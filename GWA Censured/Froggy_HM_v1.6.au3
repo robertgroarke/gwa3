@@ -474,7 +474,7 @@ Func CacheSkillBar()
 		If IsEchoRefrainskill($skillStruct) Then $SkillBarCache[$i][$echoes] = $aSkillID
 		If IsPressureSpiritSkill($skillStruct) Then $PressureSpiritSkills += 1
 	Next
-	If $SkillbarSlot[$Signet_Of_Spirits] > 0 Then $PressureSpiritSkills += 2    ; add 2 spirits for Signet of Spirits
+	If $SkillbarSlot[$Signet_Of_Spirits] > 0 Then $PressureSpiritSkills += 2
 	Out($PressureSpiritSkills & " pressure sprits on your skillbar")
 	$Summon_Spirits = $SkillbarSlot[$Summon_Spirits_Luxon] + $SkillbarSlot[$Summon_Spirits_Kurzick]
 	Out("Mapping your skill bar - completed")
@@ -1114,10 +1114,10 @@ Func Fight($aAggroRange = 1000, $careful = False)
 		If IsDllStruct($BestTarget) Then
 			Attack($BestTarget, True)
 		EndIf
-		RndSleep(100)
+		Sleep(100)
 		If $careful Then
 			MoveTo(DllStructGetData($BestTarget, 'X'), DllStructGetData($BestTarget, 'Y'))
-			RndSleep(300)
+			Sleep(300)
 		EndIf
 	Until GetNearestEnemyDistance() > $aAggroRange Or GetIsDead(-2) Or Wipe() Or TimerDiff($TimerToGetOut) > 240000
 	PickupLootEx(3000)
@@ -1172,10 +1172,10 @@ Func GetDwarvenBlessing($x, $y)
 EndFunc
 
 Func PickupLootEx($iMaxDist = 2000, $PickupTorch = False)
-	Local $lAgentArray = GetAgentArray(0x400)
+	Local $lAgentArray = GetAgentArray($ID_AGENT_TYPE_ITEM)
 	Local $lPickupDeadlock = TimerInit()
 	Local $lPickupCounter = 0
-	If $lAgentArray[0] = 0 Then Return
+	If Not IsArray($lAgentArray) Then Return
 	For $i = 1 To $lAgentArray[0]
 		Local $lAgentStruct = $lAgentArray[$i]
         If Not IsDllStruct($lAgentStruct) Then ContinueLoop
@@ -1240,7 +1240,6 @@ Func CanPickUpEx($aItem, $PickupTorch = False)
 
 		Case $TYPE_DYE
 			If $lExtraID = 10 Then ; Black dye
-				GUI_SetBlackDyes(GUI_GetBlackDyes() + 1)
 				Return True
 			EndIf
 		Case $TYPE_GOLD_COINS
@@ -1265,4 +1264,3 @@ Func CanPickUpEx($aItem, $PickupTorch = False)
 	EndSwitch
 	Return False
 EndFunc
-;I have ported the script to use the new GWA2 library. Please test it and let me know if you find any issues.
