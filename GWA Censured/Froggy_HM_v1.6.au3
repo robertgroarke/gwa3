@@ -42,7 +42,7 @@ While 1
 		$OpenedChestAgentIDs[0] = ""
 		ReDim $OpenedChestAgentIDs[1]
 		Switch GetMapID()
-			Case $explorable
+			Case $Sparkfly_Swamp
 				RunToDungeon()
 				Takequest0()
 			Case $Bogroot_Growths_Lvl1
