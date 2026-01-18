@@ -9,7 +9,7 @@
 #include "lib\Map_IDs.au3"
 #include "lib\Skill_IDs.au3"
 #include "lib\Skill_Types.au3"
-#include "lib\GUI_Functions.au3"
+; #include "lib\GUI_Functions.au3"
 InitializeGameClientData(True, True, False)
 
 Global Const $BOTNAME 			= "Froggy"
