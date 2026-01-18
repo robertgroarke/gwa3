@@ -915,52 +915,7 @@ Func IsSelfPrehealSkill($aSkill)
 	Return False
 EndFunc
 
-Func Disconnected()
-	Local $lCheck = False
-	Local $lDeadlock = TimerInit()
-	Do
-		Sleep(20)
-		$lCheck = GetMapLoading() <> 2 And GetAgentExists(-2)
-	Until $lCheck Or TimerDiff($lDeadlock) > 5000
-	If $lCheck = False Then
-		Out('Disconnected!')
-		Out('Attempting to reconnect.')
-		ControlSend(GetWindowHandle(), '', '', '{Enter}')
-		$lDeadlock = TimerInit()
-		Do
-			Sleep(20)
-			$lCheck = GetMapLoading() <> 2 And GetAgentExists(-2)
-		Until $lCheck Or TimerDiff($lDeadlock) > 60000
-		If $lCheck = False Then
-			Out('Failed to Reconnect 1!')
-			Out('Retrying.')
-			ControlSend(GetWindowHandle(), '', '', '{Enter}')
-			$lDeadlock = TimerInit()
-			Do
-				Sleep(20)
-				$lCheck = GetMapLoading() <> 2 And GetAgentExists(-2)
-			Until $lCheck Or TimerDiff($lDeadlock) > 60000
-			If $lCheck = False Then
-				Out('Failed to Reconnect 2!')
-				Out('Retrying.')
-				ControlSend(GetWindowHandle(), '', '', '{Enter}')
-				$lDeadlock = TimerInit()
-				Do
-					Sleep(20)
-					$lCheck = GetMapLoading() <> 2 And GetAgentExists(-2)
-				Until $lCheck Or TimerDiff($lDeadlock) > 60000
-				If $lCheck = False Then
-					Out('Could not reconnect!')
-					Out('Exiting.')
-					EnableRendering()
-					Exit 1
-				EndIf
-			EndIf
-		EndIf
-	EndIf
-	Out('Reconnected!')
-	Sleep(5000)
-EndFunc
+
 
 Func Wipe()
 	If Not GetIsDead(-2) Then Return False
