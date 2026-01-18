@@ -1,3 +1,4 @@
+
 #requireadmin
 #include "lib\GWA2_Headers.au3"
 #include "lib\GWA2.au3"
@@ -915,8 +916,6 @@ Func IsSelfPrehealSkill($aSkill)
 	Return False
 EndFunc
 
-
-
 Func Wipe()
 	If Not GetIsDead(-2) Then Return False
 	Local $DeadPartyMembers = 0
@@ -1219,3 +1218,5 @@ Func CanPickUpEx($aItem, $PickupTorch = False)
 	EndSwitch
 	Return False
 EndFunc
+;I have ported the script to use the new GWA2 library. Please test it and let me know if you find any issues.
+;I have ported the script to use the new GWA2 library. Please test it and let me know if you find any issues.
