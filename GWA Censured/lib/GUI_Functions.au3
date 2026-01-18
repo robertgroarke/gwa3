@@ -15,7 +15,7 @@ AutoItSetOption("GUIOnEventMode", 1)	; Opt("GUIOnEventMode", True)
 
 Global Const $INI_PATH 		= @ScriptDir & "\Settings.ini"
 
-#Region Settings
+; #Region Settings
 
 
 
@@ -45,7 +45,7 @@ Global Const $GUI_CHECKBOX_HEIGHT 	= 16
 
 #EndRegion
 
-#Region GUI Vars
+; #Region GUI Vars
 ;Main
 Global $GUI = 0									;handle to the main window
 
@@ -116,7 +116,7 @@ Global $GUI_GroupDropStatistics_lblDyesVal 		= 0
 Global $GUI_GroupDropStatistics_lblTomesVal	= 0
 #EndRegion GUI Vars
 
-#Region String Extensions
+; #Region String Extensions
 Func String_GetTimeStamp($ShowSeconds)
 	Local $TimeStamp = "[" & @HOUR & ":" & @MIN
 	If $ShowSeconds Then $TimeStamp &= ":" & @SEC
@@ -125,7 +125,7 @@ Func String_GetTimeStamp($ShowSeconds)
 EndFunc
 #EndRegion
 
-#Region GUI Helpfunctions
+; #Region GUI Helpfunctions
 ;Gets the information of a control related to the main GUI
 ;$SizeBuffer[0] = X Position
 ;$SizeBuffer[1] = Y Position
@@ -156,9 +156,9 @@ Func GUI_IsChecked($ControlID)
 EndFunc
 #EndRegion GUI Helpfunctions
 
-#Region Creation
+; #Region Creation
 #cs
-#Region Set Uskin
+; #Region Set Uskin
 _Uskin_LoadDLL()
 _USkin_Init(@ScriptDir & "\Skins\Royale.msstyles") ; <-- Put here your skin...
 OnAutoItExitRegister(_USkin_Exit)
@@ -190,7 +190,7 @@ Func GUI_Create()
 	GUICtrlSetOnEvent($GUI_idMenuFile_idOpenDir, "GUI_MenuCallback")
 	GUICtrlSetOnEvent($GUI_idMenuFile_idExit, "GUI_MenuCallback")
 
-	#Region Gui Grid Row 1
+	; #Region Gui Grid Row 1
 
 	;Buttons
 
@@ -206,7 +206,7 @@ Func GUI_Create()
 
 	#EndRegion Gui Grid Row 1
 
-	#Region Gui Grid Row 2
+	; #Region Gui Grid Row 2
 	;Group 1: Fast Settings
 	$tempCtrlTop = $GUI_CHECKBOX_HEIGHT + $GUI_CONTROL_SPACE
 
@@ -239,7 +239,7 @@ Func GUI_Create()
 	GUICtrlSetColor($GUI_idConsole, 0xFFFFFF)
 	#EndRegion Gui GridRow 2
 
-	#Region Gui Grid Row 3
+	; #Region Gui Grid Row 3
 	$tempCtrlTop = $GUI_LABEL_HEIGHT
 
 	;Group 2: General Statistics
@@ -297,7 +297,7 @@ Func GUI_Create()
     _GUICtrlStatusBar_SetText($GUI_hStatusBar, "Total Time: 00:00:00", 2)
 
 
-	#Region INI
+	; #Region INI
 	GUI_IniCreate()
 	If Not GUI_IniIsComplete() Then
 		FileDelete($INI_PATH)
@@ -319,7 +319,7 @@ Func GUI_Create()
 EndFunc
 #EndRegion Creation
 
-#Region Events
+; #Region Events
 Func GUI_onExit()
 	Exit
 EndFunc
@@ -359,7 +359,7 @@ Func GUI_MenuCallback() ;Checking here for the GUI does not work. Since every GU
 EndFunc
 #EndRegion
 
-#Region Getters
+; #Region Getters
 ;Group 1: Checkbox
 Func GUI_IsAddHeroesChecked()
 	Return GUI_IsChecked($GUI_GroupSettings_CheckAddHeroes)
@@ -459,7 +459,7 @@ EndFunc
 
 #EndRegion Getters
 
-#Region Commands
+; #Region Commands
 Func GUI_SetOnStartFunc($NewFunc = "")
 	$GUI_idButtonStart_Function = $NewFunc
 EndFunc
@@ -606,7 +606,7 @@ Func GUI_SetAvgRunTime($TimeStamp)
 
 #EndRegion Commands
 
-#Region Ini
+; #Region Ini
 Global Const $ValuesToBeSaved = [ _
 		[7, ""], _ ;Amount of elements in the array
 		["AddHeroes", True], _
@@ -1050,3 +1050,11 @@ Func ModSelection()
 			 Next
 
    GUICtrlCreateTabItem("") ; end tabitem definition
+   
+   GUISetOnEvent($GUI_EVENT_CLOSE, "SpecialEvents")
+
+   GUICtrlCreateGroup("", -99, -99, 1, 1)
+
+   GUISetState()
+
+EndFunc

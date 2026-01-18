@@ -105,7 +105,7 @@ Func Setup($addHeroes = True)
 	TolSleep(500)
 	Do
 		Move(-9451, -19766)
-	Until WaitMapLoading($iSplarkflyMapID)
+	Until WaitMapLoading($Sparkfly_Swamp)
 
 EndFunc
 
