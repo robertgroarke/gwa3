@@ -16,6 +16,12 @@ Global Const $AUTHORS 			= ["bob version | reaverseath/logicdoor"]
 Global Const $VERSION 			= "1.6"
 Global $aPlayerAgent			= GetAgentByID(-2)
 
+; New constants for Tekks War
+Global Const $QUEST_ID_TEKKS_WAR = 0x339
+Global Const $DIALOG_ID_TEKKS_WAR_ACCEPT_INITIAL = 0x833901
+Global Const $DIALOG_ID_TEKKS_WAR_ACCEPT = 0x833905
+Global Const $DIALOG_ID_TEKKS_WAR_REWARD = 0x833907
+
 GUI_Create()
 
 Global $gReturnMap = $Gadds_Encampment
@@ -143,10 +149,10 @@ Func TakeQuest0()
 	Local $NPC = GetNearestNPCToCoords (12396, 22407)
 	GoNPC($NPC)
 
-	QuestReward($hTekksWar) ; in case for some reason we didnt find tekks after chest
-	AcceptQuest($hTekksWar)
+	QuestReward($QUEST_ID_TEKKS_WAR) ; in case for some reason we didnt find tekks after chest
+	AcceptQuest($QUEST_ID_TEKKS_WAR)
 
-	Dialog(0x833905)
+	Dialog($DIALOG_ID_TEKKS_WAR_ACCEPT)
 	
 	;0x8101 dialog body
 	;0x833901 accept quest
@@ -322,8 +328,8 @@ Func Boss()
 	Local $NPC = GetNearestNPCToCoords (14618, -17828)
 	GoNPC($NPC)
 	;Dialog($TekksDialog)
-	QuestReward($hTekksWar)
-	Dialog(0x833907)
+	QuestReward($QUEST_ID_TEKKS_WAR)
+	Dialog($DIALOG_ID_TEKKS_WAR_REWARD)
 	
 	
 	If GUI_IsSalvageChecked() = True Then Return SalvageItems()
