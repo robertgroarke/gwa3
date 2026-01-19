@@ -273,7 +273,7 @@ Func BogrootLvl2 ()
 	Local $Timer = TimerInit()
 	Do
 		Sleep(200)
-	Until WaitMapLoading($iSplarkflyMapID) Or TimerDiff($Timer) >= 360000 
+	Until WaitMapLoading(Sparkfly_Swamp) Or TimerDiff($Timer) >= 360000 
 
 
     AdlibUnregister("CurrentRunTime")
