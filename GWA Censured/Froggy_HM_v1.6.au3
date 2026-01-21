@@ -258,7 +258,7 @@ Func BogrootLvl2 ()
 	CacheSkillBar() ; 16006, -6019 was 20
    $NearestWaypoint = GetNearestWaypointIndex($aWaypointsLevel2)
 
-	$Me = GetAgentByID()
+	$Me = GetMyAgent()
 
 	If $NearestWaypoint = 0 then
 	   Out("Start at "& $aWaypointsLevel2[$NearestWaypoint][3])
