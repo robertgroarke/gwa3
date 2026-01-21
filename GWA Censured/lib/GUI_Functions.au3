@@ -1050,11 +1050,44 @@ Func ModSelection()
 			 Next
 
    GUICtrlCreateTabItem("") ; end tabitem definition
-   
+
+   GUICtrlCreateTabItem("Armor")
+		 Global $grpEnergy = GUICtrlCreateGroup("", 0, 14, 816, 660)
+		 For $j = 4 to 14
+			GUICtrlCreateLabel($ColLabels[$j-4], $X_GUI + 55 +(50 * $j), 40 , $iSpacing*6, $iSpacing*2, $ES_CENTER)
+			For $i = 102 To 132
+				If $j = 4 then GUICtrlCreateLabel($array_weaponmods[$i][0], $X_GUI+$iSpacing*2, 60 + (19 * ($i - 102)),200, $iSpacing*2)
+				$array_checkboxes[$i][$j] = GUICtrlCreateCheckbox("", $X_GUI + 72+(50 * $j), 60 + (19 * ($i - 102)), $iSpacing*2, $iSpacing*2, BitOR($BS_AUTOCHECKBOX, $ES_CENTER,($array_checkboxes[$i][$j] >-1 ? $GUI_CHECKED : $GUI_UNCHECKED)))
+			    If $array_weaponmods[$i][$j] = 1 then guictrlsetstate (-1, $GUI_CHECKED)
+			    If $array_weaponmods[$i][$j] 		= -1 then guictrlsetstate (-1, $GUI_DISABLE)
+			    If $array_weaponmods_ini[$i][$j] 	= 1 then guictrlsetstate (-1, $GUI_CHECKED)
+			Next
+		 Next
+
+   GUICtrlCreateTabItem("") ; end tabitem definition
+
    GUISetOnEvent($GUI_EVENT_CLOSE, "SpecialEvents")
 
    GUICtrlCreateGroup("", -99, -99, 1, 1)
 
    GUISetState()
 
+EndFunc
+
+Func SpecialEvents()
+
+   Select
+        Case @GUI_CtrlId = $GUI_EVENT_CLOSE
+			For $j = 4 to 14
+			   For $i = 0 to 132
+				  $array_weaponmods[$i][$j] = GUICtrlRead($array_checkboxes[$i][$j])
+			   Next
+			Next
+
+			_arrayToIni("Mod_Settings.ini", "Mod_Settings.ini", $array_weaponmods)
+
+;			_ArrayDisplay($array_weaponmods_ini, "2D display")
+
+			GUISetState (@SW_HIDE)
+    EndSelect
 EndFunc
