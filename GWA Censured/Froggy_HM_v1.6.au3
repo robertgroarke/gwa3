@@ -1,4 +1,3 @@
-
 #requireadmin
 #include "lib\GWA2_Headers.au3"
 #include "lib\GWA2.au3"
@@ -1234,3 +1233,99 @@ Func CanPickUpEx($aItem, $PickupTorch = False)
 EndFunc
 ;I have ported the script to use the new GWA2 library. Please test it and let me know if you find any issues.
 ;I have ported the script to use the new GWA2 library. Please test it and let me know if you find any issues.
+ Func usedp()
+	usedp9()
+	usedp9()
+	usedp9()
+	usedp9()
+	usedp9()
+endfunc
+
+Func usedp9()
+   USedp1()
+   Usedp2()
+   usedp3()
+   usedp4()
+   USedp5()
+   Endfunc
+
+
+Func Usedp1()
+   Local $aBag
+   Local $aItem
+   Sleep(2)
+   For $i = 1 To 4
+	  $aBag = GetBag($i)
+	  For $j = 1 To DllStructGetData($aBag, "Slots")
+		 $aItem = GetItemBySlot($aBag, $j)
+		 If DllStructGetData($aItem, "ModelID") == 26784 Then
+			UseItem($aItem)
+			Return True
+		 EndIf
+	  Next
+   Next
+EndFunc
+
+Func Usedp2()
+   Local $aBag
+   Local $aItem
+   Sleep(2)
+   For $i = 1 To 4
+	  $aBag = GetBag($i)
+	  For $j = 1 To DllStructGetData($aBag, "Slots")
+		 $aItem = GetItemBySlot($aBag, $j)
+		 If DllStructGetData($aItem, "ModelID") == 22191 Then
+			UseItem($aItem)
+			Return True
+		 EndIf
+	  Next
+   Next
+EndFunc
+
+Func Usedp3()
+   Local $aBag
+   Local $aItem
+   Sleep(2)
+   For $i = 1 To 4
+	  $aBag = GetBag($i)
+	  For $j = 1 To DllStructGetData($aBag, "Slots")
+		 $aItem = GetItemBySlot($aBag, $j)
+		 If DllStructGetData($aItem, "ModelID") == 21488 Then
+			UseItem($aItem)
+			Return True
+		 EndIf
+	  Next
+   Next
+EndFunc
+
+Func Usedp4()
+   Local $aBag
+   Local $aItem
+   Sleep(2)
+   For $i = 1 To 4
+	  $aBag = GetBag($i)
+	  For $j = 1 To DllStructGetData($aBag, "Slots")
+		 $aItem = GetItemBySlot($aBag, $j)
+		 If DllStructGetData($aItem, "ModelID") == 21489 Then
+			UseItem($aItem)
+			Return True
+		 EndIf
+	  Next
+   Next
+EndFunc
+
+Func Usedp5()
+   Local $aBag
+   Local $aItem
+   Sleep(2)
+   For $i = 1 To 4
+	  $aBag = GetBag($i)
+	  For $j = 1 To DllStructGetData($aBag, "Slots")
+		 $aItem = GetItemBySlot($aBag, $j)
+		 If DllStructGetData($aItem, "ModelID") == 6370 Then
+			UseItem($aItem)
+			Return True
+		 EndIf
+	  Next
+   Next
+EndFunc
