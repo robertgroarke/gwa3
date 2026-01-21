@@ -1,4 +1,3 @@
-
 #include-once
 
 Global Const $Healing_Signet = 1
@@ -223,3 +222,5 @@ Global Const $Soothing_PvP = 2279
 Global Const $Union = 2280
 Global Const $Union_PvP = 2281
 Global Const $Vampirism = 2282
+Global Const $Summon_Spirits_Luxon = 2051
+Global Const $Summon_Spirits_Kurzick = 2100
