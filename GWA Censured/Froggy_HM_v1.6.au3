@@ -344,7 +344,7 @@ Func ReverseToSparkflySwamp()
 	Do
 		MoveTo(14747, 480)
 		Sleep(250)
-	Until WaitMapLoading($iSplarkflyMapID) or TimerDiff($aTimer) > 60000
+	Until WaitMapLoading($Sparkfly_Swamp) or TimerDiff($aTimer) > 60000
 EndFunc
 
 Func MoveandAggroEx($aWaypoints)
