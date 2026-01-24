@@ -17,40 +17,57 @@ Global Const $QUEST_ID_TEKKS_WAR = 0x339
 Global Const $DIALOG_ID_TEKKS_WAR_ACCEPT = 0x833901
 Global Const $DIALOG_ID_TEKKS_WAR_REWARD = 0x833907
 
-InitializeGameClientData(True, False)
 
-Global $Character_Select_Input
-Global $Form1 = GUICreate("Froggy HM", 200, 100)
-Global $Start_Bot = GUICtrlCreateButton("Start Bot", 50, 50, 100, 30)
-$Character_Select_Input = GUICtrlCreateCombo("Character Select", 50, 10, 100, 30)
+
+ScanAndUpdateGameClients()
+
+Global $Form1 = GUICreate("Froggy HM", 250, 150)
+
+If Not IsArray($game_clients) Or $game_clients[0][0] = 0 Then
+	MsgBox(48, "Error", "No Guild Wars clients found." & @CRLF & "Please start Guild Wars and log in to a character.")
+	Exit
+EndIf
+
+Global $Combo_Label = GUICtrlCreateLabel("Select Character:", 20, 20, 100, 20)
+Global $Char_Combo = GUICtrlCreateCombo("", 20, 40, 210, 25)
+Global $Launch_Button = GUICtrlCreateButton("Launch", 85, 90, 80, 30)
 
 Local $comboList = ""
 For $i = 1 To $game_clients[0][0]
 	$comboList &= $game_clients[$i][3] & "|"
 Next
 $comboList = StringTrimRight($comboList, 1)
+GUICtrlSetData($Char_Combo, $comboList, $game_clients[1][3])
 
-GUICtrlSetData($Character_Select_Input, $comboList, $game_clients[0][0] > 0 ? $game_clients[1][3] : '')
-
+GUICtrlSetOnEvent($Launch_Button, "LaunchEvent")
+GUISetOnEvent($GUI_EVENT_CLOSE, "CloseEvent")
 GUISetState(@SW_SHOW)
 
-While 1
-	$nMsg = GUIGetMsg()
-	Switch $nMsg
-		Case $GUI_EVENT_CLOSE
-			Exit
-		Case $Start_Bot
-			Global $Character_Select = GUICtrlRead($Character_Select_Input)
-			Local $clientIndex = FindClientIndexByCharacterName($Character_Select)
-			If $clientIndex > 0 Then
-				SelectClient($clientIndex)
-				WinSetTitle(GetWindowHandle(), '', 'Guild Wars - ' & GetCharacterName())
-				ExitLoop
-			Else
-				MsgBox(0, 'Error', 'Could not find a GW client with a character named <<' & $Character_Select & '>>')
-			EndIf
-	EndSwitch
+Global $g_BotHasLaunched = False
+While Not $g_BotHasLaunched
+	Sleep(100)
 WEnd
+
+Func CloseEvent()
+	Exit
+EndFunc
+
+Func LaunchEvent()
+	GUICtrlSetData($Combo_Label, "Launching...")
+	Global $Character_Select = GUICtrlRead($Char_Combo)
+	Local $clientIndex = FindClientIndexByCharacterName($Character_Select)
+
+	If $clientIndex > 0 Then
+		SelectClient($clientIndex)
+		InitializeGameClientData(True, False)
+		WinSetTitle(GetWindowHandle(), '', 'Guild Wars - ' & GetCharacterName())
+		GUIDelete($Form1)
+		$g_BotHasLaunched = True
+	Else
+		MsgBox(48, "Error", "Could not find a GW client with character: '" & $Character_Select & "'")
+		GUICtrlSetData($Combo_Label, "Select Character:")
+	EndIf
+EndFunc
 
 onStart()
 
