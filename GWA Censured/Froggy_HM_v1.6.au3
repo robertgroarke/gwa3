@@ -17,6 +17,8 @@ Global Const $QUEST_ID_TEKKS_WAR = 0x339
 Global Const $DIALOG_ID_TEKKS_WAR_ACCEPT = 0x833901
 Global Const $DIALOG_ID_TEKKS_WAR_REWARD = 0x833907
 
+Global $BotRunning = False
+
 
 
 ScanAndUpdateGameClients()
