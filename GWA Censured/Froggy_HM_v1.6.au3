@@ -22,6 +22,9 @@ Global Const $BOTNAME = "Froggy HM"
 Global Const $VERSION = "1.6"
 Global Const $AUTHORS[1] = ["Censured"]
 
+Global $Outpost = 638 ; Gadd's Camp
+Global $Language = 0 ; English
+
 Global $BotRunning = False
 Global $OpenedChestAgentIDs[1]
 Global $NearestWaypoint = 0
