@@ -22,6 +22,7 @@ Global $BotRunning = False
 Global $OpenedChestAgentIDs[1]
 Global $NearestWaypoint = 0
 Global $unlit = False
+Global $iVanguardTitle, $iNornTitle, $iAsuraTitle, $iDeldrimorTitle
 
 
 
@@ -75,7 +76,10 @@ Func LaunchEvent()
 	EndIf
 EndFunc
 
-onStart()
+GUI_SetOnStartFunc("onStart")
+GUI_SetOnStopFunc("onStop")
+GUI_SetOnResumeFunc("onResume")
+GUI_Create()
 
 Global $gReturnMap = $Gadds_Encampment
 Global $gPickupCoins = True
@@ -107,6 +111,17 @@ WEnd
 
 Func onStart()
 	$BotRunning = True
+	Out("Start pressed")
+	$iVanguardTitle = GetVanguardTitle()
+	$iNornTitle = GetNornTitle()
+	$iAsuraTitle = GetAsuraTitle()
+	$iDeldrimorTitle = GetDeldrimorTitle()
+	;GUI_SetLockpicks(GetPicksCount())
+	GUI_SetWipes(0)
+	;GUI_SetGolds(0)
+	;GUI_SetTomes(0)
+	GUI_SetChestsOpened(0)
+	AdlibRegister("UpdateStats", 1000)
 EndFunc
 
 Func onStop()
@@ -1117,6 +1132,7 @@ Func AggroMoveToEX($x, $y, $aFightRange = 1350)
 		$aOldX = DllStructGetData(GetMyAgent(), 'X')
 		$aOldY = DllStructGetData(GetMyAgent(), 'Y')
 		If GetMapLoading() == 2 Then Disconnected()
+		ConsoleWrite("Nearest enemy distance: " & GetNearestEnemyDistance() & @CRLF)
 		If GetNearestEnemyDistance() < $aFightRange Then Fight($aFightRange)
 		If GUI_IsChestChecked() Then CheckForChest()
 		If WeCanMove($aFightRange) Or TimerDiff($TimerAggro) > 60000 Then
@@ -1138,6 +1154,7 @@ Func WeCanMove($aRange = 1200)
 EndFunc
 
 Func Fight($aAggroRange = 1000, $careful = False)
+	ConsoleWrite("! Fight function entered." & @CRLF)
 	Out("Fighting enemies")
 	Local $TimerToGetOut = TimerInit()
 	Do
@@ -1298,6 +1315,39 @@ Func CanPickUpEx($aItem, $PickupTorch = False)
 EndFunc
 ;I have ported the script to use the new GWA2 library. Please test it and let me know if you find any issues.
 ;I have ported the script to use the new GWA2 library. Please test it and let me know if you find any issues.
+
+Func AvgRunTime()
+	Local $CurrentRunTime = Floor(TimerDiff($nCurrentRunTime))
+	$CumulatedTime += $CurrentRunTime
+	Out("Cumulated Time: " & $CumulatedTime)
+	Out("Run Counter: " & $GUI_RunCounter)
+	$AvgRunTime = $CumulatedTime / ($GUI_RunCounter-$GUI_FailCounter)
+
+	Local $iHours, $iMins, $iSecs
+	Local $TimeStamp = ""
+	_TicksToTime($AvgRunTime, $iHours, $iMins, $iSecs)
+	If $iHours < 10 Then $TimeStamp = "0"
+	$TimeStamp &= $iHours & ":"
+	If $iMins < 10 Then $TimeStamp &= "0"
+	$TimeStamp &= $iMins & ":"
+	If $iSecs < 10 Then $TimeStamp &= "0"
+	$TimeStamp &= $iSecs
+	Out($TimeStamp)
+	Return $TimeStamp
+EndFunc
+
+Func BestRunTime()
+	If TimerDiff($nCurrentRunTime) < $nBestRunTime Then $nBestRunTime = TimerDiff($nCurrentRunTime)
+	Return $nBestRunTime
+EndFunc
+
+Func UpdateStats()
+	GUI_SetVanguard(GetVanguardTitle() - $iVanguardTitle)
+	GUI_SetNorn(GetNornTitle() - $iNornTitle)
+	GUI_SetAsura(GetAsuraTitle() - $iAsuraTitle)
+	GUI_SetDeldrimor(GetDeldrimorTitle() - $iDeldrimorTitle)
+EndFunc
+
  Func usedp()
 	usedp9()
 	usedp9()
