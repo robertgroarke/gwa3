@@ -423,3 +423,5 @@ Global Const $Shattering_Assault = 1634
 Global Const $Signet_of_Twilight = 1648
 Global Const $Signet_Of_Rejuvenation = 887
 Global Const $Words_of_Comfort = 1396
+Global Const $Windborne_Speed = 160
+Global Const $Essence_Bond = 250
