@@ -547,7 +547,7 @@ Func CacheSkillBar()
 	$PressureSpiritSkills = 0 ; (reset in case we map skills more than once)
 	Sleep(200)
 	For $i = 1 To 8
-		$aSkillID = GetSkillbarSkillID($i)
+		Local $aSkillID = GetSkillbarSkillID($i)
         If $aSkillID = 0 Then ContinueLoop
 
         Local $skillStruct = GetSkillByID($aSkillID)
