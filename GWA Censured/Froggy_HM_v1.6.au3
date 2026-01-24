@@ -1457,3 +1457,50 @@ Func Usedp5()
 	  Next
    Next
 EndFunc
+
+; ============================================================
+; Functions added for Resign and Return capability
+; ============================================================
+
+Func ResignAndReturn($aMapID = 0, $aLanguage = -1, $aRegion = -1)
+	If $aLanguage = -1 Then $aLanguage = GetLanguage()
+	If $aRegion = -1 Then $aRegion = GetRegion()
+
+	Local $targetMap = ($aMapID = 0) ? $Outpost : $aMapID
+
+	Out("Resigning")
+	Resign()
+	
+	; Update GUI stats if function exists
+	GUI_SetWipes(GUI_GetWipes() + 1)
+
+	Local $lDeadlock = TimerInit()
+	Do
+		Sleep(100)
+	Until GetIsDead(-2) Or TimerDiff($lDeadlock) >= 5000
+	Sleep(1000)
+	
+	Out("Returning To Outpost")
+	If $aMapID = 0 Then
+		ReturnToOutpost()
+		WaitMapLoading($targetMap)
+	Else
+		TravelTo($aMapID, $aLanguage, $aRegion)
+	EndIf
+	Return Setup(False)
+EndFunc
+
+Func TravelTo($aMapID, $aLanguage = -1, $aRegion = -1)
+	If $aLanguage = -1 Then $aLanguage = GetLanguage()
+	If $aRegion = -1 Then $aRegion = GetRegion()
+	
+	If GetMapID() = $aMapID And GetLanguage() = $aLanguage And GetMapLoading() = 2 Then
+		Out("Already at destination")
+		Return True
+	EndIf
+
+	If Not IsDeclared("HEADER_PARTY_TRAVEL") Then Global Const $HEADER_PARTY_TRAVEL = 0x00B0
+	
+	SendPacket(0x18, $HEADER_PARTY_TRAVEL, $aMapID, $aRegion, 0, $aLanguage, False)
+	WaitMapLoading($aMapID)
+EndFunc
