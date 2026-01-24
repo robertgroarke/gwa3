@@ -8,6 +8,7 @@
 #include "lib\Map_IDs.au3"
 #include "lib\Skill_IDs.au3"
 #include "lib\Skill_Types.au3"
+#include "lib\Utils-Debugger.au3"
 #include "lib\GUI_Functions.au3"
 #include <GUIConstantsEx.au3>
 #include <StaticConstants.au3>
