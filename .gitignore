@@ -1,0 +1,14 @@
+# General
+.idea/
+
+# BotsHub-master specific
+BotsHub-master/logs/**
+BotsHub-master/data/**
+BotsHub-master/conf/farm/*
+BotsHub-master/conf/loot/*
+!BotsHub-master/conf/farm/Default Farm Configuration.json
+!BotsHub-master/conf/loot/Default Loot Configuration.json
+
+# GWA Censured specific
+GWA Censured/Settings.ini
+GWA Censured/logs/
