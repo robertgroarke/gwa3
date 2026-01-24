@@ -91,6 +91,7 @@ Global $gPickupCoins = True
 Global Enum $all = 0, $ptr, $energyreq, $adrereq, $type, $target, $hexes, $pressure, $bind, $speedBoost, $survive, $attackskill, $heal, $prot, $bond, $condremove, $hexremove, $enchantremove, $rupt, $hardrupt, $precast, $chantsnshouts, $echoes
 Global $SkillBarCache[9][23]
 Global $SkillbarSlot[3500]
+Global $PressureSpiritSkills = 0
 
 While 1
 	Sleep(200)
@@ -126,6 +127,7 @@ Func onStart()
 	;GUI_SetTomes(0)
 	GUI_SetChestsOpened(0)
 	AdlibRegister("UpdateStats", 1000)
+	CacheSkillBar()
 EndFunc
 
 Func onStop()
