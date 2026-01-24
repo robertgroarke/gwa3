@@ -114,6 +114,7 @@ While 1
 WEnd
 
 Func onStart()
+	MsgBox(0, "Debug", "onStart function called!")
 	$BotRunning = True
 	Out("Start pressed")
 	$iVanguardTitle = GetVanguardTitle()
