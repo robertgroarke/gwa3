@@ -20,6 +20,7 @@ Global Const $DIALOG_ID_TEKKS_WAR_REWARD = 0x833907
 
 Global $BotRunning = False
 Global $OpenedChestAgentIDs[1]
+Global $NearestWaypoint = 0
 
 
 
