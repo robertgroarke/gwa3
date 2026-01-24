@@ -5,3 +5,5 @@ conf/loot/*
 !conf/farm/Default Farm Configuration.json
 !conf/loot/Default Loot Configuration.json
 .idea/
+GWA Censured/Settings.ini
+GWA Censured/logs/
