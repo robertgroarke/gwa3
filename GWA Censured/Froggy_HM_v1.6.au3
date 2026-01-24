@@ -18,6 +18,10 @@ Global Const $QUEST_ID_TEKKS_WAR = 0x339
 Global Const $DIALOG_ID_TEKKS_WAR_ACCEPT = 0x833901
 Global Const $DIALOG_ID_TEKKS_WAR_REWARD = 0x833907
 
+Global Const $BOTNAME = "Froggy HM"
+Global Const $VERSION = "1.6"
+Global Const $AUTHORS[1] = ["Censured"]
+
 Global $BotRunning = False
 Global $OpenedChestAgentIDs[1]
 Global $NearestWaypoint = 0
