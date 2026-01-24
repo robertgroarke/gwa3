@@ -114,7 +114,6 @@ While 1
 WEnd
 
 Func onStart()
-	MsgBox(0, "Debug", "onStart function called!")
 	$BotRunning = True
 	Out("Start pressed")
 	$iVanguardTitle = GetVanguardTitle()
@@ -141,13 +140,15 @@ EndFunc
 
 
 Func Setup($addHeroes = True)
-
+	Out("Entering Setup function...")
 	If GetMapID() <> 638 Then
+		Out("Incorrect map. Zoning to Gadds Encampment (638)...")
 		ZoneMap(638)
 	Endif
 	Sleep(1000)
 	
 	If($addHeroes) Then
+		Out("Setting up heroes...")
 		LeaveParty()
 		sleep(500)
 		AddHero(25) ;Xandra
@@ -160,6 +161,7 @@ Func Setup($addHeroes = True)
 
 		sleep(500)
 
+		Out("Loading hero skill templates...")
 		LoadSkillTemplate("OAOiAyk8gNtePuwJ00ZaNbJA", 1) ; ST Xandra remove hex
 		LoadSkillTemplate("OAhjQkGZIT3BVVCPSTTODTjTciA", 2) ; BiP Olias
 		LoadSkillTemplate("OAhjYoHYIPWb7wnoqKNncDzqH", 3) ; Xinrae Livia
@@ -170,6 +172,7 @@ Func Setup($addHeroes = True)
 
 		sleep(500)
 
+		Out("Setting hero behaviors...")
 		For $i = 1 To 2
 			SetHeroBehaviour($i, 1) ;0=Fight, 1=Guard, 2=Avoid
 			sleep(100)
@@ -184,7 +187,7 @@ Func Setup($addHeroes = True)
 
 	SwitchMode(2)
 
-	Out("Let's GO")
+	Out("Setup complete. Let's GO")
 	MoveTo(-10018, -21892)
 	MoveTo(-9550, -20400)
 	TolSleep(500)
