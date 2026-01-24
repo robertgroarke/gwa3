@@ -9,20 +9,50 @@
 #include "lib\Skill_IDs.au3"
 #include "lib\Skill_Types.au3"
 #include "lib\GUI_Functions.au3"
-InitializeGameClientData(True, True, False)
+#include <GUIConstantsEx.au3>
+#include <StaticConstants.au3>
+#include <WindowsConstants.au3>
 
-Global Const $BOTNAME 			= "Froggy"
-Global Const $AUTHORS 			= ["bob version | reaverseath/logicdoor"]
-Global Const $VERSION 			= "1.6"
-Global $aPlayerAgent			= GetAgentByID(-2)
-
-; New constants for Tekks War
 Global Const $QUEST_ID_TEKKS_WAR = 0x339
-Global Const $DIALOG_ID_TEKKS_WAR_ACCEPT_INITIAL = 0x833901
-Global Const $DIALOG_ID_TEKKS_WAR_ACCEPT = 0x833905
+Global Const $DIALOG_ID_TEKKS_WAR_ACCEPT = 0x833901
 Global Const $DIALOG_ID_TEKKS_WAR_REWARD = 0x833907
 
-GUI_Create()
+InitializeGameClientData(True, False)
+
+Global $Character_Select_Input
+Global $Form1 = GUICreate("Froggy HM", 200, 100)
+Global $Start_Bot = GUICtrlCreateButton("Start Bot", 50, 50, 100, 30)
+$Character_Select_Input = GUICtrlCreateCombo("Character Select", 50, 10, 100, 30)
+
+Local $comboList = ""
+For $i = 1 To $game_clients[0][0]
+	$comboList &= $game_clients[$i][3] & "|"
+Next
+$comboList = StringTrimRight($comboList, 1)
+
+GUICtrlSetData($Character_Select_Input, $comboList, $game_clients[0][0] > 0 ? $game_clients[1][3] : '')
+
+GUISetState(@SW_SHOW)
+
+While 1
+	$nMsg = GUIGetMsg()
+	Switch $nMsg
+		Case $GUI_EVENT_CLOSE
+			Exit
+		Case $Start_Bot
+			Global $Character_Select = GUICtrlRead($Character_Select_Input)
+			Local $clientIndex = FindClientIndexByCharacterName($Character_Select)
+			If $clientIndex > 0 Then
+				SelectClient($clientIndex)
+				WinSetTitle(GetWindowHandle(), '', 'Guild Wars - ' & GetCharacterName())
+				ExitLoop
+			Else
+				MsgBox(0, 'Error', 'Could not find a GW client with a character named <<' & $Character_Select & '>>')
+			EndIf
+	EndSwitch
+WEnd
+
+onStart()
 
 Global $gReturnMap = $Gadds_Encampment
 Global $gPickupCoins = True
@@ -30,12 +60,6 @@ Global $gPickupCoins = True
 Global Enum $all = 0, $ptr, $energyreq, $adrereq, $type, $target, $hexes, $pressure, $bind, $speedBoost, $survive, $attackskill, $heal, $prot, $bond, $condremove, $hexremove, $enchantremove, $rupt, $hardrupt, $precast, $chantsnshouts, $echoes
 Global $SkillBarCache[9][23]
 Global $SkillbarSlot[3500]
-
-Local $BotRunning 			= False
-
-GUI_SetOnStartFunc("onStart")
-GUI_SetOnStopFunc("onStop")
-GUI_SetOnResumeFunc("onResume")
 
 While 1
 	Sleep(200)
@@ -57,6 +81,21 @@ While 1
 		Endswitch
 	WEnd
 WEnd
+
+Func onStart()
+	$BotRunning = True
+EndFunc
+
+Func onStop()
+	$BotRunning = False
+EndFunc
+
+Func onResume()
+	$BotRunning = True
+EndFunc
+
+
+
 
 Func Setup($addHeroes = True)
 
