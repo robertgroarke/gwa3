@@ -495,8 +495,11 @@ Func MoveandAggroEx($aWaypoints)
 				If GetMapLoading() = 0 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				Boss()
 			Case Else
-				If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
-				If GetMapLoading() = 0 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				If GetMapLoading() = 2 Then
+					AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
+				Else
+					MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				EndIf
 		EndSwitch
 	Next
 EndFunc   ;==>MoveandAggro
@@ -1107,7 +1110,7 @@ EndFunc
 Func AggroMoveToEX($x, $y, $aFightRange = 1350)
 	Local $lDeadlock, $lBlocked, $aOldX, $aOldY
 	Local $random = 100
-	If GetMapLoading() <> 1 Or GetMapLoading() = 2 Then Return True
+	If GetMapLoading() <> 2 Then Return True
 	If WeCanMove($aFightRange) Then Move($x, $y, $random)
 	Local $TimerAggro = TimerInit()
 	Do
