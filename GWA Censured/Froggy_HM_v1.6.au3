@@ -35,6 +35,8 @@ Global Const $TYPE_DYE = 10
 Global Const $TYPE_GOLD_COINS = 20
 Global Const $TYPE_KEY = 18
 
+Global $CumulatedTime = 0
+
 Global $mBasePointer
 
 Global $BotRunning = False
@@ -464,7 +466,7 @@ Func MoveandAggroEx($aWaypoints)
 		; Consets arent working - duration check is wrong or something
 		;If(GUI_IsConsetsChecked() and (GetMapId() = $Bogroot_Growths_Lvl1 Or GetMapId() = $Bogroot_Growths_Lvl2)) Then UseConsets()
 		;If(GUI_IsConsetsChecked() and (GetMapId() = $Bogroot_Growths_Lvl1 Or GetMapId() = $Bogroot_Growths_Lvl2)) Then UseArmor()
-		If $unlit Then $i = RekindleTorch($aWaypoints, $NearestWaypoint)
+		;If $unlit Then $i = RekindleTorch($aWaypoints, $NearestWaypoint)
         If GetMapLoading() == 2 Then Disconnected()
 		If Wipe() = 1 Then    ; wipe intercept - wait until rezz and redirect to best waypoint, check for GetIsDead first to avoid checking fo wipe all the time..
 			GUI_SetWipes(GUI_GetWipes() + 1)
@@ -1149,10 +1151,21 @@ Func GoToSignpostNearXY($x, $y)
 EndFunc
 
 Func AggroMoveToEX($x, $y, $aFightRange = 1350)
+	Out("Debug: AggroMoveToEx Entered (" & $x & "," & $y & ")")
 	Local $lDeadlock, $lBlocked, $aOldX, $aOldY
 	Local $random = 100
-	If GetMapLoading() <> 2 Then Return True
-	If WeCanMove($aFightRange) Then Move($x, $y, $random)
+	If GetMapLoading() <> 2 Then 
+		Out("Debug: AggroMoveToEx Early Exit (MapLoading=" & GetMapLoading() & ")")
+		Return True
+	EndIf
+	
+	If WeCanMove($aFightRange) Then 
+		Out("Debug: WeCanMove=True, Moving...")
+		Move($x, $y, $random)
+	Else
+		Out("Debug: WeCanMove=False")
+	EndIf
+	
 	Local $TimerAggro = TimerInit()
 	Do
 		$aOldX = DllStructGetData(GetMyAgent(), 'X')
@@ -1160,7 +1173,7 @@ Func AggroMoveToEX($x, $y, $aFightRange = 1350)
 		If GetMapLoading() == 2 Then Disconnected()
 		
 		Local $dist = GetNearestEnemyDistance()
-		; Out("Debug: Nearest Distance=" & $dist & " AggroRange=" & $aFightRange) 
+		Out("Debug: Loop Check Dist=" & $dist & " Range=" & $aFightRange) 
 		
 		If $dist < $aFightRange Then 
 			Out("Debug: Triggering Fight! Dist=" & $dist)
@@ -1182,7 +1195,9 @@ Func AggroMoveToEX($x, $y, $aFightRange = 1350)
 EndFunc
 
 Func WeCanMove($aRange = 1200)
-	If GetNearestEnemyDistance() < $aRange Then Return False
+	Local $dist = GetNearestEnemyDistance()
+	; Out("Debug: WeCanMove Check Dist=" & $dist & " Range=" & $aRange)
+	If $dist < $aRange Then Return False
 	Return True
 EndFunc
 
