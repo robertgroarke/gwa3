@@ -1107,7 +1107,7 @@ Func WipeManagement($aWaypoints, $NearestWaypoint, $LastWaypoint)
 			   Case 21 To 41
 			     Return 23
 		    	EndSwitch
-			 Case $iSplarkflyMapID
+			 Case $Sparkfly_Swamp
 		 Switch $aWaypoints[$NearestWaypoint][3]
 			   Case 1 to 6
 			    Return 4
