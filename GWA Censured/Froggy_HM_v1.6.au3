@@ -1186,6 +1186,15 @@ Func Fight($aAggroRange = 1000, $careful = False)
 	PickupLootEx(3000)
 EndFunc
 
+Func GetNearestEnemyDistance()
+	Local $target = GetNearestEnemyToAgent(GetMyAgent())
+	If IsDllStruct($target) Then
+		Return GetDistance(GetMyAgent(), $target)
+	Else
+		Return 10000
+	EndIf
+EndFunc
+
 Func CheckForChest($chestrun = False)
 	Local $AgentArray, $lAgent, $lExtraType
 	Local $ChestFound = False
