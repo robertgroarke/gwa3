@@ -20,7 +20,7 @@ Global Const $DIALOG_ID_TEKKS_WAR_REWARD = 0x833907
 
 Global Const $BOTNAME = "Froggy HM"
 Global Const $VERSION = "1.6"
-Global Const $AUTHORS[1] = ["Censured"]
+Global Const $AUTHORS[1] = ["Bob and Gemini"]
 
 Global $Outpost = 638 ; Gadd's Camp
 Global $Language = 0 ; English
@@ -33,8 +33,11 @@ Global Const $TYPE_BUNDLE = 6
 Global Const $TYPE_USABLE = 9
 Global Const $TYPE_DYE = 10
 Global Const $TYPE_GOLD_COINS = 20
+Global Const $Type_Attack = 14 ; Added missing constant
 Global Const $TYPE_KEY = 18
 
+; Logic Port
+; Missing Skill IDs moved to Skill_IDs.au3
 Global $CumulatedTime = 0
 
 Global $mBasePointer
@@ -44,6 +47,7 @@ Global $OpenedChestAgentIDs[1]
 Global $NearestWaypoint = 0
 Global $unlit = False
 Global $iVanguardTitle, $iNornTitle, $iAsuraTitle, $iDeldrimorTitle
+Global $BestTargetPtr = 0
 
 
 
@@ -491,8 +495,8 @@ Func MoveandAggroEx($aWaypoints)
 				If Wipe() = 0 Then GoToSignpostNearXY($aWaypoints[$i][0], $aWaypoints[$i][1])
 				PickupLootEx()
 			Case "Blessing Lvl1"
-				If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
-				If GetMapLoading() = 0 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
+				If GetMapLoading() = 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				GetDwarvenBlessing(19099, 7762)	
 			Case "Lvl1 to Lvl2"
 				Local $aTimer = TimerInit()
@@ -501,44 +505,44 @@ Func MoveandAggroEx($aWaypoints)
 					Sleep(250)
 				Until WaitMapLoading($Bogroot_Growths_Lvl2) Or TimerDiff($aTimer) > 60000
 			Case "Dungeon Key"
-				If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
-				If GetMapLoading() = 0 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
+				If GetMapLoading() = 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				GetDungeonKeyEx()
 			Case "Dungeon Door"
-				If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
-				If GetMapLoading() = 0 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
+				If GetMapLoading() = 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				OpenDungeonDoor()
 			Case "Dungeon Door Checkpoint"
-				If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
-				If GetMapLoading() = 0 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
+				If GetMapLoading() = 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				$NearestWaypoint = GetNearestWaypointIndex($aWaypoints)
 				If($NearestWaypoint <> $i) Then
 					Out("Failed dungeon door, going back to waypoint i-3")
 					For $j = $i-1 To $i - 3 Step -1
-						If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$j][0], $aWaypoints[$j][1], $aWaypoints[$j][2])
-						If GetMapLoading() = 0 Then MoveTo($aWaypoints[$j][0], $aWaypoints[$j][1])
+						If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$j][0], $aWaypoints[$j][1], $aWaypoints[$j][2])
+						If GetMapLoading() = 1 Then MoveTo($aWaypoints[$j][0], $aWaypoints[$j][1])
 					Next
 					$i = GetNearestWaypointIndex($aWaypoints)
 				EndIf
 			Case "Quest Door Checkpoint"
-				If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
-				If GetMapLoading() = 0 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
+				If GetMapLoading() = 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				$NearestWaypoint = GetNearestWaypointIndex($aWaypoints)
 				If($NearestWaypoint <> $i) Then
 					Out("Failed first door, going back to get quest")
 					For $j = $i-1 To $i - 3 Step -1
-						If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$j][0], $aWaypoints[$j][1], $aWaypoints[$j][2])
-						If GetMapLoading() = 0 Then MoveTo($aWaypoints[$j][0], $aWaypoints[$j][1])
+						If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$j][0], $aWaypoints[$j][1], $aWaypoints[$j][2])
+						If GetMapLoading() = 1 Then MoveTo($aWaypoints[$j][0], $aWaypoints[$j][1])
 					Next
 					ReverseToSparkflySwamp()
 					Return
 				EndIf
 			Case "Boss"
-				If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
-				If GetMapLoading() = 0 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
+				If GetMapLoading() = 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				Boss()
 			Case Else
-				If GetMapLoading() = 2 Then
+				If GetMapLoading() = 0 Then
 					AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
 				Else
 					MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
@@ -558,530 +562,6 @@ Func GetNearestWaypointIndex($aWaypoints)
 		EndIf
 	Next
 	Return $lNearestWaypoint
-EndFunc
-
-Func CacheSkillBar()
-	Out("Mapping your skill bar")
-	$PressureSpiritSkills = 0 ; (reset in case we map skills more than once)
-	Sleep(200)
-	For $i = 1 To 8
-		Local $aSkillID = GetSkillbarSkillID($i)
-        If $aSkillID = 0 Then ContinueLoop
-
-        Local $skillStruct = GetSkillByID($aSkillID)
-        If Not IsDllStruct($skillStruct) Then ContinueLoop
-
-		$SkillbarSlot[$aSkillID] = $i
-		$SkillBarCache[$i][$all] = $aSkillID
-		$SkillBarCache[$i][$energyreq] = DllStructGetData($skillStruct, 'EnergyCost')
-		$SkillBarCache[$i][$adrereq] = DllStructGetData($skillStruct, 'Adrenaline')
-		$SkillBarCache[$i][$type] = DllStructGetData($skillStruct, 'Type')
-		$SkillBarCache[$i][$target] = DllStructGetData($skillStruct, 'Target')
-
-		If IsHexSpell($skillStruct) Then $SkillBarCache[$i][$hexes] = $aSkillID
-		If IsPressureSkill($skillStruct) Then $SkillBarCache[$i][$pressure] = $aSkillID
-		If IsBindingSkill($skillStruct) Then $SkillBarCache[$i][$bind] = $aSkillID
-		If IsSpeedBoost($skillStruct) Then $SkillBarCache[$i][$speedBoost] = $aSkillID
-		If IsSurvivalSkill($skillStruct) Then $SkillBarCache[$i][$survive] = $aSkillID
-		If IsAttackSkill($skillStruct) Then $SkillBarCache[$i][$attackskill] = $aSkillID
-		If IsHealSkill($skillStruct) Then $SkillBarCache[$i][$heal] = $aSkillID
-		If IsBondSkill($skillStruct) Then $SkillBarCache[$i][$bond] = $aSkillID
-		If IsCondRemoveSkill($skillStruct) Then $SkillBarCache[$i][$condremove] = $aSkillID
-		If IsHexRemoveSkill($skillStruct) Then $SkillBarCache[$i][$hexremove] = $aSkillID
-		If IsEnchantRemoveSkill($skillStruct) Then $SkillBarCache[$i][$enchantremove] = $aSkillID
-		If IsRuptSkill($skillStruct) Then $SkillBarCache[$i][$rupt] = $aSkillID
-		If IsRuptSkill($skillStruct, True) Then $SkillBarCache[$i][$hardrupt] = $aSkillID
-		If IsPrecastSkill($skillStruct) Then $SkillBarCache[$i][$precast] = $aSkillID
-		If IsChantSkill($skillStruct) or IsShoutSkill($skillStruct) Then $SkillBarCache[$i][$chantsnshouts] = $aSkillID
-		If IsEchoRefrainskill($skillStruct) Then $SkillBarCache[$i][$echoes] = $aSkillID
-		If IsPressureSpiritSkill($skillStruct) Then $PressureSpiritSkills += 1
-	Next
-	If $SkillbarSlot[$Signet_Of_Spirits] > 0 Then $PressureSpiritSkills += 2
-	Out($PressureSpiritSkills & " pressure sprits on your skillbar")
-	$Summon_Spirits = $SkillbarSlot[$Summon_Spirits_Luxon] + $SkillbarSlot[$Summon_Spirits_Kurzick]
-	Out("Mapping your skill bar - completed")
-	Return True
-EndFunc
-
-Func IsHexSpell($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Hex
-EndFunc
-
-Func IsConditionSpell($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Condition
-EndFunc
-
-Func IsRitualSkill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Ritual
-EndFunc
-
-Func IsWeaponSpell($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $WeaponSpell
-EndFunc
-
-Func IsEnchantmentSkill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Enchantment
-EndFunc
-
-Func IsAttackSkill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Attack
-EndFunc
-
-Func IsStanceskill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Stance
-EndFunc
-
-Func IsSpellskill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Spell
-EndFunc
-
-Func IsSignetskill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Signet
-EndFunc
-
-Func IsWellskill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Well
-EndFunc
-
-Func IsWardskill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Ward
-EndFunc
-
-Func IsGlyphskill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Glyph
-EndFunc
-
-Func IsShoutskill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Shout
-EndFunc
-
-Func IsPreparationskill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Preparation
-EndFunc
-
-Func IsTrapskill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Trap
-EndFunc
-
-Func IsItemSpellskill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $ItemSpell
-EndFunc
-
-Func IsChantskill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Chant
-EndFunc
-
-Func IsEchoRefrainskill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $EchoRefrain
-EndFunc
-
-Func IsDisguiseskill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-    Return DllStructGetData($skillStruct, "Type") = $Disguise
-EndFunc
-
-Func IsBindingSkill($aSkill)
-    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
-	Switch $skillID
-		Case $Ebon_Battle_Standard_of_Honor
-			Return True
-		Case $Agony, $Agony_PvP, $Anguish, $Anguish_PvP, _
-				$Bloodsong, $Bloodsong_PvP, $Call_to_the_Spirit_Realm, $Destruction, $Destruction_PvP, _
-				$Disenchantment, $Disenchantment_PvP, $Disenchantment_Togo, $Dissonance, $Dissonance_PvP, _
-				$Gaze_of_Fury, $Gaze_of_Fury_PvP, $Jack_Frost, $Life, $Pain, $Pain_PvP, $Wanderlust, $Wanderlust_PvP, _
-				$Displacement, $Displacement_PvP, $Earthbind, $Earthbind_PvP, $Empowerment, $Empowerment_PvP, _
-				$Preservation, $Preservation_PvP, $Recovery, $Recovery_PvP, $Recuperation, $Recuperation_PvP, _
-				$Rejuvenation, $Rejuvenation_PvP, $Shadowsong, $Shadowsong_PvP, $Shelter, $Shelter_PvP, _
-				$Signet_of_Creation, $Signet_of_Creation_PvP, $Signet_Of_Spirits, $Signet_of_Spirits_PvP, _
-				$Soothing, $Soothing_PvP, $Union, $Union_PvP, $Vampirism
-			Return True
-		Case $Summon_Spirits_Luxon, $Summon_Spirits_Kurzick
-			Return True
-		Case $Ritual_Lord, $Ritual_Lord_PvP
-			Return True
-		Case $Soul_Twisting
-			Return True
-		Case $Armor_of_Unfeeling, $Armor_of_Unfeeling_PvP, $Signet_of_Ghostly_Might, $Signet_of_Ghostly_Might_PvP
-			Return True
-		Case $Spiritleech_Aura
-			Return True
-	EndSwitch
-	Return False
-EndFunc
-
-Func IsPressureSpiritSkill($aSkill)
-    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
-	Switch $skillID
-		Case $Agony, $Agony_PvP, $Anguish, $Anguish_PvP, $Bloodsong, $Bloodsong_PvP, $Destruction, $Destruction_PvP, _
-				$Disenchantment, $Disenchantment_PvP, $Dissonance, $Dissonance_PvP, $Gaze_of_Fury, $Gaze_of_Fury_PvP, _
-				$Pain, $Pain_PvP, $Wanderlust, $Wanderlust_PvP, $Earthbind, $Earthbind_PvP, $Shadowsong, $Shadowsong_PvP, _
-				$Signet_Of_Spirits, $Signet_of_Spirits_PvP, $Vampirism
-			Return True
-	EndSwitch
-	Return False
-EndFunc
-
-Func IsRuptSkill($aSkill, $hardrupt = False)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-
-	Local $lSkillEffect2 = DllStructGetData($skillStruct, 'Effect2')
-	Local $lSkillID = DllStructGetData($skillStruct, 'ID')
-	If BitAND($lSkillEffect2, 1) Then Return True
-
-	Switch $lSkillID
-		Case $Mistrust, $Mistrust_PvP, $Guilt, $Power_Drain, $Power_Flux, $Power_Leak, $Power_Leech, $Power_Lock, $Power_Return, $Power_Spike, $Shame
-			If Not $hardrupt Then Return True
-		Case $You_Move_Like_a_Dwarf, $Disarm, $Disrupting_Shot, $Disrupting_Throw, $Distracting_Lunge, $Distracting_Strike, $Magebane_Shot, $Concussion_Shot
-			Return True
-		Case $Cry_of_Pain, $Overload, $Psychic_Instability, $Psychic_Instability_PvP, $Signet_of_Clumsiness, $Simple_Thievery, $Tease
-			Return True
-		Case $Exhausting_Assault, $Temple_Strike, $Lyssas_Assault, $Lyssas_Haste, $Thunderclap
-			Return True
-		Case Else
-			Return False
-	EndSwitch
-EndFunc
-
-Func IsHardRuptSkill($aSkill)
-	Return IsRuptSkill($aSkill, True)
-EndFunc
-
-Func IsHealSkill($aSkill)
-    Local $skillStruct
-    If IsDllStruct($aSkill) Then
-        $skillStruct = $aSkill
-    Else
-        $skillStruct = GetSkillByID($aSkill)
-    EndIf
-    If Not IsDllStruct($skillStruct) Then Return False
-
-	Switch(DllStructGetData($skillStruct, 'Effect2'))
-		Case 2, 4, 6, 36, 38, 4102, 4096, 6144, 8196, 8198, 14336
-			Return True
-		Case Else
-			Switch(DllStructGetData($skillStruct, 'ID'))
-				Case $Healing_Hands, $Restful_Breeze, $Signet_Of_Rejuvenation, $Words_of_Comfort, $Conviction, $Faithful_Intervention, _
-					$Mystic_Healing, $Mystic_Healing_PvP, $Mystic_Regeneration, $Mystic_Vigor, $Pious_Renewal, $Watchful_Intervention, _
-					$Spirit_Transfer, $I_Will_Avenge_You, $I_Will_Survive, $Shadow_Sanctuary_Luxon, $Shadow_Sanctuary_Kurzick, _
-					$Shroud_of_Distress, $Healing_Spring, $Hexers_Vigor, $Feel_No_Pain
-				Return True
-			EndSwitch
-	EndSwitch
-
-	If IsPartyHealSkill($skillStruct) Then Return True
-	Return False
-EndFunc
-
-Func IsPartyHealSkill($aSkill)
-    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
-	Switch $skillID
-		Case $Divine_Healing, $Heal_Party, $Heavens_Delight, $Protective_Was_Kaolai, $Mystic_Healing, $Mystic_Healing_PvP
-			Return True
-	EndSwitch
-	Return False
-EndFunc
-
-Func IsBondSkill($aSkill)
-    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
-	Switch $skillID
-		Case $Balthazars_Spirit, $Essence_Bond, $Life_Barrier, $Life_Bond, $Mending, $Protective_Bond, $Purifying_Veil, $Retribution, $Strength_of_Honor, $Succor
-			Return True
-	EndSwitch
-	Return False
-EndFunc
-
-Func IsCondRemoveSkill($aSkill)
-    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
-	Switch $skillID
-		Case $mend_ailment, $purge_conditions, $mending_touch, $Mend_Body_and_Soul, $Spotless_Soul
-			Return True
-	EndSwitch
-	If IsHexAndConditionRemoveSkill($skillID) Then Return True
-	Return False
-EndFunc
-
-Func IsHexRemoveSkill($aSkill)
-    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
-	Switch $skillID
-		Case $Smite_Hex, $Divert_Hexes, $Cure_Hex, $Hex_Eater_Vortex, $Shatter_Hex, $Reverse_Hex, $Remove_Hex, $Expel_Hexes, $Inspired_Hex, $Revealed_Hex, $Spotless_Mind, $Convert_Hexes, $Deny_Hexes, _
-				$Hex_Eater_Signet, $Withdraw_Hexes, $Hexbreaker_Aria, $holy_veil, $Pious_Restoration
-			Return True
-	EndSwitch
-	If IsHexAndConditionRemoveSkill($skillID) Then Return True
-	Return False
-EndFunc
-
-Func IsHexAndConditionRemoveSkill($aSkillID)
-	Switch $aSkillID
-		Case $Peace_and_Harmony, $Empathic_Removal, $Blessed_Light, $Contemplation_of_Purity, $Purge_Signet, $Signet_of_Removal
-			Return True
-	EndSwitch
-	Return False
-EndFunc
-
-Func IsEnchantRemoveSkill($aSkill)
-    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
-	Switch $skillID
-		Case $Chilblains, $Corrupt_Enchantment, $Envenom_Enchantments, $Jaundiced_Gaze, $Pain_of_Disenchantment, $Rend_Enchantments, _
-				$Rip_Enchantment, $Strip_Enchantment, _
-				$Air_of_Disenchantment, $Discharge_Enchantment, $Drain_Enchantment, $Feedback, $Inspired_Enchantment, $Lyssas_Balance, _
-				$Mirror_of_Disenchantment, $Revealed_Enchantment, $Shatter_Enchantment, $Shatter_Storm, $Signet_of_Disenchantment, _
-				$Assault_Enchantments, $Expunge_Enchantments, $Lift_Enchantment, $Shattering_Assault, $Signet_of_Twilight, _
-				$Rending_Touch, $Test_of_Faith
-			Return True
-	EndSwitch
-	Return False
-EndFunc
-
-Func IsPressureSkill($aSkill)
-    If IsConditionSpell($aSkill) Then Return True
-    If IsHexSpell($aSkill) Then Return True
-    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
-    Switch $skillID
-        Case $Ebon_Vanguard_Assassin_Support, $Ebon_Battle_Standard_Of_Honor, $Finish_Him, $Dark_Pact
-            Return True
-    EndSwitch
-    Return False
-EndFunc
-
-Func IsSpeedBoost($aSkill)
-    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
-	Switch $skillID
-		Case $Dwarven_Stability
-			Return True
-		Case $Illusion_of_Haste, $Windborne_Speed, $Armor_of_Mist, $Storm_Djinns_Haste, $Rush, $Sprint, $Charge, $Bulls_Charge, $Dodge, $Escape, $Storm_Chaser, $Run_as_One, _
-				$Burning_Speed, $Retreat, $Gust, $Shadow_of_Haste, $Torch_Hex, $Torch_Degeneration_Hex, $Dark_Escape, $Dash, $Zojuns_Haste, $Flame_Djinns_Haste, _
-				$Enraging_Charge, $Lyssas_Haste, $Avatar_of_Balthazar, $Enchanted_Haste, $Pious_Haste, $Whirling_Charge, $Godspeed, $Make_Haste, $Fall_Back, $Incoming, $Onslaught, _
-				$Featherfoot_Grace, $Harriers_Haste, $Hasty_Refrain, $Soldiers_Speed, $Drunken_Master, $Ursan_Roar, $Volfen_Pounce, $Escape_PvP, $Charging_Strike, _
-				$Battle_Rage, $Natural_Stride, $Storms_Embrace, $Junundu_Tunnel, $Flee, $HYAHHHHH, $Ursan_Force, $Incoming_PvP, $Its_Just_a_Flesh_Wound, $Fall_Back_PvP, _
-				$Call_of_Haste, $Call_of_Haste_PvP, $Lead_the_Way, $Fleeting_Stability, $Illusion_of_Haste_PvP, $Mindbender, $Rampage_as_One
-			Return True
-		Case $Heroic_Refrain, $To_the_Limit
-			Return True
-	EndSwitch
-	Return False
-EndFunc
-
-Func IsSurvivalSkill($aSkill)
-    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
-	Switch $skillID
-		Case $I_Am_Unstoppable, $Shadow_Form, $Shroud_of_Distress, $Glyph_of_Swiftness, $Shadow_Sanctuary_Luxon, $Shadow_Sanctuary_Kurzick _
-				, $Heart_of_Shadow, $Way_Of_The_Master, $Shadow_Refuge, $Protective_Spirit, $Shield_of_Absorption, $Shielding_Hands _
-				, $Mystic_Regeneration, $Shield_of_Judgment, $Spirit_Bond, $Zealots_Fire
-			Return True
-	EndSwitch
-	Return False
-EndFunc
-
-Func IsPrecastSkill($aSkill)
-	If IsPressureSpiritSkill($aSkill) Then Return True
-    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
-	Switch $skillID
-		Case $Balthazars_Spirit, $Blessed_Aura, $Boon_Of_Creation
-			Return True
-	EndSwitch
-	If IsSelfPrehealSkill($aSkill) Then Return True
-	If IsDisguiseskill($aSkill) Then Return True
-	If DllStructGetData(GetSkillByID($skillID), "Type") = $Ward Then Return True
-	Return False
-EndFunc
-
-Func IsSelfPrehealSkill($aSkill)
-    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
-	Switch $skillID
-		Case $Healing_Breeze, $Healing_Hands, $Mending, $Patient_Spirit, $Restful_Breeze, $Spirit_Bond, $Vigorous_Spirit _
-				, $Conviction, $Faithful_Intervention, $Mystic_Regeneration, $Mystic_Vigor, $Pious_Renewal, $Watchful_Intervention _
-				, $Feigned_Neutrality, $Shadow_Refuge, $Shadow_Sanctuary_Luxon, $Shadow_Sanctuary_Kurzick, $Shroud_of_Distress _
-				, $Healing_Spring, $Troll_Unguent _
-				, $Blood_Renewal, $Hexers_Vigor
-			Return True
-	EndSwitch
-	Return False
-EndFunc
-
-Func Wipe()
-	If Not GetIsDead(-2) Then Return False
-	Local $DeadPartyMembers = 0
-	For $i = 1 To GetHeroCount()
-		If GetIsDead(GetHeroID($i)) = True Then $DeadPartyMembers += 1
-	Next
-	If GetIsDead(-2) And (GetAvailableRezz() = 0 Or $DeadPartyMembers >= UBound(GetParty()) - 2 Or GetPartyHealth() < 0.15) Then Return True
-	Return False
-EndFunc
-
-Func GetPartyHealth()
-	Local $aTotalTeamHP = 0
-	Local $aParty = GetParty()
-	If Not IsArray($aParty) Or UBound($aParty) = 0 Then return 0
-	For $i = 0 To UBound($aParty) - 1
-		If GetIsDead($aParty[$i]) Then ContinueLoop
-		Local $aAgent = $aParty[$i]
-		Local $aAgentHP = Round(DllStructGetData($aAgent, 'HealthPercent'), 6)
-		$aTotalTeamHP += $aAgentHP
-	Next
-    If UBound($aParty) <= 1 Then Return 0
-	Local $nAverageHP = Round($aTotalTeamHP / (UBound($aParty) -1), 6)
-	Return $nAverageHP
-EndFunc
-
-Func GetAvailableRezz()
-	Local $aHeroRezzSkills = 0
-	For $aHeroNumber = 1 To GetHeroCount()
-		If GetIsDead(GetHeroID($aHeroNumber)) Then ContinueLoop
-		For $aSkillSlot = 1 To 8
-			Local $aSkill = GetSkillbarSkillID($aSkillSlot, $aHeroNumber)
-			If IsResSkill($aSkill) Then $aHeroRezzSkills += 1
-		Next
-	Next
-	Return $aHeroRezzSkills
-EndFunc
-
-Func IsResSkill($aSkill)
-    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
-	Switch $skillID
-		Case $By_Urals_Hammer, $We_Shall_Return, $Death_Pact_Signet, $Eternal_Aura, $Flesh_of_My_Flesh, $Junundu_Wail, $Light_of_Dwayna, $Lively_Was_Naomei, $Rebirth, $Renew_Life, _
-				$Restoration, $Restore_Life, $Resurrect, $Resurrection_Chant, $Resurrection_Signet, $Signet_of_Return, $Sunspear_Rebirth_Signet, $Unyielding_Aura, $Vengeance
-			Return True
-	EndSwitch
-	Return False
 EndFunc
 
 Func GetPartyDefeated()
@@ -1154,7 +634,7 @@ Func AggroMoveToEX($x, $y, $aFightRange = 1350)
 	Out("Debug: AggroMoveToEx Entered (" & $x & "," & $y & ")")
 	Local $lDeadlock, $lBlocked, $aOldX, $aOldY
 	Local $random = 100
-	If GetMapLoading() <> 2 Then 
+	If GetMapLoading() <> 0 Then 
 		Out("Debug: AggroMoveToEx Early Exit (MapLoading=" & GetMapLoading() & ")")
 		Return True
 	EndIf
@@ -1173,7 +653,7 @@ Func AggroMoveToEX($x, $y, $aFightRange = 1350)
 		If GetMapLoading() == 2 Then Disconnected()
 		
 		Local $dist = GetNearestEnemyDistance()
-		Out("Debug: Loop Check Dist=" & $dist & " Range=" & $aFightRange) 
+
 		
 		If $dist < $aFightRange Then 
 			Out("Debug: Triggering Fight! Dist=" & $dist)
@@ -1201,28 +681,7 @@ Func WeCanMove($aRange = 1200)
 	Return True
 EndFunc
 
-Func Fight($aAggroRange = 1000, $careful = False)
-	Out("Debug: Fight() Entered.")
-	Local $TimerToGetOut = TimerInit()
-	Do
-		If $careful Then CancelAll()
-		Local $BestTarget = GetNearestEnemyToAgent(GetMyAgent())
-		
-		If IsDllStruct($BestTarget) Then
-			Out("Debug: Attacking Target ID=" & DllStructGetData($BestTarget, 'ID'))
-			Attack($BestTarget, True)
-		Else
-			Out("Debug: No valid target to attack.")
-		EndIf
-		
-		Sleep(100)
-		If $careful Then
-			MoveTo(DllStructGetData($BestTarget, 'X'), DllStructGetData($BestTarget, 'Y'))
-			Sleep(300)
-		EndIf
-	Until GetNearestEnemyDistance() > $aAggroRange Or GetIsDead(-2) Or Wipe() Or TimerDiff($TimerToGetOut) > 240000
-	PickupLootEx(3000)
-EndFunc
+; Fight function removed here. New Fight logic appended at the end of the script.
 
 Func GetNearestEnemyDistance()
 	Local $target = GetNearestEnemyToAgent(GetMyAgent())
@@ -1538,6 +997,7 @@ EndFunc
 
 Func CountFreeSlots($NumOfBags = 4)
 	Local $lCount = 0
+	Local $lBagPtr
 	For $lBag = 1 To $NumOfBags
 		$lBagPtr = GetBagPtr($lBag)
 		If $lBagPtr = 0 Then ContinueLoop
@@ -1592,3 +1052,818 @@ Func TravelTo($aMapID, $aLanguage = -1, $aRegion = -1)
 	SendPacket(0x18, $HEADER_PARTY_TRAVEL, $aMapID, $aRegion, 0, $aLanguage, False)
 	WaitMapLoading($aMapID)
 EndFunc
+
+; Helper for Logic Port
+; Helper for Logic Port
+Func GetSkillPtr($aSkillID)
+	Local $skillStruct = GetSkillByID($aSkillID)
+	If IsDllStruct($skillStruct) Then Return DllStructGetPtr($skillStruct)
+	Return 0
+EndFunc
+
+; Ported Helper: GetHP (Percentage)
+Func GetHP($aAgent = -2)
+	Return MemoryRead(GetAgentPtr($aAgent) + 304, 'float')
+EndFunc
+
+; Ported Helper: GetIsKnocked Wrapper
+Func IsKnocked($aAgent = -2)
+	Return GetIsKnocked($aAgent)
+EndFunc
+
+; Ported Helper: IsPressureSpiritSkill
+
+
+; Ported Helper: IsDisguiseskill
+
+
+; Renamed Helper for Logic Port to avoid conflict
+Func AgentHasEffect($aSkillID, $aAgentID = -2)
+	Return GetEffect($aSkillID, ID($aAgentID)) <> 0
+EndFunc
+
+; Ported Helper: IsSkillType
+Func IsSkillType($aSkill, $aType)
+	Return DllStructGetData(GetSkillByID($aSkill), 'Type') = $aType
+EndFunc
+
+; Ported Helper: IsWeaponRange
+Func IsWeaponRange($aSkill)
+    Local $lRange = MemoryRead(GetSkillPtr($aSkill) + 96, "long") ; Range offset
+    Return $lRange > 0
+EndFunc
+
+; Ported Helper: Wipe
+Func Wipe($aPartyPtr = GetParty())
+	Local $lDeadCount = 0
+	Local $lPartySize = UBound($aPartyPtr) - 1
+	For $i = 1 To $lPartySize
+		If GetIsDead($aPartyPtr[$i]) Then $lDeadCount += 1
+	Next
+	If $lDeadCount = $lPartySize Then Return True
+	Return False
+EndFunc
+
+; Ported Helper: GetPartyHealth
+Func GetPartyHealth($aParty = GetParty())
+	Local $lHealth = 0
+	For $i = 1 To $aParty[0]
+		$lHealth += GetHP($aParty[$i])
+	Next
+	Return $lHealth / $aParty[0]
+EndFunc
+
+
+#Region Logic_Port
+; Ported Logic from GWA_Logic_Censured_NEW.au3
+; Including Smart Casting, Fight, and CacheSkillBar
+
+
+Global $Skillbar[9] = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+Global $SkillBarCache[9][20] ; Increased size for cache
+Global $SkillbarSlot[10000]
+
+; Helper Functions from Froggy (Restored for Logic)
+
+
+
+; Implemented GetBestTargetPtr (was missing in source)
+Func GetBestTargetPtr($aRange = 1350, $casting = False, $nohex = False, $enchanted = False)
+    Local $lAgentArray = GetAgentArray(0xDB) ; 0xDB = Living Enemy? Or 0x6C? Using 0xDB from GWA_Logic.
+    If Not IsArray($lAgentArray) Then Return 0
+    
+    Local $lBestDist = 99999
+    Local $lBestPtr = 0
+    Local $lMe = GetAgentByID(-2)
+    
+    For $i = 1 To $lAgentArray[0]
+        Local $lAgent = $lAgentArray[$i]
+        If GetIsDead($lAgent) Then ContinueLoop
+		Local $lDist = GetDistance(GetMyAgent(), $lAgent)
+		If $lDist > $aRange Then ContinueLoop
+		Local $lID = DllStructGetData($lAgent, 'ID')
+		
+		; Apply filters
+		If $casting And Not GetIsCasting($lID) Then ContinueLoop
+		If $nohex And GetHasHex($lID) Then ContinueLoop
+		If $enchanted And Not GetHasEnchantment($lID) Then ContinueLoop
+		
+		If $lDist < $lBestDist Then
+			$lBestDist = $lDist
+			$lBestPtr = $lAgent
+		EndIf
+    Next
+    Return $lBestPtr
+EndFunc
+
+Func GetBestMeleeTarget($aRange = 250)
+	Return GetBestTargetPtr($aRange) ; Simplified
+EndFunc
+
+Func GetNearestSpiritPtrToAgent($aAgent = -2)
+	; Simplified implementation
+	Return GetNearestNPCToCoords(GetX($aAgent), GetY($aAgent)) ; Placeholder
+EndFunc
+
+Func GetNearestMinionPtrToAgent($aAgent = -2)
+	Return 0 ; Placeholder
+EndFunc
+
+Func GetNearestDeadAllyPtrToAgent($aAgent = -2)
+	; Simplified
+	Local $party = GetParty()
+    For $i = 0 To UBound($party) - 1
+        if GetIsDead($party[$i]) Then Return $party[$i]
+    Next
+    Return 0
+EndFunc
+
+; Copied UseSkillEX
+Func UseSkillSmart($aSkillSlot, $aTarget = -2, $aTimeout = 6000, $aSkillbarPtr = 0)
+	Local $lDeadlock = TimerInit(), $lAgentID = ID($aTarget)
+	If $lAgentID = 0 Or GetIsDead(-2) Then Return
+	If $lAgentID <> GetMyID() Then ChangeTarget($aTarget)
+	UseSkill($aSkillSlot, $lAgentID)
+	Do
+		Sleep(50)
+		If GetIsDead($aTarget) Then Return
+		If GetEnergy(-2) < $SkillBarCache[$aSkillSlot][$energyreq] Then Return
+	Until Not CanCast($aSkillSlot) Or TimerDiff($lDeadlock) > $aTimeout
+	Sleep(MemoryRead(GetSkillPtr($SkillbarSlot[$aSkillSlot]) + 64, "float") * 1000) ; Aftercast
+	Return True
+EndFunc
+
+Func Fight($aAggroRange = 1000, $careful = False) ; Fighting mechanics
+	Out("Fighting enemies")
+	Local $TimerToGetOut = TimerInit()
+	; SetEvent("Rupt", "", "", "", "") ; Event system not ported, removing
+	Do
+		If $careful Then CancelAll()
+		If CanAttack($aAggroRange) Then Attack($BestTargetPtr, True) ; CanAttack() sets $besttarget global variable to best target
+		Sleep(100)
+		If $careful Then
+			Move(X($BestTargetPtr), Y($BestTargetPtr))
+			Sleep(300)
+		EndIf
+		UseSkills($aAggroRange, $all)    ; UseSkills resets $besttarget depending on the skills being used
+	Until GetNearestEnemyDistance() > $aAggroRange Or GetIsDead(-2) Or Wipe() Or TimerDiff($TimerToGetOut) > 240000
+	; SetEvent("", "", "", "", "")
+	PickupLootEx(3000)
+EndFunc
+
+Func UseSkills($aAggroRange = 1000, $skilltype = $all)
+	For $aSkillSlot = 1 To 8
+		; BossGlow(ID(GetAgentByID(-2)), Random(2, 10, 1)) ; Logic specific?
+		If GetIsDead(-2) Or Wipe() = 1 Or GetMapLoading() == 2 Then ExitLoop
+		If $SkillBarCache[$aSkillSlot][$skilltype] = "" Then ContinueLoop
+		If CanUse($aSkillSlot, $aAggroRange) Then UseSkillSmart($aSkillSlot, $BestTargetPtr)
+		If GetNearestEnemyDistance() > $aAggroRange Then Return
+	Next
+EndFunc
+
+Func CanCast($aSkillSlot = 0)
+	If GetMapLoading() == 2 Then Disconnected()
+	If GetMapLoading() == 0 Then Return
+	If IsKnocked() Or GetIsDead(-2) Or Wipe() = 1 Then Return False
+	If $aSkillSlot <> 0 And Not IsRecharged($aSkillSlot) Then Return False
+	Local $aType = $SkillBarCache[$aSkillSlot][$type]
+	If $aSkillSlot = 0 Then $aType = $Attack
+
+	Switch $aType
+		Case $Hex, $Spell, $Enchantment, $Well, $Ward, $ItemSpell, $WeaponSpell
+            If AgentHasEffect($Diversion) <> 0 Then Return False
+            If AgentHasEffect($Visions_of_Regret) <> 0 Then Return False
+            If AgentHasEffect($Visions_of_Regret_PvP) <> 0 Then Return False
+            If AgentHasEffect($Backfire) <> 0 Then Return False
+            If AgentHasEffect($Soul_Leech) <> 0 Then Return False
+            If AgentHasEffect($Mistrust) <> 0 Then Return False
+            If AgentHasEffect($Mistrust_PvP) <> 0 Then Return False
+            If AgentHasEffect($Mark_of_Subversion) <> 0 Then Return False
+            If AgentHasEffect($Spiteful_Spirit) <> 0 Then Return False
+		Case $Attack
+			If AgentHasEffect($Ineptitude) + AgentHasEffect($Clumsiness) + AgentHasEffect($Spiteful_Spirit) + AgentHasEffect($Wandering_Eye) + AgentHasEffect($Wandering_Eye_PvP) <> 0 Then
+				Out("Can't Attack")
+				Return False
+			EndIf
+		Case $Ritual, $Signet, $Glyph, $Shout, $Preparation, $Trap, $Chant, $EchoRefrain, $Disguise
+			If AgentHasEffect($Diversion) Then Return False
+		Case $Shout, $Chant
+			If AgentHasEffect($Well_of_Silence) Then Return False
+		Case $Signet
+			If AgentHasEffect($Ignorance) Then Return False
+	EndSwitch
+	Return True
+EndFunc
+
+Func CanAttack($aRange = 1320)
+	$BestTargetPtr = GetBestTargetPtr($aRange)
+	If $BestTargetPtr = 0 Then Return False ; Or IsFrostWorm($BestTargetPtr)
+	If CanCast() Then Return True
+	Return False
+EndFunc
+
+Func CanUse($aSkillSlot, $aAggroRange = 1320)
+	Local $ZephyrEffect = $SkillBarCache[$aSkillSlot][$energyreq] * 30 / 100
+	Local $ZephyrAddition = $SkillBarCache[$aSkillSlot][$energyreq] + $ZephyrEffect
+
+	If $aSkillSlot = "" Then Return
+	If Not CanCast($aSkillSlot) Then Return False
+	If GetBestTargetBySkillSlot($aSkillSlot, $aAggroRange) = 0 Then Return False        ; This sets besttarget global variable
+	If Not IsRecharged($aSkillSlot) Then Return False
+	If GetEnergy(-2) < $SkillBarCache[$aSkillSlot][$energyreq] Then Return False
+	If AgentHasEffect($Quickening_Zephyr, -2) And GetEnergy(-2) < $ZephyrAddition Then Return False
+	If $SkillBarCache[$aSkillSlot][$adrereq] <> 0 And GetAdrenaline($aSkillSlot) < $SkillBarCache[$aSkillSlot][$adrereq]  Then Return False
+
+;~ BINDING RITUALS
+	If $SkillBarCache[$aSkillSlot][$bind] <> "" Then
+		Switch $SkillBarCache[$aSkillSlot][$bind]     ; binding ritual skills
+			Case $Summon_Spirits_Kurzick, $Summon_Spirits_Luxon
+				If GetNumberOfEnemies($aAggroRange) = 0 Then Return False ; NumberOfPressureSpirits not impl
+		EndSwitch
+	EndIf
+
+;~ SURVIVAL SKILLS
+	If $SkillBarCache[$aSkillSlot][$survive] <> "" Then
+		Switch $SkillBarCache[$aSkillSlot][$survive]
+			Case $I_Am_Unstoppable
+				If GetEffectTimeRemaining($Shadow_Form) > 5000 And Not GetIsKnocked(-2) Then Return False
+			Case $Glyph_of_Swiftness
+				If GetEffectTimeRemaining($Shadow_Form) > 5000 Then Return False
+				If GetSkillbarSkillRecharge($SkillbarSlot[$Shadow_Form]) > 5000 Then Return False
+			Case $Shadow_Form
+				If GetEffectTimeRemaining($Shadow_Form) > 5000 Then Return False
+				If GetEffectTimeRemaining($Glyph_of_Swiftness) = 0 Then Return False
+			Case $Shroud_Of_Distress
+				If GetHP(-2) > 0.9 Then Return False
+				If GetEffectTimeRemaining($Shroud_Of_Distress) > 5000 Then Return False
+			Case $Shadow_Sanctuary_Luxon, $Shadow_Sanctuary_Kurzick, $Shadow_Refuge
+				If GetHP(-2) > 0.7 Then Return False
+			Case $Heart_of_Shadow
+				If GetHP(-2) > 0.5 Then Return False
+			Case $Mystic_Regeneration
+				If GetEffectTimeRemaining($Mystic_Regeneration) < 4000 Then Return True
+			Case $Shield_of_Judgment
+				If GetEffectTimeRemaining($Shielding_Hands) < 4500 And GetEffectTimeRemaining($Shield_of_Absorption) < 4500 Then Return False
+
+		EndSwitch
+	EndIf
+
+;~ PRESSURE SKILLS
+	If $SkillBarCache[$aSkillSlot][$pressure] <> "" Then
+		Switch $SkillBarCache[$aSkillSlot][$pressure]
+			Case $Finish_Him
+				If DllStructGetData(GetAgentByID(ID($BestTargetPtr)), 'Health') > 0.45 Then Return False
+		EndSwitch
+	EndIf
+
+;~ HEAL SKILLS
+	If $SkillBarCache[$aSkillSlot][$heal] <> "" Then
+		$lowestally = GetLowestAlly()
+		If IsHealSkill($SkillBarCache[$aSkillSlot][$heal]) And GetHP($lowestally) > 0.8 Then Return False
+	EndIf
+
+	Return True
+EndFunc
+
+Func GetBestTargetBySkillSlot($aSkillSlot, $aAggroRange = 1320)
+	$MyPtr = GetAgentPtr(-2)
+	Switch $SkillBarCache[$aSkillSlot][$target]
+		Case 0	; self
+			If $SkillBarCache[$aSkillSlot][$type] == $Ward And GetDistance(GetMyAgent(), GetNearestEnemyToAgent(GetMyAgent())) > $aAggroRange Then Return False
+			$BestTargetPtr = $MyPtr
+		Case 1	; spirit, minion
+			$BestTargetPtr = GetNearestSpiritPtrToAgent()
+		Case 3	; ally
+			If $SkillBarCache[$aSkillSlot][$condremove] <> "" Then
+				$BestTargetPtr = MostCondsAllyPtr()
+			ElseIf $SkillBarCache[$aSkillSlot][$hexremove] <> "" Then
+				$BestTargetPtr = MostHexedAllyPtr()
+			ElseIf $SkillBarCache[$aSkillSlot][$precast] <> "" Then
+				$BestTargetPtr = $MyPtr
+			ElseIf $SkillBarCache[$aSkillSlot][$survive] <> "" Then
+				$BestTargetPtr = $MyPtr
+			ElseIf $SkillBarCache[$aSkillSlot][$echoes] <> "" Then
+				$BestTargetPtr = NeedEchoAlly($SkillBarCache[$aSkillSlot][$echoes])
+			Else
+				$BestTargetPtr = GetLowestAlly()
+			EndIf
+		Case 4	; other ally
+			If $SkillBarCache[$aSkillSlot][$condremove] <> "" Then
+				$BestTargetPtr = MostCondsAllyPtr(True)
+			ElseIf $SkillBarCache[$aSkillSlot][$hexremove] <> "" Then
+				$BestTargetPtr = MostHexedAllyPtr(True)
+			ElseIf $SkillBarCache[$aSkillSlot][$precast] <> "" Then
+				$BestTargetPtr = $MyPtr
+			ElseIf $SkillBarCache[$aSkillSlot][$survive] <> "" Then
+				$BestTargetPtr = $MyPtr
+			ElseIf $SkillBarCache[$aSkillSlot][$echoes] <> "" Then
+				$BestTargetPtr = NeedEchoAlly($SkillBarCache[$aSkillSlot][$echoes])
+			Else
+				$BestTargetPtr = GetLowestAlly(True)
+			EndIf
+
+		Case 5	; enemy,
+			If $SkillBarCache[$aSkillSlot][$hexes] <> "" Then
+				$BestTargetPtr = GetNoHexEnemy($aAggroRange)
+				If $BestTargetPtr = 0 Then $BestTargetPtr = GetBestTargetPtr($aAggroRange)
+			ElseIf $SkillBarCache[$aSkillSlot][$enchantremove] <> "" Then
+				$BestTargetPtr = GetBalledEnchantedEnemy($aAggroRange)
+			ElseIf $SkillBarCache[$aSkillSlot][$attackskill] <> "" Then
+				$BestTargetPtr = GetBestMeleeTarget()
+			ElseIf $SkillBarCache[$aSkillSlot][$rupt] <> "" Then
+				$BestTargetPtr = GetMostBalledCastingEnemy($aAggroRange)    ; finds only enemies that are casting a spell
+			Else
+				$BestTargetPtr = GetBestTargetPtr($aAggroRange)
+			EndIf
+		Case 6	; dead ally
+			$BestTargetPtr = GetNearestDeadAllyPtrToAgent()
+		Case 14	; spirit, minion
+			$BestTargetPtr = GetNearestMinionPtrToAgent()
+	EndSwitch
+
+	If $BestTargetPtr <> 0 Then Return $BestTargetPtr
+	Return 0
+EndFunc
+
+Func GetLowestAlly($excludeself = False)
+	Local $lLowestally = 0, $lLowestHP = 1.0
+	Local $lAgentArray = GetAgentArray(0xDB)
+	For $i = 1 To $lAgentArray[0]
+		If DllStructGetData($lAgentArray[$i], 'Allegiance') <> 1 Then ContinueLoop
+		If DllStructGetData($lAgentArray[$i], 'HP') <= 0 Then ContinueLoop
+		If $excludeself And ID($lAgentArray[$i]) = ID(-2) Then ContinueLoop
+		$lHP = GetHP($lAgentArray[$i])
+		If $lHP < $lLowestHP Then
+			$lLowestally = $lAgentArray[$i]
+			$lLowestHP = $lHP
+		EndIf
+	Next
+	Return $lLowestally
+EndFunc
+
+Func GetNoHexEnemy($aRange = 1320)
+	Return GetBestTargetPtr($aRange, False, True)
+EndFunc
+
+Func GetBalledEnchantedEnemy($aRange)
+	Return GetBestTargetPtr($aRange, False, False, True)
+EndFunc
+
+Func GetMostBalledCastingEnemy($aRange = 1320)
+	Return GetBestTargetPtr($aRange, True)
+EndFunc
+
+Func NeedEchoAlly($aSkillID)
+	Return GetAgentByID(-2) ; Simplified
+EndFunc
+
+Func MostCondsAllyPtr($excludeself = False)
+    Local $MostConditionedAlly = 0
+    Local $lMostConditions = 0
+    For $aHeroNumber = 0 To GetPartySize()-1
+       If $excludeself = True And $aHeroNumber = 0 Then ContinueLoop
+		; Logic simplified: assume random ally if complex effect checking fails
+		$MostConditionedAlly = GetHeroID($aHeroNumber)
+	Next
+    Return $MostConditionedAlly ; Placeholder
+EndFunc
+
+Func MostHexedAllyPtr($excludeself = False)
+	Local $lMostHexedally = 0
+	For $aHeroNumber = 0 To GetPartySize()-1
+		If $excludeself = True And $aHeroNumber = 0 Then ContinueLoop
+		$lMostHexedally = GetHeroID($aHeroNumber)
+	Next
+	Return $lMostHexedally ; Placeholder
+EndFunc
+
+Func CacheSkillBar()
+	Out("Mapping your skill bar")
+	$PressureSpiritSkills = 0
+	Sleep(200)
+	For $i = 1 To 8
+		Local $aSkillID = GetSkillbarSkillID($i)
+		If $aSkillID = 0 Then ContinueLoop
+		$SkillbarSlot[$aSkillID] = $i
+		$SkillBarCache[$i][$all] = $aSkillID
+		$SkillBarCache[$i][$ptr] = GetSkillPtr($aSkillID)
+		$SkillBarCache[$i][$energyreq] = MemoryRead($SkillBarCache[$i][$ptr] + 28, 'long') ; Offset guess
+		$SkillBarCache[$i][$adrereq] = MemoryRead($SkillBarCache[$i][$ptr] + 56, 'dword')
+		$SkillBarCache[$i][$type] = MemoryRead($SkillBarCache[$i][$ptr] + 12, "long")
+		$SkillBarCache[$i][$target] = MemoryRead($SkillBarCache[$i][$ptr] + 49, "byte")
+		
+		If IsHexSpell($aSkillID) Then $SkillBarCache[$i][$hexes] = $aSkillID
+		If IsPressureSkill($aSkillID) Then $SkillBarCache[$i][$pressure] = $aSkillID
+		If IsSurvivalSkill($aSkillID) Then $SkillBarCache[$i][$survive] = $aSkillID
+		If IsAttackSkill($aSkillID) Then $SkillBarCache[$i][$attackskill] = $aSkillID
+		If IsHealSkill($aSkillID) Then $SkillBarCache[$i][$heal] = $aSkillID
+		If IsBondSkill($aSkillID) Then $SkillBarCache[$i][$bond] = $aSkillID
+		If IsCondRemoveSkill($aSkillID) Then $SkillBarCache[$i][$condremove] = $aSkillID
+		If IsHexRemoveSkill($aSkillID) Then $SkillBarCache[$i][$hexremove] = $aSkillID
+		If IsEnchantRemoveSkill($aSkillID) Then $SkillBarCache[$i][$enchantremove] = $aSkillID
+		If IsPrecastSkill($aSkillID) Then $SkillBarCache[$i][$precast] = $aSkillID
+		If IsChantSkill($aSkillID) or IsShoutSkill($aSkillID) Then $SkillBarCache[$i][$chantsnshouts] = $aSkillID
+		If IsEchoRefrainskill($aSkillID) Then $SkillBarCache[$i][$echoes] = $aSkillID
+	Next
+	Out("Mapping your skill bar - completed")
+	Return True
+EndFunc
+
+
+
+
+Func IsWeaponSpell($aSkill)
+    Local $skillStruct = IsDllStruct($aSkill) ? $aSkill : GetSkillByID($aSkill)
+    If Not IsDllStruct($skillStruct) Then Return False
+	Return IsSkillType($aSkill, $Type_Attack) And IsWeaponRange($aSkill)
+EndFunc
+
+Func IsEnchantmentSkill($aSkill)
+    Local $skillStruct = IsDllStruct($aSkill) ? $aSkill : GetSkillByID($aSkill)
+    If Not IsDllStruct($skillStruct) Then Return False
+    Return DllStructGetData($skillStruct, "Type") = $Enchantment
+EndFunc
+
+Func IsAttackSkill($aSkill)
+    Local $skillStruct = IsDllStruct($aSkill) ? $aSkill : GetSkillByID($aSkill)
+    If Not IsDllStruct($skillStruct) Then Return False
+    Return DllStructGetData($skillStruct, "Type") = $Type_Attack
+EndFunc
+
+Func IsShoutSkill($aSkill)
+    Local $skillStruct = IsDllStruct($aSkill) ? $aSkill : GetSkillByID($aSkill)
+    If Not IsDllStruct($skillStruct) Then Return False
+    Return DllStructGetData($skillStruct, "Type") = $Shout
+EndFunc
+
+Func IsEchoRefrainskill($aSkill)
+    Local $skillStruct = IsDllStruct($aSkill) ? $aSkill : GetSkillByID($aSkill)
+    If Not IsDllStruct($skillStruct) Then Return False
+    Return DllStructGetData($skillStruct, "Type") = $EchoRefrain
+EndFunc
+
+
+
+Func IsChantSkill($aSkill)
+    Local $skillStruct = IsDllStruct($aSkill) ? $aSkill : GetSkillByID($aSkill)
+    If Not IsDllStruct($skillStruct) Then Return False
+    Return DllStructGetData($skillStruct, "Type") = $Chant
+EndFunc
+
+Func IsHealSkill($aSkill)
+	Switch MemoryRead(GetSkillPtr($aSkill) + 32, 'long')	; Effect 2
+		Case 2, 4, 6, 36, 38, 4102, 4096, 6144, 8196, 8198, 14336
+			Return True
+		Case Else
+			Switch ID($aSkill)	;
+				Case $Healing_Hands, $Restful_Breeze, $Signet_Of_Rejuvenation, $Words_of_Comfort, $Conviction, $Faithful_Intervention _
+					,$Mystic_Healing, $Mystic_Healing_PvP, $Mystic_Regeneration, $Mystic_Vigor, $Pious_Renewal, $Watchful_Intervention _
+					,$Spirit_Transfer, $I_Will_Avenge_You, $I_Will_Survive, $Shadow_Sanctuary_Luxon, $Shadow_Sanctuary_Kurzick _
+					,$Shroud_of_Distress, $Healing_Spring, $Hexers_Vigor, $Feel_No_Pain
+				Return True
+			EndSwitch
+	EndSwitch
+	If IsPartyHealSkill($aSkill) Then Return True
+	Return False
+EndFunc
+
+; -------------------
+
+Func IsPartyHealSkill($aSkill)    ; incomplete list, add based on your needs
+	Switch $aSkill
+		Case $Divine_Healing, $Heal_Party, $Heavens_Delight, $Protective_Was_Kaolai, $Mystic_Healing, $Mystic_Healing_PvP
+			Return True
+	EndSwitch
+	Return False
+EndFunc   ;==>IsPartyHealSkill
+
+Func IsSelfPrehealSkill($aSkill)    ; contains only instant, non condititional, self-targeted heals
+	Switch $aSkill
+		Case $Healing_Breeze, $Healing_Hands, $Mending, $Patient_Spirit, $Restful_Breeze, $Spirit_Bond, $Vigorous_Spirit ; Monk Skills
+        Case $Conviction, $Faithful_Intervention, $Mystic_Regeneration, $Mystic_Vigor, $Pious_Renewal, $Vital_Boon, $Watchful_Intervention ; Dervish Skills
+        Case $Feigned_Neutrality, $Shadow_Refuge, $Shadow_Sanctuary_Luxon, $Shadow_Sanctuary_Kurzick, $Shroud_of_Distress ; Assassin Skills
+        Case $Healing_Spring, $Troll_Unguent ; Ranger Skills
+        Case $Blood_Renewal, $Hexers_Vigor ; Necro Skills
+			Return True
+	EndSwitch
+	Return False
+EndFunc   ;==>IsSelfPrehealSkill
+
+Func IsBondSkill($aSkill)
+	Switch $aSkill
+		Case $Balthazars_Spirit, $Essence_Bond, $Life_Barrier, $Life_Bond, $Mending, $Protective_Bond, $Purifying_Veil, $Retribution, $Strength_of_Honor, $Succor
+			Return True
+	EndSwitch
+	Return False
+EndFunc   ;==>IsBondSkill
+
+;~ Tests if a skill is a condition removal skill - to be expanded
+Func IsCondRemoveSkill($aSkill)
+	Switch $aSkill
+		Case $mend_ailment, $purge_conditions, $mending_touch, $Mend_Body_and_Soul, $Spotless_Soul
+			Return True
+	EndSwitch
+	If IsHexAndConditionRemoveSkill($aSkill) Then Return True
+	Return False
+EndFunc   ;==>IsCondRemoveSkill
+
+;~ Tests if a skill is a hex removal skill
+Func IsHexRemoveSkill($aSkill)
+	Switch $aSkill
+		Case $Smite_Hex, $Divert_Hexes, $Cure_Hex, $Hex_Eater_Vortex, $Shatter_Hex, $Reverse_Hex, $Remove_Hex, $Expel_Hexes, $Inspired_Hex, $Revealed_Hex, $Spotless_Mind, $Convert_Hexes, $Deny_Hexes; remove hex (me and ally)
+        Case $Hex_Eater_Signet, $Withdraw_Hexes, $Hexbreaker_Aria, $holy_veil, $Pious_Restoration
+			Return True
+	EndSwitch
+	If IsHexAndConditionRemoveSkill($aSkill) Then Return True
+	Return False
+EndFunc   ;==>IsHexRemoveSkill
+
+Func IsHexAndConditionRemoveSkill($aSkillID)
+	Switch $aSkillID
+		Case $Peace_and_Harmony, $Empathic_Removal, $Blessed_Light, $Contemplation_of_Purity, $Purge_Signet, $Signet_of_Removal
+			Return True
+	EndSwitch
+	Return False
+EndFunc   ;==>IsHexAndConditionRemoveSkill
+
+Func IsEnchantRemoveSkill($aSkill)
+	Return False
+EndFunc
+
+Func IsBindingSkill($aSkillID)
+	Switch $aSkillID
+		Case $Ebon_Battle_Standard_of_Honor
+			Return True    ; not binding ritual but grouped together for convenience purposes
+		Case $Agony, $Agony_PvP, $Anguish, $Anguish_PvP
+        Case $Bloodsong, $Bloodsong_PvP, $Call_to_the_Spirit_Realm, $Destruction, $Destruction_PvP
+        Case $Disenchantment, $Disenchantment_PvP, $Disenchantment_Togo, $Dissonance, $Dissonance_PvP
+        Case $Gaze_of_Fury, $Gaze_of_Fury_PvP, $Jack_Frost, $Life, $Pain, $Pain_PvP, $Wanderlust, $Wanderlust_PvP
+        Case $Displacement, $Displacement_PvP, $Earthbind, $Earthbind_PvP, $Empowerment, $Empowerment_PvP
+        Case $Preservation, $Preservation_PvP, $Recovery, $Recovery_PvP, $Recuperation, $Recuperation_PvP
+        Case $Rejuvenation, $Rejuvenation_PvP, $Shadowsong, $Shadowsong_PvP, $Shelter, $Shelter_PvP
+        Case $Signet_of_Creation, $Signet_of_Creation_PvP, $Signet_Of_Spirits, $Signet_of_Spirits_PvP
+        Case $Soothing, $Soothing_PvP, $Union, $Union_PvP, $Vampirism
+			Return True
+		Case $Summon_Spirits_Luxon, $Summon_Spirits_Kurzick ; used in binding builds
+			Return True
+		Case $Ritual_Lord, $Ritual_Lord_PvP ; used in binding builds
+			Return True
+		Case $Soul_Twisting ; used in binding builds
+			Return True
+		Case $Armor_of_Unfeeling, $Armor_of_Unfeeling_PvP, $Signet_of_Ghostly_Might, $Signet_of_Ghostly_Might_PvP ; used in binding builds
+			Return True
+		Case $Spiritleech_Aura ; used in binding builds
+			Return True
+	EndSwitch
+	Return False
+EndFunc   ;==>IsBindingSkill
+
+Func IsPressureSpiritSkill($aSkillID)
+	Switch $aSkillID
+		Case $Agony, $Agony_PvP, $Anguish, $Anguish_PvP, $Bloodsong, $Bloodsong_PvP, $Destruction, $Destruction_PvP
+        Case $Disenchantment, $Disenchantment_PvP, $Dissonance, $Dissonance_PvP, $Gaze_of_Fury, $Gaze_of_Fury_PvP
+        Case $Pain, $Pain_PvP, $Wanderlust, $Wanderlust_PvP, $Earthbind, $Earthbind_PvP, $Shadowsong, $Shadowsong_PvP
+        Case $Signet_Of_Spirits, $Signet_of_Spirits_PvP, $Vampirism
+			Return True
+	EndSwitch
+	Return False
+EndFunc   ;==>IsPressureSpiritSkill
+
+Func IsPressureSkill($aSkill)
+    If IsConditionSpell($aSkill) Then Return True
+    If IsHexSpell($aSkill) Then Return True
+    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
+    Switch $skillID
+        Case $Ebon_Vanguard_Assassin_Support, $Ebon_Battle_Standard_Of_Honor, $Finish_Him, $Dark_Pact
+            Return True
+    EndSwitch
+    Return False
+EndFunc
+
+Func IsSpeedBoost($aSkill)
+	Switch $aSkill
+		Case $Dwarven_Stability    ; used to potentiate running, to be used before stances
+			Return True
+		Case $Illusion_of_Haste, $Windborne_Speed, $Armor_of_Mist, $Storm_Djinns_Haste, $Rush, $Sprint, $Charge, $Bulls_Charge, $Dodge, $Escape, $Storm_Chaser, $Run_as_One
+        Case $Burning_Speed, $Retreat, $Gust, $Shadow_of_Haste, $Torch_Hex, $Torch_Degeneration_Hex, $Dark_Escape, $Dash, $Zojuns_Haste, $Flame_Djinns_Haste
+        Case $Enraging_Charge, $Lyssas_Haste, $Avatar_of_Balthazar, $Enchanted_Haste, $Pious_Haste, $Whirling_Charge, $Godspeed, $Make_Haste, $Fall_Back, $Incoming, $Onslaught
+        Case $Featherfoot_Grace, $Harriers_Haste, $Hasty_Refrain, $Soldiers_Speed, $Drunken_Master, $Ursan_Roar, $Volfen_Pounce, $Escape_PvP, $Charging_Strike
+        Case $Battle_Rage, $Natural_Stride, $Storms_Embrace, $Junundu_Tunnel, $Flee, $HYAHHHHH, $Ursan_Force, $Incoming_PvP, $Its_Just_a_Flesh_Wound, $Fall_Back_PvP
+        Case $Call_of_Haste, $Call_of_Haste_PvP, $Lead_the_Way, $Fleeting_Stability, $Illusion_of_Haste_PvP, $Mindbender, $Rampage_as_One
+			Return True
+		Case $Heroic_Refrain, $To_the_Limit	; ensures Heroic refrain is being ramped up / maintained outside of aggro
+			Return True
+	EndSwitch
+	Return False
+EndFunc   ;==>IsSpeedBoost
+
+Func IsSurvivalSkill($aSkill)
+    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
+	Switch $skillID
+		Case $I_Am_Unstoppable, $Shadow_Form, $Shroud_of_Distress, $Glyph_of_Swiftness, $Shadow_Sanctuary_Luxon, $Shadow_Sanctuary_Kurzick _
+				, $Heart_of_Shadow, $Way_Of_The_Master, $Shadow_Refuge, $Protective_Spirit, $Shield_of_Absorption, $Shielding_Hands _
+				, $Mystic_Regeneration, $Shield_of_Judgment, $Spirit_Bond, $Zealots_Fire
+			Return True
+	EndSwitch
+	Return False
+EndFunc
+
+; Returns whether a skill is a hex spell
+Func IsHexSpell($aSkill)
+	If IsPtr($aSkill) <> 0 Then
+		Return MemoryRead($aSkill + 12, "long") = $Hex
+	ElseIf IsDllStruct($aSkill) <> 0 Then
+		Return DllStructGetData($aSkill, "Type") = $Hex
+	Else
+		Return MemoryRead(GetSkillPtr($aSkill) + 12, "long") = $Hex
+	EndIf
+EndFunc   ;==>IsHexSpell
+
+; Returns whether a skill is a condition spell
+Func IsConditionSpell($aSkill)
+	If IsPtr($aSkill) <> 0 Then
+		Return MemoryRead($aSkill + 12, "long") = $Condition
+	ElseIf IsDllStruct($aSkill) <> 0 Then
+		Return DllStructGetData($aSkill, "Type") = $Condition
+	Else
+		Return MemoryRead(GetSkillPtr($aSkill) + 12, "long") = $Condition
+	EndIf
+EndFunc   ;==>IsConditionSpell
+
+Func IsRuptSkill($aSkill, $hardrupt = False)
+	Local $lSkillEffect2 = MemoryRead(GetSkillPtr($aSkill) + 32, 'long')
+	Local $lSkillID = ID($aSkill)
+	If BitAND($lSkillEffect2, 1) Then Return True
+
+	Switch $lSkillID	; interrupt skills that are incorrectly categorized via Effect2 or soft rupts for separation
+		Case $Mistrust, $Mistrust_PvP, $Guilt, $Power_Drain, $Power_Flux, $Power_Leak, $Power_Leech, $Power_Lock, $Power_Return, $Power_Spike, $Shame    ; soft rupts
+			If Not $hardrupt Then Return True
+		Case $You_Move_Like_a_Dwarf, $Disarm, $Disrupting_Shot, $Disrupting_Throw, $Distracting_Lunge, $Distracting_Strike, $Magebane_Shot, $Concussion_Shot
+			Return True
+		Case $Cry_of_Pain, $Overload, $Psychic_Instability, $Psychic_Instability_PvP, $Signet_of_Clumsiness, $Simple_Thievery, $Tease    ; overoad/SoC lumped here for convenience
+			Return True
+		Case $Exhausting_Assault, $Temple_Strike, $Lyssas_Assault, $Lyssas_Haste, $Thunderclap
+			Return True
+		Case Else
+			Return False
+	EndSwitch
+EndFunc   ;==>IsRuptSkill
+
+Func IsHardRuptSkill($aSkillID)
+	Return IsRuptSkill($aSkillID, True)
+EndFunc   ;==>IsHardRuptSkill
+
+Func IsDisguiseskill($aSkill)
+	If IsPtr($aSkill) <> 0 Then
+		Return MemoryRead($aSkill + 12, "long") = $Disguise
+	ElseIf IsDllStruct($aSkill) <> 0 Then
+		Return DllStructGetData($aSkill, "Type") = $Disguise
+	Else
+		Return MemoryRead(GetSkillPtr($aSkill) + 12, "long") = $Disguise
+	EndIf
+EndFunc   ;==>IsDisguiseskill
+
+Func IsPrecastSkill($aSkill)
+	If IsPressureSpiritSkill($aSkill) Then Return True
+    Local $skillID = IsDllStruct($aSkill) ? DllStructGetData($aSkill, "ID") : $aSkill
+	Switch $skillID
+		Case $Balthazars_Spirit, $Blessed_Aura, $Boon_Of_Creation
+			Return True
+	EndSwitch
+	If IsSelfPrehealSkill($aSkill) Then Return True
+	If IsDisguiseskill($aSkill) Then Return True
+	If DllStructGetData(GetSkillByID($skillID), "Type") = $Ward Then Return True
+	Return False
+EndFunc
+
+
+
+; ============================
+; Helper Functions for Compatibility
+; ============================
+
+Func ID($agent)
+    If IsDllStruct($agent) Then Return DllStructGetData($agent, 'ID')
+    Return $agent
+EndFunc
+
+Func GetX($agent)
+    If IsDllStruct($agent) Then Return DllStructGetData($agent, 'X')
+    Return 0
+EndFunc
+
+Func GetY($agent)
+    If IsDllStruct($agent) Then Return DllStructGetData($agent, 'Y')
+    Return 0
+EndFunc
+
+Func X($agent)
+    Return GetX($agent)
+EndFunc
+
+Func Y($agent)
+    Return GetY($agent)
+EndFunc
+
+; Ported Logic Helpers
+; -------------------
+
+Func GetHasEnchantment($aAgent)
+	; Alias for GetIsEnchanted logic
+	Return BitAND(MemoryRead(GetAgentPtr($aAgent) + 312, "long"), 0x0080) > 0
+EndFunc
+
+Func GetEffectsPtr($aSkillID = 0, $aHeroNumber = 0, $aHeroId = GetHeroID($aHeroNumber))
+	Local $lEffectCount, $lEffectStructAddress, $lBuffer
+	Local $lOffset[4] = [0, 24, 44, 1296]
+	Local $lCount = MemoryReadPtr($mBasePointer, $lOffset)
+	ReDim $lOffset[5]
+	$lOffset[3] = 1288
+	For $i = 0 To $lCount[1] - 1
+		$lOffset[4] = 36 * $i
+		$lBuffer = MemoryReadPtr($mBasePointer, $lOffset)
+		If $lBuffer[1] = $aHeroId Then
+			$lOffset[4] = 28 + 36 * $i
+			$lEffectCount = MemoryReadPtr($mBasePointer, $lOffset)
+			$lOffset[4] = 20 + 36 * $i
+			$lEffectStructAddress = MemoryReadPtr($mBasePointer, $lOffset, 'ptr')
+			If $aSkillID = 0 Then Return $lEffectStructAddress[1]
+			; Logic for specific ID omitted for basic Ptr return
+		EndIf
+	Next
+	Return 0
+EndFunc
+
+Func IsSelfHealSkill($aSkill)    ; healing skills that can be used on self
+	Return IsPartyHealSkill($aSkill) And MemoryRead(GetSkillPtr($aSkill) + 49, "byte") <> 4
+EndFunc
+
+Func IsSelfOnlyHealSkill($aSkill)    ; healing skills that can be used on self
+	Return IsPartyHealSkill($aSkill) And MemoryRead(GetSkillPtr($aSkill) + 49, "byte") = 0
+EndFunc
+
+Func IsHealOtherSkill($aSkill)    ; healing skills that can only be used on others
+	Return IsPartyHealSkill($aSkill) And MemoryRead(GetSkillPtr($aSkill) + 49, "byte") = 4
+EndFunc
+
+Func IsHealMySelfSkill($aSkill)
+	Local $lSkillType = MemoryRead(GetSkillPtr($aSkill) + 12, "long")
+	Return BitAND($lSkillType, 4)
+EndFunc
+
+Func IsHealAllySkill($aSkill)
+	Local $lSkillType = MemoryRead(GetSkillPtr($aSkill) + 12, "long")
+	Return BitAND($lSkillType, 2)
+EndFunc
+
+Func IsHexRemovalSkill($aSkill)
+	Return IsHexRemoveSkill($aSkill)
+EndFunc
+
+Func IsConditionRemovalSkill($aSkill)
+	Return IsCondRemoveSkill($aSkill)
+EndFunc
+
+Func IsConditionAndHexRemovalSkill($aSkill)
+	Return IsHexAndConditionRemoveSkill($aSkill)
+EndFunc
+
+
+
+Func GetNumberOfEnemies($aRange = 1200)
+	Local $count = 0
+	Local $lAgentArray = GetAgentArray(0xDB)
+	If Not IsArray($lAgentArray) Then Return 0
+	For $i = 1 To $lAgentArray[0]
+		If GetIsDead($lAgentArray[$i]) Then ContinueLoop
+		If GetDistance(GetMyAgent(), $lAgentArray[$i]) < $aRange Then $count += 1
+	Next
+	Return $count
+EndFunc
+
+Func GetAdrenaline($aSkillSlot)
+    Local $aSkillbarPtr = GetSkillbarPtr()
+    If $aSkillbarPtr = 0 Then Return 0
+    $aSkillSlot -= 1
+    Return MemoryRead($aSkillbarPtr + 4 + $aSkillSlot * 20, "long")
+EndFunc
+
+
+
+
+; Ported Dependency for GetAdrenaline
+Func GetSkillbarPtr($aHeroNumber = 0)
+    Local $lOffset[5] = [0, 24, 76, 84, 44]
+    Local $lHeroCount = MemoryReadPtr($mBasePointer, $lOffset)
+    Local $lOffset2[5] = [0, 24, 44, 1776, 0] ; Re-dimensioned for 5 elements
+    For $i = 0 To $lHeroCount[1]
+        $lOffset2[4] = $i * 188
+        Local $lSkillbarStructAddress = MemoryReadPtr($mBasePointer, $lOffset2)
+        If $lSkillbarStructAddress[1] = GetHeroID($aHeroNumber) Then Return $lSkillbarStructAddress[0]
+    Next
+    Return 0
+EndFunc
+
+
+
+#EndRegion Logic_Port

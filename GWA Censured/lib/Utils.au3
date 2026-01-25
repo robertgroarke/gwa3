@@ -19,6 +19,7 @@
 
 #include <array.au3>
 #include <WinAPIDiag.au3>
+#include <File.au3>
 #include 'GWA2_Headers.au3'
 #include 'GWA2_ID.au3'
 #include 'GWA2.au3'

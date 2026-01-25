@@ -1093,3 +1093,38 @@ Func SpecialEvents()
 			GUISetState (@SW_HIDE)
     EndSelect
 EndFunc
+
+; #Region Logging Wrappers
+; Added to resolve missing functions
+
+Global $WARN_ONCE_CACHE[]
+
+Func Notice($Text)
+    Out("[NOTICE] " & $Text)
+EndFunc
+
+Func Warn($Text)
+    Out("[WARN] " & $Text)
+EndFunc
+
+Func WarnOnce($Text)
+    If $WARN_ONCE_CACHE[$Text] = True Then Return
+    $WARN_ONCE_CACHE[$Text] = True
+    Warn($Text)
+EndFunc
+
+Func Debug($Text)
+	; Simple debug wrapper
+    Out("[DEBUG] " & $Text)
+EndFunc
+
+Func Info($Text)
+    Out("[INFO] " & $Text)
+EndFunc
+
+Func Error($Text)
+    Out("[ERROR] " & $Text)
+    MsgBox(16, "Error", $Text)
+    Exit
+EndFunc
+; #EndRegion Logging Wrappers

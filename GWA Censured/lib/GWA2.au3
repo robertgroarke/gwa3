@@ -468,27 +468,13 @@ Func InitializeGameClientData($changeTitle = True, $initUseStringLog = False, $i
 	$map_ID = MemoryRead(GetScannedAddress('ScanMapID', 28))
 	If @error Then LogCriticalError('Failed to read map ID')
 
-	$map_loading = MemoryRead(MemoryRead(GetLabelInfo('ScanMapLoading') + 27))
-	If @error Then 
-		LogCriticalError('Failed to read loading status')
-	Else
-		Local $ptr = GetLabelInfo('ScanMapLoading')
-		Local $addr_ptr = $ptr + 27
-		Local $resolved_addr = MemoryRead($addr_ptr)
-		Local $val = MemoryRead($resolved_addr)
-		
-		Local $msg = 'DEBUG: Init MapLoading.' & @CRLF & _
-		             '  Pattern Ptr: ' & Hex($ptr) & @CRLF & _
-		             '  Addr Ptr: ' & Hex($addr_ptr) & @CRLF & _
-		             '  Resolved Var Addr ($map_loading): ' & Hex($resolved_addr) & @CRLF & _
-		             '  Current Value: ' & $val
-		
-		LogCriticalError($msg)
-		If IsFunc('Out') Then Call('Out', $msg)
-	EndIf
-
+    ; Fix: MapLoading is located 4 bytes before MapID
+	$map_loading = $map_ID - 4
+	
 	$is_logged_in = MemoryRead(GetScannedAddress('ScanLoggedIn', -3)) - 0x198
 	If @error Then LogCriticalError('Failed to read login status')
+
+
 
 	$language_ID = MemoryRead(GetScannedAddress('ScanMapInfo', 11)) + 0xC
 	If @error Then LogCriticalError('Failed to read language and region')
@@ -789,7 +775,7 @@ Func ScanGWBasePatterns()
 	AddPatternToInjection('558BEC8B450885C074078B')
 
 	_('ScanMapLoading:')
-	AddPatternToInjection('85C0740B6A2C50E8')
+	AddPatternToInjection('6A2C50E8????????A3')
 
 	_('ScanLoggedIn:')
 	AddPatternToInjection('85C07411B807')
@@ -3638,8 +3624,11 @@ Func GetAgentArray($type = 0)
 		$count = MemoryRead($agent_copy_count, 'long')
 	Until $count >= 0 Or TimerDiff($deadlock) > 5000
 	If $count < 0 Then $count = 0
-
-	Local $returnArray[$count]
+    
+    ; Fix: Return [Count, Item, ...] to match standard GWA2 usage
+	Local $returnArray[$count + 1]
+    $returnArray[0] = $count
+    
 	If $count > 0 Then
 		For $i = 0 To $count - 1
 			; 448 = size of $AGENT_STRUCT_TEMPLATE in bytes
@@ -3648,8 +3637,8 @@ Func GetAgentArray($type = 0)
 		$buffer = SafeDllStructCreate($buffer)
 		SafeDllCall13($kernel_handle, 'int', 'ReadProcessMemory', 'int', GetProcessHandle(), 'int', $agent_copy_base, 'ptr', DllStructGetPtr($buffer), 'int', DllStructGetSize($buffer), 'int', 0)
 		For $i = 0 To $count - 1
-			$returnArray[$i] = SafeDllStructCreate($AGENT_STRUCT_TEMPLATE)
-			$struct = SafeDllStructCreate('byte[448]', DllStructGetPtr($returnArray[$i]))
+			$returnArray[$i + 1] = SafeDllStructCreate($AGENT_STRUCT_TEMPLATE)
+			$struct = SafeDllStructCreate('byte[448]', DllStructGetPtr($returnArray[$i + 1]))
 			DllStructSetData($struct, 1, DllStructGetData($buffer, $i + 1))
 		Next
 	EndIf
@@ -4268,9 +4257,9 @@ EndFunc
 ;~ Returns current load-state.
 Func GetMapLoading()
 	Local $val = MemoryRead($map_loading)
-	Local $msg = "[GetMapLoading] Ptr: " & Hex($map_loading) & ", Val: " & $val
-	ConsoleWrite($msg & @CRLF)
-	If IsFunc('Out') Then Call('Out', $msg)
+	; DEBUG: Print MapLoading state to UI and Console
+	ConsoleWrite("DEBUG: GetMapLoading() = " & $val & @CRLF)
+	If IsFunc('Out') Then Call('Out', "DEBUG: GetMapLoading() = " & $val)
 	Return $val
 EndFunc
 
