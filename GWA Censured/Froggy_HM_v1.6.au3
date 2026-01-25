@@ -1483,6 +1483,33 @@ Func Usedp5()
    Next
 EndFunc
 
+Func HasEffect($aEffectSkillID, $aHeroNumber = 0, $aHeroId = GetHeroID($aHeroNumber))
+	Return GetSkillEffectPtr($aEffectSkillID, $aHeroNumber, $aHeroId) <> 0
+EndFunc
+
+Func GetSkillEffectPtr($aSkillID, $aHeroNumber = 0, $aHeroId = GetHeroID($aHeroNumber))
+	Local $lOffset[4] = [0, 24, 44, 1296]
+	Local $lCount = MemoryReadPtr($mBasePointer, $lOffset)
+	ReDim $lOffset[5]
+	$lOffset[3] = 1288
+	Local $lBuffer
+	For $i = 0 To $lCount[1] - 1
+		$lOffset[4] = 36 * $i
+		$lBuffer = MemoryReadPtr($mBasePointer, $lOffset)
+		If $lBuffer[1] = $aHeroId Then
+			$lOffset[4] = 28 + 36 * $i
+			Local $lEffectCount = MemoryReadPtr($mBasePointer, $lOffset)
+			$lOffset[4] = 20 + 36 * $i
+			Local $lEffectStructAddress = MemoryReadPtr($mBasePointer, $lOffset, 'ptr')
+			For $J = 0 To $lEffectCount[1] - 1
+				Local $lEffectSkillID = MemoryRead($lEffectStructAddress[1] + 24 * $J, 'long')
+				If $lEffectSkillID = $aSkillID Then Return Ptr($lEffectStructAddress[1] + 24 * $J)
+			Next
+		EndIf
+	Next
+	Return 0
+EndFunc
+
 ; ============================================================
 ; Functions added for Resign and Return capability
 ; ============================================================
