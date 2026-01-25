@@ -236,6 +236,10 @@ Func MemoryRead($address, $type = 'dword', $handleOverride = -1)
 	Local $buffer = SafeDllStructCreate($type)
 	Local $processHandle = $handleOverride = -1 ? GetProcessHandle() : $handleOverride
 	SafeDllCall13($kernel_handle, 'int', 'ReadProcessMemory', 'int', $processHandle, 'int', $address, 'ptr', DllStructGetPtr($buffer), 'int', DllStructGetSize($buffer), 'int', 0)
+	If @error Then
+		SetError(1)
+		Return 0
+	EndIf
 	Return DllStructGetData($buffer, 1)
 EndFunc
 
