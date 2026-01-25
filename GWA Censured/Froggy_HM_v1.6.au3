@@ -24,6 +24,7 @@ Global Const $AUTHORS[1] = ["Censured"]
 
 Global $Outpost = 638 ; Gadd's Camp
 Global $Language = 0 ; English
+Global $Summon_Spirits = 0
 
 Global $BotRunning = False
 Global $OpenedChestAgentIDs[1]
