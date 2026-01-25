@@ -26,6 +26,9 @@ Global $Outpost = 638 ; Gadd's Camp
 Global $Language = 0 ; English
 Global $Summon_Spirits = 0
 Global Const $DwarvenBuffArr[9] = [2445, 2446, 2447, 2448, 2549, 2565, 2566, 2567, 2568]
+Global Const $TYPE_MATERIAL_AND_ZCOINS = 11
+Global Const $TYPE_TROPHY = 30
+Global Const $TYPE_SCROLL = 31
 
 Global $mBasePointer
 
