@@ -464,7 +464,7 @@ Func InitializeGameClientData($changeTitle = True, $initUseStringLog = False, $i
 	$map_ID = MemoryRead(GetScannedAddress('ScanMapID', 28))
 	If @error Then LogCriticalError('Failed to read map ID')
 
-	$map_loading = MemoryRead(GetScannedAddress('ScanMapLoading', 44))
+	$map_loading = MemoryRead(GetScannedAddress('ScanMapLoading', 43))
 	If @error Then LogCriticalError('Failed to read loading status')
 
 	$is_logged_in = MemoryRead(GetScannedAddress('ScanLoggedIn', -3)) - 0x198
