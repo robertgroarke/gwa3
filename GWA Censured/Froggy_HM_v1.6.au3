@@ -29,6 +29,8 @@ Global Const $DwarvenBuffArr[9] = [2445, 2446, 2447, 2448, 2549, 2565, 2566, 256
 Global Const $TYPE_MATERIAL_AND_ZCOINS = 11
 Global Const $TYPE_TROPHY = 30
 Global Const $TYPE_SCROLL = 31
+Global Const $TYPE_BUNDLE = 6
+Global Const $TYPE_GOLD_COINS = 20
 
 Global $mBasePointer
 
