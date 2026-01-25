@@ -1521,6 +1521,16 @@ Func GetSkillEffectPtr($aSkillID, $aHeroNumber = 0, $aHeroId = GetHeroID($aHeroN
 	Return 0
 EndFunc
 
+Func CountFreeSlots($NumOfBags = 4)
+	Local $lCount = 0
+	For $lBag = 1 To $NumOfBags
+		$lBagPtr = GetBagPtr($lBag)
+		If $lBagPtr = 0 Then ContinueLoop
+		$lCount += MemoryRead($lBagPtr + 32, "long") - MemoryRead($lBagPtr + 16, "long")
+	Next
+	Return $lCount
+EndFunc
+
 ; ============================================================
 ; Functions added for Resign and Return capability
 ; ============================================================
