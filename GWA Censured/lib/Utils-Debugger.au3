@@ -122,7 +122,13 @@ EndFunc
 ; === Wrapper Functions ===
 ;~ DllStructCreate wrapper
 Func SafeDllStructCreate($type, $ptr = -1)
-	If Not $DEBUG_MODE Then Return $ptr <> -1 ? DllStructCreate($type, $ptr) : DllStructCreate($type)
+	If Not $DEBUG_MODE Then
+		If $ptr <> -1 Then
+			Return DllStructCreate($type, $ptr)
+		Else
+			Return DllStructCreate($type)
+		EndIf
+	EndIf
 	Local $call = 'DllStructCreate(type=' & $type & ',ptr=' & $ptr & ')'
 	If $ptr <> -1 And Not IsPtr($ptr) Then
 		DebuggerLog('[ERROR] Invalid pointer passed to ' & $call)
