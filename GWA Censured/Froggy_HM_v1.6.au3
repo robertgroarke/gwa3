@@ -25,6 +25,7 @@ Global Const $AUTHORS[1] = ["Censured"]
 Global $Outpost = 638 ; Gadd's Camp
 Global $Language = 0 ; English
 Global $Summon_Spirits = 0
+Global Const $DwarvenBuffArr[9] = [2445, 2446, 2447, 2448, 2549, 2565, 2566, 2567, 2568]
 
 Global $BotRunning = False
 Global $OpenedChestAgentIDs[1]
@@ -1146,8 +1147,15 @@ Func AggroMoveToEX($x, $y, $aFightRange = 1350)
 		$aOldX = DllStructGetData(GetMyAgent(), 'X')
 		$aOldY = DllStructGetData(GetMyAgent(), 'Y')
 		If GetMapLoading() == 2 Then Disconnected()
-		ConsoleWrite("Nearest enemy distance: " & GetNearestEnemyDistance() & @CRLF)
-		If GetNearestEnemyDistance() < $aFightRange Then Fight($aFightRange)
+		
+		Local $dist = GetNearestEnemyDistance()
+		; Out("Debug: Nearest Distance=" & $dist & " AggroRange=" & $aFightRange) 
+		
+		If $dist < $aFightRange Then 
+			Out("Debug: Triggering Fight! Dist=" & $dist)
+			Fight($aFightRange)
+		EndIf
+		
 		If GUI_IsChestChecked() Then CheckForChest()
 		If WeCanMove($aFightRange) Or TimerDiff($TimerAggro) > 60000 Then
 			Move($x, $y, $random)
@@ -1168,15 +1176,19 @@ Func WeCanMove($aRange = 1200)
 EndFunc
 
 Func Fight($aAggroRange = 1000, $careful = False)
-	ConsoleWrite("! Fight function entered." & @CRLF)
-	Out("Fighting enemies")
+	Out("Debug: Fight() Entered.")
 	Local $TimerToGetOut = TimerInit()
 	Do
 		If $careful Then CancelAll()
 		Local $BestTarget = GetNearestEnemyToAgent(GetMyAgent())
+		
 		If IsDllStruct($BestTarget) Then
+			Out("Debug: Attacking Target ID=" & DllStructGetData($BestTarget, 'ID'))
 			Attack($BestTarget, True)
+		Else
+			Out("Debug: No valid target to attack.")
 		EndIf
+		
 		Sleep(100)
 		If $careful Then
 			MoveTo(DllStructGetData($BestTarget, 'X'), DllStructGetData($BestTarget, 'Y'))
@@ -1189,8 +1201,11 @@ EndFunc
 Func GetNearestEnemyDistance()
 	Local $target = GetNearestEnemyToAgent(GetMyAgent())
 	If IsDllStruct($target) Then
-		Return GetDistance(GetMyAgent(), $target)
+		Local $d = GetDistance(GetMyAgent(), $target)
+		; Out("Debug: Found Enemy ID=" & DllStructGetData($target, 'ID') & " Dist=" & $d)
+		Return $d
 	Else
+		; Out("Debug: No Enemy Found")
 		Return 10000
 	EndIf
 EndFunc
