@@ -468,11 +468,23 @@ Func InitializeGameClientData($changeTitle = True, $initUseStringLog = False, $i
 	$map_ID = MemoryRead(GetScannedAddress('ScanMapID', 28))
 	If @error Then LogCriticalError('Failed to read map ID')
 
-	$map_loading = MemoryRead(MemoryRead(GetLabelInfo('ScanMapLoading') + 43))
+	$map_loading = MemoryRead(MemoryRead(GetLabelInfo('ScanMapLoading') + 27))
 	If @error Then 
 		LogCriticalError('Failed to read loading status')
 	Else
-		LogCriticalError('DEBUG: MapLoading Address: ' & Hex(MemoryRead(GetLabelInfo('ScanMapLoading') + 43)) & ', Value: ' & $map_loading)
+		Local $ptr = GetLabelInfo('ScanMapLoading')
+		Local $addr_ptr = $ptr + 27
+		Local $resolved_addr = MemoryRead($addr_ptr)
+		Local $val = MemoryRead($resolved_addr)
+		
+		Local $msg = 'DEBUG: Init MapLoading.' & @CRLF & _
+		             '  Pattern Ptr: ' & Hex($ptr) & @CRLF & _
+		             '  Addr Ptr: ' & Hex($addr_ptr) & @CRLF & _
+		             '  Resolved Var Addr ($map_loading): ' & Hex($resolved_addr) & @CRLF & _
+		             '  Current Value: ' & $val
+		
+		LogCriticalError($msg)
+		If IsFunc('Out') Then Call('Out', $msg)
 	EndIf
 
 	$is_logged_in = MemoryRead(GetScannedAddress('ScanLoggedIn', -3)) - 0x198
@@ -777,7 +789,7 @@ Func ScanGWBasePatterns()
 	AddPatternToInjection('558BEC8B450885C074078B')
 
 	_('ScanMapLoading:')
-	AddPatternToInjection('6A2C50E8')
+	AddPatternToInjection('85C0740B6A2C50E8')
 
 	_('ScanLoggedIn:')
 	AddPatternToInjection('85C07411B807')
@@ -4255,7 +4267,11 @@ EndFunc
 ;~ FIXME: this function might not be working correctly
 ;~ Returns current load-state.
 Func GetMapLoading()
-	Return MemoryRead($map_loading)
+	Local $val = MemoryRead($map_loading)
+	Local $msg = "[GetMapLoading] Ptr: " & Hex($map_loading) & ", Val: " & $val
+	ConsoleWrite($msg & @CRLF)
+	If IsFunc('Out') Then Call('Out', $msg)
+	Return $val
 EndFunc
 
 
