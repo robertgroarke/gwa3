@@ -464,13 +464,11 @@ Func InitializeGameClientData($changeTitle = True, $initUseStringLog = False, $i
 	$map_ID = MemoryRead(GetScannedAddress('ScanMapID', 28))
 	If @error Then LogCriticalError('Failed to read map ID')
 
-	; FIXME: this call fails
-	;$map_loading = MemoryRead(GetScannedAddress('ScanMapLoading', 0xB))
-	;If @error Then LogCriticalError('Failed to read loading status')
+	$map_loading = MemoryRead(GetScannedAddress('ScanMapLoading', 44))
+	If @error Then LogCriticalError('Failed to read loading status')
 
-	; FIXME: this call fails
-	;$is_logged_in = MemoryRead(GetScannedAddress('ScanLoggedIn', 0x3))
-	;If @error Then LogCriticalError('Failed to read login status')
+	$is_logged_in = MemoryRead(GetScannedAddress('ScanLoggedIn', -3)) - 0x198
+	If @error Then LogCriticalError('Failed to read login status')
 
 	$language_ID = MemoryRead(GetScannedAddress('ScanMapInfo', 11)) + 0xC
 	If @error Then LogCriticalError('Failed to read language and region')
@@ -771,10 +769,10 @@ Func ScanGWBasePatterns()
 	AddPatternToInjection('558BEC8B450885C074078B')
 
 	_('ScanMapLoading:')
-	AddPatternToInjection('2480ED0000000000')
+	AddPatternToInjection('6A2C50E8')
 
 	_('ScanLoggedIn:')
-	AddPatternToInjection('C705ACDE740000000000C3CCCCCCCC')
+	AddPatternToInjection('85C07411B807')
 
 	_('ScanRegion:')
 	AddPatternToInjection('8BF0EB038B750C3B')
