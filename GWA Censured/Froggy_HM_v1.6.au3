@@ -30,7 +30,10 @@ Global Const $TYPE_MATERIAL_AND_ZCOINS = 11
 Global Const $TYPE_TROPHY = 30
 Global Const $TYPE_SCROLL = 31
 Global Const $TYPE_BUNDLE = 6
+Global Const $TYPE_USABLE = 9
+Global Const $TYPE_DYE = 10
 Global Const $TYPE_GOLD_COINS = 20
+Global Const $TYPE_KEY = 18
 
 Global $mBasePointer
 
