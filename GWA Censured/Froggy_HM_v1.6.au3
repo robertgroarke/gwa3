@@ -27,6 +27,8 @@ Global $Language = 0 ; English
 Global $Summon_Spirits = 0
 Global Const $DwarvenBuffArr[9] = [2445, 2446, 2447, 2448, 2549, 2565, 2566, 2567, 2568]
 
+Global $mBasePointer
+
 Global $BotRunning = False
 Global $OpenedChestAgentIDs[1]
 Global $NearestWaypoint = 0
@@ -76,6 +78,7 @@ Func LaunchEvent()
 	If $clientIndex > 0 Then
 		SelectClient($clientIndex)
 		InitializeGameClientData(True, False)
+		$mBasePointer = MemoryRead(GetScannedAddress('ScanBasePointer', 8))
 		WinSetTitle(GetWindowHandle(), '', 'Guild Wars - ' & GetCharacterName())
 		GUIDelete($Form1)
 		$g_BotHasLaunched = True
