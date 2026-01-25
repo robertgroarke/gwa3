@@ -51,8 +51,18 @@ EndFunc
 ;~ Log critical error in a OneShot way - only use for very specific usage
 Func LogCriticalError($log)
 	If $log_handle == -1 Then
-		Local $logFile = @ScriptDir & '/logs/dll_debug-' & GetCharacterName() & '.log'
-		$log_handle = FileOpen($logFile, $FO_APPEND + $FO_CREATEPATH + $FO_UTF8)
+		Local $charName = GetCharacterName()
+		If $charName == "" Then $charName = "Unknown"
+		
+		Local $logDir = @ScriptDir & '\logs'
+		If Not FileExists($logDir) Then DirCreate($logDir)
+		
+		Local $logFile = $logDir & '\dll_debug-' & $charName & '.log'
+		$log_handle = FileOpen($logFile, $FO_APPEND + $FO_UTF8)
+		
+		If $log_handle == -1 Then
+			ConsoleWrite("[Debugger] FAILED TO OPEN LOG FILE: " & $logFile & @CRLF)
+		EndIf
 	EndIf
 	DebuggerLog($log)
 	If $log_handle <> -1 Then 
