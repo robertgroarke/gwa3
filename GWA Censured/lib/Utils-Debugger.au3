@@ -55,7 +55,10 @@ Func LogCriticalError($log)
 		$log_handle = FileOpen($logFile, $FO_APPEND + $FO_CREATEPATH + $FO_UTF8)
 	EndIf
 	DebuggerLog($log)
-	If $log_handle <> -1 Then FileClose($log_handle)
+	If $log_handle <> -1 Then 
+		FileClose($log_handle)
+		$log_handle = -1
+	EndIf
 EndFunc
 
 ;~ Write log in log file
