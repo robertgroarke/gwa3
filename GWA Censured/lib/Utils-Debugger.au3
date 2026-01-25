@@ -16,7 +16,7 @@
 
 #include-once
 
-Global Const $DEBUG_MODE = False
+Global Const $DEBUG_MODE = True
 Global Const $ADD_CONTEXT = False
 Global Const $FUNCTION_NAMES = ['SetProcessWorkingSetSizeEx','VirtualQueryEx','VirtualFreeEx','VirtualAllocEx','ReadProcessMemory','WriteProcessMemory','CreateRemoteThread','CloseHandle','WaitForSingleObject','OpenProcess','SetProcessWorkingSetSize']
 ; VirtualQueryEx error code is 0 - but it shouldn't be caught
