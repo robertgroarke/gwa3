@@ -75,7 +75,7 @@ Global $region_ID, $language_ID
 Global $scan_ping_address
 
 ; Map status
-Global $max_agents, $is_logged_in, $agent_copy_count, $agent_copy_base
+Global $max_agents, $agent_copy_count, $agent_copy_base
 
 ; Trader system
 Global $trader_quote_ID, $trader_cost_ID, $trader_cost_value
@@ -95,7 +95,7 @@ Global $use_string_logging, $use_event_system
 ; Character info
 Global $instance_info_ptr, $area_info_ptr
 Global $attribute_info_ptr
-Global $map_ID, $map_loading
+Global $map_ID
 #EndRegion Declarations
 
 
@@ -468,11 +468,9 @@ Func InitializeGameClientData($changeTitle = True, $initUseStringLog = False, $i
 	$map_ID = MemoryRead(GetScannedAddress('ScanMapID', 28))
 	If @error Then LogCriticalError('Failed to read map ID')
 
-    ; Fix: MapLoading is located 4 bytes before MapID
-	$map_loading = $map_ID - 4
+	; $map_loading removed - GetMapLoading() now uses $instance_info_ptr
 	
-	$is_logged_in = MemoryRead(GetScannedAddress('ScanLoggedIn', -3)) - 0x198
-	If @error Then LogCriticalError('Failed to read login status')
+	; $is_logged_in removed - GetLoggedIn() now uses agent existence check
 
 
 
@@ -774,11 +772,9 @@ Func ScanGWBasePatterns()
 	_('ScanMapID:')
 	AddPatternToInjection('558BEC8B450885C074078B')
 
-	_('ScanMapLoading:')
-	AddPatternToInjection('6A2C50E8????????A3')
+	; ScanMapLoading pattern removed - no longer needed, using $instance_info_ptr instead
 
-	_('ScanLoggedIn:')
-	AddPatternToInjection('85C07411B807')
+	; ScanLoggedIn pattern removed - no longer needed, using agent existence check
 
 	_('ScanRegion:')
 	AddPatternToInjection('8BF0EB038B750C3B')
@@ -4253,14 +4249,16 @@ Func GetMapRegionType($mapID = 0)
 EndFunc
 
 
-;~ FIXME: this function might not be working correctly
-;~ Returns current load-state.
+;~ Returns current instance type / load-state.
+;~ Verified values:
+;~   0 = Outpost (in town/outpost)
+;~   1 = Explorable (in explorable area)
+;~   2 = Loading (during map transition)
+;~ This reads the instance_type from the game's instance info structure
 Func GetMapLoading()
-	Local $val = MemoryRead($map_loading)
-	; DEBUG: Print MapLoading state to UI and Console
-	ConsoleWrite("DEBUG: GetMapLoading() = " & $val & @CRLF)
-	If IsFunc('Out') Then Call('Out', "DEBUG: GetMapLoading() = " & $val)
-	Return $val
+	; Read instance_type from instance_info_ptr (offset 0)
+	Local $instanceType = MemoryRead($instance_info_ptr)
+	Return $instanceType
 EndFunc
 
 
@@ -4319,8 +4317,13 @@ EndFunc
 
 
 ;~ Returns if you're logged in.
+;~ Uses agent existence check since the old ScanLoggedIn pattern is broken.
+;~ When at character select: MyID=0, AgentExists=False
+;~ When logged in: MyID>0, AgentExists=True
 Func GetLoggedIn()
-	Return MemoryRead($is_logged_in)
+	Local $myID = GetMyID()
+	If $myID <= 0 Then Return False
+	Return GetAgentExists($myID)
 EndFunc
 
 
