@@ -45,6 +45,7 @@ Global $mBasePointer
 Global $BotRunning = False
 Global $OpenedChestAgentIDs[1]
 Global $NearestWaypoint = 0
+Global $LastWaypoint = 0
 Global $unlit = False
 Global $iVanguardTitle, $iNornTitle, $iAsuraTitle, $iDeldrimorTitle
 Global $BestTargetPtr = 0
