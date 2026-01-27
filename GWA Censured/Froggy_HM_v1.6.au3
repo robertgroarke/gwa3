@@ -1079,8 +1079,15 @@ EndFunc
 
 
 ; Renamed Helper for Logic Port to avoid conflict
+; Note: GetEffect() expects hero index (0=player, 1-7=heroes), not agent ID
+; For player effects, we use hero index 0
 Func AgentHasEffect($aSkillID, $aAgentID = -2)
-	Return GetEffect($aSkillID, ID($aAgentID)) <> 0
+	; For simplicity, if checking player (-2), use hero index 0
+	; This function currently only supports checking player effects
+	Local $heroIndex = 0  ; Always check player for now
+	Local $effect = GetEffect($aSkillID, $heroIndex)
+	; GetEffect returns Null if effect not found, or DllStruct if found
+	Return ($effect <> Null And Not IsArray($effect))
 EndFunc
 
 ; Ported Helper: IsSkillType
@@ -1224,7 +1231,7 @@ EndFunc
 
 Func CanCast($aSkillSlot = 0)
 	If GetMapLoading() == 2 Then Disconnected()
-	If GetMapLoading() == 0 Then Return
+	If GetMapLoading() <> 1 Then Return False  ; Can only cast in explorable areas
 	If IsKnocked() Or GetIsDead(-2) Or Wipe() = 1 Then Return False
 	If $aSkillSlot <> 0 And Not IsRecharged($aSkillSlot) Then Return False
 	Local $aType = $SkillBarCache[$aSkillSlot][$type]
