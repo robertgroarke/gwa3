@@ -1327,7 +1327,7 @@ Func CanUse($aSkillSlot, $aAggroRange = 1320)
 EndFunc
 
 Func GetBestTargetBySkillSlot($aSkillSlot, $aAggroRange = 1320)
-	$MyPtr = GetAgentPtr(-2)
+	Local $MyPtr = GetAgentPtr(-2)
 	Switch $SkillBarCache[$aSkillSlot][$target]
 		Case 0	; self
 			If $SkillBarCache[$aSkillSlot][$type] == $Ward And GetDistance(GetMyAgent(), GetNearestEnemyToAgent(GetMyAgent())) > $aAggroRange Then Return False
