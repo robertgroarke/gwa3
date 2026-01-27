@@ -9,6 +9,7 @@
 #include 'GWA2_ID.au3'
 #include 'Utils.au3'
 #include 'Utils-Debugger.au3'
+#include <Math.au3>
 
 ; Required for memory access, opening external process handles and injecting code
 #RequireAdmin
