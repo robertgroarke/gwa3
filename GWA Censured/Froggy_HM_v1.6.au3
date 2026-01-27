@@ -496,8 +496,8 @@ Func MoveandAggroEx($aWaypoints)
 				If Wipe() = 0 Then GoToSignpostNearXY($aWaypoints[$i][0], $aWaypoints[$i][1])
 				PickupLootEx()
 			Case "Blessing Lvl1"
-				If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
-				If GetMapLoading() = 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
+				If GetMapLoading() <> 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				GetDwarvenBlessing(19099, 7762)	
 			Case "Lvl1 to Lvl2"
 				Local $aTimer = TimerInit()
@@ -506,44 +506,44 @@ Func MoveandAggroEx($aWaypoints)
 					Sleep(250)
 				Until WaitMapLoading($Bogroot_Growths_Lvl2) Or TimerDiff($aTimer) > 60000
 			Case "Dungeon Key"
-				If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
-				If GetMapLoading() = 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
+				If GetMapLoading() <> 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				GetDungeonKeyEx()
 			Case "Dungeon Door"
-				If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
-				If GetMapLoading() = 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
+				If GetMapLoading() <> 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				OpenDungeonDoor()
 			Case "Dungeon Door Checkpoint"
-				If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
-				If GetMapLoading() = 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
+				If GetMapLoading() <> 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				$NearestWaypoint = GetNearestWaypointIndex($aWaypoints)
 				If($NearestWaypoint <> $i) Then
 					Out("Failed dungeon door, going back to waypoint i-3")
 					For $j = $i-1 To $i - 3 Step -1
-						If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$j][0], $aWaypoints[$j][1], $aWaypoints[$j][2])
-						If GetMapLoading() = 1 Then MoveTo($aWaypoints[$j][0], $aWaypoints[$j][1])
+						If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$j][0], $aWaypoints[$j][1], $aWaypoints[$j][2])
+						If GetMapLoading() <> 1 Then MoveTo($aWaypoints[$j][0], $aWaypoints[$j][1])
 					Next
 					$i = GetNearestWaypointIndex($aWaypoints)
 				EndIf
 			Case "Quest Door Checkpoint"
-				If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
-				If GetMapLoading() = 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
+				If GetMapLoading() <> 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				$NearestWaypoint = GetNearestWaypointIndex($aWaypoints)
 				If($NearestWaypoint <> $i) Then
 					Out("Failed first door, going back to get quest")
 					For $j = $i-1 To $i - 3 Step -1
-						If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$j][0], $aWaypoints[$j][1], $aWaypoints[$j][2])
-						If GetMapLoading() = 1 Then MoveTo($aWaypoints[$j][0], $aWaypoints[$j][1])
+						If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$j][0], $aWaypoints[$j][1], $aWaypoints[$j][2])
+						If GetMapLoading() <> 1 Then MoveTo($aWaypoints[$j][0], $aWaypoints[$j][1])
 					Next
 					ReverseToSparkflySwamp()
 					Return
 				EndIf
 			Case "Boss"
-				If GetMapLoading() = 0 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
-				If GetMapLoading() = 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
+				If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
+				If GetMapLoading() <> 1 Then MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				Boss()
 			Case Else
-				If GetMapLoading() = 0 Then
+				If GetMapLoading() = 1 Then
 					AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
 				Else
 					MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
@@ -635,7 +635,7 @@ Func AggroMoveToEX($x, $y, $aFightRange = 1350)
 	Out("Debug: AggroMoveToEx Entered (" & $x & "," & $y & ")")
 	Local $lDeadlock, $lBlocked, $aOldX, $aOldY
 	Local $random = 100
-	If GetMapLoading() <> 0 Then 
+	If GetMapLoading() <> 1 Then 
 		Out("Debug: AggroMoveToEx Early Exit (MapLoading=" & GetMapLoading() & ")")
 		Return True
 	EndIf
