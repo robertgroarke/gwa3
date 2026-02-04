@@ -1347,7 +1347,10 @@ Func SalvageItems($buyKit = True)
 			Local $item = GetItemBySlot($bagIndex, $slot)
             If Not IsDllStruct($item) Or DllStructGetData($item, 'ID') = 0 Then ContinueLoop
             If Not GetIsIDed($item) And CanSell($item) Then ; Only ID if it's something we might interact with
-                IdentifyItem($item)
+                Local $itemModelID = DllStructGetData($item, 'ModelID')
+                If Not IsRareSkin($itemModelID) Then ; Don't identify rare skins
+                    IdentifyItem($item)
+                EndIf
             EndIf
         Next
     Next
