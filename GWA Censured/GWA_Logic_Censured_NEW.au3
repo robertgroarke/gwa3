@@ -29340,10 +29340,16 @@ Func MoveandAggro($aWaypoints)
 				Sleep(500)
 				$lWipeWaitCounter += 1
 				If GetPartyDefeated() Or TimerDiff($lDeadlock) > 120000 or $lWipeWaitCounter > 240 Then Return ResignAndReturn($Outpost, $Language)
-				Until GetPartyHealth() > 0.5
-				if GetMorale() < -40 then Usedp()
+			Until GetPartyHealth() > 0.5
+			if GetMorale() < -40 then Usedp()
 			$NearestWaypoint = GetNearestWaypointIndex($aWaypoints)
 			$i = WipeManagement($aWaypoints, $NearestWaypoint, $LastWaypoint)    ; converts nearest waypoint to the desired waypoint based on last or nearest waypoint
+			; Safety check: if we're too far from target waypoint, use nearest instead
+			Local $DistanceToTarget = GetDistanceToXY($aWaypoints[$i][0], $aWaypoints[$i][1])
+			If $DistanceToTarget > 5000 Then
+				Out("Target waypoint too far (" & Floor($DistanceToTarget) & "), using nearest waypoint instead")
+				$i = $NearestWaypoint
+			EndIf
 			Out("Restarting at : " & $aWaypoints[$i][3])
 		EndIf
 
