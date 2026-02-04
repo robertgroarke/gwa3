@@ -126,7 +126,7 @@ While 1
 		$OpenedChestAgentIDs[0] = ""
 		ReDim $OpenedChestAgentIDs[1]
 		Local $currentMap = GetMapID()
-		Out("Debug MapLoop: MapID=" & $currentMap)
+
 		Switch $currentMap
 			Case $Sparkfly_Swamp
 				RunToDungeon()
