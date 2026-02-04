@@ -1099,6 +1099,7 @@ EndFunc
 
 Global $WARN_ONCE_CACHE[]
 
+; Logging functions that write to GUI console
 Func Notice($Text)
     Out("[NOTICE] " & $Text)
 EndFunc
@@ -1123,7 +1124,6 @@ Func Info($Text)
 EndFunc
 
 Func Error($Text)
-    Out("[ERROR] " & $Text)
     MsgBox(16, "Error", $Text)
     Exit
 EndFunc

@@ -7,7 +7,7 @@
 
 #include 'GWA2_Headers.au3'
 #include 'GWA2_ID.au3'
-#include 'Utils.au3'
+; #include 'Utils.au3' ; Removed to prevent circular dependency
 #include 'Utils-Debugger.au3'
 #include <Math.au3>
 
@@ -343,7 +343,7 @@ Func ScanAndUpdateGameClients()
 	; Step 1: Mark all existing entries as 'unseen'
 	Local $initialClientCount = $game_clients[0][0]
 	Local $seen[$initialClientCount + 1]
-	FillArray($seen, False)
+	_GWA2_FillArray($seen, False)
 
 	; Step 2: Process current gw.exe instances
 	For $i = 1 To $processList[0][0]
@@ -1348,7 +1348,7 @@ EndFunc
 
 ;~ FIXME: this function is written like trash
 Func CraftItem($modelID, $amount, $gold, ByRef $materialsArray)
-	Local $sourceItemPtr = GetInventoryItemPtrByModelId($materialsArray[0][0])
+	Local $sourceItemPtr = _GWA2_GetInventoryItemPtrByModelId($materialsArray[0][0])
 	If ((Not $sourceItemPtr) Or (MemoryRead($sourceItemPtr + 0x4B) < $materialsArray[0][1])) Then Return 0
 	Local $destinationItemPtr = MemoryRead(GetMerchantItemPtrByModelId($modelID))
 	If (Not $destinationItemPtr) Then Return 0
@@ -1357,7 +1357,7 @@ Func CraftItem($modelID, $amount, $gold, ByRef $materialsArray)
 	If IsArray($materialsArray) = 0 Then Return 0
 	Local $materialsArraySize = UBound($materialsArray) - 1
 	For $i = $materialsArraySize To 0 Step -1
-		Local $checkQuantity = CountItemInBagsByModelID($materialsArray[$i][0])
+		Local $checkQuantity = _GWA2_CountItemInBagsByModelID($materialsArray[$i][0])
 		If $materialsArray[$i][1] * $amount > $checkQuantity Then
 			; amount of missing mats in @extended
 			Return SetExtended($materialsArray[$i][1] * $amount - $checkQuantity, $materialsArray[$i][0])
@@ -1403,7 +1403,7 @@ Func CraftItem($modelID, $amount, $gold, ByRef $materialsArray)
 	Local $currentAmount
 	Do
 		Sleep(250)
-		$currentAmount = CountItemInBagsByModelID($materialsArray[0][0])
+		$currentAmount = _GWA2_CountItemInBagsByModelID($materialsArray[0][0])
 	Until $currentAmount <> $checkQuantity Or $gold <> GetGoldCharacter() Or TimerDiff($deadlock) > 5000
 	SafeDllCall11($kernel_handle, 'ptr', 'VirtualFreeEx', 'handle', $processHandle, 'ptr', $memoryBuffer[0], 'int', 0, 'dword', 0x8000)
 	; should be zero if items were successfully crafted
@@ -1795,7 +1795,9 @@ EndFunc
 
 ;~ Attack an agent.
 Func Attack($agent, $callTarget = False)
-	Return SendPacket(0xC, $HEADER_ACTION_ATTACK, DllStructGetData($agent, 'ID'), $callTarget)
+	If Not IsDllStruct($agent) Then Return False
+	Local $agentID = DllStructGetData($agent, 'ID')
+	Return SendPacket(0xC, $HEADER_ACTION_ATTACK, $agentID, $callTarget)
 EndFunc
 
 
@@ -2351,7 +2353,7 @@ Func UseSkillTimed($skillSlot, $target = Null)
 	Local $fullCastTime = $castTimeModifier * $castTime + $aftercast + GetPing()
 
 	; when player casts a skill on target that is beyond cast range then trying to get close to target first to not count time on the run
-	If $target <> Null And GetDistance(GetMyAgent(), $target) > ($RANGE_SPELLCAST + 100) Then GetAlmostInRangeOfAgent($target)
+	If $target <> Null And GetDistance(GetMyAgent(), $target) > ($RANGE_SPELLCAST + 100) Then _GWA2_GetAlmostInRangeOfAgent($target)
 	UseSkill($skillSlot, $target)
 	Local $castTimer = TimerInit()
 	; wait until skill starts recharging or time for skill to be fully activated has elapsed
@@ -3655,9 +3657,9 @@ Func GetPartyMemberDanger($agent, $agents = Null)
 	$party = GetParty($agents)
 	$partyMemberDangers = GetPartyDanger($agents)
 
-	For $member In $party
-		;If $member == $agent Then Return $partyMemberDangers[$i]
-		If DllStructGetData($member, 'ID') == DllStructGetData($agent, 'ID') Then Return partyMemberDangers[$i]
+	For $i = 0 To UBound($party) -1
+		Local $member = $party[$i]
+		If DllStructGetData($member, 'ID') == DllStructGetData($agent, 'ID') Then Return $partyMemberDangers[$i]
 	Next
 	Return Null
 EndFunc
@@ -3671,7 +3673,7 @@ Func GetPartyDanger($agents = Null, $party = Null)
 	If $party == Null Then $party = GetParty($agents)
 
 	Local $resultLevels[UBound($party)]
-	FillArray($resultLevels, 0)
+	_GWA2_FillArray($resultLevels, 0)
 
 	For $i = 0 To UBound($agents) - 1
 		Local $agent = $agents[$i]
@@ -6676,3 +6678,81 @@ Func GetMaxSlots($bag)
 		Return MemoryRead(GetBagPtr($bag) + 32, 'long')
 	EndIf
 EndFunc
+
+; ==================================================================================================
+; Missing Helpers for GWA2 Core
+; ==================================================================================================
+
+Func _GWA2_FillArray(ByRef $array, $value)
+	For $i = 0 To UBound($array) - 1
+		$array[$i] = $value
+	Next
+EndFunc
+
+Func _GWA2_GetAlmostInRangeOfAgent($targetAgent, $proximity = ($RANGE_SPELLCAST + 100))
+	Local $distance = GetDistance(GetMyAgent(), $targetAgent)
+	If $distance > $proximity Then
+		MoveTo(DllStructGetData($targetAgent, 'X'), DllStructGetData($targetAgent, 'Y'))
+		Do
+			Sleep(100)
+			$distance = GetDistance(GetMyAgent(), $targetAgent)
+		Until $distance <= $proximity
+	EndIf
+EndFunc
+
+Func _GWA2_GetInventoryItemPtrByModelId($modelID)
+	Local $bagPtr, $slots, $itemPtr
+	For $i = 1 To 4 ; Backpack, Belt Pouch, Bag 1, Bag 2
+		$bagPtr = GetBagPtr($i)
+		If $bagPtr Then
+			$slots = GetMaxSlots($bagPtr)
+			For $j = 1 To $slots
+				$itemPtr = GetItemPtrBySlot($bagPtr, $j)
+				If $itemPtr Then
+					; ModelID is at offset 44 (long)
+					If MemoryRead($itemPtr + 44, 'long') == $modelID Then Return $itemPtr
+				EndIf
+			Next
+		EndIf
+	Next
+	Return 0
+EndFunc
+
+Func _GWA2_CountItemInBagsByModelID($modelID)
+	Local $count = 0
+	Local $bagPtr, $slots, $itemPtr
+	For $i = 1 To 4
+		$bagPtr = GetBagPtr($i)
+		If $bagPtr Then
+			$slots = GetMaxSlots($bagPtr)
+			For $j = 1 To $slots
+				$itemPtr = GetItemPtrBySlot($bagPtr, $j)
+				If $itemPtr Then
+					If MemoryRead($itemPtr + 44, 'long') == $modelID Then
+						; Quantity is at offset 76 (short)
+						$count += MemoryRead($itemPtr + 76, 'short')
+					EndIf
+				EndIf
+			Next
+		EndIf
+	Next
+	Return $count
+EndFunc
+
+; Warn function is defined in GUI_Functions.au3
+
+
+; Debug function is defined in GUI_Functions.au3
+
+
+; Notice function is defined in GUI_Functions.au3
+
+
+Func Extend_Write()
+	; Placeholder if missing
+EndFunc
+
+Func Extend_AssemblerWriteDetour()
+	; Placeholder if missing
+EndFunc
+

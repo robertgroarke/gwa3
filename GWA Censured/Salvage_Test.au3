@@ -121,23 +121,18 @@ Global $PressureSpiritSkills = 0
 While 1
 	Sleep(200)
 	While $BotRunning
-		Sleep(250)
-
-		$OpenedChestAgentIDs[0] = ""
-		ReDim $OpenedChestAgentIDs[1]
-		Local $currentMap = GetMapID()
-		Out("Debug MapLoop: MapID=" & $currentMap)
-		Switch $currentMap
-			Case $Sparkfly_Swamp
-				RunToDungeon()
-				Takequest0()
-			Case $Bogroot_Growths_Lvl1
-				BogrootLvl1()
-			Case $Bogroot_Growths_Lvl2
-				BogrootLvl2()
-			Case Else
-				Setup(GUI_IsAddHeroesChecked())
-		Endswitch
+		Out("Starting Salvage Loop Test...")
+		
+		; Ensure we are logged in and ready
+		If GetLoggedIn() Then
+			Out("Calling SalvageItems()...")
+			SalvageItems()
+			Out("SalvageItems() returned. Sleeping for 5 seconds...")
+			Sleep(5000)
+		Else
+			Out("Not logged in. Waiting...")
+			Sleep(2000)
+		EndIf
 	WEnd
 WEnd
 

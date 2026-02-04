@@ -23,7 +23,7 @@ Global Const $FUNCTION_NAMES = ['SetProcessWorkingSetSizeEx','VirtualQueryEx','V
 Global $ERROR_CODES = [0, -1, 0, Null, 0, 0, Null, 0, 0xFFFFFFFF, Null, 0]
 Global Const $FUNCTION_ERROR_CODES = MapFromArrays($FUNCTION_NAMES, $ERROR_CODES)
 
-#include 'Utils.au3'
+; #include 'Utils.au3' ; Removed to prevent circular dependency
 
 Global $log_handle = -1
 Global $context_stack[100]
@@ -32,7 +32,9 @@ Global $context_depth = 0
 ;~ Opens log file
 Func OpenDebugLogFile()
 	If Not $DEBUG_MODE Then Return
-	Local $logFile = @ScriptDir & '/logs/dll_debug-' & GetCharacterName() & '.log'
+	Local $charName = 'Unknown'
+	If IsDeclared("GetCharacterName") Then $charName = Call("GetCharacterName")
+	Local $logFile = @ScriptDir & '/logs/dll_debug-' & $charName & '.log'
 	$log_handle = FileOpen($logFile, $FO_APPEND + $FO_CREATEPATH + $FO_UTF8)
 	If $log_handle = -1 Then
 		MsgBox(16, 'Error', 'Failed to open log file: ' & $logFile)
@@ -51,7 +53,8 @@ EndFunc
 ;~ Log critical error in a OneShot way - only use for very specific usage
 Func LogCriticalError($log)
 	If $log_handle == -1 Then
-		Local $charName = GetCharacterName()
+		Local $charName = "Unknown"
+		If IsDeclared("GetCharacterName") Then $charName = Call("GetCharacterName")
 		If $charName == "" Then $charName = "Unknown"
 		
 		Local $logDir = @ScriptDir & '\logs'
@@ -110,7 +113,9 @@ EndFunc
 ;~ Dump bytes to see memory
 Func MemoryDump($address, $size)
 	Local $buffer = DllStructCreate('byte[' & $size & ']')
-	DllCall($kernel_handle, 'bool', 'ReadProcessMemory', 'handle', GetProcessHandle(), 'ptr', $address, 'struct*', $buffer, 'ulong_ptr', $size, 'ptr', 0)
+	Local $processHandle = 0
+	If IsDeclared("GetProcessHandle") Then $processHandle = Call("GetProcessHandle")
+	DllCall($kernel_handle, 'bool', 'ReadProcessMemory', 'handle', $processHandle, 'ptr', $address, 'struct*', $buffer, 'ulong_ptr', $size, 'ptr', 0)
 	Local $output = ''
 	For $i = 1 To $size
 		$output &= Hex(DllStructGetData($buffer, 1, $i), 2) & ' '

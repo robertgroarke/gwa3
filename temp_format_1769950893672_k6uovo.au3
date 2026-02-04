@@ -18,33 +18,27 @@
 #include-once
 
 #include <array.au3>
-#include 'RareSkins.au3'
+#include "lib\Utils-Debugger.au3"
+#include "lib\RareSkins.au3"
 
 #include <GUIConstantsEx.au3>
 #include 'GWA2_Headers.au3'
 #include 'GWA2_ID.au3'
 #include 'GWA2.au3'
 #include 'Utils-Debugger.au3'
-#include 'Utils-Salvage.au3'
 
 Opt('MustDeclareVars', True)
 
 ; Number of inventory bags: 4 standard (backpack + 3 bags), 5 with equipment bag
-; $bags_count is now defined in GWA2_ID.au3
+Global $bags_count = 4
 
-; Range constants moved to GWA2_ID.au3
-
-; Missing Run Status Constants
-Global Const $SUCCESS = True
-Global Const $FAIL = False
-Global Const $PAUSE = 2
-
-; Range constants 2 moved to GWA2_ID.au3
+Global Const $RANGE_ADJACENT=156, $RANGE_NEARBY=240, $RANGE_AREA=312, $RANGE_EARSHOT=1000, $RANGE_SPELLCAST=1085, $RANGE_LONGBOW=1250, $RANGE_SPIRIT=2500, $RANGE_COMPASS=5000
+Global Const $RANGE_ADJACENT_2=156^2, $RANGE_NEARBY_2=240^2, $RANGE_AREA_2=312^2, $RANGE_EARSHOT_2=1000^2, $RANGE_SPELLCAST_2=1085^2, $RANGE_LONGBOW_2=1250^2, $RANGE_SPIRIT_2=2500^2, $RANGE_COMPASS_2=5000^2
 ; Mobs aggro correspond to earshot range
 Global Const $AGGRO_RANGE=$RANGE_EARSHOT * 1.5
 
 Global Const $SPIRIT_TYPES_ARRAY[2] = [0x44000, 0x4C000]
-Global Const $MAP_SPIRIT_TYPES = _GWA2_ID_MapFromArray($SPIRIT_TYPES_ARRAY)
+Global Const $MAP_SPIRIT_TYPES = MapFromArray($SPIRIT_TYPES_ARRAY)
 
 ; Map containing the IDs of the opened chests - this map should be cleared at every loop
 ; Null - chest not found yet (sic)
@@ -426,11 +420,7 @@ Func DefaultShouldPickItem($item)
 	; --------------------------------------- Weapons ---------------------------------------
 	ElseIf IsWeapon($item) Then
 		If $rarity <> $RARITY_WHITE And IsLowReqMaxDamage($item) Then Return True
-		If IsDeclared("CheckPickupWeapon") Then
-			$pickup = Call("CheckPickupWeapon", $item)
-		Else
-			$pickup = True ; Default to True if function missing? Or False?
-		EndIf
+		Return CheckPickupWeapon($item)
 	; --------------------------------- Armor salvageables ---------------------------------
 	ElseIf isArmorSalvageItem($item) Then
 		Local $rarityName = $RARITY_NAMES_FROM_IDS[$rarity]
@@ -1327,6 +1317,9 @@ Func IdentifyItems($buyKit = True)
 	Return True
 EndFunc
 
+
+;~ Salvage items from inventory, only items specified by configuration in GUI interface
+;~ Salvage items from inventory, only items specified by configuration in GUI interface
 ;~ Salvage items from inventory, only items specified by configuration in GUI interface
 Func SalvageItems($buyKit = True)
 	Out("Debug Salvage: Starting salvage...")
@@ -1337,20 +1330,6 @@ Func SalvageItems($buyKit = True)
 	EndIf
 	Local $uses = DllStructGetData($kit, 'Value') / 2
 	Out("Debug Salvage: Kit has " & $uses & " uses")
-	
-	; Identify Items Loop
-    For $bagIndex = 1 To _Min(4, $bags_count)
-		Local $bag = GetBag($bagIndex)
-		If Not IsDllStruct($bag) Then ContinueLoop
-		Local $bagSize = DllStructGetData($bag, 'slots')
-		For $slot = 1 To $bagSize
-			Local $item = GetItemBySlot($bagIndex, $slot)
-            If Not IsDllStruct($item) Or DllStructGetData($item, 'ID') = 0 Then ContinueLoop
-            If Not GetIsIDed($item) And CanSell($item) Then ; Only ID if it's something we might interact with
-                IdentifyItem($item)
-            EndIf
-        Next
-    Next
 
 	Local $movedItem = Null
 	If (CountSlots(1, 4) < 1) Then
@@ -1371,52 +1350,10 @@ Func SalvageItems($buyKit = True)
 			Local $item = GetItemBySlot($bagIndex, $slot)
 			If Not IsDllStruct($item) Or DllStructGetData($item, 'ID') = 0 Then ContinueLoop
 
-			; Get the actual game memory pointer using bag/slot
-			Local $itemPtr = GetItemPtrBySlot($bagIndex, $slot)
 			Local $itemID = DllStructGetData($item, 'ModelID')
-			Local $itemType = DllStructGetData($item, 'Type')
-			Local $itemRarity = GetRarity($item)
-			Out("Debug Salvage: Checking item " & $bagIndex & ":" & $slot & " ID=" & $itemID & " Type=" & $itemType & " Rarity=" & $itemRarity)
-			
-            ; Check for Useful Mods (High Priority)
-            If CanSell($itemPtr) And HasUsefulMod($item) Then
-                Local $aMod = @extended
-                Out("========================================")
-                Out("DEBUG: SALVAGING MOD from item ID=" & $itemID & " Type=" & $itemType & " Rarity=" & $itemRarity)
-                Out("========================================")
-                StartSalvage($item, False)
-                Sleep(500)
-                
-                ; Check disconnect immediately after starting salvage
-                If GetMapLoading() == 2 Then
-                    Out("!!!!! DISCONNECTED AFTER StartSalvage() !!!!!")
-                    Out("Problem Item: ID=" & $itemID & " Type=" & $itemType & " Rarity=" & $itemRarity)
-                    Out("Location: Bag " & $bagIndex & " Slot " & $slot)
-                    Return False
-                EndIf
-                
-                SalvageMod($aMod)
-                Sleep(GetPing() + 2000)
-                
-                ; Check disconnect after mod salvage
-                If GetMapLoading() == 2 Then
-                    Out("!!!!! DISCONNECTED AFTER SalvageMod() !!!!!")
-                    Out("Problem Item: ID=" & $itemID & " Type=" & $itemType & " Rarity=" & $itemRarity)
-                    Out("Location: Bag " & $bagIndex & " Slot " & $slot)
-                    Return False
-                EndIf
-                
-                Out("Success: Salvaged mod from item " & $itemID)
-                ContinueLoop
-            EndIf
-
+			Out("Debug Salvage: Checking item " & $bagIndex & ":" & $slot & " ID=" & $itemID)
 			
 			If IsTrophy($itemID) Then
-				; Check if trophy can be sold/salvaged before adding to stack
-				If Not CanSell($itemPtr) Then
-					Out("Debug Salvage: Skipping protected trophy ID=" & $itemID)
-					ContinueLoop
-				EndIf
 				If IsDeclared('inventory_management_cache') Then
                     If $inventory_management_cache['@salvage.trophies.nothing'] Then ContinueLoop
                 EndIf
@@ -1425,11 +1362,6 @@ Func SalvageItems($buyKit = True)
 					$trophyAndMaterialIndex += 1
 				EndIf
 			ElseIf IsRareMaterial($item) Then
-				; Check if rare material can be sold/salvaged before adding to stack
-				If Not CanSell($itemPtr) Then
-					Out("Debug Salvage: Skipping protected rare material ID=" & $itemID)
-					ContinueLoop
-				EndIf
 				If IsDeclared('inventory_management_cache') Then
                     If $inventory_management_cache['@salvage.materials.nothing'] Then ContinueLoop
                 EndIf
@@ -1438,35 +1370,24 @@ Func SalvageItems($buyKit = True)
 					$trophyAndMaterialIndex += 1
 				EndIf
 			Else
-				; Note: At this point, CanSell() check happens in DefaultShouldSalvageItem,
-				; but reference implementation checks it earlier. Add explicit check here.
-				If Not CanSell($itemPtr) Then
-					Out("Debug Salvage: Skipping unsalvageable item ID=" & $itemID & " Type=" & $itemType)
-					ContinueLoop
-				EndIf
-				
-				; Check blacklist using helper function
-				If ShouldBlacklist($itemID) Then
+				; Blacklist checks for kits and known disconnect items and Tomes and Rare Skins
+				; 5900=Sup Salvage, 5899=Sup ID, 2992=Expert Salvage, 2991=ID Kit, 21798=Necro Tome, 1856=Crash Item
+				If $itemID == 5900 Or $itemID == 5899 Or $itemID == 2992 Or $itemID == 2991 Or $itemID == 21798 Or $itemID == 1856 Or IsTome($itemID) Or IsRareSkin($itemID) Then
 					Out("Debug Salvage: Skipping blacklisted item ID=" & $itemID)
 					ContinueLoop
 				EndIf
 
 				Out("Debug Salvage: Checking if should salvage item " & $itemID)
 				If DefaultShouldSalvageItem($item) Then
-					Out("========================================")
-					Out("DEBUG: SALVAGING item ID=" & $itemID & " Type=" & $itemType & " Rarity=" & $itemRarity)
-					Out("========================================")
+					Out("Debug Salvage: Salvaging item " & $itemID)
 					SalvageItem($item, $kit)
 					Sleep(GetPing() + 500)
 					
 					If GetMapLoading() == 2 Then 
-						Out("!!!!! DISCONNECTED AFTER SalvageItem() !!!!!")
-						Out("Problem Item: ID=" & $itemID & " Type=" & $itemType & " Rarity=" & $itemRarity)
-						Out("Location: Bag " & $bagIndex & " Slot " & $slot)
+						Out("Debug Salvage: Disconnected after salvaging " & $itemID)
 						Return False
 					EndIf
 					
-					Out("Success: Salvaged item " & $itemID)
 					$uses -= 1
 					If $uses < 1 Then
 						$kit = GetSalvageKit($buyKit)
@@ -1487,84 +1408,40 @@ Func SalvageItems($buyKit = True)
 	If $movedItem <> Null Then
 		Local $bagEmptySlot = FindFirstEmptySlot(1, _Min(4, $bags_count))
 		MoveItem($movedItem, $bagEmptySlot[0], $bagEmptySlot[1])
-		
-		Local $movedItemID = DllStructGetData($movedItem, 'ModelID')
-		Local $movedItemType = DllStructGetData($movedItem, 'Type')
-		Local $movedItemRarity = GetRarity($movedItem)
-		
-		; New Logic for Moved Item
-		If CanSell($movedItem) Then
-            If HasUsefulMod($movedItem) Then
-                $aMod = @extended
-                Out("========================================")
-                Out("DEBUG: SALVAGING MOD from MOVED ITEM ID=" & $movedItemID & " Type=" & $movedItemType & " Rarity=" & $movedItemRarity)
-                Out("========================================")
-                StartSalvage($movedItem, False)
-                Sleep(500)
-                
-                ; Check disconnect after starting salvage
-                If GetMapLoading() == 2 Then
-                    Out("!!!!! DISCONNECTED AFTER StartSalvage() on MOVED ITEM !!!!!!")
-                    Out("Problem Moved Item: ID=" & $movedItemID & " Type=" & $movedItemType & " Rarity=" & $movedItemRarity)
-                    Return False
-                EndIf
-                
-                SalvageMod($aMod)
-                Sleep(2000) ; Wait for salvage
-                
-                ; Check disconnect after mod salvage
-                If GetMapLoading() == 2 Then
-                    Out("!!!!! DISCONNECTED AFTER SalvageMod() on MOVED ITEM !!!!!!")
-                    Out("Problem Moved Item: ID=" & $movedItemID & " Type=" & $movedItemType & " Rarity=" & $movedItemRarity)
-                    Return False
-                EndIf
-                
-                Out("Success: Salvaged mod from moved item " & $movedItemID)
-            ElseIf DefaultShouldSalvageItem($movedItem) Then
-                Out("========================================")
-                Out("DEBUG: SALVAGING MOVED ITEM ID=" & $movedItemID & " Type=" & $movedItemType & " Rarity=" & $movedItemRarity)
-                Out("========================================")
-                SalvageItem($movedItem, $kit)
-                Sleep(GetPing() + 500)
-                
-                ; Check disconnect after salvaging moved item
-                If GetMapLoading() == 2 Then
-                    Out("!!!!! DISCONNECTED AFTER SalvageItem() on MOVED ITEM !!!!!!")
-                    Out("Problem Moved Item: ID=" & $movedItemID & " Type=" & $movedItemType & " Rarity=" & $movedItemRarity)
-                    Return False
-                EndIf
-                
-                Out("Success: Salvaged moved item " & $movedItemID)
-            EndIf
-            
+		If DefaultShouldSalvageItem($movedItem) Then
+			Local $movedID = DllStructGetData($movedItem, 'ModelID')
+			; Blacklist check for moved item
+			; 5900=Sup Salvage, 5899=Sup ID, 2992=Expert Salvage, 2991=ID Kit, 21798=Necro Tome, 1856=Crash Item
+			If $movedID <> 5900 And $movedID <> 5899 And $movedID <> 2992 And $movedID <> 2991 And $movedID <> 21798 And $movedID <> 1856 And Not IsTome($movedID) And Not IsRareSkin($movedID) Then
+				SalvageItem($movedItem, $kit)
+				Sleep(GetPing() + 500)
+				
+				If GetMapLoading() == 2 Then 
+					Out("Debug Salvage: Disconnected after salvaging moved item")
+					Return False
+				EndIf
 
-            $uses -= 1
-            If $uses < 1 Then
-                $kit = GetSalvageKit($buyKit)
-                If $kit == 0 Then Return False
-                $uses = DllStructGetData($kit, 'Value') / 2
-            EndIf
+				$uses -= 1
+				If $uses < 1 Then
+					$kit = GetSalvageKit($buyKit)
+					If $kit == 0 Then Return False
+					$uses = DllStructGetData($kit, 'Value') / 2
+				EndIf
+			EndIf
 		EndIf
 	EndIf
 
 	Out("Debug Salvage: Processing " & $trophyAndMaterialIndex & " stacked items")
 	For $i = 0 To $trophyAndMaterialIndex - 1
 		If DefaultShouldSalvageItem($trophiesAndMaterialItems[$i]) Then
-			Local $stackItemID = DllStructGetData($trophiesAndMaterialItems[$i], 'ModelID')
-			Local $stackItemType = DllStructGetData($trophiesAndMaterialItems[$i], 'Type')
 			Local $qty = DllStructGetData($trophiesAndMaterialItems[$i], 'Quantity')
-			Out("========================================")
-			Out("DEBUG: SALVAGING STACK #" & $i & " ID=" & $stackItemID & " Type=" & $stackItemType & " Qty=" & $qty)
-			Out("========================================")
+			Out("Debug Salvage: Salvaging stack " & $i & " qty=" & $qty)
 			For $k = 0 To $qty - 1
-				Out("Salvaging stack item " & ($k + 1) & "/" & $qty)
 				SalvageItem($trophiesAndMaterialItems[$i], $kit)
 				Sleep(GetPing() + 500)
 				
 				If GetMapLoading() == 2 Then 
-					Out("!!!!! DISCONNECTED DURING STACK SALVAGE !!!!!")
-					Out("Problem Stack Item: ID=" & $stackItemID & " Type=" & $stackItemType)
-					Out("Was salvaging item " & ($k + 1) & " of " & $qty)
+					Out("Debug Salvage: Disconnected after salvaging stack item")
 					Return False
 				EndIf
 				
@@ -1575,7 +1452,6 @@ Func SalvageItems($buyKit = True)
 					$uses = DllStructGetData($kit, 'Value') / 2
 				EndIf
 			Next
-			Out("Success: Salvaged all items in stack " & $stackItemID)
 		EndIf
 	Next
 	Out("Debug Salvage: Complete")
@@ -1939,22 +1815,6 @@ EndFunc
 Func IsRareSkin($itemID)
 	If $itemID < 0 Or $itemID >= UBound($aRareSkin) Then Return False
 	Return ($aRareSkin[$itemID] <> "")
-EndFunc
-
-;~ Return true if the item should be blacklisted from salvaging/identifying
-Func ShouldBlacklist($itemID)
-    ; Blacklist checks for kits and known disconnect items and Tomes and Rare Skins
-    If $itemID == $ID_SUPERIOR_SALVAGE_KIT Or _
-       $itemID == $ID_SUPERIOR_IDENTIFICATION_KIT Or _
-       $itemID == $ID_EXPERT_SALVAGE_KIT Or _
-       $itemID == $ID_IDENTIFICATION_KIT Or _
-       $itemID == $ID_NECROMANCER_TOME Or _
-       $itemID == $ID_CRASH_ITEM_1856 Or _
-       IsTome($itemID) Or _
-       IsRareSkin($itemID) Then
-        Return True
-    EndIf
-    Return False
 EndFunc
 #EndRegion Items tests
 
@@ -3795,83 +3655,3 @@ Func _dlldisplay($struct, $fieldNames = Null)
 
 	Return $structArray
 EndFunc
-
-; ==================================================================================================
-; Missing Logging Helpers
-; ==================================================================================================
-
-; ==================================================================================================
-; Logging Helpers
-; ==================================================================================================
-; Logging functions (Out, Info, Warn, etc.) are defined in GUI_Functions.au3
-; They write to the GUI console window for user visibility
-
-; ==================================================================================================
-; Missing Function Implementations
-; ==================================================================================================
-
-Func NPCCoordinatesInTown($town = $ID_EYE_OF_THE_NORTH, $type = 'Merchant')
-	Local $coordinates[2] = [-1, -1]
-	Switch $type
-		Case 'Merchant'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2158
-					$coordinates[1] = -2006
-				Case $ID_EYE_OF_THE_NORTH
-					$coordinates[0] = -2700
-					$coordinates[1] = 1075
-				Case Else
-					Warn('For provided town coordinates of that NPC aren''t mapped yet')
-			EndSwitch
-		Case 'Basic material trader'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2997
-					$coordinates[1] = -2271
-				Case $ID_EYE_OF_THE_NORTH
-					$coordinates[0] = -1850
-					$coordinates[1] = 875
-				Case Else
-					Warn('For provided town coordinates of that NPC aren''t mapped yet')
-			EndSwitch
-		Case 'Rare material trader'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2928
-					$coordinates[1] = -2452
-				Case $ID_EYE_OF_THE_NORTH
-					$coordinates[0] = -2100
-					$coordinates[1] = 1125
-				Case Else
-					Warn('For provided town coordinates of that NPC aren''t mapped yet')
-			EndSwitch
-		Case Else
-			Warn('Wrong NPC type provided')
-	EndSwitch
-	Return $coordinates
-EndFunc
-
-Func IsHardmodeEnabled()
-	; Placeholder implementation as actual memory address logic is missing
-	Return False
-EndFunc
-
-Func CheckPickupWeapon($item)
-	; Placeholder since definition was not found
-	Return True
-EndFunc
-
-; ==================================================================================================
-; Missing Globals
-; ==================================================================================================
-Global $STUCK = 6
-Global $MAP_WEAPON_MODS[1] ; Dummy array
-Global $ID_CRASH_ITEM_1856 = 0
-Global $GUI_Checkbox_WeaponSlot
-Global $default_weapon_slot = 0
-Global $GUI_Checkbox_AutomaticTeamSetup
-Global $GUI_Input_Build_Player
-Global $GUI_Combo_Hero_1, $GUI_Combo_Hero_2, $GUI_Combo_Hero_3, $GUI_Combo_Hero_4, $GUI_Combo_Hero_5, $GUI_Combo_Hero_6, $GUI_Combo_Hero_7
-Global $GUI_Input_Build_Hero_1, $GUI_Input_Build_Hero_2, $GUI_Input_Build_Hero_3, $GUI_Input_Build_Hero_4, $GUI_Input_Build_Hero_5, $GUI_Input_Build_Hero_6, $GUI_Input_Build_Hero_7
-Global $run_timer
