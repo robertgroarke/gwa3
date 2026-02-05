@@ -506,14 +506,23 @@ Func MoveandAggroEx($aWaypoints)
 			GUI_SetWipes(GUI_GetWipes() + 1)
 			$LastWaypoint = $i
 			Out("We wiped at " & $aWaypoints[$LastWaypoint][3] & ", waiting for rezz")
-			CancelAll()    ; in case we were pulling enemie
+			CancelAll()    ; in case we were pulling enemies
+			Local $lWipeWaitCounter = 0
+			Local $lDeadlock = TimerInit()
 			Do
 				Sleep(500)
-				If GetPartyDefeated() Then Return ResignAndReturn($Outpost, $Language)
-				Until GetPartyHealth() > 0.5
-				if GetMorale() < -40 then Usedp()
+				$lWipeWaitCounter += 1
+				If GetPartyDefeated() Or TimerDiff($lDeadlock) > 120000 Or $lWipeWaitCounter > 240 Then Return ResignAndReturn($Outpost, $Language)
+			Until GetPartyHealth() > 0.5
+			If GetMorale() < -40 Then Usedp()
 			$NearestWaypoint = GetNearestWaypointIndex($aWaypoints)
-			$i = WipeManagement($aWaypoints, $NearestWaypoint, $LastWaypoint)    ; converts nearest waypoint to the desired waypoint based on last or nearest waypoint
+			$i = WipeManagement($aWaypoints, $NearestWaypoint, $LastWaypoint)
+			; Safety check: if we're too far from target waypoint, use nearest instead
+			Local $DistanceToTarget = GetDistanceToPoint(GetMyAgent(), $aWaypoints[$i][0], $aWaypoints[$i][1])
+			If $DistanceToTarget > 5000 Then
+				Out("Target waypoint too far (" & Floor($DistanceToTarget) & "), using nearest waypoint instead")
+				$i = $NearestWaypoint
+			EndIf
 			Out("Restarting at : " & $aWaypoints[$i][3])
 		EndIf
 
@@ -597,12 +606,14 @@ EndFunc
 
 Func WipeManagement($aWaypoints, $NearestWaypoint, $LastWaypoint)
 	Out("Last waypoint - " & $aWaypoints[$LastWaypoint][3])
+	Out("Nearest waypoint index - " & $NearestWaypoint)
 
+	; Use the waypoint index for comparisons, not the string label
 	Switch GetMapID()
 		Case $Shards_of_Oor_Lvl1
-			Switch $aWaypoints[$NearestWaypoint][3]
-			Case 1 to 9
-			     Return 1
+			Switch $NearestWaypoint
+			Case 0 to 9
+			     Return 0
 			Case 10 to 14
 			     Return 10
 			Case 15 to 20
@@ -610,42 +621,57 @@ Func WipeManagement($aWaypoints, $NearestWaypoint, $LastWaypoint)
 			EndSwitch
 
 		Case $Shards_of_Oor_Lvl2
-			Switch $aWaypoints[$NearestWaypoint][3]
-			   Case  1 to 3
-					Return 1
+			Switch $NearestWaypoint
+			   Case  0 to 3
+					Return 0
 			   Case  4 to 11
 					Return 4
 			EndSwitch
 
 	    Case $Shards_of_Oor_Lvl3
-			Switch $aWaypoints[$NearestWaypoint][3]
-                Case 1 to 8
-			      Return 1
+			Switch $NearestWaypoint
+                Case 0 to 8
+			      Return 0
 			   Case 9 to 16
 			      Return 9
 			   Case 17 to 20
-			      Return 20
+			      Return 17
 			   Case 21 To 41
-			     Return 23
+			     Return 21
 		    	EndSwitch
-			 Case $Sparkfly_Swamp
-		 Switch $aWaypoints[$NearestWaypoint][3]
-			   Case 1 to 6
-			    Return 4
-			   Case 7 to 17
-			    Return 7
+
+		Case $Sparkfly_Swamp
+			Switch $NearestWaypoint
+			   Case 0 to 5
+			    Return 0
+			   Case 6 to 10
+			    Return 6
 		     	EndSwitch
 
 		Case $Bogroot_Growths_Lvl1
-			Switch $aWaypoints[$NearestWaypoint][3]
-				Case 14
-					Return 9
+			; Waypoints: 0=start, 1=Blessing, 2="1", 3=Quest Door, 4="2", 5="3", etc.
+			Switch $NearestWaypoint
+				Case 0 to 4
+					Return 0  ; Go back to start
+				Case 5 to 10
+					Return 5  ; Around waypoint "3"
+				Case 11 to 17
+					Return 11 ; Around waypoint "11"
+				Case 18 to 27
+					Return 18 ; Around waypoint "18"
 			EndSwitch
 
 		Case $Bogroot_Growths_Lvl2
-			Switch $aWaypoints[$NearestWaypoint][3]
-				Case 1 to 8
-					Return 1
+			; Waypoints: 0="1", 1="2", 2="3", etc.
+			Switch $NearestWaypoint
+				Case 0 to 3
+					Return 0  ; Go back to start
+				Case 4 to 10
+					Return 4  ; Around waypoint "5"
+				Case 11 to 20
+					Return 11 ; Around waypoint "11"
+				Case 21 to 35
+					Return 21 ; After dungeon door
 			EndSwitch
 
 	EndSwitch
