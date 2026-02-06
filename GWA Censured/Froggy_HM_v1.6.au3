@@ -502,7 +502,7 @@ Func MoveandAggroEx($aWaypoints)
 		;If(GUI_IsConsetsChecked() and (GetMapId() = $Bogroot_Growths_Lvl1 Or GetMapId() = $Bogroot_Growths_Lvl2)) Then UseArmor()
 		;If $unlit Then $i = RekindleTorch($aWaypoints, $NearestWaypoint)
         If GetMapLoading() == 2 Then Disconnected()
-		If Wipe() = 1 Then    ; wipe intercept - wait until rezz and redirect to best waypoint, check for GetIsDead first to avoid checking fo wipe all the time..
+		If Wipe() = 1 Then    ; wipe intercept - wait until rezz and redirect to best waypoint
 			GUI_SetWipes(GUI_GetWipes() + 1)
 			$LastWaypoint = $i
 			Out("We wiped at " & $aWaypoints[$LastWaypoint][3] & ", waiting for rezz")
@@ -512,8 +512,16 @@ Func MoveandAggroEx($aWaypoints)
 			Do
 				Sleep(500)
 				$lWipeWaitCounter += 1
-				If GetPartyDefeated() Or TimerDiff($lDeadlock) > 120000 Or $lWipeWaitCounter > 240 Then Return ResignAndReturn($Outpost, $Language)
-			Until GetPartyHealth() > 0.5
+				; Debug: Log what we're waiting for
+				If Mod($lWipeWaitCounter, 10) = 0 Then
+					Out("Still waiting... Counter=" & $lWipeWaitCounter & " PlayerDead=" & GetIsDead(-2) & " PartyDefeated=" & GetPartyDefeated())
+				EndIf
+				If GetPartyDefeated() Or TimerDiff($lDeadlock) > 120000 Or $lWipeWaitCounter > 240 Then 
+					Out("Timeout or party defeated - resigning. Counter=" & $lWipeWaitCounter & " TimerDiff=" & Round(TimerDiff($lDeadlock)))
+					Return ResignAndReturn($Outpost, $Language)
+				EndIf
+			Until Not GetIsDead(-2)  ; Wait until PLAYER is alive, not party average HP
+			Out("Player is alive! Continuing...")
 			If GetMorale() < -40 Then Usedp()
 			$NearestWaypoint = GetNearestWaypointIndex($aWaypoints)
 			$i = WipeManagement($aWaypoints, $NearestWaypoint, $LastWaypoint)
