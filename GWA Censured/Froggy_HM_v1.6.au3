@@ -497,13 +497,15 @@ Func MoveandAggroEx($aWaypoints)
 		;BossGlow(GetMyID(), Random(2, 10, 1))
 		$NearestWaypoint = GetNearestWaypointIndex($aWaypoints)
 		
-		; Stuck detection: if we're stuck at the same waypoint for too long, resign
+		; Stuck detection: if we're stuck at the same waypoint for too long, backtrack
 		If $NearestWaypoint = $lLastNearestWaypoint Then
 			$lStuckCounter += 1
 			If $lStuckCounter >= 5 Then
 				Out("STUCK DETECTED: Nearest waypoint hasn't changed in " & $lStuckCounter & " iterations. Waypoint=" & $aWaypoints[$NearestWaypoint][3])
 				Out("Current target waypoint $i=" & $i & " (" & $aWaypoints[$i][3] & ")")
-				Return ResignAndReturn($Outpost, $Language)
+				Out("Backtracking to nearest waypoint and retrying...")
+				$i = $NearestWaypoint - 1  ; For loop will increment, so we'll retry from NearestWaypoint
+				$lStuckCounter = 0  ; Reset counter after backtracking
 			EndIf
 		Else
 			$lStuckCounter = 0  ; Reset counter when we make progress
