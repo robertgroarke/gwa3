@@ -491,9 +491,25 @@ EndFunc
 
 Func MoveandAggroEx($aWaypoints)
 	Local $lMapId = GetMapId()
+	Local $lLastNearestWaypoint = -1
+	Local $lStuckCounter = 0
 	For $i = GetNearestWaypointIndex($aWaypoints) To UBound($aWaypoints) - 1 Step 1
 		;BossGlow(GetMyID(), Random(2, 10, 1))
 		$NearestWaypoint = GetNearestWaypointIndex($aWaypoints)
+		
+		; Stuck detection: if we're stuck at the same waypoint for too long, resign
+		If $NearestWaypoint = $lLastNearestWaypoint Then
+			$lStuckCounter += 1
+			If $lStuckCounter >= 5 Then
+				Out("STUCK DETECTED: Nearest waypoint hasn't changed in " & $lStuckCounter & " iterations. Waypoint=" & $aWaypoints[$NearestWaypoint][3])
+				Out("Current target waypoint $i=" & $i & " (" & $aWaypoints[$i][3] & ")")
+				Return ResignAndReturn($Outpost, $Language)
+			EndIf
+		Else
+			$lStuckCounter = 0  ; Reset counter when we make progress
+			$lLastNearestWaypoint = $NearestWaypoint
+		EndIf
+		
 		Sleep(200)
 		If GetMapId() <> $lMapId Then Return ; Need to get out of this MoveAggro loop if the mapid changes
 		; (SoO only) unlit effect intercept - backtracks until lit effect is reapplied and resumes at light torch waypoint
