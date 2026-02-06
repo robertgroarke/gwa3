@@ -932,6 +932,7 @@ Func UpdateStats()
 	GUI_SetNorn(GetNornTitle() - $iNornTitle)
 	GUI_SetAsura(GetAsuraTitle() - $iAsuraTitle)
 	GUI_SetDeldrimor(GetDeldrimorTitle() - $iDeldrimorTitle)
+	GUI_SetLockpicks(GetPicksCount())
 EndFunc
 
  Func usedp()
@@ -1955,6 +1956,26 @@ Func GetSkillbarPtr($aHeroNumber = 0)
     Return 0
 EndFunc
 
+; Counts Lockpicks in your inventory
+Func GetPicksCount()
+	Local $AmountPicks = 0
+	Local $aBag
+	Local $aItem
+	Local $i
+	For $i = 1 To 4 ; Count in personal inventory bags only
+		$aBag = GetBag($i)
+		For $j = 1 To DllStructGetData($aBag, "Slots")
+			$aItem = GetItemBySlot($aBag, $j)
+			If DllStructGetData($aItem, "ModelID") == 22751 Then
+				$AmountPicks += DllStructGetData($aItem, "Quantity")
+			Else
+				ContinueLoop
+			EndIf
+		Next
+	Next
+	Return $AmountPicks
+EndFunc   ;==>GetPicksCount
 
 
 #EndRegion Logic_Port
+
