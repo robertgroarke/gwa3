@@ -467,13 +467,14 @@ Func Boss()
 	MoveTo(14618, -17828)
 	
 	; 0x8101 dialog body
-	; 0x833907 acccept quest
+	; 0x833907 accept quest reward
 	Local $NPC = GetNearestNPCToCoords (14618, -17828)
 	GoNPC($NPC)
-	;Dialog($TekksDialog)
+	Sleep(GetPing() + 500)  ; Wait for dialog to open
 	QuestReward($QUEST_ID_TEKKS_WAR)
+	Sleep(500)  ; Wait for game to process quest reward
 	Dialog($DIALOG_ID_TEKKS_WAR_REWARD)
-	
+	Sleep(500)  ; Wait for dialog to process
 	
 	If GUI_IsSalvageChecked() = True Then Return SalvageItems()
 EndFunc
