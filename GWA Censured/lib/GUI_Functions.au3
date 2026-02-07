@@ -82,6 +82,7 @@ Global $GUI_GroupSettings_CheckStones			= 0
 Global $GUI_GroupSettings_CheckChests			= 0
 Global $GUI_GroupSettings_CheckPickupGolds		= 0
 Global $GUI_GroupSettings_CheckSalvage			= 0
+Global $GUI_GroupSettings_CheckUseMercs			= 0
 
 ;Group 2: General Statistics
 Global $GUI_GroupGeneralStats = 0
@@ -215,6 +216,7 @@ Func GUI_Create()
 	$temp1 = GUI_GetCtrlInfo($GUI_idButtonStart)
 	$GUI_GroupSettings = GUICtrlCreateGroup("Settings", $GUI_BORDERSIZE		, $temp1[1] + $temp1[3] + $GUI_CONTROL_SPACE, $GUI_LABEL_WIDTH + $GUI_BORDERSIZE * 2,  20 + $tempCtrlTop * 9, -1, $WS_EX_TRANSPARENT)
 	$GUI_GroupSettings_CheckAddHeroes  	= GUICtrlCreateCheckbox("Add Heroes"	, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 0, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
+	$GUI_GroupSettings_CheckUseMercs	= GUICtrlCreateCheckbox("Use Mercs"		, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 1, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
 ;~ 	$GUI_GroupSettings_CheckPurge   	= GUICtrlCreateCheckbox("Purge"  			, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 1, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
 ;~ 	$GUI_GroupSettings_CheckHM			= GUICtrlCreateCheckbox("Hard Mode"			, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 2, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
 	$GUI_GroupSettings_CheckConsets		= GUICtrlCreateCheckbox("Consets"			, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 3, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
@@ -397,6 +399,10 @@ EndFunc
 
 Func GUI_IsSalvageChecked()
 	Return GUI_IsChecked($GUI_GroupSettings_CheckSalvage)
+EndFunc
+
+Func GUI_IsUseMercsChecked()
+	Return GUI_IsChecked($GUI_GroupSettings_CheckUseMercs)
 EndFunc
 
 ;Group 2: General

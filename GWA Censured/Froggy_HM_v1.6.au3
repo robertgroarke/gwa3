@@ -183,13 +183,27 @@ Func Setup($addHeroes = True)
 		Out("Setting up heroes...")
 		LeaveParty()
 		sleep(500)
-		AddHero(25) ;Xandra
+		
+		; Toggle between standard heroes and mercenaries based on checkbox
+		If GUI_IsUseMercsChecked() Then
+			Out("Using Mercenary hero setup")
+			AddHero($HERO_ID_MERCENARY_3)  ; Merc instead of Xandra
+		Else
+			Out("Using Standard hero setup")
+			AddHero(25) ;Xandra
+		EndIf
+		
 		AddHero(14) ;Olias
 		AddHero(21) ; Livia
 		AddHero(4) ; Master of Whispers
 		AddHero(24) ; Gwen
 		AddHero(15) ; Norgu
-		AddHero(1); Razah
+		
+		If GUI_IsUseMercsChecked() Then
+			AddHero($HERO_ID_MERCENARY_2)  ; Merc instead of Razah
+		Else
+			AddHero(1) ; Razah
+		EndIf
 
 		sleep(500)
 
