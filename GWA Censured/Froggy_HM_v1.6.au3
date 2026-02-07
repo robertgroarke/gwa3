@@ -50,7 +50,7 @@ Global $unlit = False
 Global $iVanguardTitle, $iNornTitle, $iAsuraTitle, $iDeldrimorTitle
 Global $BestTargetPtr = 0
 Global $GUI_RunCounter = 0, $GUI_FailCounter = 0, $AvgRunTime = 0
-Global $nBestRunTime = 999999999, $nCurrentRunTime = 0
+Global $nBestRunTime = 999999999, $nCurrentRunTime = 0, $nTotalRunTime = 0
 
 
 
@@ -153,7 +153,9 @@ Func onStart()
 	;GUI_SetGolds(0)
 	;GUI_SetTomes(0)
 	GUI_SetChestsOpened(0)
+	$nTotalRunTime = TimerInit()  ; Start total runtime timer
 	AdlibRegister("UpdateStats", 1000)
+	AdlibRegister("TotalRunTime", 1000)  ; Update total runtime every second
 	CacheSkillBar()
 EndFunc
 
@@ -908,7 +910,6 @@ Func CanPickUpEx($aItem, $PickupTorch = False)
 	Return False
 EndFunc
 ;I have ported the script to use the new GWA2 library. Please test it and let me know if you find any issues.
-;I have ported the script to use the new GWA2 library. Please test it and let me know if you find any issues.
 
 Func AvgRunTime()
 	Local $CurrentRunTime = Floor(TimerDiff($nCurrentRunTime))
@@ -942,6 +943,16 @@ Func UpdateStats()
 	GUI_SetDeldrimor(GetDeldrimorTitle() - $iDeldrimorTitle)
 	GUI_SetLockpicks(GetPicksCount())
 EndFunc
+
+; Updates the current run time on the status bar (called every second via Adlib)
+Func CurrentRunTime()
+	GUI_SetRunTime(TimerDiff($nCurrentRunTime))
+EndFunc   ;==>CurrentRunTime
+
+; Updates the total runtime on the status bar (called every second via Adlib)
+Func TotalRunTime()
+	GUI_SetTotalTime(TimerDiff($nTotalRunTime))
+EndFunc   ;==>TotalRunTime
 
  Func usedp()
 	usedp9()
