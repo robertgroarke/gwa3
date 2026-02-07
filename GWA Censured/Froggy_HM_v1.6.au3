@@ -51,6 +51,7 @@ Global $iVanguardTitle, $iNornTitle, $iAsuraTitle, $iDeldrimorTitle
 Global $BestTargetPtr = 0
 Global $GUI_RunCounter = 0, $GUI_FailCounter = 0, $AvgRunTime = 0
 Global $nBestRunTime = 999999999, $nCurrentRunTime = 0, $nTotalRunTime = 0
+Global $bRunFailed = False  ; Flag to track if current run failed (don't count for best time)
 
 
 
@@ -257,6 +258,7 @@ Func TakeQuest0()
 	Local  $Return2
 	Global $nCurrentRunTime = 0
 	Global $nCurrentRunTime = TimerInit()
+	Global $bRunFailed = False  ; Reset failure flag at start of run
 	AdlibRegister("CurrentRunTime", 1000)
 	clearmemory()
 	SetPlayerStatus(0)
@@ -599,6 +601,7 @@ Func MoveandAggroEx($aWaypoints)
 				$NearestWaypoint = GetNearestWaypointIndex($aWaypoints)
 				If($NearestWaypoint <> $i) Then
 					Out("Failed first door, going back to get quest")
+					$bRunFailed = True  ; Mark this run as failed (don't count for best time)
 					For $j = $i-1 To $i - 3 Step -1
 						If GetMapLoading() = 1 Then AggroMoveToEX($aWaypoints[$j][0], $aWaypoints[$j][1], $aWaypoints[$j][2])
 						If GetMapLoading() <> 1 Then MoveTo($aWaypoints[$j][0], $aWaypoints[$j][1])
@@ -932,7 +935,10 @@ Func AvgRunTime()
 EndFunc
 
 Func BestRunTime()
-	If TimerDiff($nCurrentRunTime) < $nBestRunTime Then $nBestRunTime = TimerDiff($nCurrentRunTime)
+	; Only update best time if this wasn't a failed run
+	If Not $bRunFailed And TimerDiff($nCurrentRunTime) < $nBestRunTime Then
+		$nBestRunTime = TimerDiff($nCurrentRunTime)
+	EndIf
 	Return $nBestRunTime
 EndFunc
 
