@@ -184,37 +184,12 @@ Func Setup($addHeroes = True)
 		LeaveParty()
 		sleep(500)
 		
-		; Toggle between standard heroes and mercenaries based on checkbox
+		; Choose hero setup based on checkbox
 		If GUI_IsUseMercsChecked() Then
-			Out("Using Mercenary hero setup")
-			AddHero($HERO_ID_MERCENARY_3)  ; Merc instead of Xandra
+			AddMercHeroes()
 		Else
-			Out("Using Standard hero setup")
-			AddHero(25) ;Xandra
+			AddStandardHeroes()
 		EndIf
-		
-		AddHero(14) ;Olias
-		AddHero(21) ; Livia
-		AddHero(4) ; Master of Whispers
-		AddHero(24) ; Gwen
-		AddHero(15) ; Norgu
-		
-		If GUI_IsUseMercsChecked() Then
-			AddHero($HERO_ID_MERCENARY_2)  ; Merc instead of Razah
-		Else
-			AddHero(1) ; Razah
-		EndIf
-
-		sleep(500)
-
-		Out("Loading hero skill templates...")
-		LoadSkillTemplate("OAOiAyk8gNtePuwJ00ZaNbJA", 1) ; ST Xandra remove hex
-		LoadSkillTemplate("OAhjQkGZIT3BVVCPSTTODTjTciA", 2) ; BiP Olias
-		LoadSkillTemplate("OAhjYoHYIPWb7wnoqKNncDzqH", 3) ; Xinrae Livia
-		LoadSkillTemplate("OAljUwGpZSUBKgfBVVbh8Y7Y1YA", 4) ; MM Master P
-		LoadSkillTemplate("OQhkAsC8gFKzJY6lDMd40hQG4iB", 5)	; E-Surge Gwen
-		LoadSkillTemplate("OQhkAsC8gFKDNY6lDMd40hQG4iB", 6) ; Inep Norgu
-		LoadSkillTemplate("OQljAkBsZSvAIg5ZkAcQsA7Y1YA", 7)	; Panic Razah
 
 		sleep(500)
 
@@ -242,6 +217,53 @@ Func Setup($addHeroes = True)
 	Until WaitMapLoading($Sparkfly_Swamp)
 
 EndFunc
+
+; Standard hero setup (Xandra + Razah)
+Func AddStandardHeroes()
+	Out("Adding Standard heroes...")
+	AddHero(25) ;Xandra
+	AddHero(14) ;Olias
+	AddHero(21) ; Livia
+	AddHero(4) ; Master of Whispers
+	AddHero(24) ; Gwen
+	AddHero(15) ; Norgu
+	AddHero(1) ; Razah
+
+	sleep(500)
+
+	Out("Loading Standard skill templates...")
+	LoadSkillTemplate("OAOiAyk8gNtePuwJ00ZaNbJA", 1) ; ST Xandra remove hex
+	LoadSkillTemplate("OAhjQkGZIT3BVVCPSTTODTjTciA", 2) ; BiP Olias
+	LoadSkillTemplate("OAhjYoHYIPWb7wnoqKNncDzqH", 3) ; Xinrae Livia
+	LoadSkillTemplate("OAljUwGpZSUBKgfBVVbh8Y7Y1YA", 4) ; MM Master P
+	LoadSkillTemplate("OQhkAsC8gFKzJY6lDMd40hQG4iB", 5)	; E-Surge Gwen
+	LoadSkillTemplate("OQhkAsC8gFKDNY6lDMd40hQG4iB", 6) ; Inep Norgu
+	LoadSkillTemplate("OQljAkBsZSvAIg5ZkAcQsA7Y1YA", 7)	; Panic Razah
+EndFunc
+
+; Mercenary hero setup (Merc 3 + Merc 2)
+Func AddMercHeroes()
+	Out("Adding Mercenary heroes...")
+	AddHero($HERO_ID_MERCENARY_3) ; Merc instead of Xandra
+	AddHero(14) ;Olias
+	AddHero(21) ; Livia
+	AddHero(4) ; Master of Whispers
+	AddHero(24) ; Gwen
+	AddHero(15) ; Norgu
+	AddHero($HERO_ID_MERCENARY_2) ; Merc instead of Razah
+
+	sleep(500)
+
+	Out("Loading Mercenary skill templates...")
+	LoadSkillTemplate("OAOiAyk8gNtePuwJ00ZaNbJA", 1) ; ST Merc3 remove hex
+	LoadSkillTemplate("OAhjQkGZIT3BVVCPSTTODTjTciA", 2) ; BiP Olias
+	LoadSkillTemplate("OAhjYoHYIPWb7wnoqKNncDzqH", 3) ; Xinrae Livia
+	LoadSkillTemplate("OAljUwGpZSUBKgfBVVbh8Y7Y1YA", 4) ; MM Master P
+	LoadSkillTemplate("OQhkAsC8gFKzJY6lDMd40hQG4iB", 5)	; E-Surge Gwen
+	LoadSkillTemplate("OQhkAsC8gFKDNY6lDMd40hQG4iB", 6) ; Inep Norgu
+	LoadSkillTemplate("OQljAkBsZSvAIg5ZkAcQsA7Y1YA", 7)	; Panic Merc2
+EndFunc
+
 
 Func RunToDungeon()
 	Out("Running To Bogroot")
