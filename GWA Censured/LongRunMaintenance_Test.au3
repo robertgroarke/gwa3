@@ -46,8 +46,8 @@ Global Const $SELL_MATERIALS[] = [ _
     $ID_WOOD_PLANK _
 ]
 
-; Town for maintenance run (Vlox's Falls is near Bogroot)
-Global Const $MAINTENANCE_TOWN = $ID_VLOXS_FALLS
+; Town for maintenance run (Gadd's Encampment has all needed NPCs)
+Global Const $MAINTENANCE_TOWN = $ID_GADDS_CAMP
 
 ; ==============================================================================
 ; TEST SCRIPT MAIN
@@ -162,7 +162,7 @@ EndFunc
 ; MAINTENANCE RUN
 ; ==============================================================================
 Func DoMaintenanceRun()
-    Out("Step 1: Traveling to Vlox's Falls")
+    Out("Step 1: Traveling to Gadd's Encampment")
     ; TODO: TravelToOutpost($MAINTENANCE_TOWN)
     
     Out("Step 2: Selling items to merchant")

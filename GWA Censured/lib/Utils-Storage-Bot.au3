@@ -1180,7 +1180,7 @@ Func CheckPickupWeapon($weaponItem)
 	If $weaponRarity == $RARITY_GRAY Then Return False
 	Local $weaponRarityName = $RARITY_NAMES_FROM_IDS[$weaponRarity]
 	Local $weaponReq = GetItemReq($weaponItem)
-	Return $inventory_management_cache['Pick up items.Weapons and offhands.' & $weaponRarityName . '.' & $weaponTypeName & '.Req ' & $weaponReq]
+	Return $inventory_management_cache['Pick up items.Weapons and offhands.' & $weaponRarityName & '.' & $weaponTypeName & '.Req ' & $weaponReq]
 EndFunc
 
 
@@ -1191,7 +1191,7 @@ Func CheckSalvageWeapon($weaponItem)
 	If $weaponRarity == $RARITY_GREEN Or $weaponRarity == $RARITY_GRAY Or $weaponRarity == $RARITY_RED Then Return False
 	Local $weaponRarityName = $RARITY_NAMES_FROM_IDS[$weaponRarity]
 	Local $weaponReq = GetItemReq($weaponItem)
-	Return $inventory_management_cache['Salvage items.Weapons and offhands.' & $weaponRarityName . '.' & $weaponTypeName & '.Req ' & $weaponReq]
+	Return $inventory_management_cache['Salvage items.Weapons and offhands.' & $weaponRarityName & '.' & $weaponTypeName & '.Req ' & $weaponReq]
 EndFunc
 
 
@@ -1202,7 +1202,7 @@ Func CheckSellWeapon($weaponItem)
 	If $weaponRarity == $RARITY_GREEN Or $weaponRarity == $RARITY_GRAY Or $weaponRarity == $RARITY_RED Then Return False
 	Local $weaponRarityName = $RARITY_NAMES_FROM_IDS[$weaponRarity]
 	Local $weaponReq = GetItemReq($weaponItem)
-	Return $inventory_management_cache['Sell items.Weapons and offhands.' & $weaponRarityName . '.' & $weaponTypeName & '.Req ' & $weaponReq]
+	Return $inventory_management_cache['Sell items.Weapons and offhands.' & $weaponRarityName & '.' & $weaponTypeName & '.Req ' & $weaponReq]
 EndFunc
 
 
@@ -1214,6 +1214,6 @@ Func CheckStoreWeapon($weaponItem)
 	If $weaponRarity == $RARITY_GRAY Or $weaponRarity == $RARITY_RED Then Return False
 	Local $weaponRarityName = $RARITY_NAMES_FROM_IDS[$weaponRarity]
 	Local $weaponReq = GetItemReq($weaponItem)
-	Return $inventory_management_cache['Store items.Weapons and offhands.' & $weaponRarityName . '.' & $weaponTypeName & '.Req ' & $weaponReq]
+	Return $inventory_management_cache['Store items.Weapons and offhands.' & $weaponRarityName & '.' & $weaponTypeName & '.Req ' & $weaponReq]
 EndFunc
 #EndRegion Inventory
