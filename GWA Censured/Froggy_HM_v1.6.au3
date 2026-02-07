@@ -18,6 +18,11 @@ Global Const $QUEST_ID_TEKKS_WAR = 0x339
 Global Const $DIALOG_ID_TEKKS_WAR_ACCEPT = 0x833901
 Global Const $DIALOG_ID_TEKKS_WAR_REWARD = 0x833907
 
+; Mercenary Hero IDs (from GWA_Logic_Censured_NEW.au3 enum)
+Global Const $HERO_ID_MERCENARY_1 = 28
+Global Const $HERO_ID_MERCENARY_2 = 29
+Global Const $HERO_ID_MERCENARY_3 = 30
+
 Global Const $BOTNAME = "Froggy HM"
 Global Const $VERSION = "1.6"
 Global Const $AUTHORS[1] = ["Bob and Gemini"]
