@@ -1,0 +1,28 @@
+=== TimerDiff Test Started ===
+Testing AutoIt's TimerInit() and TimerDiff() functions
+Test run at: 2026-02-05 03:48:07
+
+Test 1: Sleep 1000ms, expect ~1000ms difference
+  Result: 1014ms (expected ~1000ms)
+  PASS: Within expected range
+
+Test 2: Sleep 500ms, expect ~500ms difference
+  Result: 515ms (expected ~500ms)
+  PASS: Within expected range
+
+Test 3: Simulated wipe wait loop (5 iterations, 500ms each)
+  Iteration 1: TimerDiff=513ms, Counter=1
+  Iteration 2: TimerDiff=1015ms, Counter=2
+  Iteration 3: TimerDiff=1516ms, Counter=3
+  Iteration 4: TimerDiff=2015ms, Counter=4
+  Iteration 5: TimerDiff=2519ms, Counter=5
+  Loop exited because: Counter reached 5 (test limit)
+  Final TimerDiff: 2519ms (expected ~2500ms)
+
+Test 4: Check if 5-second timeout works
+  Loop ran for 10 iterations over 5099ms
+  PASS: Timeout worked correctly
+
+=== TimerDiff Test Complete ===
+If all tests PASS, TimerDiff() is working correctly.
+If any tests FAIL, there may be an issue with timing functions.
