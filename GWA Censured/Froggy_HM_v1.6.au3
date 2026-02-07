@@ -241,6 +241,7 @@ Func RunToDungeon()
       [14650, 19417, 0, "10"], _
       [12280, 22585, 0, "11"]]
 	MoveandAggroEx($aWaypoints)
+	ClearMemory()  ; Clean up DllStructs from MoveandAggroEx before continuing
 
    If $GUI_RunCounter > 0 Then
 		GUI_SetAvgRunTime(AvgRunTime())
@@ -261,9 +262,12 @@ Func TakeQuest0()
 	Out("Starting Run Num: " & $GUI_RunCounter)
 
 	TolSleep(800)
+	ClearMemory()  ; Clear memory before heavy agent operations to prevent allocation errors
 	MoveTo(12396, 22407)
 	Out("Accept Quest")
 	
+	; Add a small delay after moving to allow game state to stabilize
+	Sleep(500)
 	Local $NPC = GetNearestNPCToCoords(12396, 22407)
 	Out("Debug: NPC IsDllStruct=" & IsDllStruct($NPC) & " ID=" & (IsDllStruct($NPC) ? DllStructGetData($NPC, 'ID') : "N/A"))
 	
