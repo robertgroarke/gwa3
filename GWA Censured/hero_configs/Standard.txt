@@ -1,0 +1,11 @@
+; Standard Hero Configuration
+; Format: HeroID,SkillTemplateCode
+; Heroes are added in order (1-7)
+
+25,OAOiAyk8gNtePuwJ00ZaNbJA   ; Xandra - ST remove hex
+14,OAhjQkGZIT3BVVCPSTTODTjTciA ; Olias - BiP
+21,OAhjYoHYIPWb7wnoqKNncDzqH   ; Livia - Xinrae
+4,OAljUwGpZSUBKgfBVVbh8Y7Y1YA  ; Master of Whispers - MM
+24,OQhkAsC8gFKzJY6lDMd40hQG4iB ; Gwen - E-Surge
+15,OQhkAsC8gFKDNY6lDMd40hQG4iB ; Norgu - Inep
+1,OQljAkBsZSvAIg5ZkAcQsA7Y1YA  ; Razah - Panic

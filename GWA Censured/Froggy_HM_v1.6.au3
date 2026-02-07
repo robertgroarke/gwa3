@@ -189,12 +189,8 @@ Func Setup($addHeroes = True)
 		LeaveParty()
 		sleep(500)
 		
-		; Choose hero setup based on checkbox
-		If GUI_IsUseMercsChecked() Then
-			AddMercHeroes()
-		Else
-			AddStandardHeroes()
-		EndIf
+		; Load hero configuration from selected file
+		LoadHeroConfigFromFile(GUI_GetSelectedHeroConfig())
 
 		sleep(500)
 
@@ -223,51 +219,83 @@ Func Setup($addHeroes = True)
 
 EndFunc
 
-; Standard hero setup (Xandra + Razah)
-Func AddStandardHeroes()
-	Out("Adding Standard heroes...")
-	AddHero(25) ;Xandra
-	AddHero(14) ;Olias
-	AddHero(21) ; Livia
-	AddHero(4) ; Master of Whispers
-	AddHero(24) ; Gwen
-	AddHero(15) ; Norgu
-	AddHero(1) ; Razah
-
-	sleep(500)
-
-	Out("Loading Standard skill templates...")
-	LoadSkillTemplate("OAOiAyk8gNtePuwJ00ZaNbJA", 1) ; ST Xandra remove hex
-	LoadSkillTemplate("OAhjQkGZIT3BVVCPSTTODTjTciA", 2) ; BiP Olias
-	LoadSkillTemplate("OAhjYoHYIPWb7wnoqKNncDzqH", 3) ; Xinrae Livia
-	LoadSkillTemplate("OAljUwGpZSUBKgfBVVbh8Y7Y1YA", 4) ; MM Master P
-	LoadSkillTemplate("OQhkAsC8gFKzJY6lDMd40hQG4iB", 5)	; E-Surge Gwen
-	LoadSkillTemplate("OQhkAsC8gFKDNY6lDMd40hQG4iB", 6) ; Inep Norgu
-	LoadSkillTemplate("OQljAkBsZSvAIg5ZkAcQsA7Y1YA", 7)	; Panic Razah
+; Load hero configuration from file
+; File format: HeroID,SkillTemplateCode (one per line, comments start with ;)
+Func LoadHeroConfigFromFile($sConfigName)
+	Local $sFilePath = @ScriptDir & "\hero_configs\" & $sConfigName & ".txt"
+	
+	If Not FileExists($sFilePath) Then
+		Out("ERROR: Hero config file not found: " & $sFilePath)
+		Return False
+	EndIf
+	
+	Out("Loading hero config: " & $sConfigName)
+	
+	Local $hFile = FileOpen($sFilePath, 0) ; Read mode
+	If $hFile = -1 Then
+		Out("ERROR: Could not open config file")
+		Return False
+	EndIf
+	
+	Local $iHeroSlot = 1
+	While 1
+		Local $sLine = FileReadLine($hFile)
+		If @error Then ExitLoop
+		
+		; Skip empty lines and comments
+		$sLine = StringStripWS($sLine, 3) ; Strip leading/trailing whitespace
+		If $sLine = "" Or StringLeft($sLine, 1) = ";" Then ContinueLoop
+		
+		; Remove inline comments
+		Local $iCommentPos = StringInStr($sLine, ";")
+		If $iCommentPos > 0 Then
+			$sLine = StringStripWS(StringLeft($sLine, $iCommentPos - 1), 2)
+		EndIf
+		
+		; Parse HeroID,SkillTemplate
+		Local $aParts = StringSplit($sLine, ",")
+		If $aParts[0] >= 2 Then
+			Local $iHeroID = Int(StringStripWS($aParts[1], 3))
+			Local $sSkillTemplate = StringStripWS($aParts[2], 3)
+			
+			; Add hero
+			AddHero($iHeroID)
+			Sleep(100)
+		EndIf
+	WEnd
+	FileClose($hFile)
+	
+	Sleep(500)
+	Out("Loading skill templates...")
+	
+	; Re-read file for skill templates (now that all heroes are added)
+	$hFile = FileOpen($sFilePath, 0)
+	$iHeroSlot = 1
+	While 1
+		Local $sLine = FileReadLine($hFile)
+		If @error Then ExitLoop
+		
+		$sLine = StringStripWS($sLine, 3)
+		If $sLine = "" Or StringLeft($sLine, 1) = ";" Then ContinueLoop
+		
+		Local $iCommentPos = StringInStr($sLine, ";")
+		If $iCommentPos > 0 Then
+			$sLine = StringStripWS(StringLeft($sLine, $iCommentPos - 1), 2)
+		EndIf
+		
+		Local $aParts = StringSplit($sLine, ",")
+		If $aParts[0] >= 2 Then
+			Local $sSkillTemplate = StringStripWS($aParts[2], 3)
+			LoadSkillTemplate($sSkillTemplate, $iHeroSlot)
+			$iHeroSlot += 1
+		EndIf
+	WEnd
+	FileClose($hFile)
+	
+	Out("Hero config loaded successfully")
+	Return True
 EndFunc
 
-; Mercenary hero setup (Merc 3 + Merc 2)
-Func AddMercHeroes()
-	Out("Adding Mercenary heroes...")
-	AddHero($HERO_ID_MERCENARY_3) ; Merc instead of Xandra
-	AddHero(14) ;Olias
-	AddHero(21) ; Livia
-	AddHero(4) ; Master of Whispers
-	AddHero(24) ; Gwen
-	AddHero(15) ; Norgu
-	AddHero($HERO_ID_MERCENARY_2) ; Merc instead of Razah
-
-	sleep(500)
-
-	Out("Loading Mercenary skill templates...")
-	LoadSkillTemplate("OAOiAyk8gNtePuwJ00ZaNbJA", 1) ; ST Merc3 remove hex
-	LoadSkillTemplate("OAhjQkGZIT3BVVCPSTTODTjTciA", 2) ; BiP Olias
-	LoadSkillTemplate("OAhjYoHYIPWb7wnoqKNncDzqH", 3) ; Xinrae Livia
-	LoadSkillTemplate("OAljUwGpZSUBKgfBVVbh8Y7Y1YA", 4) ; MM Master P
-	LoadSkillTemplate("OQhkAsC8gFKzJY6lDMd40hQG4iB", 5)	; E-Surge Gwen
-	LoadSkillTemplate("OQhkAsC8gFKDNY6lDMd40hQG4iB", 6) ; Inep Norgu
-	LoadSkillTemplate("OQljAkBsZSvAIg5ZkAcQsA7Y1YA", 7)	; Panic Merc2
-EndFunc
 
 
 Func RunToDungeon()
