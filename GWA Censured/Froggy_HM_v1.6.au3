@@ -880,12 +880,13 @@ Func CanPickUpEx($aItem, $PickupTorch = False)
 
 		Case $TYPE_DYE
 			If $lExtraID = 10 Then ; Black dye
+				GUI_SetBlackDyes(GUI_GetBlackDyes() + 1)
 				Return True
 			EndIf
 		Case $TYPE_GOLD_COINS
             If $gPickupCoins And $lModelID = 2511 And GetGoldCharacter() + $lValue < 100000 Then Return True
 		Case $TYPE_KEY
-			If $lModelID = 22751 Then Return True
+			If $lModelID = 22751 Then GUI_SetDroppedLockpicks(GUI_GetDroppedLockpicks() + 1)
 			If $lModelID = 25410 Or $lModelID = 25416 Then Out("Grab Dungeon Key")
 			Return True
 
@@ -893,13 +894,15 @@ Func CanPickUpEx($aItem, $PickupTorch = False)
 			Return false
 		Case $TYPE_USABLE
 			Switch $lModelID
-			Case 21786 To 21805
+			Case 21786 To 21805 ; Tomes
+					GUI_SetTomes(GUI_GetTomes() + 1)
 					Return True
 		  EndSwitch
         EndSwitch
 
     Switch $lRarity
 		Case $RARITY_Gold
+			GUI_SetGolds(GUI_GetGolds() + 1)
 		    Return True
 	EndSwitch
 	Return False
