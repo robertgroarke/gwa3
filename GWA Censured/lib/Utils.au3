@@ -3668,15 +3668,15 @@ Func LoadAttributes($attributesArray, $secondaryProfession, $heroIndex = 0)
 	For $i = 1 To $attributesArray[0][1]
 		For $j = 1 To $attributesArray[$i][1]
 			IncreaseAttribute($attributesArray[$i][0], $heroIndex)
-			Sleep(GetPing() + 50)
+			Sleep(10)
 		Next
 	Next
-	Sleep(GetPing() + 50)
+	Sleep(50)
 
 	; If there are any points left, we put them in the primary attribute
 	For $i = 0 To 11
 		IncreaseAttribute($primaryAttribute, $heroIndex)
-		Sleep(GetPing() + 50)
+		Sleep(10)
 	Next
 EndFunc
 
@@ -3686,14 +3686,14 @@ Func EmptyAttributes($secondaryProfession, $heroIndex = 0)
 	For $attribute In $ATTRIBUTES_BY_PROFESSION_MAP[GetHeroProfession($heroIndex)]
 		For $i = 0 To 11
 			DecreaseAttribute($attribute, $heroIndex)
-			Sleep(GetPing() + 10)
+			Sleep(10)
 		Next
 	Next
 
 	For $attribute In $ATTRIBUTES_BY_PROFESSION_MAP[$secondaryProfession]
 		For $i = 0 To 11
 			DecreaseAttribute($attribute, $heroIndex)
-			Sleep(GetPing() + 10)
+			Sleep(10)
 		Next
 	Next
 EndFunc
