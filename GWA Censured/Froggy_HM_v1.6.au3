@@ -10,6 +10,7 @@
 #include "lib\Skill_Types.au3"
 #include "lib\Utils-Debugger.au3"
 #include "lib\GUI_Functions.au3"
+#include "lib\Utils-Maintenance.au3"
 #include <GUIConstantsEx.au3>
 #include <StaticConstants.au3>
 #include <WindowsConstants.au3>
@@ -135,6 +136,7 @@ While 1
 
 		Switch $currentMap
 			Case $Sparkfly_Swamp
+                PerformMaintenance()
 				RunToDungeon()
 				Takequest0()
 			Case $Bogroot_Growths_Lvl1
@@ -178,6 +180,7 @@ EndFunc
 
 Func Setup($addHeroes = True)
 	Out("Entering Setup function...")
+    PerformMaintenance(True)
 	If GetMapID() <> 638 Then
 		Out("Incorrect map. Zoning to Gadds Encampment (638)...")
 		ZoneMap(638)
@@ -546,12 +549,29 @@ Func Boss()
 	; 0x8101 dialog body
 	; 0x833907 accept quest reward
 	Local $NPC = GetNearestNPCToCoords (14618, -17828)
-	GoNPC($NPC)
-	Sleep(GetPing() + 500)  ; Wait for dialog to open
-	QuestReward($QUEST_ID_TEKKS_WAR)
-	Sleep(500)  ; Wait for game to process quest reward
-	Dialog($DIALOG_ID_TEKKS_WAR_REWARD)
-	Sleep(500)  ; Wait for dialog to process
+	If IsDllStruct($NPC) Then
+		GoNPC($NPC)
+		Sleep(2000)  ; Wait for dialog to fully open (was GetPing()+500, too short)
+		
+		; Try to accept the quest reward, retry if it doesn't take
+		For $iRetry = 1 To 3
+			Out("Attempting quest reward (attempt " & $iRetry & "/3)")
+			QuestReward($QUEST_ID_TEKKS_WAR)
+			Sleep(1000)  ; Wait for game to process quest reward
+			Dialog($DIALOG_ID_TEKKS_WAR_REWARD)
+			Sleep(1000)  ; Wait for dialog to process
+			
+			; If the reward was accepted, the quest state should change
+			; Give it a moment and try again if needed
+			If $iRetry < 3 Then
+				; Re-interact with NPC in case dialog closed without accepting
+				GoNPC($NPC)
+				Sleep(1500)
+			EndIf
+		Next
+	Else
+		Out("WARNING: Could not find Tekk NPC near chest!")
+	EndIf
 	
 	If GUI_IsSalvageChecked() = True Then Return SalvageItems()
 EndFunc
@@ -584,6 +604,7 @@ Func MoveandAggroEx($aWaypoints)
 				Out("Backtracking to nearest waypoint and retrying...")
 				$i = $NearestWaypoint - 1  ; For loop will increment, so we'll retry from NearestWaypoint
 				$lStuckCounter = 0  ; Reset counter after backtracking
+				ContinueLoop ; Restart loop with new index
 			EndIf
 		Else
 			$lStuckCounter = 0  ; Reset counter when we make progress
@@ -601,7 +622,12 @@ Func MoveandAggroEx($aWaypoints)
 		If Wipe() = 1 Then    ; wipe intercept - wait until rezz and redirect to best waypoint
 			GUI_SetWipes(GUI_GetWipes() + 1)
 			$LastWaypoint = $i
-			Out("We wiped at " & $aWaypoints[$LastWaypoint][3] & ", waiting for rezz")
+			
+			Local $wpName = "Unknown"
+			If $LastWaypoint >= 0 And $LastWaypoint < UBound($aWaypoints) Then
+			    $wpName = $aWaypoints[$LastWaypoint][3]
+			EndIf
+			Out("We wiped at " & $wpName & ", waiting for rezz")
 			CancelAll()    ; in case we were pulling enemies
 			Local $lWipeWaitCounter = 0
 			Local $lDeadlock = TimerInit()
