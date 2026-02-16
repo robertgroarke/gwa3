@@ -158,6 +158,7 @@ Func DistrictTravel($mapID, $district = 'Random')
 	Else
 		Local $districtAndRegion = $REGION_MAP[$district]
 		MoveMap($mapID, $districtAndRegion[1], 0, $districtAndRegion[0])
+		Sleep(500)
 		WaitMapLoading($mapID, 20000)
 		RandomSleep(2000)
 	EndIf
@@ -171,6 +172,7 @@ Func RandomDistrictTravel($mapID, $district = 12)
 	Local $Language[12] = [$ID_ENGLISH, $ID_FRENCH, $ID_GERMAN, $ID_ITALIAN, $ID_SPANISH, $ID_POLISH, $ID_RUSSIAN, $ID_ENGLISH, $ID_ENGLISH, $ID_ENGLISH, $ID_ENGLISH, $ID_ENGLISH]
 	Local $Random = Random(0, $district - 1, 1)
 	MoveMap($mapID, $Region[$Random], 0, $Language[$Random])
+	Sleep(500)
 	WaitMapLoading($mapID, 20000)
 	RandomSleep(2000)
 EndFunc
@@ -700,7 +702,7 @@ EndFunc
 Func FindAllEmptySlots($firstBag, $lastBag)
 	Local $emptySlots[0] = []
 	For $i = $firstBag To $lastBag
-		Local $bagEmptySlots[] = FindEmptySlots($i)
+		Local $bagEmptySlots = FindEmptySlots($i)
 		If UBound($bagEmptySlots) > 0 Then _ArrayAdd($emptySlots, $bagEmptySlots)
 	Next
 	Return $emptySlots
@@ -1587,10 +1589,10 @@ EndFunc
 
 ;~ Get a salvage kit from inventory, or buy one if not present
 ;~ Returns the kit or 0 if it was not found and not bought
-Func GetSalvageKit($buyKit = True)
+Func GetSalvageKit($buyKit = True, $townID = $ID_EYE_OF_THE_NORTH)
 	Local $kit = FindBasicSalvageKit()
 	If $kit == 0 And $buyKit Then
-		BuySalvageKitInTown()
+		BuySalvageKitInTown(1, $townID)
 		$kit = FindBasicSalvageKit()
 	EndIf
 	Return $kit
@@ -1621,12 +1623,12 @@ EndFunc
 
 
 ;~ Buy salvage kits in town
-Func BuySalvageKitInTown($amount = 1)
+Func BuySalvageKitInTown($amount = 1, $townID = $ID_EYE_OF_THE_NORTH)
 	While $amount > 10
-		BuyInTown($ID_SALVAGE_KIT, 2, 100, 10, False)
+		BuyInTown($ID_SALVAGE_KIT, 2, 100, 10, False, $townID)
 		$amount -= 10
 	WEnd
-	If $amount > 0 Then BuyInTown($ID_SALVAGE_KIT, 2, 100, $amount, False)
+	If $amount > 0 Then BuyInTown($ID_SALVAGE_KIT, 2, 100, $amount, False, $townID)
 EndFunc
 
 
@@ -3813,57 +3815,7 @@ EndFunc
 ; Missing Function Implementations
 ; ==================================================================================================
 
-Func NPCCoordinatesInTown($town = $ID_EYE_OF_THE_NORTH, $type = 'Merchant')
-	Local $coordinates[2] = [-1, -1]
-	Switch $type
-		Case 'Merchant'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2158
-					$coordinates[1] = -2006
-				Case $ID_EYE_OF_THE_NORTH
-					$coordinates[0] = -2700
-					$coordinates[1] = 1075
-				Case Else
-					Warn('For provided town coordinates of that NPC aren''t mapped yet')
-			EndSwitch
-		Case 'Basic material trader'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2997
-					$coordinates[1] = -2271
-				Case $ID_EYE_OF_THE_NORTH
-					$coordinates[0] = -1850
-					$coordinates[1] = 875
-				Case Else
-					Warn('For provided town coordinates of that NPC aren''t mapped yet')
-			EndSwitch
-		Case 'Rare material trader'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2928
-					$coordinates[1] = -2452
-				Case $ID_EYE_OF_THE_NORTH
-					$coordinates[0] = -2100
-					$coordinates[1] = 1125
-				Case Else
-					Warn('For provided town coordinates of that NPC aren''t mapped yet')
-			EndSwitch
-		Case Else
-			Warn('Wrong NPC type provided')
-	EndSwitch
-	Return $coordinates
-EndFunc
 
-Func IsHardmodeEnabled()
-	; Placeholder implementation as actual memory address logic is missing
-	Return False
-EndFunc
-
-Func CheckPickupWeapon($item)
-	; Placeholder since definition was not found
-	Return True
-EndFunc
 
 ; ==================================================================================================
 ; Missing Globals

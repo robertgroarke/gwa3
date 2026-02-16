@@ -79,7 +79,7 @@ Global $scan_ping_address
 Global $max_agents, $agent_copy_count, $agent_copy_base
 
 ; Trader system
-Global $trader_quote_ID, $trader_cost_ID, $trader_cost_value
+Global $trader_quote_ID, $trader_cost_ID, $trader_cost_value, $trade_id_addr
 
 ; Skill state
 Global $skill_timer, $build_number
@@ -650,6 +650,7 @@ Func InitializeGameClientData($changeTitle = True, $initUseStringLog = False, $i
 	$trader_quote_ID = GetValue('TraderQuoteID')
 	$trader_cost_ID = GetValue('TraderCostID')
 	$trader_cost_value = GetValue('TraderCostValue')
+	$trade_id_addr = GetValue('TradeID')
 	$disable_rendering_address = GetValue('DisableRendering')
 	$agent_copy_count = GetValue('AgentCopyCount')
 	$agent_copy_base = GetValue('AgentCopyBase')
@@ -827,9 +828,9 @@ Func ScanGWBasePatterns()
 	_('ScanRequestQuoteFunction:')
 	AddPatternToInjection('8B752083FE107614')
 	_('ScanTraderFunction:')
-	AddPatternToInjection('83FF10761468D2210000')
+	AddPatternToInjection('83FF10761468FE210000')
 	_('ScanTraderHook:')
-	AddPatternToInjection('8D4DFC51576A5450')
+	AddPatternToInjection('8D4DFC51576A5550')
 	_('ScanSleep:')
 	AddPatternToInjection('6A0057FF15D8408A006860EA0000')
 	_('ScanSalvageFunction:')
@@ -1346,12 +1347,55 @@ Func BuySuperiorSalvageKit($amount = 1)
 EndFunc
 
 
+;~ Check if merchant window is open (by checking if merchant items are populated)
+Func GetIsMerchantOpen()
+	Return GetMerchantItemsSize() > 0
+EndFunc
+
 ;~ FIXME: this function is written like trash
 Func CraftItem($modelID, $amount, $gold, ByRef $materialsArray)
+	; Sanity checks
+	If Not GetIsMerchantOpen() Then Return SetError(1) ; Merchant window must be open
+	
+	; Find the destination item ptr and its INDEX in the merchant list
+	Local $merchantItemsBase = GetMerchantItemsBase()
+	If Not $merchantItemsBase Then Return SetError(2)
+	Local $merchantItemsSize = GetMerchantItemsSize()
+	
+	Local $itemPtr = 0
+	Local $destinationItemPtr = 0
+	Local $itemIndex = -1
+	Local $itemID = 0
+	
+	For $i = 0 To $merchantItemsSize - 1
+		$itemID = MemoryRead($merchantItemsBase + 4 * $i)
+		If ($itemID) Then
+			$itemPtr = MemoryRead(MemoryRead($base_address_ptr) + 0x18, 'ptr') ; Re-implement ptr chain
+			; Optimization: Use helper memory read if possible, but manual is safer here to replicate GetMerchantItemPtrByModelId logic
+			; Logic from GetMerchantItemPtrByModelId:
+			; offsets[5] = [0, 0x18, 0x40, 0xB8, 4*itemID]
+			; Actually GetMerchantItemPtrByModelId implementation:
+			; $offsets[4] = 4 * $itemID
+			; $itemPtr = MemoryReadPtr($base_address_ptr, $offsets)[1]
+			
+			Local $offsets[5] = [0, 0x18, 0x40, 0xB8, 4 * $itemID]
+			Local $result = MemoryReadPtr($base_address_ptr, $offsets)
+			$itemPtr = $result[1]
+			
+			If $itemPtr <> 0 And MemoryRead($itemPtr + 0x2C) = $modelID Then
+				$destinationItemPtr = $itemPtr
+				$itemIndex = $i
+				ExitLoop
+			EndIf
+		EndIf
+	Next
+	
+	If $itemIndex = -1 Then Return SetError(3) ; Item not found in merchant list
+	
+	; Check materials
 	Local $sourceItemPtr = _GWA2_GetInventoryItemPtrByModelId($materialsArray[0][0])
 	If ((Not $sourceItemPtr) Or (MemoryRead($sourceItemPtr + 0x4B) < $materialsArray[0][1])) Then Return 0
-	Local $destinationItemPtr = MemoryRead(GetMerchantItemPtrByModelId($modelID))
-	If (Not $destinationItemPtr) Then Return 0
+	
 	Local $materialString = ''
 	Local $materialCount = 0
 	If IsArray($materialsArray) = 0 Then Return 0
@@ -1363,50 +1407,58 @@ Func CraftItem($modelID, $amount, $gold, ByRef $materialsArray)
 			Return SetExtended($materialsArray[$i][1] * $amount - $checkQuantity, $materialsArray[$i][0])
 		EndIf
 	Next
-	Local $gold = GetGoldCharacter()
-
+	Local $currentGold = GetGoldCharacter()
+	
 	For $i = 0 To $materialsArraySize
 		$materialString &= GetItemIDFromModelID($materialsArray[$i][0]) & ';'
 		Debug($materialString)
 		$materialCount += 1
 	Next
 
-	$craftingMaterialType = 'dword'
+	Local $craftingMaterialType = 'dword'
 	For $i = 1 To $materialCount - 1
 		$craftingMaterialType &= ';dword'
 	Next
-	$craftingMaterialStruct = SafeDllStructCreate($craftingMaterialType)
-	$craftingMaterialStructPtr = DllStructGetPtr($craftingMaterialStruct)
+	Local $craftingMaterialStruct = SafeDllStructCreate($craftingMaterialType)
+	Local $craftingMaterialStructPtr = DllStructGetPtr($craftingMaterialStruct)
 	For $i = 1 To $materialCount
 		Local $size = StringInStr($materialString, ';')
 		DllStructSetData($craftingMaterialStruct, $i, StringLeft($materialString, $size - 1))
 		$materialString = StringTrimLeft($materialString, $size)
 	Next
+	
 	Local $memorySize = $materialCount * 4
 	Local $processHandle = GetProcessHandle()
 	Local $memoryBuffer = SafeDllCall13($kernel_handle, 'ptr', 'VirtualAllocEx', 'handle', $processHandle, 'ptr', 0, 'ulong_ptr', $memorySize, 'dword', 0x1000, 'dword', 0x40)
-	; Couldnt allocate enough memory
-	If $memoryBuffer = 0 Then Return 0
-	Local $buffer = SafeDllCall13($kernel_handle, 'int', 'WriteProcessMemory', 'int', $processHandle, 'int', $memoryBuffer[0], 'ptr', $craftingMaterialStructPtr, 'int', $memorySize, 'int', 0)
-	If $buffer = 0 Then Return
+	If $memoryBuffer = 0 Or $memoryBuffer[0] = 0 Then Return 0
+	
+	SafeDllCall13($kernel_handle, 'int', 'WriteProcessMemory', 'int', $processHandle, 'int', $memoryBuffer[0], 'ptr', $craftingMaterialStructPtr, 'int', $memorySize, 'int', 0)
+	
+	; WRITE THE INDEX TO TradeID ADDRESS
+	If $trade_id_addr <> 0 Then
+		MemoryWrite($trade_id_addr, $itemIndex, 'dword')
+	Else
+		Debug("Error: TradeID address not initialized")
+		Return 0
+	EndIf
+
 	DllStructSetData($CRAFT_ITEM_STRUCT, 1, GetValue('CommandCraftItemEx'))
 	DllStructSetData($CRAFT_ITEM_STRUCT, 2, $amount)
 	DllStructSetData($CRAFT_ITEM_STRUCT, 3, $destinationItemPtr)
 	DllStructSetData($CRAFT_ITEM_STRUCT, 4, $memoryBuffer[0])
-	Debug($memoryBuffer[0])
 	DllStructSetData($CRAFT_ITEM_STRUCT, 5, $materialCount)
-	Debug($materialCount)
 	DllStructSetData($CRAFT_ITEM_STRUCT, 6, $amount * $gold)
-	Debug($amount * $gold)
 	Enqueue($CRAFT_ITEM_STRUCT_PTR, 24)
-	$deadlock = TimerInit()
+	
+	Local $deadlock = TimerInit()
 	Local $currentAmount
 	Do
 		Sleep(250)
 		$currentAmount = _GWA2_CountItemInBagsByModelID($materialsArray[0][0])
-	Until $currentAmount <> $checkQuantity Or $gold <> GetGoldCharacter() Or TimerDiff($deadlock) > 5000
+	Until $currentAmount <> $checkQuantity Or $currentGold <> GetGoldCharacter() Or TimerDiff($deadlock) > 5000
+	
 	SafeDllCall11($kernel_handle, 'ptr', 'VirtualFreeEx', 'handle', $processHandle, 'ptr', $memoryBuffer[0], 'int', 0, 'dword', 0x8000)
-	; should be zero if items were successfully crafted
+	
 	Return SetExtended($checkQuantity - $currentAmount - $materialsArray[0][1] * $amount, True)
 EndFunc
 
@@ -2251,6 +2303,19 @@ EndFunc
 
 
 #Region Misc
+
+;~ Check if player is dead (Placeholder)
+Func IsPlayerDead()
+	; FIXME: Implement proper check using GetAgentHP or Agent State
+	Return False
+EndFunc
+
+;~ Check if hero is dead (Placeholder)
+Func IsHeroDead($heroID)
+	; FIXME: Implement proper check
+	Return False
+EndFunc
+
 ;~ Change weapon sets.
 Func ChangeWeaponSet($weaponSet)
 	Return PerformAction(0x80 + $weaponSet)
@@ -4801,7 +4866,7 @@ Func ModifyMemory()
 		If IsDeclared('g_b_Write') Then Extend_Write()
 
 		WriteDetour('MainStart', 'MainProc')
-		WriteDetour('TraderStart', 'TraderProc')
+		WriteDetour('TraderStart', 'TraderHookProc')
 		WriteDetour('RenderingMod', 'RenderingModProc')
 		WriteDetour('LoadFinishedStart', 'LoadFinishedProc')
 		; FIXME: add this back
@@ -4830,6 +4895,7 @@ Func CreateData()
 	_('TraderQuoteID/4')
 	_('TraderCostID/4')
 	_('TraderCostValue/4')
+	_('TradeID/4')
 	_('DisableRendering/4')
 
 	_('QueueBase/' & 256 * GetValue('QueueSize'))
@@ -5372,8 +5438,97 @@ Func CreateCommands()
 	_('push 1')
 	_('push 0')
 	_('push 0')
+	_('push 0')
+	_('push 0')
+	_('mov ebx,BuyItemBase') ; Load the base address of merchant items
+	_('mov ebx,dword[ebx]') ; Dereference it to get the actual array start (Note: BuyItemBase is a pointer to the base address?)
+	; Wait, [BuyItemBase] is the address of the pointer?
+	; ScanBuyItemBase returns an address. MemoryRead(ScanBuyItemBase, 15)??
+	; Line 612: SetValue('BuyItemBase', MemoryRead(...)) -> So BuyItemBase IS the address of the array base?
+	; If BuyItemBase holds the address 0x12345678.
+	; mov ebx,dword[BuyItemBase] -> loads dword at 0x12345678?
+	; If SetValue set the VALUe, then GetValue('BuyItemBase') returns the address.
+	; In ASM, [BuyItemBase] resolves to the address.
+	; If SetValue stored the pointer itself, then [BuyItemBase] IS the pointer.
+	; Let's check SetValue line 612: SetValue('BuyItemBase', '0x' & Hex(MemoryRead(...), 8))
+	; So BuyItemBase label holds the VALUE of the pointer.
+	; Wait, labels map holds value.
+	; [BuyItemBase] in ASM -> replaced by the VALUE.
+	; So 'mov ebx,BuyItemBase' -> mov ebx, 0x12345678.
+	; NOT 'mov ebx,dword[BuyItemBase]'.
+	; 'mov ebx,Immed' is B8/BB.
+	; CompleteASMCode handles 'mov ebx,[-hex]'.
+	; If I use 'mov ebx,BuyItemBase', and BuyItemBase resolves to 0x..., it should work.
+	; BUT wait, BuyItemBase might be dynamic?
+	; SetValue sets it once during Init.
+	; So 'mov ebx,BuyItemBase' works.
+	; Let's be safe: 'mov ebx,dword[BuyItemBase]' only if BuyItemBase was a variable holding the pointer.
+	; Here BuyItemBase IS the pointer value.
+	; So: 'mov ebx,BuyItemBase'
+	; BUT CompleteASMCode supports 'mov ebx,Imm' only if regex matches.
+	; 'mov ebx,[-[:xdigit:]]'
+	; Does it support 'mov ebx,Label'?
+	; No explicit case for 'mov ebx,Label'.
+	; It supports 'mov eax,dword[Label]'.
+	; Can I put BuyItemBase into a variable?
+	; No, I should use the label directly if possible.
+	; Maybe 'mov ebx,dword[BuyItemBase]' is correct if BuyItemBase was defined as a variable.
+	; But it's defined as a LABEL with a value.
+	; If I use 'mov ebx,BuyItemBase', CompleteASMCode might fail if it doesn't match 'mov ebx,Hex'.
+	
+	; Alternate: 'mov ebx, dword[BuyItemBaseAddr]'? No.
+	
+	; Let's look at how other constants are used.
+	; 'mov eax,dword[PacketLocation]' (Line 5306)
+	; PacketLocation is set via SetValue.
+	; So 'mov eax,dword[PacketLocation]' loads from the address PacketLocation?
+	; If SetValue('PacketLocation', '0x1234') -> [PacketLocation] = 0x1234.
+	; 'mov eax,dword[0x1234]'.
+	; This reads the memory at 0x1234.
+	; Is PacketLocation the address, or the value?
+	; Line 463: $packetLocation = Hex(MemoryRead(..., 11), 8) -> The address.
+	; So PacketLocation is an address.
+	; So 'mov eax,dword[PacketLocation]' reads the value at that address.
+	; BuyItemBase (Line 612) = MemoryRead(..., 15).
+	; It looks like an address too.
+	; So 'mov ebx,dword[BuyItemBase]' is correct to load the value at that address?
+	; No, BuyItemBase IS the base address of the array (start of array).
+	; We want ebx = BuyItemBase.
+	; So we want 'lea ebx,dword[BuyItemBase]'? No, labels are absolute addresses.
+	; We want 'mov ebx, BuyItemBase'. 
+	; But we don't have 'mov ebx, Label' support?
+	; Let's check CompleteASMCode again.
+	; It handles 'mov ebx,[-[:xdigit:]]'.
+	; It doesn't handle 'mov ebx,Label'.
+	
+	; Workaround:
+	; Use a variable?
+	; Or assume 'mov ebx,dword[Label]' is what we want?
+	; If BuyItemBase IS the array pointer (the address 0x...), and we want to access `[ebx + index*4]`.
+	; Then ebx must hold 0x...
+	; If we do `mov ebx,dword[BuyItemBase]`, we read 4 bytes from 0x...
+	; That would be the first item's ID.
+	; That's NOT what `lea` expects if it uses `ebx` as base.
+	; We want ebx = 0x...
+	
+	; So we need `mov ebx, Immediate`.
+	; But the Immediate is a Label.
+	; Is there `mov ebx, [Label]` support where it resolves to immediate?
+	; No.
+	
+	; However, `BuyItemBase` is found via scan.
+	; Maybe it's a global variable in game memory that HOLDS the pointer?
+	; Line 612: SetValue('BuyItemBase', '0x' & Hex(MemoryRead(GetScannedAddress('ScanBuyItemBase', 15)), 8))
+	; `ScanBuyItemBase` pattern: `D9EED9580CC74004`.
+	; `MemoryRead(..., 15)`.
+	; Usually this reads a pointer to a global.
+	; So `BuyItemBase` IS the address of the global variable that holds the item array base.
+	; So `mov ebx,dword[BuyItemBase]` loads the array base!
+	; YES! That makes sense.
+	
+	_('mov ebx,dword[BuyItemBase]')
 	_('mov ecx,dword[TradeID]')
-	_('mov ecx,dword[ecx]')
+	; _('mov ecx,dword[ecx]') ; Removed double indirection
 	_('mov edx,dword[eax+4]')
 	_('lea ecx,dword[ebx+ecx*4]')
 	_('push ecx')
@@ -6601,7 +6756,7 @@ EndFunc
 
 ;~ Like pressing the 'Change Offer' button.
 Func ChangeOffer()
-	Return SendPacket(0x4, $HEADER_TRADE_CHANGE_OFFER)
+	Return SendPacket(0x4, 0x02) ; $HEADER_TRADE_CHANGE_OFFER = 0x02
 EndFunc
 
 

@@ -1,0 +1,1203 @@
+#include-once
+#include "Utils-Storage-Bot.au3"
+#include "Utils-Salvage.au3"
+
+; Configuration for Maintenance
+Global Const $MIN_FREE_SLOTS = 7               ; Minimum free inventory slots before triggering maintenance
+Global Const $MIN_ID_KITS = 1                   ; Minimum Superior ID kits before restocking
+Global Const $MIN_SALVAGE_KITS = 1              ; Minimum Salvage kits before restocking
+Global Const $MAX_CHARACTER_GOLD = 95000        ; Max gold before depositing (100k is hard cap)
+Global Const $TARGET_ID_KITS = 3                ; Target number of Superior ID kits
+Global Const $TARGET_SALVAGE_KITS = 8           ; Target number of Salvage kits
+Global Const $MAINTENANCE_TOWN = $ID_GADDS_CAMP
+
+; Materials to KEEP
+Global Const $KEEP_MATERIALS[] = [ _
+    $ID_IRON_INGOT, _
+    $ID_PILE_OF_GLITTERING_DUST, _
+    $ID_BONE, _
+    $ID_FEATHER, _
+    $ID_GRANITE_SLAB, _
+    $ID_PLANT_FIBER, _
+    $ID_SCALE _
+]
+
+; Materials to SELL
+Global Const $SELL_MATERIALS[] = [ _
+    $ID_BOLT_OF_CLOTH, _
+    $ID_TANNED_HIDE_SQUARE, _
+    $ID_WOOD_PLANK _
+]
+
+
+
+; ==============================================================================
+; DIAGNOSTIC CHECKS
+; ==============================================================================
+Func RunDiagnostics()
+    Local $needsMaintenance = False
+    
+    ; Check inventory slots
+    Local $freeSlots = CountFreeInventorySlots()
+    If $freeSlots < $MIN_FREE_SLOTS Then $needsMaintenance = True
+    
+    ; Check ID kits
+    Local $idKitCount = CountItemsByModelID($ID_SUPERIOR_IDENTIFICATION_KIT)
+    If $idKitCount < $MIN_ID_KITS Then $needsMaintenance = True
+    
+    ; Check salvage kits
+    Local $salvageKitCount = CountItemsByModelID($ID_SALVAGE_KIT)
+    Local $salvageKitCorrect = CountItemsByModelID(2989) ; Basic Kit
+    Local $salvageKitExpert = CountItemsByModelID($ID_EXPERT_SALVAGE_KIT)
+    If ($salvageKitCount + $salvageKitCorrect + $salvageKitExpert) < $MIN_SALVAGE_KITS Then $needsMaintenance = True
+    
+    ; Check gold
+    Local $characterGold = GetGoldCharacter()
+    If $characterGold >= $MAX_CHARACTER_GOLD Then $needsMaintenance = True
+    
+    Return $needsMaintenance
+EndFunc
+
+; ==============================================================================
+; MAINTENANCE RUN
+; ==============================================================================
+Func PerformMaintenance($force = False, $buyConsumables = False)
+    If Not $force And Not RunDiagnostics() Then Return
+
+    Out("Starting Maintenance Run... (BuyConsumables=" & $buyConsumables & ")")
+    
+    If GetMapID() <> $MAINTENANCE_TOWN Then
+        TravelToOutpost($MAINTENANCE_TOWN)
+        Sleep(2000) ; Wait for load
+    EndIf
+    
+    ClaimSpecificItem(27036) ; Amphibian Tongues
+    SalvageAmphibianTongues()
+    IdentifyUnidentifiedItemsForMaintenance()
+    
+    If GetGoldCharacter() > 80000 Then
+        GoToXunlaiChest($MAINTENANCE_TOWN)
+        DepositGold(GetGoldCharacter() - 10000)
+        Sleep(1000)
+    EndIf
+    
+    SellItemsToMerchant(ShouldSellItemForMaintenance, False, $MAINTENANCE_TOWN)
+    
+    If HasOverallBasicMaterialsToSell() Then
+        SellBasicMaterialsToMerchant(ShouldSellMaterialForMaintenance, $MAINTENANCE_TOWN)
+    EndIf
+    
+    BuyKitsUntilTarget()
+    
+    GoToXunlaiChest($MAINTENANCE_TOWN)
+    If GetGoldCharacter() > 5000 Then DepositGold(GetGoldCharacter() - 5000)
+    StoreItemsInXunlaiStorageSafe("ShouldStoreTome")
+    
+
+    ; Buy ectos if bank gold is getting too high (approaching 1M cap)
+    BuyEctosWithExcessGold()
+
+    ; Buy Consumables (Consets) if we have materials
+    If $buyConsumables Then
+        BuyConsumablesInEmbarkBeach()
+    EndIf
+    
+    Out("Maintenance Complete")
+EndFunc
+
+; ==============================================================================
+; HELPER FUNCTIONS
+
+
+
+Func BuyConsumablesInEmbarkBeach()
+    ; 0. Travel to Embark Beach FIRST (Center of operations)
+    If GetMapID() <> $ID_EMBARK_BEACH Then
+        TravelToOutpost($ID_EMBARK_BEACH)
+        Sleep(4000) ; Wait for load
+    EndIf
+
+    ; Recipes
+    ; Grail (Eyja): 50 Iron + 50 Glit. Dust + 250g
+    ; Powerstone (Edwin): 100 Granite + 100 Glit. Dust + 1000g
+    ; Scroll (Edwin): 25 Fiber + 25 Bone + 250g
+    ; Essence (Kwat): 50 Feather + 50 Dust + 250g
+    ; Armor (Alcus): 50 Iron + 50 Bone + 250g
+    
+    ; Consumable IDs
+
+    ; 1. Inventory Scan
+    Local $haveIron = GetMaterialCount($ID_IRON_INGOT)
+    Local $haveDust = GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
+    Local $haveBone = GetMaterialCount($ID_BONE)
+    Local $haveFeather = GetMaterialCount($ID_FEATHER)
+    Local $haveGranite = GetMaterialCount($ID_GRANITE_SLAB)
+    Local $haveFiber = GetMaterialCount($ID_PLANT_FIBER)
+    Local $haveGlitter = GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
+    
+    Out("Current Mats: Iron=" & $haveIron & " Glit=" & $haveGlitter & " Bone=" & $haveBone & " Granite=" & $haveGranite & " Fiber=" & $haveFiber)
+
+    ; 2. Calculate Targets
+    ; Goal 1: Deplete Granite and Fiber
+    Local $targetPowerstone = Floor($haveGranite / 100)
+    Local $targetScroll = Floor($haveFiber / 25)
+    
+    ; Goal 2: Equal Sets of Essence/Grail/Armor
+    Local $setsFromIron = $haveIron / 100
+    Local $setsFromGlit = ($haveGlitter - ($targetPowerstone * 100)) / 100
+    Local $setsFromBone = ($haveBone - ($targetScroll * 25)) / 50
+    Local $setsFromFeather = $haveFeather / 50
+    
+    ; Maximize sets to use up the most abundant resource
+    Local $targetSets = $setsFromIron
+    If $setsFromGlit > $targetSets Then $targetSets = $setsFromGlit
+    If $setsFromBone > $targetSets Then $targetSets = $setsFromBone
+    If $setsFromFeather > $targetSets Then $targetSets = $setsFromFeather
+    
+    $targetSets = Floor($targetSets)
+    If $targetSets < 5 Then $targetSets = 5 ; Minimum batch size
+    
+    Out("Plan: Powerstones=" & $targetPowerstone & ", Scrolls=" & $targetScroll & ", EqualSets=" & $targetSets)
+    
+    ; 3. Execute Cycles
+    
+    ; Cycle 1: Grails (Eyja)
+    If $targetSets > 0 Then
+        Out("Cycle 1: Grails")
+        Local $cycleIron = $targetSets * 50
+        Local $cycleDust = $targetSets * 50
+        
+        Local $missingIron = $cycleIron - GetMaterialCount($ID_IRON_INGOT)
+        Local $missingDust = $cycleDust - GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
+        
+        If $missingIron > 0 Or $missingDust > 0 Then
+            ; Check strictly missing items to decide trader
+            If $missingIron > 0 Then
+                GoToMaterialTrader($ID_EMBARK_BEACH, False) ; Common
+                BuyMaterialSafe($ID_IRON_INGOT, $missingIron)
+            EndIf
+            
+            If $missingDust > 0 Then
+                GoToMaterialTrader($ID_EMBARK_BEACH, True) ; Rare
+                BuyMaterialSafe($ID_PILE_OF_GLITTERING_DUST, $missingDust)
+            EndIf
+        EndIf
+        
+        If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
+        
+        If GoToConsumableTrader("Eyja") Then 
+            Local $grailMats[2][2] = [[$ID_IRON_INGOT, 50], [$ID_PILE_OF_GLITTERING_DUST, 50]]
+            BuyConsumableChunk($ID_GRAIL_OF_MIGHT, $targetSets, 250, $grailMats)
+            GoToXunlaiChest($ID_EMBARK_BEACH)
+            StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
+        EndIf
+    EndIf
+
+    ; Cycle 2: Powerstone/Scroll (Edwin)
+    If $targetPowerstone > 0 Or $targetScroll > 0 Then
+        Out("Cycle 2: Powerstones/Scrolls")
+        Local $cycleGranite = $targetPowerstone * 100
+        Local $cycleDust = $targetPowerstone * 100
+        Local $cycleFiber = $targetScroll * 25
+        Local $cycleBone = $targetScroll * 25
+        
+        Local $missingGranite = $cycleGranite - GetMaterialCount($ID_GRANITE_SLAB)
+        Local $missingDust = $cycleDust - GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
+        Local $missingFiber = $cycleFiber - GetMaterialCount($ID_PLANT_FIBER)
+        Local $missingBone = $cycleBone - GetMaterialCount($ID_BONE)
+        
+        If $missingGranite > 0 Or $missingDust > 0 Or $missingFiber > 0 Or $missingBone > 0 Then
+            GoToMaterialTrader($ID_EMBARK_BEACH, False) ; Start Common
+            If $missingGranite > 0 Then BuyMaterialSafe($ID_GRANITE_SLAB, $missingGranite)
+            If $missingFiber > 0 Then BuyMaterialSafe($ID_PLANT_FIBER, $missingFiber)
+            If $missingBone > 0 Then BuyMaterialSafe($ID_BONE, $missingBone)
+            
+            If $missingDust > 0 Then
+                GoToMaterialTrader($ID_EMBARK_BEACH, True) ; Switch to Rare
+                BuyMaterialSafe($ID_PILE_OF_GLITTERING_DUST, $missingDust)
+            EndIf
+        EndIf
+        
+        If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
+        
+        If GoToConsumableTrader("Edwin") Then
+            Local $powerstoneMats[2][2] = [[$ID_GRANITE_SLAB, 100], [$ID_PILE_OF_GLITTERING_DUST, 100]]
+            BuyConsumableChunk($ID_POWERSTONE_OF_COURAGE, $targetPowerstone, 1000, $powerstoneMats, "Edwin")
+            
+            Local $scrollMats[2][2] = [[$ID_PLANT_FIBER, 25], [$ID_BONE, 25]]
+            BuyConsumableChunk($ID_SCROLL_OF_RESURRECTION, $targetScroll, 250, $scrollMats)
+            
+            GoToXunlaiChest($ID_EMBARK_BEACH)
+            StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
+        EndIf
+    EndIf
+
+    ; Cycle 3: Essence (Kwat)
+    If $targetSets > 0 Then
+        Out("Cycle 3: Essence")
+        Local $cycleFeather = $targetSets * 50
+        Local $cycleDust = $targetSets * 50
+        
+        Local $missingFeather = $cycleFeather - GetMaterialCount($ID_FEATHER)
+        Local $missingDust = $cycleDust - GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
+        
+        If $missingFeather > 0 Or $missingDust > 0 Then
+            GoToMaterialTrader($ID_EMBARK_BEACH, True) ; Both match Rare? No, Feather/Dust are Rare?
+            ; Dust/Feather are Rare in Embark?
+            BuyMaterialSafe($ID_FEATHER, $missingFeather)
+            BuyMaterialSafe($ID_PILE_OF_GLITTERING_DUST, $missingDust)
+        EndIf
+        
+        If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
+        
+        If GoToConsumableTrader("Kwat") Then 
+            Local $essenceMats[2][2] = [[$ID_FEATHER, 50], [$ID_PILE_OF_GLITTERING_DUST, 50]]
+            BuyConsumableChunk($ID_ESSENCE_OF_CELERITY, $targetSets, 250, $essenceMats)
+            GoToXunlaiChest($ID_EMBARK_BEACH)
+            StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
+        EndIf
+    EndIf
+
+    ; Cycle 4: Armor (Alcus)
+    If $targetSets > 0 Then
+        Out("Cycle 4: Armor")
+        Local $cycleIron = $targetSets * 50
+        Local $cycleBone = $targetSets * 50
+        
+        Local $missingIron = $cycleIron - GetMaterialCount($ID_IRON_INGOT)
+        Local $missingBone = $cycleBone - GetMaterialCount($ID_BONE)
+        
+        If $missingIron > 0 Or $missingBone > 0 Then
+            GoToMaterialTrader($ID_EMBARK_BEACH)
+            BuyMaterialSafe($ID_IRON_INGOT, $missingIron)
+            BuyMaterialSafe($ID_BONE, $missingBone)
+        EndIf
+        
+        If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
+        
+        If GoToConsumableTrader("Alcus Nailbiter") Then 
+            Local $armorMats[2][2] = [[$ID_IRON_INGOT, 50], [$ID_BONE, 50]]
+            BuyConsumableChunk($ID_ARMOR_OF_SALVATION, $targetSets, 250, $armorMats)
+            GoToXunlaiChest($ID_EMBARK_BEACH)
+            StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
+        EndIf
+    EndIf
+
+    ; Final Clean up
+    GoToXunlaiChest($ID_EMBARK_BEACH)
+    DepositGold(GetGoldCharacter() - 5000)
+    
+    TravelToOutpost($MAINTENANCE_TOWN)
+EndFunc
+
+
+Func GoToRareMaterialTrader($townID)
+    Local $traderName = "Rare Material Trader"
+    Local $coords = NPCCoordinatesInTown($townID, $traderName)
+    If $coords[0] <> 0 Then
+        MoveTo($coords[0], $coords[1])
+        Local $npc = GetNearestNPCToCoords($coords[0], $coords[1])
+        GoToNPC($npc)
+    Else
+        Out("Could not find Rare Material Trader in town " & $townID)
+    EndIf
+EndFunc
+
+
+Func BuyConsumableChunk($itemID, $amount, $unitCost, $materials = 0, $traderName = "Eyja")
+    If $amount <= 0 Then Return
+    Out("Debug: BuyConsumableChunk ID=" & $itemID & " Amount=" & $amount & " Cost=" & $unitCost)
+    
+    If Not GoToConsumableTrader($traderName) Then Return
+    
+
+
+    If IsArray($materials) Then
+        Out("Crafting " & $amount & " items...")
+        CraftItemSafe($itemID, $amount, $unitCost, $materials)
+        Sleep(1000)
+        Return
+    EndIf
+
+    Local $slot = GetMerchantItemSlot($itemID)
+    Out("Debug: Slot for ID " & $itemID & " is " & $slot)
+    
+    If $slot == 0 Then 
+        Out("Error: Could not find consumable ID " & $itemID & " at trader.")
+        Return
+    EndIf
+    
+    Out("Buying " & $amount & " items one by one...")
+    For $i = 1 To $amount
+        BuyItem($slot, 1, $unitCost)
+        Sleep(500)
+    Next
+EndFunc
+
+Func UpdateInventory()
+    Out("Updating inventory state...")
+    For $i = 1 To 4
+        GetBag($i)
+    Next
+EndFunc
+
+
+Func GetMerchantItemSlot($modelID)
+    Local $base = GetMerchantItemsBase()
+    Local $count = GetMerchantItemsSize()
+    Out("Debug: MerchantBase=" & $base & " Count=" & $count)
+    
+    If $base = 0 Then Return 0
+    
+    Local $offsets[5] = [0, 0x18, 0x40, 0xB8, 0]
+    
+    For $i = 1 To $count
+        Local $itemID = MemoryRead($base + 4 * ($i - 1))
+        
+        If $itemID <> 0 Then
+            $offsets[4] = 4 * $itemID
+            Local $itemPtrData = MemoryReadPtr($base_address_ptr, $offsets)
+            Local $itemPtr = $itemPtrData[1]
+            
+            If $itemPtr <> 0 Then
+                Local $id = MemoryRead($itemPtr + 0x2C)
+                Out("Debug: Slot " & $i & " ModelID=" & $id)
+                If $id = $modelID Then Return $i
+            EndIf
+        EndIf
+    Next
+    Out("Debug: Item " & $modelID & " not found.")
+    Return 0
+EndFunc
+
+Func GetMaterialCount($modelID)
+    Local $count = 0
+    For $bag = 1 To 4
+        Local $bagStruct = GetBag($bag)
+        If DllStructGetData($bagStruct, 'ID') == 0 Then ContinueLoop
+        For $slot = 1 To DllStructGetData($bagStruct, 'slots')
+            Local $item = GetItemBySlot($bag, $slot)
+            If IsDllStruct($item) And DllStructGetData($item, 'ModelID') == $modelID Then
+                $count += DllStructGetData($item, 'Quantity')
+            EndIf
+        Next
+    Next
+    Return $count
+EndFunc
+
+Func GoToMaterialTrader($townID, $forceRare = False)
+    Local $traderName = "Material Trader"
+    If $forceRare Then $traderName = "Rare Material Trader"
+    
+    Local $coords = NPCCoordinatesInTown($townID, $traderName)
+    If $coords[0] = 0 Or $coords[0] = -1 Then
+        $traderName = "Rare Material Trader"
+        $coords = NPCCoordinatesInTown($townID, $traderName)
+    EndIf
+    
+    If $coords[0] <> 0 And $coords[0] <> -1 Then
+        MoveTo($coords[0], $coords[1])
+        Local $npc = GetNearestNPCToCoords($coords[0], $coords[1])
+        GoToNPC($npc)
+    Else
+        Out("Could not find Material Trader in town " & $townID)
+    EndIf
+EndFunc
+
+Func GoToConsumableTrader($name)
+    Local $coords = NPCCoordinatesInTown($ID_EMBARK_BEACH, 'Consumables trader', $name)
+    
+    If $coords[0] <> 0 And $coords[0] <> -1 Then
+        MoveTo($coords[0], $coords[1])
+        Local $npc = GetNearestNPCToCoords($coords[0], $coords[1])
+        GoToNPC($npc)
+        RandomSleep(500)
+        Dialog($npc)
+        Sleep(1000)
+        Return True
+    Else
+        Out("Could not find Consumable Trader: " & $name)
+        Return False
+    EndIf
+EndFunc
+
+
+Func BuyMaterialIfMissing($modelID, $amountNeeded, $batchSize = 10)
+    If $amountNeeded <= 0 Then Return
+    Out("Buying " & $amountNeeded & " of material " & $modelID & " (Batch Size: " & $batchSize & ")")
+
+    ; Request Quote
+    If Not TraderRequest($modelID) Then
+        Out("Failed to get quote for material " & $modelID)
+        Return
+    EndIf
+    
+    Sleep(500)
+    Local $cost = GetTraderCostValue()
+    
+    If $cost > 0 Then
+        ; Calculate number of packs/items to buy
+        Local $packs = Ceiling($amountNeeded / $batchSize)
+        Out("Requesting " & $packs & " packs from trader.")
+        
+        Local $bought = 0
+        While $bought < $packs
+            $cost = GetTraderCostValue()
+            If $cost == 0 Then 
+                Out("Use TraderRequest failed or cost is 0")
+                ExitLoop
+            EndIf
+            
+            If GetGoldCharacter() < $cost Then
+                Out("Not enough gold to buy pack.")
+                ExitLoop
+            EndIf
+
+            TraderBuy()
+            $bought += 1
+            Sleep(GetPing() + 200)
+            
+            ; Re-request quote
+            If Not TraderRequest($modelID) Then ExitLoop
+        WEnd
+        Out("Bought " & $bought & " packs.")
+    Else
+        Out("Error: Trader cost is 0 or quote failed.")
+    EndIf
+EndFunc
+
+Func RefuelGold($townID)
+    Out("Refueling Gold...")
+    GoToXunlaiChest($townID)
+    WithdrawGold(100000 - GetGoldCharacter())
+EndFunc
+
+Func BuyMaterialSafe($id, $amount)
+    Local $useRare = ($id = $ID_FEATHER Or $id = $ID_PILE_OF_GLITTERING_DUST Or $id = 2212)
+    GoToMaterialTrader($ID_EMBARK_BEACH, $useRare)
+
+    For $retry = 1 To 3
+        BuyMaterialIfMissing($id, $amount, 10)
+        Sleep(500)
+        If GetMaterialCount($id) >= $amount Then Return
+        If $retry < 3 Then Out("Retry " & $retry & " buy material " & $id)
+    Next
+    
+    If GetGoldCharacter() < 5000 Then
+        RefuelGold($ID_EMBARK_BEACH)
+        GoToMaterialTrader($ID_EMBARK_BEACH, $useRare)
+        ; Try one last time after refuel
+        BuyMaterialIfMissing($id, $amount, 10)
+    EndIf
+EndFunc
+
+Func IsMaintenanceKit($itemID)
+    Switch $itemID
+        Case 2992, 2989, 235, 243 
+            Return True
+    EndSwitch
+    If $itemID = $ID_SUPERIOR_IDENTIFICATION_KIT Then Return True
+    If $itemID = $ID_EXPERT_SALVAGE_KIT Then Return True
+    If $itemID = $ID_SALVAGE_KIT Then Return True
+    Return False
+EndFunc
+
+Func ShouldStoreMaintenanceItems($item)
+    Local $itemID = DllStructGetData($item, 'ModelID')
+    ; Whitelist Consumables ONLY
+    Switch $itemID
+        Case $ID_GRAIL_OF_MIGHT, $ID_ESSENCE_OF_CELERITY, $ID_ARMOR_OF_SALVATION, $ID_POWERSTONE_OF_COURAGE, $ID_SCROLL_OF_RESURRECTION
+            Return True
+    EndSwitch
+    Return False
+EndFunc
+
+Func StoreItemsInXunlaiStorageSafe($shouldStoreFunc)
+    Out('Storing items (Safe Mode)')
+    Local $item, $itemID
+
+
+    
+    For $bagIndex = 1 To 4
+        Local $bag = GetBag($bagIndex)
+        For $i = 1 To DllStructGetData($bag, 'slots')
+            $item = GetItemBySlot($bagIndex, $i)
+            $itemID = DllStructGetData($item, 'ModelID')
+            
+            If $itemID <> 0 Then
+                Local $shouldStore = Call($shouldStoreFunc, $item)
+                If @error Then 
+                    Out("Error calling " & $shouldStoreFunc)
+                EndIf
+                
+                If $shouldStore Then
+                    Out('Storing item ' & $itemID & ' from bag ' & $bagIndex)
+                    If Not StoreItemInXunlaiStorage($item) Then Return False
+                    Sleep(50)
+                EndIf
+            EndIf
+        Next
+    Next
+EndFunc
+
+
+
+
+Func GetItemCountInStorageAndInventory($modelID)
+    Local $count = 0
+    ; Inventory
+    $count += GetMaterialCount($modelID)
+    ; Storage
+    ; ... (Need Storage counting logic, usually complex due to multiple bags)
+    ; For now, assume Inventory only? Or rely on `GetCountInStorage` if available.
+    ; `Utils-Storage-Bot.au3` might have it.
+    Return $count
+EndFunc
+; ==============================================================================
+
+Func CountFreeInventorySlots()
+    Local $freeSlots = 0
+    For $bagIndex = 1 To 4
+        Local $bag = GetBag($bagIndex)
+        If DllStructGetData($bag, 'ID') = 0 Then ContinueLoop
+        Local $totalSlots = DllStructGetData($bag, 'slots')
+        For $slot = 1 To $totalSlots
+            Local $item = GetItemBySlot($bagIndex, $slot)
+            If Not IsDllStruct($item) Or DllStructGetData($item, 'ModelID') = 0 Then
+                $freeSlots += 1
+            EndIf
+        Next
+    Next
+    Return $freeSlots
+EndFunc
+
+Func IdentifyUnidentifiedItemsForMaintenance()
+    Local $idKits = CountItemsByModelID($ID_SUPERIOR_IDENTIFICATION_KIT)
+    If $idKits == 0 Then BuyKitsUntilTarget()
+
+    For $bagIndex = 1 To 4
+        Local $bag = GetBag($bagIndex)
+        If DllStructGetData($bag, 'ID') = 0 Then ContinueLoop
+        For $slot = 1 To DllStructGetData($bag, 'slots')
+            Local $item = GetItemBySlot($bagIndex, $slot)
+            If Not IsDllStruct($item) Then ContinueLoop
+            
+            Local $itemID = DllStructGetData($item, 'ModelID')
+            If $itemID = 0 Then ContinueLoop
+
+            If Not GetIsIdentified($item) Then
+                If IsRareSkin($itemID) Then ContinueLoop
+                IdentifyItem($item)
+                Sleep(1000)
+            EndIf
+        Next
+    Next
+EndFunc
+
+Func CountItemsByModelID($modelID)
+    Local $count = 0
+    For $bagIndex = 1 To 4
+        Local $bag = GetBag($bagIndex)
+        If DllStructGetData($bag, 'ID') = 0 Then ContinueLoop
+        For $slot = 1 To DllStructGetData($bag, 'slots')
+            Local $item = GetItemBySlot($bagIndex, $slot)
+            If Not IsDllStruct($item) Then ContinueLoop
+            If DllStructGetData($item, 'ModelID') = $modelID Then
+                $count += 1
+            EndIf
+        Next
+    Next
+    Return $count
+EndFunc
+
+Func ShouldSellMaterialForMaintenance($item)
+    If Not IsBasicMaterial($item) Then Return False
+    Local $itemID = DllStructGetData($item, 'ModelID')
+    
+    For $sellID In $SELL_MATERIALS
+        If $itemID = $sellID Then Return False
+    Next
+    
+    For $keepID In $KEEP_MATERIALS
+        If $itemID = $keepID Then Return False
+    Next
+
+    Return True
+EndFunc
+
+Func HasOverallBasicMaterialsToSell()
+    For $bagIndex = 1 To 4
+        Local $bag = GetBag($bagIndex)
+        If DllStructGetData($bag, 'ID') = 0 Then ContinueLoop
+        For $slot = 1 To DllStructGetData($bag, 'slots')
+            Local $item = GetItemBySlot($bagIndex, $slot)
+            If Not IsDllStruct($item) Then ContinueLoop
+            If ShouldSellMaterialForMaintenance($item) Then Return True
+        Next
+    Next
+    Return False
+EndFunc
+
+Func ShouldStoreTome($item)
+    Return IsTome(DllStructGetData($item, 'ModelID'))
+EndFunc
+
+
+
+Func BuyKitsUntilTarget()
+    Local $idKitsTarget = 3
+    Local $salvageKitsTarget = 8
+    
+    Local $countSup = CountItemsByModelID($ID_SUPERIOR_IDENTIFICATION_KIT)
+    Local $countSupAlt = CountItemsByModelID(235)
+    Local $currentIDKits = $countSup + $countSupAlt
+    
+    Local $countSalv = CountItemsByModelID($ID_EXPERT_SALVAGE_KIT)
+    Local $countSalvBasic = CountItemsByModelID($ID_SALVAGE_KIT)
+    Local $countSalvAlt = CountItemsByModelID(243)
+    Local $currentSalvageKits = $countSalv + $countSalvBasic + $countSalvAlt
+    
+    If $currentIDKits >= $idKitsTarget And $currentSalvageKits >= $salvageKitsTarget Then Return
+    
+    if GetMapID() <> $MAINTENANCE_TOWN Then TravelToOutpost($MAINTENANCE_TOWN)
+    
+    Local $coords = NPCCoordinatesInTown($MAINTENANCE_TOWN, 'Merchant')
+    MoveTo($coords[0], $coords[1])
+    Local $merchant = GetNearestNPCToCoords($coords[0], $coords[1])
+    GoToNPC($merchant)
+    RandomSleep(500)
+    
+    Dialog($merchant)
+    Sleep(2000)
+    
+    Local $merchantBase = GetMerchantItemsBase()
+    If $merchantBase == 0 Then Return
+    
+    If $currentIDKits < $idKitsTarget Then
+        Local $buyCount = $idKitsTarget - $currentIDKits
+        Local $pos = GetMerchantItemPosition($ID_SUPERIOR_IDENTIFICATION_KIT)
+        If $pos = 0 Then $pos = GetMerchantItemPosition(235)
+        
+        If $pos > 0 Then 
+            BuyItem($pos, $buyCount, 500)
+            Sleep(1000)
+        EndIf
+    EndIf
+    
+    If $currentSalvageKits < $salvageKitsTarget Then
+        Local $buyCount = $salvageKitsTarget - $currentSalvageKits
+        
+        Local $pos = GetMerchantItemPosition($ID_SALVAGE_KIT)
+        If $pos = 0 Then $pos = GetMerchantItemPosition(2989)
+        If $pos = 0 Then $pos = GetMerchantItemPosition(243)
+        
+        If $pos > 0 Then 
+            BuyItem($pos, $buyCount, 100)
+            Sleep(1000)
+        Else
+            $pos = GetMerchantItemPosition($ID_EXPERT_SALVAGE_KIT)
+            If $pos = 0 Then $pos = GetMerchantItemPosition(2992)
+            
+            If $pos > 0 Then
+                BuyItem($pos, $buyCount, 400)
+                Sleep(1000)
+            EndIf
+        EndIf
+    EndIf
+EndFunc
+
+Func GetMerchantItemPosition($modelID)
+    Local $base = GetMerchantItemsBase()
+    If $base = 0 Then Return 0
+    Local $count = GetMerchantItemsSize()
+    
+    Local $offsets[5] = [0, 0x18, 0x40, 0xB8, 0]
+    
+    For $i = 1 To $count
+        Local $itemID = MemoryRead($base + 4 * ($i - 1))
+        
+        If $itemID <> 0 Then
+            $offsets[4] = 4 * $itemID
+            Local $itemPtrData = MemoryReadPtr($base_address_ptr, $offsets)
+            Local $itemPtr = $itemPtrData[1]
+            
+            If $itemPtr <> 0 Then
+                Local $id = MemoryRead($itemPtr + 0x2C)
+                If $id = $modelID Then Return $i
+            EndIf
+        EndIf
+    Next
+    Return 0
+EndFunc
+
+Func ShouldSellItemForMaintenance($item)
+    Local $itemID = DllStructGetData($item, 'ModelID')
+    If IsBasicMaterial($item) Then
+        For $sellID In $SELL_MATERIALS
+            If $itemID = $sellID Then Return True
+        Next
+    EndIf
+
+    Local $rarity = GetRarity($item)
+    
+    If $itemID = $ID_SUPERIOR_IDENTIFICATION_KIT Then Return False
+    If $itemID = $ID_SALVAGE_KIT Then Return False
+    If $itemID = $ID_EXPERT_SALVAGE_KIT Then Return False
+    If $itemID = $ID_SUPERIOR_SALVAGE_KIT Then Return False
+    
+    If IsWeapon($item) Then
+        Switch $rarity
+            Case $RARITY_WHITE, $RARITY_BLUE, $RARITY_PURPLE, $RARITY_GOLD
+                If Not IsRareSkinSafe($itemID) Then
+                    If GetIsIdentified($item) Then
+                        Return True
+                    EndIf
+                EndIf
+        EndSwitch
+    EndIf
+    
+    Return False
+EndFunc
+; Salvages all Amphibian Tongues in inventory using basic salvage kit
+Func SalvageAmphibianTongues()
+    Local Const $AMPHIBIAN_TONGUE_ID = 27036
+    Local $totalQty = 0
+    
+    ; Count total tongues in inventory
+    For $bagIndex = 1 To 4
+        Local $bag = GetBag($bagIndex)
+        If Not IsDllStruct($bag) Or DllStructGetData($bag, 'ID') = 0 Then ContinueLoop
+        For $slot = 1 To DllStructGetData($bag, 'slots')
+            Local $item = GetItemBySlot($bagIndex, $slot)
+            If Not IsDllStruct($item) Then ContinueLoop
+            If DllStructGetData($item, 'ModelID') = $AMPHIBIAN_TONGUE_ID Then
+                $totalQty += DllStructGetData($item, 'Quantity')
+            EndIf
+        Next
+    Next
+    
+    If $totalQty = 0 Then Return
+    Out("Salvaging " & $totalQty & " Amphibian Tongues...")
+    
+    Local $kit = GetSalvageKit(True, $MAINTENANCE_TOWN) ; Buy kit if needed
+    If $kit = 0 Then
+        Out("Warning: No salvage kit available for tongues")
+        Return
+    EndIf
+    Local $uses = DllStructGetData($kit, 'Value') / 2
+    
+    For $bagIndex = 1 To 4
+        Local $bag = GetBag($bagIndex)
+        If Not IsDllStruct($bag) Or DllStructGetData($bag, 'ID') = 0 Then ContinueLoop
+        For $slot = 1 To DllStructGetData($bag, 'slots')
+            Local $item = GetItemBySlot($bagIndex, $slot)
+            If Not IsDllStruct($item) Then ContinueLoop
+            If DllStructGetData($item, 'ModelID') <> $AMPHIBIAN_TONGUE_ID Then ContinueLoop
+            
+            Local $qty = DllStructGetData($item, 'Quantity')
+            For $k = 1 To $qty
+                SalvageItem($item, $kit)
+                Sleep(GetPing() + 500)
+                $uses -= 1
+                If $uses < 1 Then
+                    $kit = GetSalvageKit(True, $MAINTENANCE_TOWN)
+                    If $kit = 0 Then Return
+                    $uses = DllStructGetData($kit, 'Value') / 2
+                EndIf
+            Next
+        Next
+    Next
+    Out("Amphibian Tongues salvaged.")
+EndFunc
+
+; Claims a specific item type from the Unclaimed Items (Bag 7)
+Func ClaimSpecificItem($targetModelID)
+    Local $unclaimedBagIndex = 7
+    Local $bag = GetBag($unclaimedBagIndex)
+    
+    If DllStructGetData($bag, 'ID') == 0 Then Return ; Bag not found or empty
+    
+    Local $slots = DllStructGetData($bag, 'slots')
+    For $slot = 1 To $slots
+        Local $item = GetItemBySlot($unclaimedBagIndex, $slot)
+        If Not IsDllStruct($item) Then ContinueLoop
+        
+        Local $modelID = DllStructGetData($item, 'ModelID')
+        If $modelID == $targetModelID Then
+            ; Find empty slot in inventory (Bags 1-4)
+            Local $emptySlots = FindAllEmptySlots(1, 4)
+            If UBound($emptySlots) < 2 Then 
+                Out("No duplicate inventory space to claim item.")
+                Return
+            EndIf
+            
+            ; Move item to first available empty slot
+            Local $destBag = $emptySlots[0]
+            Local $destSlot = $emptySlots[1]
+            
+            MoveItem($item, $destBag, $destSlot)
+            Sleep(500) ; Wait for move
+        EndIf
+    Next
+    
+    CombineItemStacks($targetModelID)
+EndFunc
+
+; Combines multiple stacks of the same item in inventory (Bags 1-4)
+Func CombineItemStacks($modelID)
+    Local $foundStacks[30][3] ; [Bag, Slot, Quantity]
+    Local $stackCount = 0
+    
+    ; 1. Find all partial stacks
+    For $bag = 1 To 4
+        Local $bagStruct = GetBag($bag)
+        If DllStructGetData($bagStruct, 'ID') == 0 Then ContinueLoop
+        Local $slots = DllStructGetData($bagStruct, 'slots')
+        For $slot = 1 To $slots
+            Local $item = GetItemBySlot($bag, $slot)
+            If IsDllStruct($item) And DllStructGetData($item, 'ModelID') == $modelID Then
+                Local $qty = DllStructGetData($item, 'Quantity')
+                If $qty < 250 Then
+                    $foundStacks[$stackCount][0] = $bag
+                    $foundStacks[$stackCount][1] = $slot
+                    $foundStacks[$stackCount][2] = $qty
+                    $stackCount += 1
+                EndIf
+            EndIf
+        Next
+    Next
+    
+    If $stackCount < 2 Then Return ; Nothing to combine
+    
+    ; 2. Try to combine
+    Out("Found " & $stackCount & " partial stacks of ID " & $modelID & ". Attempting to combine...")
+    
+    For $i = 0 To $stackCount - 2
+        For $j = $i + 1 To $stackCount - 1
+            Local $qtyI = $foundStacks[$i][2]
+            Local $qtyJ = $foundStacks[$j][2]
+            
+            If $qtyI < 250 And $qtyJ > 0 Then
+                Local $spaceInI = 250 - $qtyI
+                
+                ; Move J to I
+                Out("Merging Bag " & $foundStacks[$j][0] & " Slot " & $foundStacks[$j][1] & " into Bag " & $foundStacks[$i][0] & " Slot " & $foundStacks[$i][1])
+                MoveItem(GetItemBySlot($foundStacks[$j][0], $foundStacks[$j][1]), $foundStacks[$i][0], $foundStacks[$i][1])
+                Sleep(600)
+                
+                ; Update tracked quantities
+                If $qtyJ <= $spaceInI Then
+                    ; Fully moved
+                    $foundStacks[$i][2] += $qtyJ
+                    $foundStacks[$j][2] = 0
+                Else
+                    ; Partially moved (filled I)
+                    $foundStacks[$i][2] = 250
+                    $foundStacks[$j][2] -= $spaceInI
+                EndIf
+            EndIf
+            
+            If $foundStacks[$i][2] >= 250 Then ExitLoop ; Stack I is full, move to next base stack
+        Next
+    Next
+EndFunc
+
+; ==============================================================================
+; ECTO GOLD MANAGEMENT
+; When bank gold exceeds the threshold, spend excess on Globs of Ectoplasm
+; to avoid hitting the 1,000,000 gold storage cap.
+; ==============================================================================
+
+Global Const $ECTO_BANK_GOLD_THRESHOLD = 900000   ; Bank gold above this triggers ecto buying
+Global Const $ECTO_BUY_BUDGET = 100000             ; Amount to withdraw and spend on ectos
+
+Func BuyEctosWithExcessGold()
+    Local $storageGold = GetGoldStorage()
+    If $storageGold <= $ECTO_BANK_GOLD_THRESHOLD Then Return
+    
+    Out("Bank gold (" & $storageGold & ") exceeds " & $ECTO_BANK_GOLD_THRESHOLD & ". Buying Ectos...")
+    
+    ; Withdraw gold for purchasing (no need to walk to chest)
+    Local $withdrawAmount = $ECTO_BUY_BUDGET
+    If $storageGold < $withdrawAmount Then $withdrawAmount = $storageGold
+    
+    WithdrawGold($withdrawAmount)
+    Sleep(1000)
+    
+    ; Navigate to Rare Material Trader
+    Local $NPCCoords = NPCCoordinatesInTown($MAINTENANCE_TOWN, 'Rare material trader')
+    MoveTo($NPCCoords[0], $NPCCoords[1])
+    Local $trader = GetNearestNPCToCoords($NPCCoords[0], $NPCCoords[1])
+    GoToNPC($trader)
+    Sleep(1000)
+    Dialog($trader)
+    Sleep(1000)
+    
+    ; Request initial quote
+    Local $ectoModelID = $ID_GLOB_OF_ECTOPLASM
+    If Not TraderRequest($ectoModelID) Then
+        Out("Failed to get ecto quote. Aborting ecto purchase.")
+        If GetGoldCharacter() > 5000 Then DepositGold(GetGoldCharacter() - 5000)
+        Return
+    EndIf
+    
+    Local $cost = GetTraderCostValue()
+    Local $bought = 0
+    
+    ; Buy loop: buy ectos while we can afford them
+    While $cost > 0 And GetGoldCharacter() >= $cost
+        TraderBuy()
+        $bought += 1
+        Sleep(GetPing() + 200)
+        
+        ; Re-request quote (price changes dynamically with supply)
+        If Not TraderRequest($ectoModelID) Then ExitLoop
+        $cost = GetTraderCostValue()
+    WEnd
+    
+    Out("Bought " & $bought & " Ectos.")
+    
+    ; Deposit ectos — material storage first, then bank stacks
+    DepositEctosToBank($ectoModelID)
+    
+    ; Deposit any remaining gold (no need to walk to chest)
+    If GetGoldCharacter() > 5000 Then DepositGold(GetGoldCharacter() - 5000)
+EndFunc
+
+; Deposits ectos from inventory into storage.
+; Priority order:
+;   1. Material Storage pane (bag 6) — if not full (< 250)
+;   2. Existing partial ecto stacks in bank (bags 8-16, qty < 250)
+;   3. Empty bank slots
+Func DepositEctosToBank($ectoModelID)
+    ; Check Material Storage first (bag 6)
+    Local $materialSlot = $MAP_MATERIAL_LOCATION[$ectoModelID]
+    Local $materialItem = GetItemBySlot(6, $materialSlot)
+    ; Material storage qty uses Equipped * 256 + Quantity for values > 255
+    Local $materialQty = DllStructGetData($materialItem, 'Equipped') * 256 + DllStructGetData($materialItem, 'Quantity')
+    Local $materialHasSpace = ($materialQty < 250)
+    
+    ; Second: find existing ecto stacks in bank (bags 8-16) with qty < 250
+    Local $bankEctoSlots[20][3] ; [bagIndex, slotIndex, quantity]
+    Local $bankEctoCount = 0
+    
+    For $bagIndex = 8 To 16
+        Local $bag = GetBag($bagIndex)
+        If Not IsDllStruct($bag) Or DllStructGetData($bag, 'ID') = 0 Then ContinueLoop
+        Local $slots = DllStructGetData($bag, 'slots')
+        For $slot = 1 To $slots
+            Local $item = GetItemBySlot($bagIndex, $slot)
+            If Not IsDllStruct($item) Then ContinueLoop
+            If DllStructGetData($item, 'ModelID') = $ectoModelID Then
+                Local $qty = DllStructGetData($item, 'Quantity')
+                If $qty < 250 And $bankEctoCount < 20 Then
+                    $bankEctoSlots[$bankEctoCount][0] = $bagIndex
+                    $bankEctoSlots[$bankEctoCount][1] = $slot
+                    $bankEctoSlots[$bankEctoCount][2] = $qty
+                    $bankEctoCount += 1
+                EndIf
+            EndIf
+        Next
+    Next
+    
+    ; Move ectos from inventory (bags 1-4) into storage
+    Local $deposited = 0
+    For $invBag = 1 To 4
+        Local $bag = GetBag($invBag)
+        If Not IsDllStruct($bag) Or DllStructGetData($bag, 'ID') = 0 Then ContinueLoop
+        Local $slots = DllStructGetData($bag, 'slots')
+        For $slot = 1 To $slots
+            Local $item = GetItemBySlot($invBag, $slot)
+            If Not IsDllStruct($item) Then ContinueLoop
+            If DllStructGetData($item, 'ModelID') <> $ectoModelID Then ContinueLoop
+            
+            ; Priority 1: Material Storage pane
+            If $materialHasSpace Then
+                MoveItem($item, 6, $materialSlot)
+                Sleep(600)
+                $deposited += 1
+                ; Re-check material storage quantity
+                $materialItem = GetItemBySlot(6, $materialSlot)
+                $materialQty = DllStructGetData($materialItem, 'Equipped') * 256 + DllStructGetData($materialItem, 'Quantity')
+                $materialHasSpace = ($materialQty < 250)
+                ContinueLoop
+            EndIf
+            
+            ; Priority 2: Existing partial bank stack
+            Local $movedToExisting = False
+            For $e = 0 To $bankEctoCount - 1
+                If $bankEctoSlots[$e][2] < 250 Then
+                    MoveItem($item, $bankEctoSlots[$e][0], $bankEctoSlots[$e][1])
+                    Sleep(600)
+                    $bankEctoSlots[$e][2] += DllStructGetData($item, 'Quantity')
+                    $movedToExisting = True
+                    $deposited += 1
+                    ExitLoop
+                EndIf
+            Next
+            If $movedToExisting Then ContinueLoop
+            
+            ; Priority 3: Empty bank slot
+            Local $emptySlot = FindChestFirstEmptySlot()
+            If $emptySlot[0] <> 0 Then
+                MoveItem($item, $emptySlot[0], $emptySlot[1])
+                Sleep(600)
+                $deposited += 1
+            Else
+                Out("Warning: No empty bank slots for ectos!")
+                ExitLoop 2
+            EndIf
+        Next
+    Next
+    
+    If $deposited > 0 Then Out("Deposited " & $deposited & " ecto stack(s) to storage.")
+EndFunc
+
+
+; Copied from GWA2.au3 and fixed (Variable redeclaration error)
+Func CraftItemSafe($modelID, $amount, $gold, $materialsArray)
+    If Not IsArray($materialsArray) Then 
+        Out("Error: materialsArray is not an array for " & $modelID)
+        Return 0
+    EndIf
+    
+	Local $sourceItemPtr = _GWA2_GetInventoryItemPtrByModelId($materialsArray[0][0])
+	If ((Not $sourceItemPtr) Or (MemoryRead($sourceItemPtr + 0x4B) < $materialsArray[0][1])) Then 
+        Out("Error: Source item (Material) not found or insufficient quantity.")
+        Return 0
+    EndIf
+    
+    ; Use our safe Ptr lookup. CraftItem expects the Pointer.
+	Local $destinationItemPtr = _GetMerchantItemPtrByModelId_Safe($modelID)
+	If ($destinationItemPtr = 0) Then 
+        Out("Error: Destination item (Consumable " & $modelID & ") not found at trader (Ptr=0).")
+        Return 0
+    EndIf
+    
+	Local $materialString = ''
+	Local $materialCount = 0
+	Local $materialsArraySize = UBound($materialsArray) - 1
+    
+	For $i = $materialsArraySize To 0 Step -1
+		Local $checkQuantity = _GWA2_CountItemInBagsByModelID($materialsArray[$i][0])
+		If $materialsArray[$i][1] * $amount > $checkQuantity Then
+			; amount of missing mats in @extended
+            Out("Error: Insufficient material " & $materialsArray[$i][0])
+			Return SetExtended($materialsArray[$i][1] * $amount - $checkQuantity, $materialsArray[$i][0])
+		EndIf
+	Next
+	Local $goldChar = GetGoldCharacter() ; Renamed to avoid confusion
+
+	For $i = 0 To $materialsArraySize
+		$materialString &= GetItemIDFromModelID($materialsArray[$i][0]) & ';'
+		$materialCount += 1
+	Next
+
+	Local $craftingMaterialType = 'dword'
+	For $i = 1 To $materialCount - 1
+		$craftingMaterialType &= ';dword'
+	Next
+    
+	Local $craftingMaterialStruct = SafeDllStructCreate($craftingMaterialType)
+	Local $craftingMaterialStructPtr = DllStructGetPtr($craftingMaterialStruct)
+    
+	For $i = 1 To $materialCount
+		Local $size = StringInStr($materialString, ';')
+		DllStructSetData($craftingMaterialStruct, $i, StringLeft($materialString, $size - 1))
+		$materialString = StringTrimLeft($materialString, $size)
+	Next
+    
+	Local $memorySize = $materialCount * 4
+	Local $processHandle = GetProcessHandle()
+    Local $kernel_handle = DllOpen('kernel32.dll') ; Ensure handle is open
+    
+	Local $memoryBuffer = SafeDllCall13($kernel_handle, 'ptr', 'VirtualAllocEx', 'handle', $processHandle, 'ptr', 0, 'ulong_ptr', $memorySize, 'dword', 0x1000, 'dword', 0x40)
+	; Couldnt allocate enough memory
+	If $memoryBuffer = 0 Then 
+        Out("Error: VirtualAllocEx failed.")
+        Return 0
+    EndIf
+    
+	Local $buffer = SafeDllCall13($kernel_handle, 'int', 'WriteProcessMemory', 'int', $processHandle, 'int', $memoryBuffer[0], 'ptr', $craftingMaterialStructPtr, 'int', $memorySize, 'int', 0)
+	If $buffer = 0 Then 
+        Out("Error: WriteProcessMemory failed.")
+        SafeDllCall11($kernel_handle, 'ptr', 'VirtualFreeEx', 'handle', $processHandle, 'ptr', $memoryBuffer[0], 'int', 0, 'dword', 0x8000)
+        Return 0
+    EndIf
+    
+    ; Setup Command
+    ; If GetValue not available, we might assume 0x8A? But GWA2 uses GetValue.
+    ; Safe to use GetValue if GWA2_Headers included.
+    ; Setup Command
+    ; Setup Command
+    ; Setup Command
+    ; Setup Command
+    ; Use CommandCraftItemEx (Original)
+    Local $cmd = GetValue('CommandCraftItemEx')
+    Local $tradeIDPtr = GetValue('TradeID')
+    Local $tradeID = 0
+    Local $Timer = TimerInit()
+    
+    Do
+        $tradeID = MemoryRead($tradeIDPtr)
+        If $tradeID <> 0 Then ExitLoop
+        Sleep(100)
+    Until TimerDiff($Timer) > 2000
+    
+    If $tradeID = 0 Then
+        Out("Error: TradeID is 0. NPC interaction failed or not ready.")
+        SafeDllCall11($kernel_handle, 'ptr', 'VirtualFreeEx', 'handle', $processHandle, 'ptr', $memoryBuffer[0], 'int', 0, 'dword', 0x8000)
+        Return 0
+    EndIf
+    
+    Out("Debug: CraftItemSafe Cmd=" & $cmd & " DestPtr=" & $destinationItemPtr & " ID=" & MemoryRead($destinationItemPtr) & " Buf=" & $memoryBuffer[0] & " Count=" & $materialCount & " TradeID=" & $tradeID)
+    
+	DllStructSetData($CRAFT_ITEM_STRUCT, 1, $cmd)
+	DllStructSetData($CRAFT_ITEM_STRUCT, 2, $amount)
+	DllStructSetData($CRAFT_ITEM_STRUCT, 3, $modelID) ; Start with ModelID (Crash investigation)
+	DllStructSetData($CRAFT_ITEM_STRUCT, 4, $memoryBuffer[0])
+	DllStructSetData($CRAFT_ITEM_STRUCT, 5, $materialCount)
+	DllStructSetData($CRAFT_ITEM_STRUCT, 6, $amount * $gold) 
+    
+    Out("Debug: Enqueuing Craft Item...")
+	Enqueue($CRAFT_ITEM_STRUCT_PTR, 24)
+    Out("Debug: Enqueued.")
+    
+	Local $deadlock = TimerInit()
+	Local $currentAmount
+	Do
+		Sleep(250)
+		$currentAmount = _GWA2_CountItemInBagsByModelID($materialsArray[0][0])
+	Until $currentAmount <> ($materialsArray[0][1] * $amount + _GWA2_CountItemInBagsByModelID($materialsArray[0][0])) Or TimerDiff($deadlock) > 5000
+    
+	; SafeDllCall11($kernel_handle, 'ptr', 'VirtualFreeEx', 'handle', $processHandle, 'ptr', $memoryBuffer[0], 'int', 0, 'dword', 0x8000)
+    Out("Debug: CraftItemSafe finished. Memory Buffer not freed (Safety).")
+	Return True
+EndFunc
+
+; Local version: Returns ItemPtr (Address) checks 0x2C offset
+Func _GetMerchantItemPtrByModelId_Safe($modelID)
+    Local $base = GetMerchantItemsBase()
+    Local $count = GetMerchantItemsSize()
+    If $base = 0 Then Return 0
+    
+    Local $offsets[5] = [0, 0x18, 0x40, 0xB8, 0]
+    
+    For $i = 1 To $count
+        Local $itemID = MemoryRead($base + 4 * ($i - 1))
+        
+        If $itemID <> 0 Then
+            $offsets[4] = 4 * $itemID
+            Local $itemPtrData = MemoryReadPtr($base_address_ptr, $offsets)
+            Local $itemPtr = $itemPtrData[1]
+            
+            If $itemPtr <> 0 Then
+                ; Check 0x2C first (as confirmed by ScanTrader)
+                If MemoryRead($itemPtr + 0x2C) = $modelID Then Return $itemPtr
+                ; Fallback to 0x18 just in case
+                If MemoryRead($itemPtr + 0x18) = $modelID Then Return $itemPtr
+            EndIf
+        EndIf
+    Next
+    Return 0
+EndFunc

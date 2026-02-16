@@ -83,6 +83,8 @@ Global $GUI_GroupSettings_CheckChests			= 0
 Global $GUI_GroupSettings_CheckPickupGolds		= 0
 Global $GUI_GroupSettings_CheckSalvage			= 0
 Global $GUI_GroupSettings_ComboHeroConfig		= 0
+Global $GUI_Checkbox_UseConsumables				= 0
+Global $GUI_Checkbox_UseScrolls					= 0
 
 ;Group 2: General Statistics
 Global $GUI_GroupGeneralStats = 0
@@ -225,7 +227,10 @@ Func GUI_Create()
 	$GUI_GroupSettings_CheckStones  	= GUICtrlCreateCheckbox("Stones"		  	, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 5, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
 	$GUI_GroupSettings_CheckChests  	= GUICtrlCreateCheckbox("Open Chests"		, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 6, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
 	$GUI_GroupSettings_CheckPickUpGolds	= GUICtrlCreateCheckbox("Pick Up Golds"	, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 7, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
-	$GUI_GroupSettings_CheckSalvage    	= GUICtrlCreateCheckbox("Auto-Salvage"	  		, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 8, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
+	$GUI_GroupSettings_CheckSalvage    	= GUICtrlCreateCheckbox("Salvage"	  		, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 8, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
+	;$GUI_Checkbox_UseConsumables = GUICtrlCreateCheckbox("Use Consumables", $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 9, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
+	;$GUI_Checkbox_UseScrolls = GUICtrlCreateCheckbox("Use Scrolls", $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 10, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
+	;GUICtrlSetTip(-1, "Use Speed/Power Scrolls")
 	GUICtrlCreateGroup("", -99, -99, 1, 1)	;Closes a Group
 
 	;GUICtrlSetOnEvent($GUI_GroupSettings_CheckRender, "ToggleRendering")
@@ -1126,37 +1131,3 @@ Func SpecialEvents()
     EndSelect
 EndFunc
 
-; #Region Logging Wrappers
-; Added to resolve missing functions
-
-Global $WARN_ONCE_CACHE[]
-
-; Logging functions that write to GUI console
-Func Notice($Text)
-    Out("[NOTICE] " & $Text)
-EndFunc
-
-Func Warn($Text)
-    Out("[WARN] " & $Text)
-EndFunc
-
-Func WarnOnce($Text)
-    If $WARN_ONCE_CACHE[$Text] = True Then Return
-    $WARN_ONCE_CACHE[$Text] = True
-    Warn($Text)
-EndFunc
-
-Func Debug($Text)
-	; Simple debug wrapper
-    Out("[DEBUG] " & $Text)
-EndFunc
-
-Func Info($Text)
-    Out("[INFO] " & $Text)
-EndFunc
-
-Func Error($Text)
-    MsgBox(16, "Error", $Text)
-    Exit
-EndFunc
-; #EndRegion Logging Wrappers

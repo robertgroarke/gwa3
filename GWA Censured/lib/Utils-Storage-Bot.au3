@@ -65,7 +65,22 @@ Global Const $SCHEMA_LOOKUP_UPGRADES = ['OS', 'upgrade_type', 'weapon', 'effect'
 Func ManageInventory()
 	;SellItemsToMerchant(DefaultShouldSellItem, True)
 	InventoryManagementBeforeRun()
-	Return $PAUSE
+	Return
+EndFunc
+
+
+;~ Move to Xunlai Chest and open it
+Func GoToXunlaiChest($town = $ID_EYE_OF_THE_NORTH)
+	TravelToOutpost($town)
+	Info('Moving to Xunlai Chest')
+	UseCitySpeedBoost()
+	
+	Local $NPCCoordinates = NPCCoordinatesInTown($town, 'Xunlai chest')
+	MoveTo($NPCCoordinates[0], $NPCCoordinates[1])
+	
+	Local $chest = GetNearestNPCToCoords($NPCCoordinates[0], $NPCCoordinates[1])
+	GoToNPC($chest)
+	RandomSleep(500)
 EndFunc
 
 
@@ -83,12 +98,12 @@ Func InventoryManagementBeforeRun($tradeTown = $ID_EYE_OF_THE_NORTH)
 	; 9-Buy ectoplasm/obsidian with surplus
 	; 10-Store items
 	If GUICtrlRead($GUI_Checkbox_StoreUnidentifiedGoldItems) == $GUI_CHECKED Then
-		TravelToOutpost($tradeTown, $district_name)
+		TravelToOutpost($tradeTown)
 		StoreItemsInXunlaiStorage(IsUnidentifiedGoldItem)
 	EndIf
 	If GUICtrlRead($GUI_Checkbox_SortItems) == $GUI_CHECKED Then SortInventory()
 	If $inventory_management_cache['@identify.something'] And HasUnidentifiedItems() Then
-		TravelToOutpost($tradeTown, $district_name)
+		TravelToOutpost($tradeTown)
 		IdentifyItems()
 	EndIf
 	If GUICtrlRead($GUI_Checkbox_CollectData) == $GUI_CHECKED Then
@@ -100,7 +115,7 @@ Func InventoryManagementBeforeRun($tradeTown = $ID_EYE_OF_THE_NORTH)
 		DisconnectFromDatabase()
 	EndIf
 	If $inventory_management_cache['@salvage.something'] Then
-		TravelToOutpost($tradeTown, $district_name)
+		TravelToOutpost($tradeTown)
 		SalvageItems()
 		If $bags_count == 5 And MoveItemsOutOfEquipmentBag() > 0 Then SalvageItems()
 		;SalvageInscriptions()
@@ -108,14 +123,14 @@ Func InventoryManagementBeforeRun($tradeTown = $ID_EYE_OF_THE_NORTH)
 		;SalvageMaterials()
 	EndIf
 	If $inventory_management_cache['@sell.materials.something'] And HasMaterials() Then
-		TravelToOutpost($tradeTown, $district_name)
+		TravelToOutpost($tradeTown)
 		; If we have more than 60k, we risk running into the situation we can't sell because we're too rich, so we store some in xunlai
 		If GetGoldCharacter() > 60000 Then BalanceCharacterGold(10000)
 		If $inventory_management_cache['@sell.materials.basic.something'] And HasBasicMaterials() Then SellBasicMaterialsToMerchant()
 		If $inventory_management_cache['@sell.materials.rare.something'] And HasRareMaterials() Then SellRareMaterialsToMerchant()
 	EndIf
 	If $inventory_management_cache['@sell.something'] Then
-		TravelToOutpost($tradeTown, $district_name)
+		TravelToOutpost($tradeTown)
 		; If we have more than 60k, we risk running into the situation we can't sell because we're too rich, so we store some in xunlai
 		If GetGoldCharacter() > 60000 Then BalanceCharacterGold(10000)
 		SellItemsToMerchant()
@@ -145,7 +160,7 @@ Func InventoryManagementMidRun()
 	; 5-Salvage
 	If GetInventoryKitCount($superiorIdentificationKits) < 1 Or GetInventoryKitCount($salvageKits) < 1 Then
 		Info('Buying kits for passive inventory management')
-		TravelToOutpost($tradeTown, $district_name)
+		TravelToOutpost($tradeTown)
 		; Since we are in trade town, might as well clear inventory
 		InventoryManagementBeforeRun()
 		BuyKitsForMidRun()
@@ -545,7 +560,7 @@ Func MoveItemsOutOfEquipmentBag()
 		Local $item = GetItemBySlot(5, $slot)
 		If DllStructGetData($item, 'ModelID') <> 0 Then
 			If IsArmor($item) Then ContinueLoop
-			If Not DefaultShouldSalvageItem($item) Then ContinueLoop
+			If Not StorageBot_ShouldSalvageItem($item) Then ContinueLoop
 			MoveItem($item, $inventoryEmptySlots[2 * $cursor], $inventoryEmptySlots[2 * $cursor + 1])
 			$cursor += 1
 			RandomSleep(50)
@@ -557,7 +572,7 @@ EndFunc
 
 ;~ Sell general items to trader
 Func SellItemsToMerchant($shouldSellItem = DefaultShouldSellItem, $dryRun = False, $tradeTown = $ID_EYE_OF_THE_NORTH)
-	TravelToOutpost($tradeTown, $district_name)
+	TravelToOutpost($tradeTown)
 	Info('Moving to merchant to sell items')
 	UseCitySpeedBoost()
 	; in Embark Beach, move to spot to avoid getting stuck on obstacles
@@ -622,59 +637,105 @@ Func HasInInventory($condition)
 EndFunc
 
 
-Func NPCCoordinatesInTown($town = $ID_EYE_OF_THE_NORTH, $type = 'Merchant')
+Func NPCCoordinatesInTown($town = $ID_EYE_OF_THE_NORTH, $type = 'Merchant', $name = '')
 	Local $coordinates[2] = [-1, -1]
 	Switch $type
 		Case 'Merchant'
 			Switch $town
 				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2158
-					$coordinates[1] = -2006
+					$coordinates[0] = 2233
+					$coordinates[1] = -2009
 				Case $ID_EYE_OF_THE_NORTH
 					$coordinates[0] = -2700
 					$coordinates[1] = 1075
+				Case $ID_GADDS_CAMP
+					; Gadd's Encampment Merchant
+					$coordinates[0] = -8374
+					$coordinates[1] = -22491
 				Case Else
 					Warn('For provided town coordinates of that NPC aren''t mapped yet')
 			EndSwitch
 		Case 'Basic material trader'
 			Switch $town
 				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2997
-					$coordinates[1] = -2271
+					$coordinates[0] = 2933
+					$coordinates[1] = -2236
 				Case $ID_EYE_OF_THE_NORTH
 					$coordinates[0] = -1850
 					$coordinates[1] = 875
+				Case $ID_GADDS_CAMP
+					; Gadd's Encampment Basic Material Trader
+					$coordinates[0] = -9097
+					$coordinates[1] = -23353
 				Case Else
 					Warn('For provided town coordinates of that NPC aren''t mapped yet')
 			EndSwitch
 		Case 'Rare material trader'
 			Switch $town
 				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2928
-					$coordinates[1] = -2452
+					$coordinates[0] = 2865
+					$coordinates[1] = -2406
 				Case $ID_EYE_OF_THE_NORTH
 					$coordinates[0] = -2100
 					$coordinates[1] = 1125
+				Case $ID_GADDS_CAMP
+					; Gadd's Encampment Rare Material Trader
+					$coordinates[0] = -9136
+					$coordinates[1] = -23153
 				Case Else
 					Warn('For provided town coordinates of that NPC aren''t mapped yet')
 			EndSwitch
 		;Case 'Dye trader'
 		;Case 'Scroll trader'
-		;Case 'Consumables trader'
+		Case 'Consumables trader'
+			Switch $town
+				Case $ID_EMBARK_BEACH
+					Switch $name
+						Case 'Edwin'
+							$coordinates[0] = 3515
+							$coordinates[1] = 369
+						Case 'Kwat'
+							$coordinates[0] = 3596
+							$coordinates[1] = 107
+						Case 'Alcus Nailbiter'
+							$coordinates[0] = 3704
+							$coordinates[1] = -163
+						Case 'Eyja', ''
+							$coordinates[0] = 3336
+							$coordinates[1] = 627
+						Case Else
+							Warn('Unknown Consumables Trader name: ' & $name)
+							; Default to Eyja
+							$coordinates[0] = 3336
+							$coordinates[1] = 627
+					EndSwitch
+				Case Else
+					Warn('For provided town coordinates of that NPC aren''t mapped yet')
+			EndSwitch
 		;Case 'Armorer'
 		;Case 'Weaponsmith'
-		;Case 'Xunlai chest'
+		Case 'Xunlai chest'
+			Switch $town
+				Case $ID_EMBARK_BEACH
+					$coordinates[0] = 2283
+					$coordinates[1] = -2134
+				Case $ID_GADDS_CAMP
+					$coordinates[0] = -10481
+					$coordinates[1] = -22787
+				Case Else
+					Warn('For provided town coordinates of that NPC aren''t mapped yet')
+			EndSwitch
 		;Case 'Skill trainer'
 		Case Else
 			Warn('Wrong NPC type provided')
 	EndSwitch
 	Return $coordinates
-FendFunc
+EndFunc
 
 
 ;~ Sell basic materials to materials merchant in town
 Func SellBasicMaterialsToMerchant($shouldSellMaterial = DefaultShouldSellBasicMaterial, $tradeTown = $ID_EYE_OF_THE_NORTH)
-	TravelToOutpost($tradeTown, $district_name)
+	TravelToOutpost($tradeTown)
 	Info('Moving to materials merchant')
 	UseCitySpeedBoost()
 	; in Embark Beach, move to spot to avoid getting stuck on obstacles
@@ -694,16 +755,23 @@ Func SellBasicMaterialsToMerchant($shouldSellMaterial = DefaultShouldSellBasicMa
 				$itemID = DllStructGetData($item, 'ID')
 				Local $totalAmount = DllStructGetData($item, 'Quantity')
 				Debug('Selling ' & $totalAmount & ' material ' & $bagIndex & '-' & $i)
+				Local $failCount = 0
 				While $totalAmount > 9
+					Local $preQty = $totalAmount
 					TraderRequestSell($itemID)
-					Sleep(GetPing() + 200)
+					Sleep(GetPing() + 500)
 					TraderSell()
-					Sleep(GetPing() + 200)
-					$totalAmount -= 10
-					; Safety net incase some sell orders didn't go through
-					If ($totalAmount < 10) Then
-						$item = GetItemBySlot($bagIndex, $i)
-						$totalAmount = DllStructGetData($item, 'Quantity')
+					Sleep(GetPing() + 500)
+					
+					$item = GetItemBySlot($bagIndex, $i)
+					$totalAmount = DllStructGetData($item, 'Quantity')
+					
+					If $totalAmount >= $preQty Then 
+						$failCount += 1
+						Warn('Sell attempt failed (' & $failCount & '/3). Qty: ' & $totalAmount)
+						If $failCount >= 3 Then ExitLoop
+					Else
+						$failCount = 0
 					EndIf
 				WEnd
 			EndIf
@@ -714,7 +782,7 @@ EndFunc
 
 ;~ Sell rare materials to rare materials merchant in town
 Func SellRareMaterialsToMerchant($shouldSellMaterial = DefaultShouldSellRareMaterial, $tradeTown = $ID_EMBARK_BEACH)
-	TravelToOutpost($tradeTown, $district_name)
+	TravelToOutpost($tradeTown)
 	Info('Moving to rare materials merchant')
 	UseCitySpeedBoost()
 	; in Embark Beach, move to spot to avoid getting stuck on obstacles
@@ -734,16 +802,23 @@ Func SellRareMaterialsToMerchant($shouldSellMaterial = DefaultShouldSellRareMate
 				$itemID = DllStructGetData($item, 'ID')
 				Local $totalAmount = DllStructGetData($item, 'Quantity')
 				Debug('Selling ' & $totalAmount & ' material ' & $bagIndex & '-' & $i)
+				Local $failCount = 0
 				While $totalAmount > 0
+					Local $preQty = $totalAmount
 					TraderRequestSell($itemID)
-					Sleep(GetPing() + 200)
+					Sleep(GetPing() + 500)
 					TraderSell()
-					Sleep(GetPing() + 200)
-					$totalAmount -= 1
-					; Safety net incase some sell orders didn't go through
-					If ($totalAmount < 1) Then
-						$item = GetItemBySlot($bagIndex, $i)
-						$totalAmount = DllStructGetData($item, 'Quantity')
+					Sleep(GetPing() + 500)
+					
+					$item = GetItemBySlot($bagIndex, $i)
+					$totalAmount = DllStructGetData($item, 'Quantity')
+
+					If $totalAmount >= $preQty Then
+						$failCount += 1
+						Warn('Sell attempt failed (' & $failCount & '/3). Qty: ' & $totalAmount)
+						If $failCount >= 3 Then ExitLoop
+					Else
+						$failCount = 0
 					EndIf
 				WEnd
 			EndIf
@@ -754,7 +829,7 @@ EndFunc
 
 ;~ Buy rare material from rare materials merchant in town
 Func BuyRareMaterialFromMerchant($materialModelID, $amount, $tradeTown = $ID_EMBARK_BEACH)
-	TravelToOutpost($tradeTown, $district_name)
+	TravelToOutpost($tradeTown)
 	Info('Moving to rare materials merchant')
 	UseCitySpeedBoost()
 	; in Embark Beach, move to spot to avoid getting stuck on obstacles
@@ -781,7 +856,7 @@ EndFunc
 ;~ Possible issue if you provide a very low poorThreshold and the price of an item hike up enough to reduce your money to less than 0
 ;~ So please only use with $poorThreshold > 5k
 Func BuyRareMaterialFromMerchantUntilPoor($materialModelID, $poorThreshold = 20000, $backupMaterialModelID = Null, $tradeTown = $ID_EYE_OF_THE_NORTH)
-	TravelToOutpost($tradeTown, $district_name)
+	TravelToOutpost($tradeTown)
 	If CountSlots(1, 4) == 0 Then
 		Warn('No room in inventory to buy rare materials, tick some checkboxes to clear inventory')
 		Return
@@ -1040,7 +1115,7 @@ EndFunc
 
 
 ;~ Return True if the item should be salvaged - default to false
-Func DefaultShouldSalvageItem($item)
+Func StorageBot_ShouldSalvageItem($item)
 	; Clarity rename
 	Local $cache = $inventory_management_cache
 	If $cache['@salvage.nothing'] Then Return False

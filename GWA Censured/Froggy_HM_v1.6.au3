@@ -58,6 +58,7 @@ Global $BestTargetPtr = 0
 Global $GUI_RunCounter = 0, $GUI_FailCounter = 0, $AvgRunTime = 0
 Global $nBestRunTime = 999999999, $nCurrentRunTime = 0, $nTotalRunTime = 0
 Global $bRunFailed = False  ; Flag to track if current run failed (don't count for best time)
+Global $district_name = 'International' ; Default to International for travel functions
 
 
 

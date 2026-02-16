@@ -15,13 +15,23 @@
 #CE ===========================================================================
 
 #include-once
+#include <FileConstants.au3>
 
 Global Const $DEBUG_MODE = True
 Global Const $ADD_CONTEXT = False
 Global Const $FUNCTION_NAMES = ['SetProcessWorkingSetSizeEx','VirtualQueryEx','VirtualFreeEx','VirtualAllocEx','ReadProcessMemory','WriteProcessMemory','CreateRemoteThread','CloseHandle','WaitForSingleObject','OpenProcess','SetProcessWorkingSetSize']
 ; VirtualQueryEx error code is 0 - but it shouldn't be caught
 Global $ERROR_CODES = [0, -1, 0, Null, 0, 0, Null, 0, 0xFFFFFFFF, Null, 0]
-Global Const $FUNCTION_ERROR_CODES = MapFromArrays($FUNCTION_NAMES, $ERROR_CODES)
+Global Const $FUNCTION_ERROR_CODES = _Debugger_MapFromArrays($FUNCTION_NAMES, $ERROR_CODES)
+
+; Helper function to avoid dependency on Utils.au3
+Func _Debugger_MapFromArrays($keys, $values)
+	Local $map[]
+	For $i = 0 To UBound($keys) - 1
+		$map[$keys[$i]] = $values[$i]
+	Next
+	Return $map
+EndFunc
 
 ; #include 'Utils.au3' ; Removed to prevent circular dependency
 
@@ -134,103 +144,128 @@ Func SafeDllStructCreate($type, $ptr = -1)
 			Return DllStructCreate($type)
 		EndIf
 	EndIf
-	Local $call = 'DllStructCreate(type=' & $type & ',ptr=' & $ptr & ')'
-	If $ptr <> -1 And Not IsPtr($ptr) Then
-		DebuggerLog('[ERROR] Invalid pointer passed to ' & $call)
-	EndIf
+	
 	Local $struct
 	If $ptr <> -1 Then
+		If Not IsPtr($ptr) Then
+			DebuggerLog('[ERROR] Invalid pointer passed to DllStructCreate(type=' & $type & ',ptr=' & $ptr & ')')
+		EndIf
 		$struct = DllStructCreate($type, $ptr)
 	Else
 		$struct = DllStructCreate($type)
 	EndIf
-	If @error Then DebuggerLog('[ERROR] Failure on ' & $call)
+	
+	If @error Then 
+		DebuggerLog('[ERROR] Failure on DllStructCreate(type=' & $type & ',ptr=' & $ptr & ')')
+	EndIf
 	Return $struct
 EndFunc
 
 ;~ DllStructGetData wrapper
 Func SafeDllStructGetData($struct, $element)
 	If Not $DEBUG_MODE Then Return DllStructGetData($struct, $element)
-	Local $call = 'DllStructGetData(struct=' & $struct & ',element=' & $element & ')'
+	
 	If Not IsDllStruct($struct) Then
-		DebuggerLog('[ERROR] Invalid DllStruct passed to ' & $call)
+		DebuggerLog('[ERROR] Invalid DllStruct passed to DllStructGetData(struct=' & $struct & ',element=' & $element & ')')
 	EndIf
+	
 	Local $data = DllStructGetData($struct, $element)
-	If @error Then DebuggerLog('[ERROR] Failure on ' & $call)
+	If @error Then 
+		DebuggerLog('[ERROR] Failure on DllStructGetData(struct=' & $struct & ',element=' & $element & ')')
+	EndIf
 	Return $data
 EndFunc
 
 ;~ DllStructSetData wrapper
 Func SafeDllStructSetData($struct, $element)
 	If Not $DEBUG_MODE Then Return DllStructSetData($struct, $element)
-	Local $call = 'DllStructSetData(struct=' & $struct & ',element=' & $element & ')'
+
 	If Not IsDllStruct($struct) Then
-		DebuggerLog('[ERROR] Invalid DllStruct passed to ' & $call)
+		DebuggerLog('[ERROR] Invalid DllStruct passed to DllStructSetData(struct=' & $struct & ',element=' & $element & ')')
 	EndIf
+	
 	Local $data = DllStructSetData($struct, $element)
-	If @error Then DebuggerLog('[ERROR] Failure on ' & $call)
+	If @error Then 
+		DebuggerLog('[ERROR] Failure on DllStructSetData(struct=' & $struct & ',element=' & $element & ')')
+	EndIf
 	Return $data
 EndFunc
 
 ;~ DllCall wrapper
 Func SafeDllCall($dll, $retType, $function, $p4, $p5, $p6 = Null, $p7 = Null, $p8 = Null, $p9 = Null, $p10 = Null, $p11 = Null, $p12 = Null, $p13 = Null, $p14 = Null, $p15 = Null, $p16 = Null, $p17 = Null)
-	Local $call = StringFormat('DllCall(dll=%s,retType=%s,fun=%s,p4=%s,p5=%s', $dll, $retType, $function, $p4, $p5)
+	; Parameter validation logic (keep simplistic for speed unless error)
 	If $p6 <> Null Then
-		$call &= StringFormat(',p6=%s,p7=%s', $p6, $p7)
-		If Not IsValidType($p6, $p7) Then DebuggerLog('Error faulty value in call to ' & $call)
+		If Not IsValidType($p6, $p7) Then DebuggerLog('Error faulty value in call to DllCall(' & $dll & ',' & $retType & ',' & $function & '...) arg 6/7')
 		If $p8 <> Null Then
-			$call &= StringFormat(',p8=%s,p9=%s', $p8, $p9)
-			If Not IsValidType($p8, $p9) Then DebuggerLog('Error faulty value in call to ' & $call)
+			If Not IsValidType($p8, $p9) Then DebuggerLog('Error faulty value in call to DllCall(' & $dll & ',' & $retType & ',' & $function & '...) arg 8/9')
 			If $p10 <> Null Then
-				$call &= StringFormat(',p10=%s,p11=%s', $p10, $p11)
-				If Not IsValidType($p10, $p11) Then DebuggerLog('Error faulty value in call to ' & $call)
+				If Not IsValidType($p10, $p11) Then DebuggerLog('Error faulty value in call to DllCall(' & $dll & ',' & $retType & ',' & $function & '...) arg 10/11')
 				If $p12 <> Null Then
-					$call &= StringFormat(',p12=%s,p13=%s', $p12, $p13)
-					If Not IsValidType($p12, $p13) Then DebuggerLog('Error faulty value in call to ' & $call)
+					If Not IsValidType($p12, $p13) Then DebuggerLog('Error faulty value in call to DllCall(' & $dll & ',' & $retType & ',' & $function & '...) arg 12/13')
 					If $p14 <> Null Then
-						$call &= StringFormat(',p14=%s,p15=%s', $p14, $p15)
-						If Not IsValidType($p14, $p15) Then DebuggerLog('Error faulty value in call to ' & $call)
+						If Not IsValidType($p14, $p15) Then DebuggerLog('Error faulty value in call to DllCall(' & $dll & ',' & $retType & ',' & $function & '...) arg 14/15')
 						If $p16 <> Null Then
-							$call &= StringFormat(',p16=%s,p17=%s', $p16, $p17)
-							If Not IsValidType($p16, $p17) Then DebuggerLog('Error faulty value in call to ' & $call)
+							If Not IsValidType($p16, $p17) Then DebuggerLog('Error faulty value in call to DllCall(' & $dll & ',' & $retType & ',' & $function & '...) arg 16/17')
 						EndIf
 					EndIf
 				EndIf
 			EndIf
 		EndIf
 	EndIf
-	$call &= ')'
 
 	If $function == 'ReadProcessMemory' Then IsMemoryReadable($p5, $p7, 0)
 	If $function == 'WriteProcessMemory' Then IsMemoryWritable($p5, $p7, 0)
 
-	;DebuggerLog('Call to ' & $call)
-	;DebuggerLog('Context{' & GetCurrentContext() & '}')
+	; Logging only if context exists (optional)
+	If $ADD_CONTEXT And GetCurrentContext() <> '' Then
+		Local $call = StringFormat('DllCall(dll=%s,retType=%s,fun=%s,p4=%s,p5=%s', $dll, $retType, $function, $p4, $p5)
+		If $p6 <> Null Then $call &= StringFormat(',p6=%s,p7=%s', $p6, $p7)
+			; ... (rest of simple context log building omitted for speed) ...
+		$call &= ')'
+		DebuggerLog('Call to ' & $call)
+		DebuggerLog('Context{' & GetCurrentContext() & '}')
+	EndIf
+
 	Local $result
 	If $p16 <> Null Then
-		If $p17 == Null Then DebuggerLog('Error null value in call to ' & $call)
+		If $p17 == Null Then DebuggerLog('Error null value in call to DllCall(' & $dll & ',' & $retType & ',' & $function & '...) arg 17')
 		$result = DllCall($dll, $retType, $function, $p4, $p5, $p6, $p7, $p8, $p9, $p10, $p11, $p12, $p13, $p14, $p15, $p16, $p17)
 	ElseIf $p14 <> Null Then
-		If $p15 == Null Then DebuggerLog('Error null value in call to ' & $call)
+		If $p15 == Null Then DebuggerLog('Error null value in call to DllCall(' & $dll & ',' & $retType & ',' & $function & '...) arg 15')
 		$result = DllCall($dll, $retType, $function, $p4, $p5, $p6, $p7, $p8, $p9, $p10, $p11, $p12, $p13, $p14, $p15)
 	ElseIf $p12 <> Null Then
-		If $p13 == Null Then DebuggerLog('Error null value in call to ' & $call)
+		If $p13 == Null Then DebuggerLog('Error null value in call to DllCall(' & $dll & ',' & $retType & ',' & $function & '...) arg 13')
 		$result = DllCall($dll, $retType, $function, $p4, $p5, $p6, $p7, $p8, $p9, $p10, $p11, $p12, $p13)
 	ElseIf $p10 <> Null Then
-		If $p11 == Null Then DebuggerLog('Error null value in call to ' & $call)
+		If $p11 == Null Then DebuggerLog('Error null value in call to DllCall(' & $dll & ',' & $retType & ',' & $function & '...) arg 11')
 		$result = DllCall($dll, $retType, $function, $p4, $p5, $p6, $p7, $p8, $p9, $p10, $p11)
 	ElseIf $p8 <> Null Then
-		If $p9 == Null Then DebuggerLog('Error null value in call to ' & $call)
+		If $p9 == Null Then DebuggerLog('Error null value in call to DllCall(' & $dll & ',' & $retType & ',' & $function & '...) arg 9')
 		$result = DllCall($dll, $retType, $function, $p4, $p5, $p6, $p7, $p8, $p9)
 	ElseIf $p6 <> Null Then
-		If $p7 == Null Then DebuggerLog('Error null value in call to ' & $call)
+		If $p7 == Null Then DebuggerLog('Error null value in call to DllCall(' & $dll & ',' & $retType & ',' & $function & '...) arg 7')
 		$result = DllCall($dll, $retType, $function, $p4, $p5, $p6, $p7)
 	Else
-		If $p5 == Null Then DebuggerLog('Error null value in call to ' & $call)
+		If $p5 == Null Then DebuggerLog('Error null value in call to DllCall(' & $dll & ',' & $retType & ',' & $function & '...) arg 5')
 		$result = DllCall($dll, $retType, $function, $p4, $p5)
 	EndIf
+	
 	If @error <> 0 Or $result[0] = $FUNCTION_ERROR_CODES[$function] Then
 		Local $errorCode = DllCall($dll, 'dword', 'GetLastError')
+		
+		; Only build string ON ERROR
+		Local $call = StringFormat('DllCall(dll=%s,retType=%s,fun=%s,p4=%s,p5=%s', $dll, $retType, $function, $p4, $p5)
+		If $p6 <> Null Then 
+			$call &= StringFormat(',p6=%s,p7=%s', $p6, $p7)
+			If $p8 <> Null Then 
+				$call &= StringFormat(',p8=%s,p9=%s', $p8, $p9)
+				If $p10 <> Null Then
+					$call &= StringFormat(',p10=%s,p11=%s', $p10, $p11)
+				EndIf
+			EndIf
+		EndIf
+		$call &= ')'
+		
 		DebuggerLog('[ERROR] Code[' & $errorCode[0] & '] on ' & $call)
 	EndIf
 	Return $result
@@ -504,3 +539,34 @@ SafeDllCall13($kernel_handle,	'ptr',	'VirtualAllocEx',				'handle',	GetProcessHa
 SafeDllCall13($kernel_handle,	'ptr',	'VirtualAllocEx',				'handle',	$processHandle,		'ptr',	0,												'ulong_ptr',	$memorySize,								'dword',	0x1000,								'dword',	0x40)
 
 #CE ===========================================================================
+
+; ==============================================================================
+; UTILS.AU3 COMPATIBILITY LOGGING WRAPPERS
+; ==============================================================================
+Func DebuggerOut($msg, $file = '', $trace = True)
+    DebuggerLog($msg)
+EndFunc
+
+Func Info($msg)
+    DebuggerOut("[INFO] " & $msg)
+EndFunc
+
+Func Warn($msg)
+    DebuggerOut("[WARN] " & $msg)
+EndFunc
+
+Func Error($msg)
+    DebuggerOut("[ERROR] " & $msg)
+EndFunc
+
+Func Debug($msg)
+    If $DEBUG_MODE Then DebuggerOut("[DEBUG] " & $msg)
+EndFunc
+
+Func Notice($msg)
+    Out("[NOTICE] " & $msg)
+EndFunc
+
+Func WarnOnce($msg)
+    Out("[WARN] " & $msg)
+EndFunc
