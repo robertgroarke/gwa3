@@ -1,5 +1,5 @@
 #include-once
-#include '..\GWA2.au3'
+#include '..\botshub\GWA2.au3'
 #include 'UsefulMods.au3'
 #include 'RareSkins.au3'
 

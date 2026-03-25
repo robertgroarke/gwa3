@@ -89,7 +89,7 @@ Func LaunchEvent()
 	If $clientIndex > 0 Then
 		SelectClient($clientIndex)
 		InitializeGameClientData(True, False)
-		$mBasePointer = MemoryRead(GetScannedAddress('ScanBasePointer', 8))
+		$mBasePointer = MemRead(GetScannedAddress('ScanBasePointer', 8))
 		WinSetTitle(GetWindowHandle(), '', 'Guild Wars - ' & GetCharacterName())
 		GUIDelete($Form1)
 		$g_BotHasLaunched = True
@@ -303,7 +303,7 @@ Func RunToDungeon()
       [14650, 19417, 0, "10"], _
       [12280, 22585, 0, "11"]]
 	MoveandAggroEx($aWaypoints)
-	ClearMemory()  ; Clean up DllStructs from MoveandAggroEx before continuing
+	ClearMem()  ; Clean up DllStructs from MoveandAggroEx before continuing
 
    If $GUI_RunCounter > 0 Then
 		GUI_SetAvgRunTime(AvgRunTime())
@@ -325,7 +325,7 @@ Func TakeQuest0()
 	Out("Starting Run Num: " & $GUI_RunCounter)
 
 	TolSleep(800)
-	ClearMemory()  ; Clear memory before heavy agent operations to prevent allocation errors
+	ClearMem()  ; Clear memory before heavy agent operations to prevent allocation errors
 	MoveTo(12396, 22407)
 	Out("Accept Quest")
 	
@@ -487,7 +487,7 @@ Func BogrootLvl2 ()
 
     AdlibUnregister("CurrentRunTime")
     Sleep(500)
-    ClearMemory()
+    ClearMem()
    AdlibUnregister("CurrentRunTime")
    TolSleep(3000)
 EndFunc
@@ -1145,20 +1145,20 @@ EndFunc
 
 Func GetSkillEffectPtr($aSkillID, $aHeroNumber = 0, $aHeroId = GetHeroID($aHeroNumber))
 	Local $lOffset[4] = [0, 24, 44, 1296]
-	Local $lCount = MemoryReadPtr($mBasePointer, $lOffset)
+	Local $lCount = MemReadPtr($mBasePointer, $lOffset)
 	ReDim $lOffset[5]
 	$lOffset[3] = 1288
 	Local $lBuffer
 	For $i = 0 To $lCount[1] - 1
 		$lOffset[4] = 36 * $i
-		$lBuffer = MemoryReadPtr($mBasePointer, $lOffset)
+		$lBuffer = MemReadPtr($mBasePointer, $lOffset)
 		If $lBuffer[1] = $aHeroId Then
 			$lOffset[4] = 28 + 36 * $i
-			Local $lEffectCount = MemoryReadPtr($mBasePointer, $lOffset)
+			Local $lEffectCount = MemReadPtr($mBasePointer, $lOffset)
 			$lOffset[4] = 20 + 36 * $i
-			Local $lEffectStructAddress = MemoryReadPtr($mBasePointer, $lOffset, 'ptr')
+			Local $lEffectStructAddress = MemReadPtr($mBasePointer, $lOffset, 'ptr')
 			For $J = 0 To $lEffectCount[1] - 1
-				Local $lEffectSkillID = MemoryRead($lEffectStructAddress[1] + 24 * $J, 'long')
+				Local $lEffectSkillID = MemRead($lEffectStructAddress[1] + 24 * $J, 'long')
 				If $lEffectSkillID = $aSkillID Then Return Ptr($lEffectStructAddress[1] + 24 * $J)
 			Next
 		EndIf
@@ -1172,7 +1172,7 @@ Func CountFreeSlots($NumOfBags = 4)
 	For $lBag = 1 To $NumOfBags
 		$lBagPtr = GetBagPtr($lBag)
 		If $lBagPtr = 0 Then ContinueLoop
-		$lCount += MemoryRead($lBagPtr + 32, "long") - MemoryRead($lBagPtr + 16, "long")
+		$lCount += MemRead($lBagPtr + 32, "long") - MemRead($lBagPtr + 16, "long")
 	Next
 	Return $lCount
 EndFunc
@@ -1235,7 +1235,7 @@ EndFunc
 
 ; Ported Helper: GetHP (Percentage)
 Func GetHP($aAgent = -2)
-	Return MemoryRead(GetAgentPtr($aAgent) + 304, 'float')
+	Return MemRead(GetAgentPtr($aAgent) + 304, 'float')
 EndFunc
 
 ; Ported Helper: GetIsKnocked Wrapper
@@ -1268,7 +1268,7 @@ EndFunc
 
 ; Ported Helper: IsWeaponRange
 Func IsWeaponRange($aSkill)
-    Local $lRange = MemoryRead(GetSkillPtr($aSkill) + 96, "long") ; Range offset
+    Local $lRange = MemRead(GetSkillPtr($aSkill) + 96, "long") ; Range offset
     Return $lRange > 0
 EndFunc
 
@@ -1375,7 +1375,7 @@ Func UseSkillSmart($aSkillSlot, $aTarget = -2, $aTimeout = 6000, $aSkillbarPtr =
 		If GetIsDead($aTarget) Then Return
 		If GetEnergy(-2) < $SkillBarCache[$aSkillSlot][$energyreq] Then Return
 	Until Not CanCast($aSkillSlot) Or TimerDiff($lDeadlock) > $aTimeout
-	Sleep(MemoryRead(GetSkillPtr($SkillbarSlot[$aSkillSlot]) + 64, "float") * 1000) ; Aftercast
+	Sleep(MemRead(GetSkillPtr($SkillbarSlot[$aSkillSlot]) + 64, "float") * 1000) ; Aftercast
 	Return True
 EndFunc
 
@@ -1636,10 +1636,10 @@ Func CacheSkillBar()
 		$SkillbarSlot[$aSkillID] = $i
 		$SkillBarCache[$i][$all] = $aSkillID
 		$SkillBarCache[$i][$ptr] = GetSkillPtr($aSkillID)
-		$SkillBarCache[$i][$energyreq] = MemoryRead($SkillBarCache[$i][$ptr] + 28, 'long') ; Offset guess
-		$SkillBarCache[$i][$adrereq] = MemoryRead($SkillBarCache[$i][$ptr] + 56, 'dword')
-		$SkillBarCache[$i][$type] = MemoryRead($SkillBarCache[$i][$ptr] + 12, "long")
-		$SkillBarCache[$i][$target] = MemoryRead($SkillBarCache[$i][$ptr] + 49, "byte")
+		$SkillBarCache[$i][$energyreq] = MemRead($SkillBarCache[$i][$ptr] + 28, 'long') ; Offset guess
+		$SkillBarCache[$i][$adrereq] = MemRead($SkillBarCache[$i][$ptr] + 56, 'dword')
+		$SkillBarCache[$i][$type] = MemRead($SkillBarCache[$i][$ptr] + 12, "long")
+		$SkillBarCache[$i][$target] = MemRead($SkillBarCache[$i][$ptr] + 49, "byte")
 		
 		If IsHexSpell($aSkillID) Then $SkillBarCache[$i][$hexes] = $aSkillID
 		If IsPressureSkill($aSkillID) Then $SkillBarCache[$i][$pressure] = $aSkillID
@@ -1700,7 +1700,7 @@ Func IsChantSkill($aSkill)
 EndFunc
 
 Func IsHealSkill($aSkill)
-	Switch MemoryRead(GetSkillPtr($aSkill) + 32, 'long')	; Effect 2
+	Switch MemRead(GetSkillPtr($aSkill) + 32, 'long')	; Effect 2
 		Case 2, 4, 6, 36, 38, 4102, 4096, 6144, 8196, 8198, 14336
 			Return True
 		Case Else
@@ -1860,27 +1860,27 @@ EndFunc
 ; Returns whether a skill is a hex spell
 Func IsHexSpell($aSkill)
 	If IsPtr($aSkill) <> 0 Then
-		Return MemoryRead($aSkill + 12, "long") = $Hex
+		Return MemRead($aSkill + 12, "long") = $Hex
 	ElseIf IsDllStruct($aSkill) <> 0 Then
 		Return DllStructGetData($aSkill, "Type") = $Hex
 	Else
-		Return MemoryRead(GetSkillPtr($aSkill) + 12, "long") = $Hex
+		Return MemRead(GetSkillPtr($aSkill) + 12, "long") = $Hex
 	EndIf
 EndFunc   ;==>IsHexSpell
 
 ; Returns whether a skill is a condition spell
 Func IsConditionSpell($aSkill)
 	If IsPtr($aSkill) <> 0 Then
-		Return MemoryRead($aSkill + 12, "long") = $Condition
+		Return MemRead($aSkill + 12, "long") = $Condition
 	ElseIf IsDllStruct($aSkill) <> 0 Then
 		Return DllStructGetData($aSkill, "Type") = $Condition
 	Else
-		Return MemoryRead(GetSkillPtr($aSkill) + 12, "long") = $Condition
+		Return MemRead(GetSkillPtr($aSkill) + 12, "long") = $Condition
 	EndIf
 EndFunc   ;==>IsConditionSpell
 
 Func IsRuptSkill($aSkill, $hardrupt = False)
-	Local $lSkillEffect2 = MemoryRead(GetSkillPtr($aSkill) + 32, 'long')
+	Local $lSkillEffect2 = MemRead(GetSkillPtr($aSkill) + 32, 'long')
 	Local $lSkillID = ID($aSkill)
 	If BitAND($lSkillEffect2, 1) Then Return True
 
@@ -1904,11 +1904,11 @@ EndFunc   ;==>IsHardRuptSkill
 
 Func IsDisguiseskill($aSkill)
 	If IsPtr($aSkill) <> 0 Then
-		Return MemoryRead($aSkill + 12, "long") = $Disguise
+		Return MemRead($aSkill + 12, "long") = $Disguise
 	ElseIf IsDllStruct($aSkill) <> 0 Then
 		Return DllStructGetData($aSkill, "Type") = $Disguise
 	Else
-		Return MemoryRead(GetSkillPtr($aSkill) + 12, "long") = $Disguise
+		Return MemRead(GetSkillPtr($aSkill) + 12, "long") = $Disguise
 	EndIf
 EndFunc   ;==>IsDisguiseskill
 
@@ -1936,7 +1936,7 @@ Func ID($aAgent = -2)
 	If $aAgent = -2 Then Return GetMyID()
 	; Handle pointers (from GetAgentPtr)
 	If IsPtr($aAgent) Then
-		Return MemoryRead($aAgent + 44, 'long')
+		Return MemRead($aAgent + 44, 'long')
 	; Handle DllStruct (from GetAgentByID)
 	ElseIf IsDllStruct($aAgent) Then
 		Return DllStructGetData($aAgent, 'ID')
@@ -1969,23 +1969,23 @@ EndFunc
 
 Func GetHasEnchantment($aAgent)
 	; Alias for GetIsEnchanted logic
-	Return BitAND(MemoryRead(GetAgentPtr($aAgent) + 312, "long"), 0x0080) > 0
+	Return BitAND(MemRead(GetAgentPtr($aAgent) + 312, "long"), 0x0080) > 0
 EndFunc
 
 Func GetEffectsPtr($aSkillID = 0, $aHeroNumber = 0, $aHeroId = GetHeroID($aHeroNumber))
 	Local $lEffectCount, $lEffectStructAddress, $lBuffer
 	Local $lOffset[4] = [0, 24, 44, 1296]
-	Local $lCount = MemoryReadPtr($mBasePointer, $lOffset)
+	Local $lCount = MemReadPtr($mBasePointer, $lOffset)
 	ReDim $lOffset[5]
 	$lOffset[3] = 1288
 	For $i = 0 To $lCount[1] - 1
 		$lOffset[4] = 36 * $i
-		$lBuffer = MemoryReadPtr($mBasePointer, $lOffset)
+		$lBuffer = MemReadPtr($mBasePointer, $lOffset)
 		If $lBuffer[1] = $aHeroId Then
 			$lOffset[4] = 28 + 36 * $i
-			$lEffectCount = MemoryReadPtr($mBasePointer, $lOffset)
+			$lEffectCount = MemReadPtr($mBasePointer, $lOffset)
 			$lOffset[4] = 20 + 36 * $i
-			$lEffectStructAddress = MemoryReadPtr($mBasePointer, $lOffset, 'ptr')
+			$lEffectStructAddress = MemReadPtr($mBasePointer, $lOffset, 'ptr')
 			If $aSkillID = 0 Then Return $lEffectStructAddress[1]
 			; Logic for specific ID omitted for basic Ptr return
 		EndIf
@@ -1994,24 +1994,24 @@ Func GetEffectsPtr($aSkillID = 0, $aHeroNumber = 0, $aHeroId = GetHeroID($aHeroN
 EndFunc
 
 Func IsSelfHealSkill($aSkill)    ; healing skills that can be used on self
-	Return IsPartyHealSkill($aSkill) And MemoryRead(GetSkillPtr($aSkill) + 49, "byte") <> 4
+	Return IsPartyHealSkill($aSkill) And MemRead(GetSkillPtr($aSkill) + 49, "byte") <> 4
 EndFunc
 
 Func IsSelfOnlyHealSkill($aSkill)    ; healing skills that can be used on self
-	Return IsPartyHealSkill($aSkill) And MemoryRead(GetSkillPtr($aSkill) + 49, "byte") = 0
+	Return IsPartyHealSkill($aSkill) And MemRead(GetSkillPtr($aSkill) + 49, "byte") = 0
 EndFunc
 
 Func IsHealOtherSkill($aSkill)    ; healing skills that can only be used on others
-	Return IsPartyHealSkill($aSkill) And MemoryRead(GetSkillPtr($aSkill) + 49, "byte") = 4
+	Return IsPartyHealSkill($aSkill) And MemRead(GetSkillPtr($aSkill) + 49, "byte") = 4
 EndFunc
 
 Func IsHealMySelfSkill($aSkill)
-	Local $lSkillType = MemoryRead(GetSkillPtr($aSkill) + 12, "long")
+	Local $lSkillType = MemRead(GetSkillPtr($aSkill) + 12, "long")
 	Return BitAND($lSkillType, 4)
 EndFunc
 
 Func IsHealAllySkill($aSkill)
-	Local $lSkillType = MemoryRead(GetSkillPtr($aSkill) + 12, "long")
+	Local $lSkillType = MemRead(GetSkillPtr($aSkill) + 12, "long")
 	Return BitAND($lSkillType, 2)
 EndFunc
 
@@ -2044,7 +2044,7 @@ Func GetAdrenaline($aSkillSlot)
     Local $aSkillbarPtr = GetSkillbarPtr()
     If $aSkillbarPtr = 0 Then Return 0
     $aSkillSlot -= 1
-    Return MemoryRead($aSkillbarPtr + 4 + $aSkillSlot * 20, "long")
+    Return MemRead($aSkillbarPtr + 4 + $aSkillSlot * 20, "long")
 EndFunc
 
 
@@ -2053,11 +2053,11 @@ EndFunc
 ; Ported Dependency for GetAdrenaline
 Func GetSkillbarPtr($aHeroNumber = 0)
     Local $lOffset[5] = [0, 24, 76, 84, 44]
-    Local $lHeroCount = MemoryReadPtr($mBasePointer, $lOffset)
+    Local $lHeroCount = MemReadPtr($mBasePointer, $lOffset)
     Local $lOffset2[5] = [0, 24, 44, 1776, 0] ; Re-dimensioned for 5 elements
     For $i = 0 To $lHeroCount[1]
         $lOffset2[4] = $i * 188
-        Local $lSkillbarStructAddress = MemoryReadPtr($mBasePointer, $lOffset2)
+        Local $lSkillbarStructAddress = MemReadPtr($mBasePointer, $lOffset2)
         If $lSkillbarStructAddress[1] = GetHeroID($aHeroNumber) Then Return $lSkillbarStructAddress[0]
     Next
     Return 0
