@@ -69,19 +69,7 @@ Func ManageInventory()
 EndFunc
 
 
-;~ Move to Xunlai Chest and open it
-Func GoToXunlaiChest($town = $ID_EYE_OF_THE_NORTH)
-	TravelToOutpost($town)
-	Info('Moving to Xunlai Chest')
-	UseCitySpeedBoost()
-	
-	Local $NPCCoordinates = NPCCoordinatesInTown($town, 'Xunlai chest')
-	MoveTo($NPCCoordinates[0], $NPCCoordinates[1])
-	
-	Local $chest = GetNearestNPCToCoords($NPCCoordinates[0], $NPCCoordinates[1])
-	GoToNPC($chest)
-	RandomSleep(500)
-EndFunc
+; GoToXunlaiChest() moved to custom/NPC_Coordinates.au3
 
 
 ;~ Function to deal with inventory before farm run
@@ -637,100 +625,7 @@ Func HasInInventory($condition)
 EndFunc
 
 
-Func NPCCoordinatesInTown($town = $ID_EYE_OF_THE_NORTH, $type = 'Merchant', $name = '')
-	Local $coordinates[2] = [-1, -1]
-	Switch $type
-		Case 'Merchant'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2233
-					$coordinates[1] = -2009
-				Case $ID_EYE_OF_THE_NORTH
-					$coordinates[0] = -2700
-					$coordinates[1] = 1075
-				Case $ID_GADDS_CAMP
-					; Gadd's Encampment Merchant
-					$coordinates[0] = -8374
-					$coordinates[1] = -22491
-				Case Else
-					Warn('For provided town coordinates of that NPC aren''t mapped yet')
-			EndSwitch
-		Case 'Basic material trader'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2933
-					$coordinates[1] = -2236
-				Case $ID_EYE_OF_THE_NORTH
-					$coordinates[0] = -1850
-					$coordinates[1] = 875
-				Case $ID_GADDS_CAMP
-					; Gadd's Encampment Basic Material Trader
-					$coordinates[0] = -9097
-					$coordinates[1] = -23353
-				Case Else
-					Warn('For provided town coordinates of that NPC aren''t mapped yet')
-			EndSwitch
-		Case 'Rare material trader'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2865
-					$coordinates[1] = -2406
-				Case $ID_EYE_OF_THE_NORTH
-					$coordinates[0] = -2100
-					$coordinates[1] = 1125
-				Case $ID_GADDS_CAMP
-					; Gadd's Encampment Rare Material Trader
-					$coordinates[0] = -9136
-					$coordinates[1] = -23153
-				Case Else
-					Warn('For provided town coordinates of that NPC aren''t mapped yet')
-			EndSwitch
-		;Case 'Dye trader'
-		;Case 'Scroll trader'
-		Case 'Consumables trader'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					Switch $name
-						Case 'Edwin'
-							$coordinates[0] = 3515
-							$coordinates[1] = 369
-						Case 'Kwat'
-							$coordinates[0] = 3596
-							$coordinates[1] = 107
-						Case 'Alcus Nailbiter'
-							$coordinates[0] = 3704
-							$coordinates[1] = -163
-						Case 'Eyja', ''
-							$coordinates[0] = 3336
-							$coordinates[1] = 627
-						Case Else
-							Warn('Unknown Consumables Trader name: ' & $name)
-							; Default to Eyja
-							$coordinates[0] = 3336
-							$coordinates[1] = 627
-					EndSwitch
-				Case Else
-					Warn('For provided town coordinates of that NPC aren''t mapped yet')
-			EndSwitch
-		;Case 'Armorer'
-		;Case 'Weaponsmith'
-		Case 'Xunlai chest'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2283
-					$coordinates[1] = -2134
-				Case $ID_GADDS_CAMP
-					$coordinates[0] = -10481
-					$coordinates[1] = -22787
-				Case Else
-					Warn('For provided town coordinates of that NPC aren''t mapped yet')
-			EndSwitch
-		;Case 'Skill trainer'
-		Case Else
-			Warn('Wrong NPC type provided')
-	EndSwitch
-	Return $coordinates
-EndFunc
+; NPCCoordinatesInTown() moved to custom/NPC_Coordinates.au3
 
 
 ;~ Sell basic materials to materials merchant in town
