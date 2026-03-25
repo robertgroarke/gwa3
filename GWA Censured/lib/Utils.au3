@@ -2684,9 +2684,9 @@ Func IsPlayerAlive()
 EndFunc
 
 
-Func IsPlayerDead()
-	Return BitAND(DllStructGetData(GetMyAgent(), 'Effects'), 0x0010) > 0
-EndFunc
+; Func IsPlayerDead()
+; 	Return BitAND(DllStructGetData(GetMyAgent(), 'Effects'), 0x0010) > 0
+; EndFunc
 
 
 Func IsHeroAlive($heroIndex)
@@ -2694,9 +2694,9 @@ Func IsHeroAlive($heroIndex)
 EndFunc
 
 
-Func IsHeroDead($heroIndex)
-	Return BitAND(DllStructGetData(GetAgentById(GetHeroID($heroIndex)), 'Effects'), 0x0010) > 0
-EndFunc
+; Func IsHeroDead($heroIndex)
+; 	Return BitAND(DllStructGetData(GetAgentById(GetHeroID($heroIndex)), 'Effects'), 0x0010) > 0
+; EndFunc
 
 
 Func IsPlayerAndPartyWiped()

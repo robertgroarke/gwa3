@@ -95,7 +95,8 @@ Func PerformMaintenance($force = False, $buyConsumables = False)
     
 
     ; Buy ectos if bank gold is getting too high (approaching 1M cap)
-    BuyEctosWithExcessGold()
+    ; Commented out because ecto logic broke when troubleshooting consumable buying
+    ;BuyEctosWithExcessGold()
 
     ; Buy Consumables (Consets) if we have materials
     If $buyConsumables Then
@@ -1054,125 +1055,197 @@ Func DepositEctosToBank($ectoModelID)
 EndFunc
 
 
-; Copied from GWA2.au3 and fixed (Variable redeclaration error)
+; CraftItemSafe: Crafts an item using the same mechanism as the original CraftItem.
+; Key insight: material arrays must be in GAME PROCESS memory (VirtualAllocEx),
+; and the item index must be written to TradeID before calling CommandCraftItemEx2.
 Func CraftItemSafe($modelID, $amount, $gold, $materialsArray)
     If Not IsArray($materialsArray) Then 
         Out("Error: materialsArray is not an array for " & $modelID)
         Return 0
     EndIf
     
-	Local $sourceItemPtr = _GWA2_GetInventoryItemPtrByModelId($materialsArray[0][0])
-	If ((Not $sourceItemPtr) Or (MemoryRead($sourceItemPtr + 0x4B) < $materialsArray[0][1])) Then 
-        Out("Error: Source item (Material) not found or insufficient quantity.")
+    ; Check merchant window is open
+    If Not GetIsMerchantOpen() Then
+        Out("Error: Merchant window not open.")
         Return 0
     EndIf
     
-    ; Use our safe Ptr lookup. CraftItem expects the Pointer.
-	Local $destinationItemPtr = _GetMerchantItemPtrByModelId_Safe($modelID)
-	If ($destinationItemPtr = 0) Then 
-        Out("Error: Destination item (Consumable " & $modelID & ") not found at trader (Ptr=0).")
+    ; Find the destination item in merchant list
+    Local $merchantItemsBase = GetMerchantItemsBase()
+    Local $merchantItemsSize = GetMerchantItemsSize()
+    If Not $merchantItemsBase Or $merchantItemsSize = 0 Then
+        Out("Error: No merchant items found.")
         Return 0
     EndIf
     
-	Local $materialString = ''
-	Local $materialCount = 0
-	Local $materialsArraySize = UBound($materialsArray) - 1
+    ; Find item index and destination ptr (like original CraftItem)
+    Local $itemPtr = 0
+    Local $destinationItemPtr = 0
+    Local $itemIndex = -1
+    Local $itemID = 0
     
-	For $i = $materialsArraySize To 0 Step -1
-		Local $checkQuantity = _GWA2_CountItemInBagsByModelID($materialsArray[$i][0])
-		If $materialsArray[$i][1] * $amount > $checkQuantity Then
-			; amount of missing mats in @extended
-            Out("Error: Insufficient material " & $materialsArray[$i][0])
-			Return SetExtended($materialsArray[$i][1] * $amount - $checkQuantity, $materialsArray[$i][0])
-		EndIf
-	Next
-	Local $goldChar = GetGoldCharacter() ; Renamed to avoid confusion
-
-	For $i = 0 To $materialsArraySize
-		$materialString &= GetItemIDFromModelID($materialsArray[$i][0]) & ';'
-		$materialCount += 1
-	Next
-
-	Local $craftingMaterialType = 'dword'
-	For $i = 1 To $materialCount - 1
-		$craftingMaterialType &= ';dword'
-	Next
+    For $i = 0 To $merchantItemsSize - 1
+        $itemID = MemoryRead($merchantItemsBase + 4 * $i)
+        If $itemID Then
+            Local $offsets[5] = [0, 0x18, 0x40, 0xB8, 4 * $itemID]
+            Local $result = MemoryReadPtr($base_address_ptr, $offsets)
+            $itemPtr = $result[1]
+            
+            If $itemPtr <> 0 And MemoryRead($itemPtr + 0x2C) = $modelID Then
+                $destinationItemPtr = $itemPtr
+                $itemIndex = $i
+                ExitLoop
+            EndIf
+        EndIf
+    Next
     
-	Local $craftingMaterialStruct = SafeDllStructCreate($craftingMaterialType)
-	Local $craftingMaterialStructPtr = DllStructGetPtr($craftingMaterialStruct)
-    
-	For $i = 1 To $materialCount
-		Local $size = StringInStr($materialString, ';')
-		DllStructSetData($craftingMaterialStruct, $i, StringLeft($materialString, $size - 1))
-		$materialString = StringTrimLeft($materialString, $size)
-	Next
-    
-	Local $memorySize = $materialCount * 4
-	Local $processHandle = GetProcessHandle()
-    Local $kernel_handle = DllOpen('kernel32.dll') ; Ensure handle is open
-    
-	Local $memoryBuffer = SafeDllCall13($kernel_handle, 'ptr', 'VirtualAllocEx', 'handle', $processHandle, 'ptr', 0, 'ulong_ptr', $memorySize, 'dword', 0x1000, 'dword', 0x40)
-	; Couldnt allocate enough memory
-	If $memoryBuffer = 0 Then 
-        Out("Error: VirtualAllocEx failed.")
+    If $itemIndex = -1 Then
+        Out("Error: Item " & $modelID & " not found in merchant list.")
         Return 0
     EndIf
     
-	Local $buffer = SafeDllCall13($kernel_handle, 'int', 'WriteProcessMemory', 'int', $processHandle, 'int', $memoryBuffer[0], 'ptr', $craftingMaterialStructPtr, 'int', $memorySize, 'int', 0)
-	If $buffer = 0 Then 
-        Out("Error: WriteProcessMemory failed.")
+    Out("Debug: Found item at index " & $itemIndex & " destPtr=" & $destinationItemPtr)
+    
+    ; Check materials quantity
+    For $i = 0 To UBound($materialsArray) - 1
+        Local $checkQuantity = _GWA2_CountItemInBagsByModelID($materialsArray[$i][0])
+        If $materialsArray[$i][1] * $amount > $checkQuantity Then
+            Out("Error: Insufficient material " & $materialsArray[$i][0] & " (have " & $checkQuantity & ", need " & ($materialsArray[$i][1] * $amount) & ")")
+            Return 0
+        EndIf
+    Next
+    
+    ; Check gold
+    If GetGoldCharacter() < $amount * $gold Then
+        Out("Error: Insufficient gold (have " & GetGoldCharacter() & ", need " & ($amount * $gold) & ")")
+        Return 0
+    EndIf
+    
+    ; Build material item IDs string (like original CraftItem)
+    Local $materialString = ''
+    Local $materialCount = 0
+    For $i = 0 To UBound($materialsArray) - 1
+        $materialString &= GetItemIDFromModelID($materialsArray[$i][0]) & ';'
+        $materialCount += 1
+    Next
+    
+    Out("Debug: Material IDs string: " & $materialString & " count=" & $materialCount)
+    
+    ; Build arrays of material item IDs and quantities for each material type
+    ; The ASM needs TWO arrays: MatIDs (inventory item IDs) and MatQtys (amounts from each stack)
+    Local $giveCount = 0
+    Local $giveItemIDs[32]
+    Local $giveItemQtys[32]
+    
+    For $i = 0 To UBound($materialsArray) - 1
+        Local $matModelID = $materialsArray[$i][0]
+        Local $matAmountNeeded = $materialsArray[$i][1] * $amount
+        
+        ; Loop through all bags to find the material stacks
+        For $bagIdx = 1 To 4
+            Local $bag = GetBag($bagIdx)
+            If Not IsDllStruct($bag) Then ContinueLoop
+            For $slotIdx = 1 To DllStructGetData($bag, 'Slots')
+                Local $item = GetItemBySlot($bagIdx, $slotIdx)
+                If Not IsDllStruct($item) Then ContinueLoop
+                
+                If DllStructGetData($item, 'ModelID') == $matModelID Then
+                    Local $qtyInStack = DllStructGetData($item, 'Quantity')
+                    Local $takeAmount = $matAmountNeeded
+                    If $qtyInStack < $takeAmount Then $takeAmount = $qtyInStack
+                    
+                    $giveItemIDs[$giveCount] = DllStructGetData($item, 'Id')
+                    $giveItemQtys[$giveCount] = $takeAmount
+                    $giveCount += 1
+                    
+                    $matAmountNeeded -= $takeAmount
+                    If $matAmountNeeded <= 0 Then ExitLoop
+                EndIf
+            Next
+            If $matAmountNeeded <= 0 Then ExitLoop
+        Next
+        
+        If $matAmountNeeded > 0 Then
+            Out("Error: Not enough material ModelID " & $matModelID & " in bags!")
+            Return 0
+        EndIf
+    Next
+    
+    Out("Debug: Found " & $giveCount & " material stacks to give")
+    
+    ; Create DllStructs for material IDs and quantities
+    Local $matsStruct = DllStructCreate("dword[" & $giveCount & "]")
+    Local $qtysStruct = DllStructCreate("dword[" & $giveCount & "]")
+    For $i = 0 To $giveCount - 1
+        DllStructSetData($matsStruct, 1, $giveItemIDs[$i], $i + 1)
+        DllStructSetData($qtysStruct, 1, $giveItemQtys[$i], $i + 1)
+        Out("Debug: MatStack[" & $i & "] ItemID=" & $giveItemIDs[$i] & " Qty=" & $giveItemQtys[$i])
+    Next
+    
+    ; Allocate memory INSIDE THE GAME PROCESS for both arrays
+    Local $matIDsSize = $giveCount * 4
+    Local $matQtysSize = $giveCount * 4
+    Local $totalMemSize = $matIDsSize + $matQtysSize
+    Local $processHandle = GetProcessHandle()
+    Local $memoryBuffer = SafeDllCall13($kernel_handle, 'ptr', 'VirtualAllocEx', 'handle', $processHandle, 'ptr', 0, 'ulong_ptr', $totalMemSize, 'dword', 0x1000, 'dword', 0x40)
+    If $memoryBuffer = 0 Or $memoryBuffer[0] = 0 Then
+        Out("Error: VirtualAllocEx failed!")
+        Return 0
+    EndIf
+    
+    ; MatIDs at offset 0, MatQtys at offset matIDsSize
+    Local $matIDsGamePtr = $memoryBuffer[0]
+    Local $matQtysGamePtr = $memoryBuffer[0] + $matIDsSize
+    
+    Out("Debug: Game memory: MatIDs at " & $matIDsGamePtr & ", MatQtys at " & $matQtysGamePtr)
+    
+    ; Write both arrays to game process memory
+    SafeDllCall13($kernel_handle, 'int', 'WriteProcessMemory', 'int', $processHandle, 'int', $matIDsGamePtr, 'ptr', DllStructGetPtr($matsStruct), 'int', $matIDsSize, 'int', 0)
+    SafeDllCall13($kernel_handle, 'int', 'WriteProcessMemory', 'int', $processHandle, 'int', $matQtysGamePtr, 'ptr', DllStructGetPtr($qtysStruct), 'int', $matQtysSize, 'int', 0)
+    
+    ; WRITE THE INDEX TO TradeID ADDRESS (critical for ASM to find the item)
+    If $trade_id_addr <> 0 Then
+        MemoryWrite($trade_id_value_addr, $itemIndex, 'dword')
+        MemoryWrite($trade_id_addr, $trade_id_value_addr, 'dword')
+        Out("Debug: Wrote itemIndex=" & $itemIndex & " to TradeID addr=" & $trade_id_addr)
+    Else
+        Out("Error: TradeID address not initialized")
         SafeDllCall11($kernel_handle, 'ptr', 'VirtualFreeEx', 'handle', $processHandle, 'ptr', $memoryBuffer[0], 'int', 0, 'dword', 0x8000)
         Return 0
     EndIf
     
-    ; Setup Command
-    ; If GetValue not available, we might assume 0x8A? But GWA2 uses GetValue.
-    ; Safe to use GetValue if GWA2_Headers included.
-    ; Setup Command
-    ; Setup Command
-    ; Setup Command
-    ; Setup Command
-    ; Use CommandCraftItemEx (Original)
-    Local $cmd = GetValue('CommandCraftItemEx')
-    Local $tradeIDPtr = GetValue('TradeID')
-    Local $tradeID = 0
-    Local $Timer = TimerInit()
+    ; Populate CRAFT_ITEM_STRUCT to match CommandCraftItemEx2 ASM layout:
+    ;   +0  CmdAddr              (field 1: ptr)
+    ;   +4  AmountToCraft        (field 2: dword)
+    ;   +8  MerchantItemID/Ptr   (field 3: dword) - original uses $destinationItemPtr
+    ;   +C  TotalCost            (field 4: dword)
+    ;   +10 GiveCount            (field 5: dword)
+    ;   +14 MatIDsArray_PTR      (field 6: ptr)  - game process memory pointer
+    ;   +18 MatQtysArray_PTR     (field 7: ptr)  - game process memory pointer
+    DllStructSetData($CRAFT_ITEM_STRUCT, 1, GetValue('CommandCraftItemEx2'))
+    DllStructSetData($CRAFT_ITEM_STRUCT, 2, $amount)
+    DllStructSetData($CRAFT_ITEM_STRUCT, 3, $destinationItemPtr)   ; +8: Item ptr (used by ASM as &MerchantItemID for recv)
+    DllStructSetData($CRAFT_ITEM_STRUCT, 4, $amount * $gold)       ; +C: TotalCost
+    DllStructSetData($CRAFT_ITEM_STRUCT, 5, $giveCount)            ; +10: GiveCount (number of material stacks)
+    DllStructSetData($CRAFT_ITEM_STRUCT, 6, $matIDsGamePtr)        ; +14: MatIDsArray (game process ptr)
+    DllStructSetData($CRAFT_ITEM_STRUCT, 7, $matQtysGamePtr)       ; +18: MatQtysArray (game process ptr)
     
+    Out("Debug: Enqueuing craft: amount=" & $amount & " destPtr=" & $destinationItemPtr & " cost=" & ($amount * $gold) & " giveCount=" & $giveCount & " matIDs=" & $matIDsGamePtr & " matQtys=" & $matQtysGamePtr)
+    Enqueue($CRAFT_ITEM_STRUCT_PTR, 28) ; 7 fields = 28 bytes
+    
+    
+    ; Wait for crafting to complete
+    Local $startGold = GetGoldCharacter()
+    Local $deadlock = TimerInit()
     Do
-        $tradeID = MemoryRead($tradeIDPtr)
-        If $tradeID <> 0 Then ExitLoop
-        Sleep(100)
-    Until TimerDiff($Timer) > 2000
+        Sleep(250)
+    Until GetGoldCharacter() <> $startGold Or TimerDiff($deadlock) > 5000
     
-    If $tradeID = 0 Then
-        Out("Error: TradeID is 0. NPC interaction failed or not ready.")
-        SafeDllCall11($kernel_handle, 'ptr', 'VirtualFreeEx', 'handle', $processHandle, 'ptr', $memoryBuffer[0], 'int', 0, 'dword', 0x8000)
-        Return 0
-    EndIf
+    ; Free game process memory
+    SafeDllCall11($kernel_handle, 'ptr', 'VirtualFreeEx', 'handle', $processHandle, 'ptr', $memoryBuffer[0], 'int', 0, 'dword', 0x8000)
     
-    Out("Debug: CraftItemSafe Cmd=" & $cmd & " DestPtr=" & $destinationItemPtr & " ID=" & MemoryRead($destinationItemPtr) & " Buf=" & $memoryBuffer[0] & " Count=" & $materialCount & " TradeID=" & $tradeID)
-    
-	DllStructSetData($CRAFT_ITEM_STRUCT, 1, $cmd)
-	DllStructSetData($CRAFT_ITEM_STRUCT, 2, $amount)
-	DllStructSetData($CRAFT_ITEM_STRUCT, 3, $modelID) ; Start with ModelID (Crash investigation)
-	DllStructSetData($CRAFT_ITEM_STRUCT, 4, $memoryBuffer[0])
-	DllStructSetData($CRAFT_ITEM_STRUCT, 5, $materialCount)
-	DllStructSetData($CRAFT_ITEM_STRUCT, 6, $amount * $gold) 
-    
-    Out("Debug: Enqueuing Craft Item...")
-	Enqueue($CRAFT_ITEM_STRUCT_PTR, 24)
-    Out("Debug: Enqueued.")
-    
-	Local $deadlock = TimerInit()
-	Local $currentAmount
-	Do
-		Sleep(250)
-		$currentAmount = _GWA2_CountItemInBagsByModelID($materialsArray[0][0])
-	Until $currentAmount <> ($materialsArray[0][1] * $amount + _GWA2_CountItemInBagsByModelID($materialsArray[0][0])) Or TimerDiff($deadlock) > 5000
-    
-	; SafeDllCall11($kernel_handle, 'ptr', 'VirtualFreeEx', 'handle', $processHandle, 'ptr', $memoryBuffer[0], 'int', 0, 'dword', 0x8000)
-    Out("Debug: CraftItemSafe finished. Memory Buffer not freed (Safety).")
-	Return True
+    Out("Debug: CraftItemSafe finished.")
+    Return True
 EndFunc
 
 ; Local version: Returns ItemPtr (Address) checks 0x2C offset

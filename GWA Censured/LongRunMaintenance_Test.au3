@@ -94,11 +94,10 @@ Func RunMaintenanceTest()
         Out("Starting maintenance run...")
         
         ; Call the actual maintenance function from Utils-Maintenance.au3
-        PerformMaintenance(True, True)
+        ; PerformMaintenance(True, True)
         
-        Out("--- TESTING CONSUMABLE BUYING ---")
-        UpdateInventory()
-        BuyConsumablesInEmbarkBeach()
+        Out("--- TESTING CONSUMABLE BUYING ONLY ---")
+        buyConsumablesInEmbarkBeach()
         
         Out("Maintenance run complete!")
     Else

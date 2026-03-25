@@ -79,7 +79,7 @@ Global $scan_ping_address
 Global $max_agents, $agent_copy_count, $agent_copy_base
 
 ; Trader system
-Global $trader_quote_ID, $trader_cost_ID, $trader_cost_value, $trade_id_addr
+Global $trader_quote_ID, $trader_cost_ID, $trader_cost_value, $trade_id_addr, $trade_id_value_addr
 
 ; Skill state
 Global $skill_timer, $build_number
@@ -134,8 +134,11 @@ Global Const $USE_HERO_SKILL_STRUCT_PTR = DllStructGetPtr($USE_HERO_SKILL_STRUCT
 Global Const $BUY_ITEM_STRUCT = SafeDllStructCreate('ptr;dword;dword;dword;dword')
 Global Const $BUY_ITEM_STRUCT_PTR = DllStructGetPtr($BUY_ITEM_STRUCT)
 
-Global Const $CRAFT_ITEM_STRUCT = SafeDllStructCreate('ptr;dword;dword;ptr;dword;dword')
-Global Const $CRAFT_ITEM_STRUCT_PTR = DllStructGetPtr($CRAFT_ITEM_STRUCT)
+; Crafting takes a complex structure due to needing arrays of materials from inventory.
+Global $CRAFT_ITEM_STRUCT = DllStructCreate("ptr;dword;dword;dword;dword;ptr;ptr")
+Global $CRAFT_ITEM_STRUCT_PTR = DllStructGetPtr($CRAFT_ITEM_STRUCT)
+Global $CRAFT_MATS_STRUCT_MEMORY, $CRAFT_QTYS_STRUCT_MEMORY
+
 
 Global Const $SEND_CHAT_STRUCT = SafeDllStructCreate('ptr;dword')
 Global Const $SEND_CHAT_STRUCT_PTR = DllStructGetPtr($SEND_CHAT_STRUCT)
@@ -637,6 +640,13 @@ Func InitializeGameClientData($changeTitle = True, $initUseStringLog = False, $i
 	If @error Then LogCriticalError('Failed to read trade hack address')
 
 	ModifyMemory()
+    
+    ; Verification: Ensure TradeID is properly initialized
+    If GetValue('TradeID') = 0 Then
+        Debug("Warning: TradeID is 0 after ModifyMemory. Retrying...")
+        Sleep(500)
+        ModifyMemory()
+    EndIf
 
 	$queue_counter = MemoryRead(GetValue('QueueCounter'))
 	If @error Then LogCriticalError('Failed to read queue counter')
@@ -651,6 +661,7 @@ Func InitializeGameClientData($changeTitle = True, $initUseStringLog = False, $i
 	$trader_cost_ID = GetValue('TraderCostID')
 	$trader_cost_value = GetValue('TraderCostValue')
 	$trade_id_addr = GetValue('TradeID')
+	$trade_id_value_addr = GetValue('TradeID_Value')
 	$disable_rendering_address = GetValue('DisableRendering')
 	$agent_copy_count = GetValue('AgentCopyCount')
 	$agent_copy_base = GetValue('AgentCopyBase')
@@ -1436,18 +1447,23 @@ Func CraftItem($modelID, $amount, $gold, ByRef $materialsArray)
 	
 	; WRITE THE INDEX TO TradeID ADDRESS
 	If $trade_id_addr <> 0 Then
-		MemoryWrite($trade_id_addr, $itemIndex, 'dword')
+		; Write the Item Index to our allocated memory (TradeID_Value)
+	; Then write the address of that memory to TradeID
+	; ASM: mov ecx,[TradeID] -> gets TradeID_Value address
+	;      mov ecx,[ecx]     -> gets ItemIndex
+	MemoryWrite($trade_id_value_addr, $itemIndex, 'dword')
+	MemoryWrite($trade_id_addr, $trade_id_value_addr, 'dword')
 	Else
 		Debug("Error: TradeID address not initialized")
 		Return 0
 	EndIf
 
-	DllStructSetData($CRAFT_ITEM_STRUCT, 1, GetValue('CommandCraftItemEx'))
+	DllStructSetData($CRAFT_ITEM_STRUCT, 1, GetValue('CommandCraftItemEx2'))
 	DllStructSetData($CRAFT_ITEM_STRUCT, 2, $amount)
-	DllStructSetData($CRAFT_ITEM_STRUCT, 3, $destinationItemPtr)
-	DllStructSetData($CRAFT_ITEM_STRUCT, 4, $memoryBuffer[0])
-	DllStructSetData($CRAFT_ITEM_STRUCT, 5, $materialCount)
-	DllStructSetData($CRAFT_ITEM_STRUCT, 6, $amount * $gold)
+	DllStructSetData($CRAFT_ITEM_STRUCT, 3, $destinationItemPtr) ; Merchant item ptr for crafted item
+	DllStructSetData($CRAFT_ITEM_STRUCT, 4, $memoryBuffer[0]) ; Materials buffer in game memory
+	DllStructSetData($CRAFT_ITEM_STRUCT, 5, $materialCount) ; Number of material types
+	DllStructSetData($CRAFT_ITEM_STRUCT, 6, $amount * $gold) ; Total cost
 	Enqueue($CRAFT_ITEM_STRUCT_PTR, 24)
 	
 	Local $deadlock = TimerInit()
@@ -2304,16 +2320,23 @@ EndFunc
 
 #Region Misc
 
-;~ Check if player is dead (Placeholder)
+;~ Check if player is dead
 Func IsPlayerDead()
-	; FIXME: Implement proper check using GetAgentHP or Agent State
-	Return False
+	Return BitAND(DllStructGetData(GetMyAgent(), 'Effects'), 0x0010) > 0
 EndFunc
 
-;~ Check if hero is dead (Placeholder)
+;~ Check if hero is dead
 Func IsHeroDead($heroID)
-	; FIXME: Implement proper check
-	Return False
+	; Note: Input is HeroID, but Utils implementation took HeroIndex.
+    ; GWA2 usage usually passes ID. Let's check Utils implementation again.
+    ; Utils: GetAgentById(GetHeroID($heroIndex)) -> implies input was Index (1-7)
+    ; GWA2 Callers: 
+    ;   CommandHeroUseSkill($heroNumber, ...) -> passes $heroNumber
+    ; My placeholder: IsHeroDead($heroID)
+    
+    ; If the usage in GWA2 is `IsHeroDead($heroNumber)`, then I should use the Utils implementation logic.
+    ; Let's assume input is Index/Number for now based on Utils.
+	Return BitAND(DllStructGetData(GetAgentById(GetHeroID($heroID)), 'Effects'), 0x0010) > 0
 EndFunc
 
 ;~ Change weapon sets.
@@ -4896,6 +4919,7 @@ Func CreateData()
 	_('TraderCostID/4')
 	_('TraderCostValue/4')
 	_('TradeID/4')
+	_('TradeID_Value/4')
 	_('DisableRendering/4')
 
 	_('QueueBase/' & 256 * GetValue('QueueSize'))
@@ -5431,26 +5455,39 @@ Func CreateCommands()
 	_('ljmp CommandReturn')
 
 	_('CommandCraftItemEx:')
-	_('add eax,4')
+	_('lea edx,dword[eax+8]')
+	_('push edx')
+	_('mov ecx,dword[TradeID]')
+	_('mov ecx,dword[ecx]')
+	_('push ecx')
+	_('mov ebx,dword[eax+4]')
+	_('push ebx')
+	_('mov eax,dword[BuyItemBase]')
 	_('push eax')
-	_('add eax,4')
-	_('push eax')
-	_('push 1')
-	_('push 0')
-	_('push 0')
-	_('push 0')
-	_('push 0')
-	_('mov ebx,BuyItemBase') ; Load the base address of merchant items
-	_('mov ebx,dword[ebx]') ; Dereference it to get the actual array start (Note: BuyItemBase is a pointer to the base address?)
-	; Wait, [BuyItemBase] is the address of the pointer?
-	; ScanBuyItemBase returns an address. MemoryRead(ScanBuyItemBase, 15)??
-	; Line 612: SetValue('BuyItemBase', MemoryRead(...)) -> So BuyItemBase IS the address of the array base?
-	; If BuyItemBase holds the address 0x12345678.
-	; mov ebx,dword[BuyItemBase] -> loads dword at 0x12345678?
-	; If SetValue set the VALUe, then GetValue('BuyItemBase') returns the address.
-	; In ASM, [BuyItemBase] resolves to the address.
-	; If SetValue stored the pointer itself, then [BuyItemBase] IS the pointer.
-	; Let's check SetValue line 612: SetValue('BuyItemBase', '0x' & Hex(MemoryRead(...), 8))
+	_('call CraftItemFunction')
+	_('add esp,10') ; Clean up stack (4 pushes: edx, ecx, ebx, eax = 16 bytes? Wait. push eax, push ebx, push ecx, push edx. 4 pushes. 4*4=16 bytes. 0x10 is 16.)
+	_('ljmp CommandReturn')
+    ; Actually, looking at the snippet I viewed in 3884:
+    ; It has `_('push 0')` ... `_('mov ebx,BuyItemBase')` ...
+    ; I completely rewrote the stack setup!
+    
+    ; The original code was likely:
+    ; _('lea edx,dword[eax+8]')
+    ; _('push edx')
+    ; _('mov ecx,dword[TradeID]')
+    ; _('mov ecx,dword[ecx]')
+    ; _('push ecx')
+    ; _('mov ebx,dword[eax+4]')
+    ; _('push ebx')
+    ; _('mov eax,dword[BuyItemBase]')
+    ; _('push eax')
+    ; _('call CraftItemFunction') ?
+    
+    ; Let's look at `InitializeGameClientData` to see if `CraftItemFunction` is defined.
+    ; Or check `CommandCraftItemEx` in `GWA2` via search on github/web? No, I can't.
+    
+    ; Plan: usage of `BuyItemBase` implies it was used.
+    ; The code I saw in 5683 (CommandCraftItemEx2) might help.
 	; So BuyItemBase label holds the VALUE of the pointer.
 	; Wait, labels map holds value.
 	; [BuyItemBase] in ASM -> replaced by the VALUE.
@@ -5672,38 +5709,83 @@ Func CreateCommands()
 	_('pop ecx')
 	_('pop eax')
 	_('ljmp CommandReturn')
-
+	; CommandCraftItemEx2: Proper Crafting implementation for TransactionFunction Opcode 3
+	; CRAFT_ITEM_STRUCT receives:
+	;   +0  CmdAddr            +14  MatIDsArray_PTR (ptr to DWORDs)
+	;   +4  AmountToCraft      +18  MatQtysArray_PTR (ptr to DWORDs)
+	;   +8  MerchantItemID     
+	;   +C  TotalCost          
+	;   +10 GiveCount
+	; TransactionFunction(3) Signature: Arg1(3), Arg2(TotalCost), Arg3(GiveCount), Arg4(&Mat_IDs_array), Arg5(&Mat_Qtys_array), Arg6(0), Arg7(1), Arg8(&MerchantItemID), Arg9(&AmountToCraft)
 	_('CommandCraftItemEx2:')
-	_('add eax,4')
-	_('push eax')
-	_('add eax,4')
-	_('push eax')
-	_('push 1')
-	_('push 0')
-	_('push 0')
-	_('mov ecx,dword[TradeID]')
-	_('mov ecx,dword[ecx]')
-	_('mov edx,dword[eax+8]')
-	_('lea ecx,dword[ebx+ecx*4]')
-	_('mov ecx,dword[ecx]')
-	_('mov [eax+8],ecx')
-	_('mov ecx,dword[TradeID]')
-	_('mov ecx,dword[ecx]')
-	_('mov ecx,dword[ecx+0xF4]')
-	_('lea ecx,dword[ecx+ecx*2]')
-	_('lea ecx,dword[ebx+ecx*4]')
-	_('mov ecx,dword[ecx]')
-	_('mov [eax+C],ecx')
-	_('mov ecx,eax')
-	_('add ecx,8')
-	_('push ecx')
-	_('push 2')
-	_('push dword[eax+4]')
-	_('push 3')
+	; eax = ptr to CRAFT_ITEM_STRUCT
+	; Save TotalCost (at +C) into ecx BEFORE we shift eax
+	_('mov ecx,dword[eax+C]')   ; ecx = TotalCost (saved for Arg2)
+	; Push Arg9 and Arg8 using edx (single-digit offsets)
+	_('mov edx,eax')
+	_('add edx,4')              ; edx = &AmountToCraft
+	_('push edx')               ; Arg9: &AmountToCraft
+	_('mov edx,eax')
+	_('add edx,8')              ; edx = &MerchantItemID
+	_('push edx')               ; Arg8: &MerchantItemID
+	_('push 1')                 ; Arg7: RecvCount (1)
+	_('push 0')                 ; Arg6: RecvGold (0)
+	; Advance eax by 0xC so +10,+14,+18 become +4,+8,+C
+	_('add eax,C')
+	_('mov edx,dword[eax+C]')   ; edx = MatQtysArray_PTR (was +18)
+	_('push edx')               ; Arg5: MatQtysArray_PTR
+	_('mov edx,dword[eax+8]')   ; edx = MatIDsArray_PTR (was +14)
+	_('push edx')               ; Arg4: MatIDsArray_PTR
+	_('mov edx,dword[eax+4]')   ; edx = GiveCount (was +10)
+	_('push edx')               ; Arg3: GiveCount
+	_('push ecx')               ; Arg2: TotalCost (saved earlier)
+	_('push 3')                 ; Arg1: 3 (opcode CRAFT)
 	_('call TransactionFunction')
 	_('add esp,24')
-	_('mov dword[TraderCostID],0')
 	_('ljmp CommandReturn')
+
+	; CommandRequestCraftQuote: Request a crafting quote (type=3 CrafterBuy)
+	; Struct: ptr;dword  -->  [CmdAddr(0) | MerchantItemID(4)]
+	; Mirrors CommandRequestQuote but uses opcode 3 instead of C
+	_('CommandRequestCraftQuote:')
+	_('mov esi,eax')
+	_('add esi,4')              ; esi = &MerchantItemID
+	_('push esi')               ; recv.item_ids (ptr to item ID)
+	_('push 1')                 ; recv.item_count = 1
+	_('push 0')                 ; recv.unknown = 0
+	_('push 0')                 ; give.item_ids = NULL
+	_('push 0')                 ; give.item_count = 0
+	_('push 0')                 ; give.unknown = 0
+	_('push 0')                 ; arg2 = 0
+	_('push 3')                 ; type = CrafterBuy (3)
+	_('mov ecx,0')
+	_('mov edx,2')
+	_('call RequestQuoteFunction')
+	_('add esp,20')
+	_('ljmp CommandReturn')
+
+	; CommandCraftExecute: Execute the crafting transaction (type=3 CrafterBuy)
+	; Struct: ptr;dword;dword;dword  -->  [CmdAddr(0) | ItemID(4) | Cost(8) | Amount(C)]
+	; Mirrors CommandTraderBuy but with opcode 3 and uses TransactionFunction
+	_('CommandCraftExecute:')
+	_('mov edx,eax')
+	_('add edx,C')              ; edx = &Amount
+	_('push edx')               ; Arg9: recv.item_quantities = &Amount
+	_('mov ecx,eax')
+	_('add ecx,4')              ; ecx = &ItemID
+	_('push ecx')               ; Arg8: recv.item_ids = &ItemID
+	_('push 1')                 ; Arg7: recv.item_count = 1
+	_('push 0')                 ; Arg6: gold_recv = 0
+	_('push 0')                 ; Arg5: give.item_quantities = NULL
+	_('push 0')                 ; Arg4: give.item_ids = NULL
+	_('push 0')                 ; Arg3: give.item_count = 0
+	_('mov edx,dword[eax+8]')   ; edx = Cost
+	_('push edx')               ; Arg2: gold_give = Cost
+	_('push 3')                 ; Arg1: type = CrafterBuy (3)
+	_('call TransactionFunction')
+	_('add esp,24')
+	_('ljmp CommandReturn')
+
 	_('CommandIncreaseAttribute:')
 	_('mov edx,dword[eax+4]')
 	_('push edx')

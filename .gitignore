@@ -1,14 +1,44 @@
-# General
+# === IDE / Editor ===
 .idea/
+*.swp
+*.swo
+*~
 
-# BotsHub-master specific
+# === Temp files ===
+temp_format_*.au3
+
+# === Archives ===
+*.zip
+
+# === Binaries / Executables ===
+*.exe
+*.dll
+# Exception: sqlite3.dll is a required dependency
+!BotsHub-master/sqlite3.dll
+!GWA Censured/lib/sqlite3.dll
+
+# === External reference repos (not our code) ===
+GWA Censured/GWCA-master/
+GWA Censured/GWToolboxpp/
+GWA Censured/Py4GW-main/
+toolbox/
+gwca/
+
+# === Upstream reference files (used for diffing) ===
+upstream_*.au3
+
+# === Backup directory ===
+Backup/
+
+# === Runtime / Debug output ===
+GWA Censured/Settings.ini
+GWA Censured/logs/
+GWA Censured/debug_scripts/*.txt
+
+# === BotsHub-master specific ===
 BotsHub-master/logs/**
 BotsHub-master/data/**
 BotsHub-master/conf/farm/*
 BotsHub-master/conf/loot/*
 !BotsHub-master/conf/farm/Default Farm Configuration.json
 !BotsHub-master/conf/loot/Default Loot Configuration.json
-
-# GWA Censured specific
-GWA Censured/Settings.ini
-GWA Censured/logs/
