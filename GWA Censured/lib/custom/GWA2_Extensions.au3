@@ -387,24 +387,7 @@ EndFunc
 
 ; ==================================================================================================
 ; Custom Game State Functions (no upstream equivalent)
+; NOTE: GetMapLoading, GetMapIsLoaded, GetLoggedIn currently remain in
+; the old GWA2.au3. They will be moved here when Phase 4b fully activates
+; the upstream split files and the old GWA2.au3 is deleted.
 ; ==================================================================================================
-
-;~ Returns the map loading state:
-;~   0 = Outpost
-;~   1 = Explorable area
-;~   2 = Loading (during map transition)
-Func GetMapLoading()
-	Return MemRead($instance_info_ptr)
-EndFunc
-
-;~ Returns if map has been loaded
-Func GetMapIsLoaded()
-	Return GetAgentExists(GetMyID())
-EndFunc
-
-;~ Returns True if logged into a character, False at character select
-Func GetLoggedIn()
-	Local $myID = GetMyID()
-	If $myID <= 0 Then Return False
-	Return GetAgentExists($myID)
-EndFunc
