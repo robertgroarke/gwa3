@@ -30,6 +30,7 @@
 #include 'custom\Skill_Types.au3'
 
 ; === Custom Extensions (lib/custom/) ===
+#include 'custom\GWA2_Crafting.au3'
 #include 'custom\GWA2_Extensions.au3'
 
 ; === Custom Libraries (lib/custom/) ===

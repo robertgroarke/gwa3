@@ -79,7 +79,8 @@ Global $scan_ping_address
 Global $max_agents, $agent_copy_count, $agent_copy_base
 
 ; Trader system
-Global $trader_quote_ID, $trader_cost_ID, $trader_cost_value, $trade_id_addr, $trade_id_value_addr
+Global $trader_quote_ID, $trader_cost_ID, $trader_cost_value
+; $trade_id_addr, $trade_id_value_addr moved to custom/GWA2_Crafting.au3
 
 ; Skill state
 Global $skill_timer, $build_number
@@ -135,9 +136,7 @@ Global Const $BUY_ITEM_STRUCT = SafeDllStructCreate('ptr;dword;dword;dword;dword
 Global Const $BUY_ITEM_STRUCT_PTR = DllStructGetPtr($BUY_ITEM_STRUCT)
 
 ; Crafting takes a complex structure due to needing arrays of materials from inventory.
-Global $CRAFT_ITEM_STRUCT = DllStructCreate("ptr;dword;dword;dword;dword;ptr;ptr")
-Global $CRAFT_ITEM_STRUCT_PTR = DllStructGetPtr($CRAFT_ITEM_STRUCT)
-Global $CRAFT_MATS_STRUCT_MEMORY, $CRAFT_QTYS_STRUCT_MEMORY
+; $CRAFT_ITEM_STRUCT, $CRAFT_MATS_STRUCT_MEMORY, $CRAFT_QTYS_STRUCT_MEMORY moved to custom/GWA2_Crafting.au3
 
 
 Global Const $SEND_CHAT_STRUCT = SafeDllStructCreate('ptr;dword')
@@ -641,12 +640,8 @@ Func InitializeGameClientData($changeTitle = True, $initUseStringLog = False, $i
 
 	ModifyMemory()
     
-    ; Verification: Ensure TradeID is properly initialized
-    If GetValue('TradeID') = 0 Then
-        Debug("Warning: TradeID is 0 after ModifyMemory. Retrying...")
-        Sleep(500)
-        ModifyMemory()
-    EndIf
+	; Crafting extension hook — verifies TradeID and caches addresses
+	If IsDeclared('g_CraftingExtension') Then Extend_CraftingInit()
 
 	$queue_counter = MemoryRead(GetValue('QueueCounter'))
 	If @error Then LogCriticalError('Failed to read queue counter')
@@ -660,8 +655,7 @@ Func InitializeGameClientData($changeTitle = True, $initUseStringLog = False, $i
 	$trader_quote_ID = GetValue('TraderQuoteID')
 	$trader_cost_ID = GetValue('TraderCostID')
 	$trader_cost_value = GetValue('TraderCostValue')
-	$trade_id_addr = GetValue('TradeID')
-	$trade_id_value_addr = GetValue('TradeID_Value')
+	; $trade_id_addr/$trade_id_value_addr now set by Extend_CraftingInit()
 	$disable_rendering_address = GetValue('DisableRendering')
 	$agent_copy_count = GetValue('AgentCopyCount')
 	$agent_copy_base = GetValue('AgentCopyBase')
@@ -1360,121 +1354,7 @@ EndFunc
 
 ; GetIsMerchantOpen() moved to custom/GWA2_Extensions.au3
 
-;~ FIXME: this function is written like trash
-Func CraftItem($modelID, $amount, $gold, ByRef $materialsArray)
-	; Sanity checks
-	If Not GetIsMerchantOpen() Then Return SetError(1) ; Merchant window must be open
-	
-	; Find the destination item ptr and its INDEX in the merchant list
-	Local $merchantItemsBase = GetMerchantItemsBase()
-	If Not $merchantItemsBase Then Return SetError(2)
-	Local $merchantItemsSize = GetMerchantItemsSize()
-	
-	Local $itemPtr = 0
-	Local $destinationItemPtr = 0
-	Local $itemIndex = -1
-	Local $itemID = 0
-	
-	For $i = 0 To $merchantItemsSize - 1
-		$itemID = MemoryRead($merchantItemsBase + 4 * $i)
-		If ($itemID) Then
-			$itemPtr = MemoryRead(MemoryRead($base_address_ptr) + 0x18, 'ptr') ; Re-implement ptr chain
-			; Optimization: Use helper memory read if possible, but manual is safer here to replicate GetMerchantItemPtrByModelId logic
-			; Logic from GetMerchantItemPtrByModelId:
-			; offsets[5] = [0, 0x18, 0x40, 0xB8, 4*itemID]
-			; Actually GetMerchantItemPtrByModelId implementation:
-			; $offsets[4] = 4 * $itemID
-			; $itemPtr = MemoryReadPtr($base_address_ptr, $offsets)[1]
-			
-			Local $offsets[5] = [0, 0x18, 0x40, 0xB8, 4 * $itemID]
-			Local $result = MemoryReadPtr($base_address_ptr, $offsets)
-			$itemPtr = $result[1]
-			
-			If $itemPtr <> 0 And MemoryRead($itemPtr + 0x2C) = $modelID Then
-				$destinationItemPtr = $itemPtr
-				$itemIndex = $i
-				ExitLoop
-			EndIf
-		EndIf
-	Next
-	
-	If $itemIndex = -1 Then Return SetError(3) ; Item not found in merchant list
-	
-	; Check materials
-	Local $sourceItemPtr = _GWA2_GetInventoryItemPtrByModelId($materialsArray[0][0])
-	If ((Not $sourceItemPtr) Or (MemoryRead($sourceItemPtr + 0x4B) < $materialsArray[0][1])) Then Return 0
-	
-	Local $materialString = ''
-	Local $materialCount = 0
-	If IsArray($materialsArray) = 0 Then Return 0
-	Local $materialsArraySize = UBound($materialsArray) - 1
-	For $i = $materialsArraySize To 0 Step -1
-		Local $checkQuantity = _GWA2_CountItemInBagsByModelID($materialsArray[$i][0])
-		If $materialsArray[$i][1] * $amount > $checkQuantity Then
-			; amount of missing mats in @extended
-			Return SetExtended($materialsArray[$i][1] * $amount - $checkQuantity, $materialsArray[$i][0])
-		EndIf
-	Next
-	Local $currentGold = GetGoldCharacter()
-	
-	For $i = 0 To $materialsArraySize
-		$materialString &= GetItemIDFromModelID($materialsArray[$i][0]) & ';'
-		Debug($materialString)
-		$materialCount += 1
-	Next
-
-	Local $craftingMaterialType = 'dword'
-	For $i = 1 To $materialCount - 1
-		$craftingMaterialType &= ';dword'
-	Next
-	Local $craftingMaterialStruct = SafeDllStructCreate($craftingMaterialType)
-	Local $craftingMaterialStructPtr = DllStructGetPtr($craftingMaterialStruct)
-	For $i = 1 To $materialCount
-		Local $size = StringInStr($materialString, ';')
-		DllStructSetData($craftingMaterialStruct, $i, StringLeft($materialString, $size - 1))
-		$materialString = StringTrimLeft($materialString, $size)
-	Next
-	
-	Local $memorySize = $materialCount * 4
-	Local $processHandle = GetProcessHandle()
-	Local $memoryBuffer = SafeDllCall13($kernel_handle, 'ptr', 'VirtualAllocEx', 'handle', $processHandle, 'ptr', 0, 'ulong_ptr', $memorySize, 'dword', 0x1000, 'dword', 0x40)
-	If $memoryBuffer = 0 Or $memoryBuffer[0] = 0 Then Return 0
-	
-	SafeDllCall13($kernel_handle, 'int', 'WriteProcessMemory', 'int', $processHandle, 'int', $memoryBuffer[0], 'ptr', $craftingMaterialStructPtr, 'int', $memorySize, 'int', 0)
-	
-	; WRITE THE INDEX TO TradeID ADDRESS
-	If $trade_id_addr <> 0 Then
-		; Write the Item Index to our allocated memory (TradeID_Value)
-	; Then write the address of that memory to TradeID
-	; ASM: mov ecx,[TradeID] -> gets TradeID_Value address
-	;      mov ecx,[ecx]     -> gets ItemIndex
-	MemoryWrite($trade_id_value_addr, $itemIndex, 'dword')
-	MemoryWrite($trade_id_addr, $trade_id_value_addr, 'dword')
-	Else
-		Debug("Error: TradeID address not initialized")
-		Return 0
-	EndIf
-
-	DllStructSetData($CRAFT_ITEM_STRUCT, 1, GetValue('CommandCraftItemEx2'))
-	DllStructSetData($CRAFT_ITEM_STRUCT, 2, $amount)
-	DllStructSetData($CRAFT_ITEM_STRUCT, 3, $destinationItemPtr) ; Merchant item ptr for crafted item
-	DllStructSetData($CRAFT_ITEM_STRUCT, 4, $memoryBuffer[0]) ; Materials buffer in game memory
-	DllStructSetData($CRAFT_ITEM_STRUCT, 5, $materialCount) ; Number of material types
-	DllStructSetData($CRAFT_ITEM_STRUCT, 6, $amount * $gold) ; Total cost
-	Enqueue($CRAFT_ITEM_STRUCT_PTR, 24)
-	
-	Local $deadlock = TimerInit()
-	Local $currentAmount
-	Do
-		Sleep(250)
-		$currentAmount = _GWA2_CountItemInBagsByModelID($materialsArray[0][0])
-	Until $currentAmount <> $checkQuantity Or $currentGold <> GetGoldCharacter() Or TimerDiff($deadlock) > 5000
-	
-	SafeDllCall11($kernel_handle, 'ptr', 'VirtualFreeEx', 'handle', $processHandle, 'ptr', $memoryBuffer[0], 'int', 0, 'dword', 0x8000)
-	
-	Return SetExtended($checkQuantity - $currentAmount - $materialsArray[0][1] * $amount, True)
-EndFunc
-
+; CraftItem() moved to custom/GWA2_Crafting.au3
 
 ; GetItemIDFromModelID(), GetMerchantItemPtrByModelId() moved to custom/GWA2_Extensions.au3
 
@@ -4712,9 +4592,10 @@ Func CreateData()
 	_('TraderQuoteID/4')
 	_('TraderCostID/4')
 	_('TraderCostValue/4')
-	_('TradeID/4')
-	_('TradeID_Value/4')
 	_('DisableRendering/4')
+
+	; Crafting extension hook — adds TradeID data slots if crafting module is loaded
+	If IsDeclared('g_CraftingExtension') Then Extend_CraftingData()
 
 	_('QueueBase/' & 256 * GetValue('QueueSize'))
 	_('TargetLogBase/' & 4 * GetValue('TargetLogSize'))
@@ -5248,129 +5129,8 @@ Func CreateCommands()
 	_('add esp,24')
 	_('ljmp CommandReturn')
 
-	_('CommandCraftItemEx:')
-	_('lea edx,dword[eax+8]')
-	_('push edx')
-	_('mov ecx,dword[TradeID]')
-	_('mov ecx,dword[ecx]')
-	_('push ecx')
-	_('mov ebx,dword[eax+4]')
-	_('push ebx')
-	_('mov eax,dword[BuyItemBase]')
-	_('push eax')
-	_('call CraftItemFunction')
-	_('add esp,10') ; Clean up stack (4 pushes: edx, ecx, ebx, eax = 16 bytes? Wait. push eax, push ebx, push ecx, push edx. 4 pushes. 4*4=16 bytes. 0x10 is 16.)
-	_('ljmp CommandReturn')
-    ; Actually, looking at the snippet I viewed in 3884:
-    ; It has `_('push 0')` ... `_('mov ebx,BuyItemBase')` ...
-    ; I completely rewrote the stack setup!
-    
-    ; The original code was likely:
-    ; _('lea edx,dword[eax+8]')
-    ; _('push edx')
-    ; _('mov ecx,dword[TradeID]')
-    ; _('mov ecx,dword[ecx]')
-    ; _('push ecx')
-    ; _('mov ebx,dword[eax+4]')
-    ; _('push ebx')
-    ; _('mov eax,dword[BuyItemBase]')
-    ; _('push eax')
-    ; _('call CraftItemFunction') ?
-    
-    ; Let's look at `InitializeGameClientData` to see if `CraftItemFunction` is defined.
-    ; Or check `CommandCraftItemEx` in `GWA2` via search on github/web? No, I can't.
-    
-    ; Plan: usage of `BuyItemBase` implies it was used.
-    ; The code I saw in 5683 (CommandCraftItemEx2) might help.
-	; So BuyItemBase label holds the VALUE of the pointer.
-	; Wait, labels map holds value.
-	; [BuyItemBase] in ASM -> replaced by the VALUE.
-	; So 'mov ebx,BuyItemBase' -> mov ebx, 0x12345678.
-	; NOT 'mov ebx,dword[BuyItemBase]'.
-	; 'mov ebx,Immed' is B8/BB.
-	; CompleteASMCode handles 'mov ebx,[-hex]'.
-	; If I use 'mov ebx,BuyItemBase', and BuyItemBase resolves to 0x..., it should work.
-	; BUT wait, BuyItemBase might be dynamic?
-	; SetValue sets it once during Init.
-	; So 'mov ebx,BuyItemBase' works.
-	; Let's be safe: 'mov ebx,dword[BuyItemBase]' only if BuyItemBase was a variable holding the pointer.
-	; Here BuyItemBase IS the pointer value.
-	; So: 'mov ebx,BuyItemBase'
-	; BUT CompleteASMCode supports 'mov ebx,Imm' only if regex matches.
-	; 'mov ebx,[-[:xdigit:]]'
-	; Does it support 'mov ebx,Label'?
-	; No explicit case for 'mov ebx,Label'.
-	; It supports 'mov eax,dword[Label]'.
-	; Can I put BuyItemBase into a variable?
-	; No, I should use the label directly if possible.
-	; Maybe 'mov ebx,dword[BuyItemBase]' is correct if BuyItemBase was defined as a variable.
-	; But it's defined as a LABEL with a value.
-	; If I use 'mov ebx,BuyItemBase', CompleteASMCode might fail if it doesn't match 'mov ebx,Hex'.
-	
-	; Alternate: 'mov ebx, dword[BuyItemBaseAddr]'? No.
-	
-	; Let's look at how other constants are used.
-	; 'mov eax,dword[PacketLocation]' (Line 5306)
-	; PacketLocation is set via SetValue.
-	; So 'mov eax,dword[PacketLocation]' loads from the address PacketLocation?
-	; If SetValue('PacketLocation', '0x1234') -> [PacketLocation] = 0x1234.
-	; 'mov eax,dword[0x1234]'.
-	; This reads the memory at 0x1234.
-	; Is PacketLocation the address, or the value?
-	; Line 463: $packetLocation = Hex(MemoryRead(..., 11), 8) -> The address.
-	; So PacketLocation is an address.
-	; So 'mov eax,dword[PacketLocation]' reads the value at that address.
-	; BuyItemBase (Line 612) = MemoryRead(..., 15).
-	; It looks like an address too.
-	; So 'mov ebx,dword[BuyItemBase]' is correct to load the value at that address?
-	; No, BuyItemBase IS the base address of the array (start of array).
-	; We want ebx = BuyItemBase.
-	; So we want 'lea ebx,dword[BuyItemBase]'? No, labels are absolute addresses.
-	; We want 'mov ebx, BuyItemBase'. 
-	; But we don't have 'mov ebx, Label' support?
-	; Let's check CompleteASMCode again.
-	; It handles 'mov ebx,[-[:xdigit:]]'.
-	; It doesn't handle 'mov ebx,Label'.
-	
-	; Workaround:
-	; Use a variable?
-	; Or assume 'mov ebx,dword[Label]' is what we want?
-	; If BuyItemBase IS the array pointer (the address 0x...), and we want to access `[ebx + index*4]`.
-	; Then ebx must hold 0x...
-	; If we do `mov ebx,dword[BuyItemBase]`, we read 4 bytes from 0x...
-	; That would be the first item's ID.
-	; That's NOT what `lea` expects if it uses `ebx` as base.
-	; We want ebx = 0x...
-	
-	; So we need `mov ebx, Immediate`.
-	; But the Immediate is a Label.
-	; Is there `mov ebx, [Label]` support where it resolves to immediate?
-	; No.
-	
-	; However, `BuyItemBase` is found via scan.
-	; Maybe it's a global variable in game memory that HOLDS the pointer?
-	; Line 612: SetValue('BuyItemBase', '0x' & Hex(MemoryRead(GetScannedAddress('ScanBuyItemBase', 15)), 8))
-	; `ScanBuyItemBase` pattern: `D9EED9580CC74004`.
-	; `MemoryRead(..., 15)`.
-	; Usually this reads a pointer to a global.
-	; So `BuyItemBase` IS the address of the global variable that holds the item array base.
-	; So `mov ebx,dword[BuyItemBase]` loads the array base!
-	; YES! That makes sense.
-	
-	_('mov ebx,dword[BuyItemBase]')
-	_('mov ecx,dword[TradeID]')
-	; _('mov ecx,dword[ecx]') ; Removed double indirection
-	_('mov edx,dword[eax+4]')
-	_('lea ecx,dword[ebx+ecx*4]')
-	_('push ecx')
-	_('push 1')
-	_('push dword[eax+8]')
-	_('push dword[eax+C]')
-	_('call TraderFunction')
-	_('add esp,24')
-	_('mov dword[TraderCostID],0')
-	_('ljmp CommandReturn')
-
+	; Crafting extension hook — adds CommandCraftItemEx/Ex2/RequestCraftQuote/CraftExecute
+	If IsDeclared('g_CraftingExtension') Then Extend_CraftingCommands()
 	_('CommandAction:')
 	_('mov ecx,dword[ActionBase]')
 	_('mov ecx,dword[ecx+c]')
@@ -5503,82 +5263,8 @@ Func CreateCommands()
 	_('pop ecx')
 	_('pop eax')
 	_('ljmp CommandReturn')
-	; CommandCraftItemEx2: Proper Crafting implementation for TransactionFunction Opcode 3
-	; CRAFT_ITEM_STRUCT receives:
-	;   +0  CmdAddr            +14  MatIDsArray_PTR (ptr to DWORDs)
-	;   +4  AmountToCraft      +18  MatQtysArray_PTR (ptr to DWORDs)
-	;   +8  MerchantItemID     
-	;   +C  TotalCost          
-	;   +10 GiveCount
-	; TransactionFunction(3) Signature: Arg1(3), Arg2(TotalCost), Arg3(GiveCount), Arg4(&Mat_IDs_array), Arg5(&Mat_Qtys_array), Arg6(0), Arg7(1), Arg8(&MerchantItemID), Arg9(&AmountToCraft)
-	_('CommandCraftItemEx2:')
-	; eax = ptr to CRAFT_ITEM_STRUCT
-	; Save TotalCost (at +C) into ecx BEFORE we shift eax
-	_('mov ecx,dword[eax+C]')   ; ecx = TotalCost (saved for Arg2)
-	; Push Arg9 and Arg8 using edx (single-digit offsets)
-	_('mov edx,eax')
-	_('add edx,4')              ; edx = &AmountToCraft
-	_('push edx')               ; Arg9: &AmountToCraft
-	_('mov edx,eax')
-	_('add edx,8')              ; edx = &MerchantItemID
-	_('push edx')               ; Arg8: &MerchantItemID
-	_('push 1')                 ; Arg7: RecvCount (1)
-	_('push 0')                 ; Arg6: RecvGold (0)
-	; Advance eax by 0xC so +10,+14,+18 become +4,+8,+C
-	_('add eax,C')
-	_('mov edx,dword[eax+C]')   ; edx = MatQtysArray_PTR (was +18)
-	_('push edx')               ; Arg5: MatQtysArray_PTR
-	_('mov edx,dword[eax+8]')   ; edx = MatIDsArray_PTR (was +14)
-	_('push edx')               ; Arg4: MatIDsArray_PTR
-	_('mov edx,dword[eax+4]')   ; edx = GiveCount (was +10)
-	_('push edx')               ; Arg3: GiveCount
-	_('push ecx')               ; Arg2: TotalCost (saved earlier)
-	_('push 3')                 ; Arg1: 3 (opcode CRAFT)
-	_('call TransactionFunction')
-	_('add esp,24')
-	_('ljmp CommandReturn')
-
-	; CommandRequestCraftQuote: Request a crafting quote (type=3 CrafterBuy)
-	; Struct: ptr;dword  -->  [CmdAddr(0) | MerchantItemID(4)]
-	; Mirrors CommandRequestQuote but uses opcode 3 instead of C
-	_('CommandRequestCraftQuote:')
-	_('mov esi,eax')
-	_('add esi,4')              ; esi = &MerchantItemID
-	_('push esi')               ; recv.item_ids (ptr to item ID)
-	_('push 1')                 ; recv.item_count = 1
-	_('push 0')                 ; recv.unknown = 0
-	_('push 0')                 ; give.item_ids = NULL
-	_('push 0')                 ; give.item_count = 0
-	_('push 0')                 ; give.unknown = 0
-	_('push 0')                 ; arg2 = 0
-	_('push 3')                 ; type = CrafterBuy (3)
-	_('mov ecx,0')
-	_('mov edx,2')
-	_('call RequestQuoteFunction')
-	_('add esp,20')
-	_('ljmp CommandReturn')
-
-	; CommandCraftExecute: Execute the crafting transaction (type=3 CrafterBuy)
-	; Struct: ptr;dword;dword;dword  -->  [CmdAddr(0) | ItemID(4) | Cost(8) | Amount(C)]
-	; Mirrors CommandTraderBuy but with opcode 3 and uses TransactionFunction
-	_('CommandCraftExecute:')
-	_('mov edx,eax')
-	_('add edx,C')              ; edx = &Amount
-	_('push edx')               ; Arg9: recv.item_quantities = &Amount
-	_('mov ecx,eax')
-	_('add ecx,4')              ; ecx = &ItemID
-	_('push ecx')               ; Arg8: recv.item_ids = &ItemID
-	_('push 1')                 ; Arg7: recv.item_count = 1
-	_('push 0')                 ; Arg6: gold_recv = 0
-	_('push 0')                 ; Arg5: give.item_quantities = NULL
-	_('push 0')                 ; Arg4: give.item_ids = NULL
-	_('push 0')                 ; Arg3: give.item_count = 0
-	_('mov edx,dword[eax+8]')   ; edx = Cost
-	_('push edx')               ; Arg2: gold_give = Cost
-	_('push 3')                 ; Arg1: type = CrafterBuy (3)
-	_('call TransactionFunction')
-	_('add esp,24')
-	_('ljmp CommandReturn')
+	; CommandCraftItemEx2, CommandRequestCraftQuote, CommandCraftExecute
+	; moved to custom/GWA2_Crafting.au3 (injected via Extend_CraftingCommands hook)
 
 	_('CommandIncreaseAttribute:')
 	_('mov edx,dword[eax+4]')
