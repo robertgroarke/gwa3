@@ -7,7 +7,7 @@
 
 #include 'GWA2_Headers.au3'
 #include 'GWA2_ID.au3'
-; #include 'Utils.au3' ; Removed to prevent circular dependency
+#include 'Utils.au3' ; Restored - #include-once prevents circular dependency (verified upstream uses this pattern)
 #include 'Utils-Debugger.au3'
 #include <Math.au3>
 
@@ -346,7 +346,7 @@ Func ScanAndUpdateGameClients()
 	; Step 1: Mark all existing entries as 'unseen'
 	Local $initialClientCount = $game_clients[0][0]
 	Local $seen[$initialClientCount + 1]
-	_GWA2_FillArray($seen, False)
+	FillArray($seen, False)
 
 	; Step 2: Process current gw.exe instances
 	For $i = 1 To $processList[0][0]
@@ -3556,7 +3556,7 @@ Func GetPartyDanger($agents = Null, $party = Null)
 	If $party == Null Then $party = GetParty($agents)
 
 	Local $resultLevels[UBound($party)]
-	_GWA2_FillArray($resultLevels, 0)
+	FillArray($resultLevels, 0)
 
 	For $i = 0 To UBound($agents) - 1
 		Local $agent = $agents[$i]
@@ -6665,16 +6665,7 @@ Func GetMaxSlots($bag)
 	EndIf
 EndFunc
 
-; ==================================================================================================
-; Missing Helpers for GWA2 Core
-; ==================================================================================================
-
-Func _GWA2_FillArray(ByRef $array, $value)
-	For $i = 0 To UBound($array) - 1
-		$array[$i] = $value
-	Next
-EndFunc
-
+; FillArray now comes from Utils.au3 (restored include)
 ; _GWA2_GetAlmostInRangeOfAgent, _GWA2_GetInventoryItemPtrByModelId,
 ; _GWA2_CountItemInBagsByModelID moved to custom/GWA2_Extensions.au3
 
