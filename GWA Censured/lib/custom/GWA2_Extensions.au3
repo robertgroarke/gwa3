@@ -383,3 +383,28 @@ EndFunc
 
 ; RegisterNameTo32Code, RegisterNameTo16Code, RegisterNameTo8Code
 ; will be added here when COA1 branch is merged into this branch.
+
+
+; ==================================================================================================
+; Custom Game State Functions (no upstream equivalent)
+; ==================================================================================================
+
+;~ Returns the map loading state:
+;~   0 = Outpost
+;~   1 = Explorable area
+;~   2 = Loading (during map transition)
+Func GetMapLoading()
+	Return MemRead($instance_info_ptr)
+EndFunc
+
+;~ Returns if map has been loaded
+Func GetMapIsLoaded()
+	Return GetAgentExists(GetMyID())
+EndFunc
+
+;~ Returns True if logged into a character, False at character select
+Func GetLoggedIn()
+	Local $myID = GetMyID()
+	If $myID <= 0 Then Return False
+	Return GetAgentExists($myID)
+EndFunc
