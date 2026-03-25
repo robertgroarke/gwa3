@@ -60,8 +60,8 @@ EndFunc
 ;~ Ported Functions: CanSell & HasUsefulMod
 
 Func CanSell($aItem)
-	Local $lType = MemoryRead(GetItemPtr($aItem) + 32, "byte")
-	Local $lModelID = MemoryRead(GetItemPtr($aItem) + 44, "long")
+	Local $lType = MemRead(GetItemPtr($aItem) + 32, "byte")
+	Local $lModelID = MemRead(GetItemPtr($aItem) + 44, "long")
 	Local $lQuantity = GetQuantity($aItem), $lValue = GetItemValue($aItem)
 	Local $lReq = GetItemReq($aItem), $lDmg = GetItemMaxDmg($aItem), $lRarity = GetRarity($aItem)
 	
@@ -120,7 +120,7 @@ Func HasUsefulMod($aItem)
 	Local $array_weaponmods_ini = $array_weaponmods
 
 	Local $aModStruct = GetModStruct($aItem)
-	Local $atype = MemoryRead(GetItemPtr($aItem) + 32, "byte")
+	Local $atype = MemRead(GetItemPtr($aItem) + 32, "byte")
 
 	Switch $atype
 		Case 0
@@ -151,7 +151,7 @@ Func HasUsefulMod($aItem)
 EndFunc
 
 Func GetIsIDed($aItem)
-	Return BitAND(MemoryRead(GetItemPtr($aItem) + 40, 'long'), 1) > 0
+	Return BitAND(MemRead(GetItemPtr($aItem) + 40, 'long'), 1) > 0
 EndFunc   ;==>GetIsIDed
 
 ;~ Missing Helpers from GWA Logic
@@ -164,11 +164,11 @@ Func GetItemPtr($aItem)
 EndFunc
 
 Func GetQuantity($aItem)
-	Return MemoryRead(GetItemPtr($aItem) + 76, 'short')
+	Return MemRead(GetItemPtr($aItem) + 76, 'short')
 EndFunc
 
 Func GetItemValue($aItem)
-	Return MemoryRead(GetItemPtr($aItem) + 36, "short")
+	Return MemRead(GetItemPtr($aItem) + 36, "short")
 EndFunc
 
 Func IsRareSkinSafe($modelID)

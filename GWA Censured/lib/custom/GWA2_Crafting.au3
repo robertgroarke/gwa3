@@ -154,13 +154,13 @@ Func CraftItem($modelID, $amount, $gold, ByRef $materialsArray)
 	Local $itemID = 0
 
 	For $i = 0 To $merchantItemsSize - 1
-		$itemID = MemoryRead($merchantItemsBase + 4 * $i)
+		$itemID = MemRead($merchantItemsBase + 4 * $i)
 		If ($itemID) Then
 			Local $offsets[5] = [0, 0x18, 0x40, 0xB8, 4 * $itemID]
-			Local $result = MemoryReadPtr($base_address_ptr, $offsets)
+			Local $result = MemReadPtr($base_address_ptr, $offsets)
 			$itemPtr = $result[1]
 
-			If $itemPtr <> 0 And MemoryRead($itemPtr + 0x2C) = $modelID Then
+			If $itemPtr <> 0 And MemRead($itemPtr + 0x2C) = $modelID Then
 				$destinationItemPtr = $itemPtr
 				$itemIndex = $i
 				ExitLoop
@@ -172,7 +172,7 @@ Func CraftItem($modelID, $amount, $gold, ByRef $materialsArray)
 
 	; Check materials
 	Local $sourceItemPtr = _GWA2_GetInventoryItemPtrByModelId($materialsArray[0][0])
-	If ((Not $sourceItemPtr) Or (MemoryRead($sourceItemPtr + 0x4B) < $materialsArray[0][1])) Then Return 0
+	If ((Not $sourceItemPtr) Or (MemRead($sourceItemPtr + 0x4B) < $materialsArray[0][1])) Then Return 0
 
 	Local $materialString = ''
 	Local $materialCount = 0
@@ -213,8 +213,8 @@ Func CraftItem($modelID, $amount, $gold, ByRef $materialsArray)
 
 	; Write the index to TradeID address
 	If $trade_id_addr <> 0 Then
-		MemoryWrite($trade_id_value_addr, $itemIndex, 'dword')
-		MemoryWrite($trade_id_addr, $trade_id_value_addr, 'dword')
+		MemWrite($trade_id_value_addr, $itemIndex, 'dword')
+		MemWrite($trade_id_addr, $trade_id_value_addr, 'dword')
 	Else
 		Debug("Error: TradeID address not initialized")
 		Return 0

@@ -353,15 +353,15 @@ Func GetMerchantItemSlot($modelID)
     Local $offsets[5] = [0, 0x18, 0x40, 0xB8, 0]
     
     For $i = 1 To $count
-        Local $itemID = MemoryRead($base + 4 * ($i - 1))
+        Local $itemID = MemRead($base + 4 * ($i - 1))
         
         If $itemID <> 0 Then
             $offsets[4] = 4 * $itemID
-            Local $itemPtrData = MemoryReadPtr($base_address_ptr, $offsets)
+            Local $itemPtrData = MemReadPtr($base_address_ptr, $offsets)
             Local $itemPtr = $itemPtrData[1]
             
             If $itemPtr <> 0 Then
-                Local $id = MemoryRead($itemPtr + 0x2C)
+                Local $id = MemRead($itemPtr + 0x2C)
                 Out("Debug: Slot " & $i & " ModelID=" & $id)
                 If $id = $modelID Then Return $i
             EndIf
@@ -715,15 +715,15 @@ Func GetMerchantItemPosition($modelID)
     Local $offsets[5] = [0, 0x18, 0x40, 0xB8, 0]
     
     For $i = 1 To $count
-        Local $itemID = MemoryRead($base + 4 * ($i - 1))
+        Local $itemID = MemRead($base + 4 * ($i - 1))
         
         If $itemID <> 0 Then
             $offsets[4] = 4 * $itemID
-            Local $itemPtrData = MemoryReadPtr($base_address_ptr, $offsets)
+            Local $itemPtrData = MemReadPtr($base_address_ptr, $offsets)
             Local $itemPtr = $itemPtrData[1]
             
             If $itemPtr <> 0 Then
-                Local $id = MemoryRead($itemPtr + 0x2C)
+                Local $id = MemRead($itemPtr + 0x2C)
                 If $id = $modelID Then Return $i
             EndIf
         EndIf
@@ -1085,13 +1085,13 @@ Func CraftItemSafe($modelID, $amount, $gold, $materialsArray)
     Local $itemID = 0
     
     For $i = 0 To $merchantItemsSize - 1
-        $itemID = MemoryRead($merchantItemsBase + 4 * $i)
+        $itemID = MemRead($merchantItemsBase + 4 * $i)
         If $itemID Then
             Local $offsets[5] = [0, 0x18, 0x40, 0xB8, 4 * $itemID]
-            Local $result = MemoryReadPtr($base_address_ptr, $offsets)
+            Local $result = MemReadPtr($base_address_ptr, $offsets)
             $itemPtr = $result[1]
             
-            If $itemPtr <> 0 And MemoryRead($itemPtr + 0x2C) = $modelID Then
+            If $itemPtr <> 0 And MemRead($itemPtr + 0x2C) = $modelID Then
                 $destinationItemPtr = $itemPtr
                 $itemIndex = $i
                 ExitLoop
@@ -1205,8 +1205,8 @@ Func CraftItemSafe($modelID, $amount, $gold, $materialsArray)
     
     ; WRITE THE INDEX TO TradeID ADDRESS (critical for ASM to find the item)
     If $trade_id_addr <> 0 Then
-        MemoryWrite($trade_id_value_addr, $itemIndex, 'dword')
-        MemoryWrite($trade_id_addr, $trade_id_value_addr, 'dword')
+        MemWrite($trade_id_value_addr, $itemIndex, 'dword')
+        MemWrite($trade_id_addr, $trade_id_value_addr, 'dword')
         Out("Debug: Wrote itemIndex=" & $itemIndex & " to TradeID addr=" & $trade_id_addr)
     Else
         Out("Error: TradeID address not initialized")
@@ -1257,18 +1257,18 @@ Func _GetMerchantItemPtrByModelId_Safe($modelID)
     Local $offsets[5] = [0, 0x18, 0x40, 0xB8, 0]
     
     For $i = 1 To $count
-        Local $itemID = MemoryRead($base + 4 * ($i - 1))
+        Local $itemID = MemRead($base + 4 * ($i - 1))
         
         If $itemID <> 0 Then
             $offsets[4] = 4 * $itemID
-            Local $itemPtrData = MemoryReadPtr($base_address_ptr, $offsets)
+            Local $itemPtrData = MemReadPtr($base_address_ptr, $offsets)
             Local $itemPtr = $itemPtrData[1]
             
             If $itemPtr <> 0 Then
                 ; Check 0x2C first (as confirmed by ScanTrader)
-                If MemoryRead($itemPtr + 0x2C) = $modelID Then Return $itemPtr
+                If MemRead($itemPtr + 0x2C) = $modelID Then Return $itemPtr
                 ; Fallback to 0x18 just in case
-                If MemoryRead($itemPtr + 0x18) = $modelID Then Return $itemPtr
+                If MemRead($itemPtr + 0x18) = $modelID Then Return $itemPtr
             EndIf
         EndIf
     Next

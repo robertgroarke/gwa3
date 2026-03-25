@@ -222,11 +222,11 @@ Func GetMerchantItemPtrByModelId($modelID)
 	Local $itemID = 0
 	Local $itemPtr = 0
 	For $i = 0 To GetMerchantItemsSize() -1
-		$itemID = MemoryRead($merchantBaseAddress + 4 * $i)
+		$itemID = MemRead($merchantBaseAddress + 4 * $i)
 		If ($itemID) Then
 			$offsets[4] = 4 * $itemID
-			$itemPtr = MemoryReadPtr($base_address_ptr, $offsets)[1]
-			If (MemoryRead($itemPtr + 0x2C) = $modelID) Then
+			$itemPtr = MemReadPtr($base_address_ptr, $offsets)[1]
+			If (MemRead($itemPtr + 0x2C) = $modelID) Then
 				Return Ptr($itemPtr)
 			EndIf
 		EndIf
@@ -338,7 +338,7 @@ Func _GWA2_GetInventoryItemPtrByModelId($modelID)
 				$itemPtr = GetItemPtrBySlot($bagPtr, $j)
 				If $itemPtr Then
 					; ModelID is at offset 44 (long)
-					If MemoryRead($itemPtr + 44, 'long') == $modelID Then Return $itemPtr
+					If MemRead($itemPtr + 44, 'long') == $modelID Then Return $itemPtr
 				EndIf
 			Next
 		EndIf
@@ -356,9 +356,9 @@ Func _GWA2_CountItemInBagsByModelID($modelID)
 			For $j = 1 To $slots
 				$itemPtr = GetItemPtrBySlot($bagPtr, $j)
 				If $itemPtr Then
-					If MemoryRead($itemPtr + 44, 'long') == $modelID Then
+					If MemRead($itemPtr + 44, 'long') == $modelID Then
 						; Quantity is at offset 76 (short)
-						$count += MemoryRead($itemPtr + 76, 'short')
+						$count += MemRead($itemPtr + 76, 'short')
 					EndIf
 				EndIf
 			Next

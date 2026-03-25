@@ -29,6 +29,9 @@
 #include 'custom\Skill_IDs.au3'
 #include 'custom\Skill_Types.au3'
 
+; === Custom Compatibility Layer (lib/custom/) ===
+#include 'custom\GWA2_Compat.au3'
+
 ; === Custom Extensions (lib/custom/) ===
 #include 'custom\NPC_Coordinates.au3'
 #include 'custom\GWA2_Crafting.au3'
