@@ -1,19 +1,5 @@
 #requireadmin
-#include "lib\GWA2_Headers.au3"
-#include "lib\GWA2.au3"
-#include "lib\Utils.au3"
-#include "lib\JSON.au3"
-#include "lib\SQLite.au3"
-#include "lib\SQLite.dll.au3"
-#include "lib\Map_IDs.au3"
-#include "lib\Skill_IDs.au3"
-#include "lib\Skill_Types.au3"
-#include "lib\Utils-Debugger.au3"
-#include "lib\GUI_Functions.au3"
-#include "lib\Utils-Maintenance.au3"
-#include <GUIConstantsEx.au3>
-#include <StaticConstants.au3>
-#include <WindowsConstants.au3>
+#include "lib\Froggy_Includes.au3"
 
 Global Const $QUEST_ID_TEKKS_WAR = 0x339
 Global Const $DIALOG_ID_TEKKS_WAR_ACCEPT = 0x833901

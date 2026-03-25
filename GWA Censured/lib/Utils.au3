@@ -18,14 +18,14 @@
 #include-once
 
 #include <array.au3>
-#include 'RareSkins.au3'
+#include 'custom\RareSkins.au3'
 
 #include <GUIConstantsEx.au3>
 #include 'GWA2_Headers.au3'
 #include 'GWA2_ID.au3'
 #include 'GWA2.au3'
 #include 'Utils-Debugger.au3'
-#include 'Utils-Salvage.au3'
+#include 'custom\Utils-Salvage.au3'
 
 Opt('MustDeclareVars', True)
 
