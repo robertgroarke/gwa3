@@ -29,6 +29,9 @@
 #include 'custom\Skill_IDs.au3'
 #include 'custom\Skill_Types.au3'
 
+; === Custom Extensions (lib/custom/) ===
+#include 'custom\GWA2_Extensions.au3'
+
 ; === Custom Libraries (lib/custom/) ===
 #include 'custom\GUI_Functions.au3'
 #include 'custom\Utils-Maintenance.au3'
