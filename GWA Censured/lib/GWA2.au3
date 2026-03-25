@@ -3506,11 +3506,10 @@ Func GetAgentArray($type = 0)
 		$count = MemoryRead($agent_copy_count, 'long')
 	Until $count >= 0 Or TimerDiff($deadlock) > 5000
 	If $count < 0 Then $count = 0
-    
-    ; Fix: Return [Count, Item, ...] to match standard GWA2 usage
-	Local $returnArray[$count + 1]
-    $returnArray[0] = $count
-    
+
+	; 0-indexed array (matches upstream convention, works with For...In)
+	Local $returnArray[$count]
+
 	If $count > 0 Then
 		For $i = 0 To $count - 1
 			; 448 = size of $AGENT_STRUCT_TEMPLATE in bytes
@@ -3519,8 +3518,8 @@ Func GetAgentArray($type = 0)
 		$buffer = SafeDllStructCreate($buffer)
 		SafeDllCall13($kernel_handle, 'int', 'ReadProcessMemory', 'int', GetProcessHandle(), 'int', $agent_copy_base, 'ptr', DllStructGetPtr($buffer), 'int', DllStructGetSize($buffer), 'int', 0)
 		For $i = 0 To $count - 1
-			$returnArray[$i + 1] = SafeDllStructCreate($AGENT_STRUCT_TEMPLATE)
-			$struct = SafeDllStructCreate('byte[448]', DllStructGetPtr($returnArray[$i + 1]))
+			$returnArray[$i] = SafeDllStructCreate($AGENT_STRUCT_TEMPLATE)
+			$struct = SafeDllStructCreate('byte[448]', DllStructGetPtr($returnArray[$i]))
 			DllStructSetData($struct, 1, DllStructGetData($buffer, $i + 1))
 		Next
 	EndIf

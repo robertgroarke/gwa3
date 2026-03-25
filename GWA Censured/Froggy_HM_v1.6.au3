@@ -868,7 +868,7 @@ Func CheckForChest($chestrun = False)
 	If GetIsDead(-2) Then Return
 	$AgentArray = GetAgentArray(0x200)   ;0x200 = type: static
 	Out("Looking for chests")
-	For $i = 1 To $AgentArray[0]
+	For $i = 0 To UBound($AgentArray) - 1
 		$lAgent = $AgentArray[$i]
 		$lType = DllStructGetData($lAgent, 'Type')
 		$lExtraType = DllStructGetData($lAgent, 'ExtraType')
@@ -888,7 +888,7 @@ Func CheckForChest($chestrun = False)
 	OpenChest()
 	Sleep(GetPing() + 500)
 	$AgentArray = GetAgentArray(0x400)    ;0x400 = type: item
-	If $AgentArray[0] > 0 Then ChangeTarget($AgentArray[1])
+	If UBound($AgentArray) > 0 Then ChangeTarget($AgentArray[0])
 	If $chestrun = True Then
 		PickupLootEx(5000)
 	Else
@@ -902,8 +902,8 @@ Func PickupLootEx($iMaxDist = 2000, $PickupTorch = False)
 	Local $lAgentArray = GetAgentArray($ID_AGENT_TYPE_ITEM)
 	Local $lPickupDeadlock = TimerInit()
 	Local $lPickupCounter = 0, $lDeadlock = 0
-	If Not IsArray($lAgentArray) Then Return
-	For $i = 1 To $lAgentArray[0]
+	If Not IsArray($lAgentArray) Or UBound($lAgentArray) == 0 Then Return
+	For $i = 0 To UBound($lAgentArray) - 1
 		Local $lAgentStruct = $lAgentArray[$i]
         If Not IsDllStruct($lAgentStruct) Then ContinueLoop
 
@@ -1316,10 +1316,10 @@ Func GetBestTargetPtr($aRange = 1350, $casting = False, $nohex = False, $enchant
     Local $lMe = GetAgentByID(-2)
     Local $lEnemiesInRange = 0
     
-    For $i = 1 To $lAgentArray[0]
+    For $i = 0 To UBound($lAgentArray) - 1
         Local $lAgent = $lAgentArray[$i]
         If GetIsDead($lAgent) Then ContinueLoop
-        
+
         ; CRITICAL: Filter for enemies only (Allegiance = 3 = FOE)
         Local $lAllegiance = DllStructGetData($lAgent, 'Allegiance')
         If $lAllegiance <> 3 Then ContinueLoop  ; Skip non-enemies
@@ -1577,7 +1577,7 @@ EndFunc
 Func GetLowestAlly($excludeself = False)
 	Local $lLowestally = 0, $lLowestHP = 1.0
 	Local $lAgentArray = GetAgentArray(0xDB)
-	For $i = 1 To $lAgentArray[0]
+	For $i = 0 To UBound($lAgentArray) - 1
 		If DllStructGetData($lAgentArray[$i], 'Allegiance') <> 1 Then ContinueLoop
 		If DllStructGetData($lAgentArray[$i], 'HP') <= 0 Then ContinueLoop
 		If $excludeself And ID($lAgentArray[$i]) = ID(-2) Then ContinueLoop
@@ -2032,8 +2032,8 @@ EndFunc
 Func GetNumberOfEnemies($aRange = 1200)
 	Local $count = 0
 	Local $lAgentArray = GetAgentArray(0xDB)
-	If Not IsArray($lAgentArray) Then Return 0
-	For $i = 1 To $lAgentArray[0]
+	If Not IsArray($lAgentArray) Or UBound($lAgentArray) == 0 Then Return 0
+	For $i = 0 To UBound($lAgentArray) - 1
 		If GetIsDead($lAgentArray[$i]) Then ContinueLoop
 		If GetDistance(GetMyAgent(), $lAgentArray[$i]) < $aRange Then $count += 1
 	Next
