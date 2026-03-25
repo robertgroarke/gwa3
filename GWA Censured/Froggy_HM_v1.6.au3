@@ -319,7 +319,7 @@ Func TakeQuest0()
 	Global $nCurrentRunTime = TimerInit()
 	Global $bRunFailed = False  ; Reset failure flag at start of run
 	AdlibRegister("CurrentRunTime", 1000)
-	clearmemory()
+	ClearMem()
 	SetPlayerStatus(0)
 	GUI_SetRunCounter()
 	Out("Starting Run Num: " & $GUI_RunCounter)

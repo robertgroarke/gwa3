@@ -12,16 +12,21 @@
 #include <StaticConstants.au3>
 #include <WindowsConstants.au3>
 
+; === BotsHub Framework Stubs (must load before botshub/) ===
+#include 'custom\BotsHub_Stubs.au3'
+
 ; === BotsHub Core Libraries (lib/botshub/) ===
 #include 'botshub\GWA2_Assembly.au3'
 #include 'botshub\GWA2.au3'
 #include 'botshub\Utils.au3'
 #include 'botshub\Utils-Agents.au3'
 #include 'botshub\Utils-Storage.au3'
+#include 'botshub\GWA2_Assembly_Chatlog.au3'
 #include 'botshub\JSON.au3'
 
 ; === Custom Compatibility Layer ===
 #include 'custom\GWA2_Compat.au3'
+#include 'custom\ID_Aliases.au3'
 
 ; === Custom Data Files (aliases for upstream IDs) ===
 #include 'custom\Map_IDs.au3'

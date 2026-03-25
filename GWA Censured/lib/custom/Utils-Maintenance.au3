@@ -780,7 +780,7 @@ Func SalvageAmphibianTongues()
     If $totalQty = 0 Then Return
     Out("Salvaging " & $totalQty & " Amphibian Tongues...")
     
-    Local $kit = GetSalvageKit(True, $MAINTENANCE_TOWN) ; Buy kit if needed
+    Local $kit = GetSalvageKitCompat(True, $MAINTENANCE_TOWN) ; Buy kit if needed
     If $kit = 0 Then
         Out("Warning: No salvage kit available for tongues")
         Return
@@ -801,7 +801,7 @@ Func SalvageAmphibianTongues()
                 Sleep(GetPing() + 500)
                 $uses -= 1
                 If $uses < 1 Then
-                    $kit = GetSalvageKit(True, $MAINTENANCE_TOWN)
+                    $kit = GetSalvageKitCompat(True, $MAINTENANCE_TOWN)
                     If $kit = 0 Then Return
                     $uses = DllStructGetData($kit, 'Value') / 2
                 EndIf
