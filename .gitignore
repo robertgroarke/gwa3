@@ -23,9 +23,15 @@ GWA Censured/GWToolboxpp/
 GWA Censured/Py4GW-main/
 toolbox/
 gwca/
+BotsHub-original/
+BotsHub-latest/
 
 # === Upstream reference files (used for diffing) ===
 upstream_*.au3
+
+# === Temporary analysis/diff artifacts ===
+*_diff.txt
+FROGGY_DEPENDENCIES.md
 
 # === Backup directory ===
 Backup/

@@ -34,12 +34,16 @@ If a remote is ever added, treat it as read-only unless the user explicitly says
 
 ## Project Overview
 
-A Guild Wars bot automation suite written in **AutoIt3**. Two main components:
+A Guild Wars bot automation suite written in **AutoIt3**. This project combines two originally separate codebases:
 
 | Component | Purpose |
 |---|---|
 | **GWA Censured** | Primary farming/maintenance bot — automated questing, trading, crafting, inventory management, hero builds |
 | **BotsHub** | Modular farming bot framework with 20+ pluggable farm modules (raptors, vaettirs, DoA, FoW, etc.) |
+
+**History:** GWA Censured stopped working because its scan patterns and injection methods were outdated for the current Guild Wars client. The BotsHub repo was pulled in (~Feb 2026) and its updated GWA2 core library was used to get GWA Censured functional again. Code flowed **from BotsHub into GWA Censured** — BotsHub provided the working foundation (GWA2 core, Utils, Storage-Bot), and GWA Censured added its own layers on top (GUI, Maintenance, Salvage filtering, Skill/Map constants).
+
+**Primary script:** `GWA Censured/Froggy_HM_v1.6.au3` — Bogroot Growths dungeon farming in Hard Mode. See [FROGGY_DEPENDENCIES.md](FROGGY_DEPENDENCIES.md) for full dependency map and code provenance.
 
 The bots interact with Guild Wars via direct memory access through **GWCA** (Guild Wars Client API) headers and DLL struct manipulation. Packet-level protocol manipulation is used for trading, crafting, quests, and hero management.
 
