@@ -35,50 +35,50 @@ Suggested status values:
 
 | ID | Title | Area | Status | Assignee | Depends on | Parallel-safe | Summary |
 |---|---|---|---|---|---|---|---|
-| KF-001 | Create custom library skeleton | Infra | Ready | unassigned | none | yes | Create `GWA Censured/lib/custom/` and initial placeholder modules plus shared include aggregator. |
-| KF-002 | Add shared include aggregator to Froggy | Infra | Backlog | unassigned | KF-001 | no | Add `lib/Froggy_Shared.au3` and wire Froggy to include it without behavior changes. |
-| KF-003 | Define shared naming and state conventions | Infra | Ready | unassigned | none | yes | Write conventions for module prefixes, state containers, callbacks, and compatibility wrappers before parallel extraction begins. |
-| KF-004 | Inventory all Froggy globals consumed by extractable functions | Analysis | Ready | unassigned | none | yes | Produce a definitive list of global state used by low-level, combat, loot, travel, and stats helpers. |
-| KF-005 | Define compatibility policy for extracted functions | Infra | Backlog | unassigned | KF-003,KF-004 | yes | Decide which legacy function names remain as wrappers and which are renamed immediately. |
-| KF-006 | Create Au3Check validation script/process | Tooling | Ready | unassigned | none | yes | Add a repeatable validation command or helper script for Froggy and new custom libraries. |
-| KF-007 | Create smoke-test checklist for Froggy runtime | Tooling | Ready | unassigned | none | yes | Document the manual smoke checks required after each merged extraction phase. |
-| KF-008 | Extract identity and coordinate helpers | Effects | Backlog | unassigned | KF-001,KF-005 | yes | Move `ID`, `GetX`, `GetY`, `X`, `Y` into `BotCore-Effects.au3` with compatibility wrappers. |
-| KF-009 | Extract health/effect read helpers | Effects | Backlog | unassigned | KF-001,KF-004,KF-005 | yes | Move `GetHP`, `GetHasEnchantment`, `HasEffect`, `GetSkillEffectPtr`, `GetEffectsPtr` into `BotCore-Effects.au3`. |
-| KF-010 | Extract skillbar pointer helpers | Effects | Backlog | unassigned | KF-001,KF-004,KF-005 | yes | Move `GetSkillbarPtr`, `GetAdrenaline`, and any required wrapper around `GetSkillPtr` into `BotCore-Effects.au3`. |
-| KF-011 | Replace DP helper family with data-driven utility | Travel | Backlog | unassigned | KF-001,KF-005 | yes | Replace `usedp`, `usedp9`, `Usedp1`-`Usedp5` with one reusable helper in `BotCore-Travel.au3`. |
-| KF-012 | Extract travel wrappers | Travel | Backlog | unassigned | KF-001,KF-005 | yes | Move `TravelTo` and `ResignAndReturn` into `BotCore-Travel.au3`, preserving Froggy behavior. |
-| KF-013 | Extract inventory counters | Loot | Backlog | unassigned | KF-001,KF-005 | yes | Move `CountFreeSlots` and `GetPicksCount` into shared library code. |
-| KF-014 | Extract skill classification core set | SkillRules | Backlog | unassigned | KF-001,KF-005 | yes | Move generic classifiers like `IsSkillType`, `IsWeaponRange`, `IsHexSpell`, `IsConditionSpell`, `IsDisguiseskill`. |
-| KF-015 | Extract skill classification support set | SkillRules | Backlog | unassigned | KF-014 | yes | Move heal/bond/condition/hex/enchant removal classification helpers. |
-| KF-016 | Extract skill classification advanced set | SkillRules | Backlog | unassigned | KF-014 | yes | Move pressure/binding/speed/survival/rupt/precast classification helpers. |
-| KF-017 | Define combat state container | Combat | Backlog | unassigned | KF-003,KF-004 | no | Define ownership for `SkillBarCache`, `SkillbarSlot`, `BestTargetPtr`, `PressureSpiritSkills`, enum indices, and initialization flow. |
-| KF-018 | Extract target selection helpers | Combat | Backlog | unassigned | KF-008,KF-009,KF-010,KF-014,KF-017 | yes | Move `GetBestTargetPtr`, `GetBestMeleeTarget`, `GetLowestAlly`, `GetNoHexEnemy`, `GetBalledEnchantedEnemy`, `GetMostBalledCastingEnemy`. |
-| KF-019 | Extract ally/summon target helpers | Combat | Backlog | unassigned | KF-008,KF-009,KF-017 | yes | Move `GetNearestSpiritPtrToAgent`, `GetNearestMinionPtrToAgent`, `GetNearestDeadAllyPtrToAgent`, `NeedEchoAlly`, `MostCondsAllyPtr`, `MostHexedAllyPtr`. |
-| KF-020 | Extract combat state readers | Combat | Backlog | unassigned | KF-008,KF-009,KF-010,KF-017 | yes | Move `Wipe`, `GetPartyHealth`, `GetNumberOfEnemies`, `IsKnocked`, `AgentHasEffect`. |
-| KF-021 | Extract skillbar caching | Combat | Backlog | unassigned | KF-010,KF-014,KF-015,KF-016,KF-017 | no | Move `CacheSkillBar` into `BotCore-Combat.au3` using the new combat state container. |
-| KF-022 | Extract cast/use decision engine | Combat | Backlog | unassigned | KF-018,KF-019,KF-020,KF-021 | no | Move `CanCast`, `CanAttack`, `CanUse`, and `GetBestTargetBySkillSlot`. |
-| KF-023 | Extract active combat execution | Combat | Backlog | unassigned | KF-018,KF-019,KF-020,KF-021,KF-022 | no | Move `UseSkillSmart`, `UseSkills`, and `Fight`. |
-| KF-024 | Add Froggy compatibility wrappers for extracted combat subsystem | Combat | Backlog | unassigned | KF-021,KF-022,KF-023 | no | Keep Froggy call sites stable while moving the implementation into shared modules. |
-| KF-025 | Define loot policy callback interface | Loot | Backlog | unassigned | KF-003,KF-004 | no | Define interfaces for `ShouldPickItem`, stat update hooks, chest-open behavior, and post-pickup hooks. |
-| KF-026 | Refactor pickup predicate into engine plus policy | Loot | Backlog | unassigned | KF-013,KF-025 | no | Split `CanPickUpEx` into generic reusable rules and Froggy-specific policy/config. |
-| KF-027 | Extract loot pickup engine | Loot | Backlog | unassigned | KF-013,KF-025,KF-026 | no | Move `PickupLootEx` into `BotCore-Loot.au3` and route script-specific behavior through callbacks. |
-| KF-028 | Extract chest detection/open flow | Loot | Backlog | unassigned | KF-013,KF-025,KF-026 | no | Move `CheckForChest` into `BotCore-Loot.au3` with configurable behavior. |
-| KF-029 | Define waypoint action callback interface | Waypoints | Backlog | unassigned | KF-003,KF-004 | no | Define generic waypoint labels/actions, wipe restart callback, and special node handling. |
-| KF-030 | Extract nearest-waypoint helper | Waypoints | Backlog | unassigned | KF-001,KF-005 | yes | Move `GetNearestWaypointIndex` into `BotCore-Waypoints.au3`. |
-| KF-031 | Refactor movement step engine from AggroMoveToEX | Waypoints | Backlog | unassigned | KF-023,KF-025,KF-029 | no | Split `AggroMoveToEX` into reusable movement/fight/loot step logic plus Froggy policy. |
-| KF-032 | Refactor generic waypoint runner from MoveandAggroEx | Waypoints | Backlog | unassigned | KF-028,KF-029,KF-030,KF-031 | no | Extract generic waypoint traversal and action dispatch from `MoveandAggroEx`. |
-| KF-033 | Convert WipeManagement into Froggy route policy callback | Waypoints | Backlog | unassigned | KF-029,KF-032 | no | Keep Bogroot-specific restart behavior outside the generic waypoint module. |
-| KF-034 | Define run-stats state container and callback interface | Stats | Backlog | unassigned | KF-003,KF-004 | yes | Define state structure and GUI callback hooks for runtime tracking. |
-| KF-035 | Extract runtime timers and calculations | Stats | Backlog | unassigned | KF-001,KF-034 | yes | Move `AvgRunTime`, `BestRunTime`, `CurrentRunTime`, `TotalRunTime` into `BotCore-RunStats.au3`. |
-| KF-036 | Extract GUI stat update bridge | Stats | Backlog | unassigned | KF-034,KF-035 | no | Refactor `UpdateStats` to use run-stats state plus GUI callback hooks. |
-| KF-037 | Evaluate `LoadHeroConfigFromFile` for shared extraction | HeroSetup | Backlog | unassigned | KF-001,KF-005 | yes | Decide whether to keep it in Froggy or move it into `BotCore-HeroSetup.au3`. |
-| KF-038 | Create post-phase integration branch/checkpoint plan | Process | Ready | unassigned | none | yes | Define merge checkpoints so parallel agents integrate in safe batches instead of one huge merge. |
-| KF-039 | Integrate low-risk extraction batch into Froggy | Integration | Backlog | unassigned | KF-008,KF-009,KF-010,KF-011,KF-012,KF-013 | no | Merge and validate Phase 1 extractions together. |
-| KF-040 | Integrate skill classification batch into Froggy | Integration | Backlog | unassigned | KF-014,KF-015,KF-016,KF-039 | no | Merge and validate skill-rule extraction with Froggy call sites. |
-| KF-041 | Integrate combat subsystem batch into Froggy | Integration | Backlog | unassigned | KF-017,KF-018,KF-019,KF-020,KF-021,KF-022,KF-023,KF-024,KF-040 | no | Merge and validate combat extraction. |
-| KF-042 | Integrate loot subsystem batch into Froggy | Integration | Backlog | unassigned | KF-025,KF-026,KF-027,KF-028,KF-041 | no | Merge and validate loot/chest extraction. |
-| KF-043 | Integrate waypoint subsystem batch into Froggy | Integration | Backlog | unassigned | KF-029,KF-030,KF-031,KF-032,KF-033,KF-042 | no | Merge and validate waypoint extraction. |
-| KF-044 | Integrate stats subsystem batch into Froggy | Integration | Backlog | unassigned | KF-034,KF-035,KF-036,KF-043 | no | Merge and validate run-stats extraction. |
+| KF-001 | Create custom library skeleton | Infra | Done | agent-1 | none | yes | 8 BotCore module skeletons created in `lib/custom/`. |
+| KF-002 | Add shared include aggregator to Froggy | Infra | Done | agent-1 | KF-001 | no | Modules wired into `Froggy_Includes.au3` master include. |
+| KF-003 | Define shared naming and state conventions | Infra | Done | agent-2 | none | yes | `CONVENTIONS.md` written with module, function, state, callback, and MemRead rules. |
+| KF-004 | Inventory all Froggy globals consumed by extractable functions | Analysis | Done | agent-1 | none | yes | 46 globals audited. Found 3 critical bugs (SkillBarCache OOB, NearestWaypoint corruption, BestTargetPtr side-effect). |
+| KF-005 | Define compatibility policy for extracted functions | Infra | Done | agent-1 | KF-003,KF-004 | yes | `COMPATIBILITY_POLICY.md` — names preserved, duplicates expected during migration, dead globals deleted. |
+| KF-006 | Create Au3Check validation script/process | Tooling | Done | agent-1 | none | yes | `tests/run_au3check.sh` with baseline 191 and real-error filtering. |
+| KF-007 | Create smoke-test checklist for Froggy runtime | Tooling | Done | agent-1 | none | yes | `tests/SMOKE_TEST_CHECKLIST.md` covering launch, travel, combat, loot, maintenance, stats. |
+| KF-008 | Extract identity and coordinate helpers | Effects | Done | agent-3 | KF-001,KF-005 | yes | `ID`, `GetX`, `GetY`, `X`, `Y` → BotCore-Effects.au3 (148 lines). |
+| KF-009 | Extract health/effect read helpers | Effects | Done | agent-3 | KF-001,KF-004,KF-005 | yes | `GetHP`, `GetHasEnchantment`, `HasEffect`, `GetSkillEffectPtr`, `GetEffectsPtr` → BotCore-Effects.au3. |
+| KF-010 | Extract skillbar pointer helpers | Effects | Done | agent-3 | KF-001,KF-004,KF-005 | yes | `GetSkillbarPtr`, `GetAdrenaline` → BotCore-Effects.au3. Depends on `$mBasePointer` global. |
+| KF-011 | Replace DP helper family with data-driven utility | Travel | Done | agent-4 | KF-001,KF-005 | yes | 7 DP functions consolidated with named constants → BotCore-Travel.au3 (202 lines). |
+| KF-012 | Extract travel wrappers | Travel | Done | agent-4 | KF-001,KF-005 | yes | `TravelTo`, `ResignAndReturn` → BotCore-Travel.au3. |
+| KF-013 | Extract inventory counters | Loot | Done | agent-5 | KF-001,KF-005 | yes | `CountFreeSlots`, `GetPicksCount` → BotCore-Loot.au3. |
+| KF-014 | Extract skill classification core set | SkillRules | Done | agent-5 | KF-001,KF-005 | yes | Core classifiers → BotCore-SkillRules.au3. |
+| KF-015 | Extract skill classification support set | SkillRules | Done | agent-6 | KF-014 | yes | Heal/bond/condition/hex/enchant removal classifiers → BotCore-SkillRules.au3. |
+| KF-016 | Extract skill classification advanced set | SkillRules | Done | agent-6 | KF-014 | yes | Pressure/binding/speed/survival/rupt/precast classifiers → BotCore-SkillRules.au3 (453 lines total). |
+| KF-017 | Define combat state container | Combat | Done | agent-7 | KF-003,KF-004 | no | SkillBarCache[9][23] (OOB bug FIXED), SkillbarSlot[10000], BestTargetPtr, enum. Dead globals removed. |
+| KF-018 | Extract target selection helpers | Combat | Done | agent-9 | KF-008,KF-009,KF-010,KF-014,KF-017 | yes | 6 target selection functions → BotCore-Combat.au3. |
+| KF-019 | Extract ally/summon target helpers | Combat | Done | agent-9 | KF-008,KF-009,KF-017 | yes | 6 ally/summon targeting functions → BotCore-Combat.au3. |
+| KF-020 | Extract combat state readers | Combat | Done | agent-7 | KF-008,KF-009,KF-010,KF-017 | yes | Wipe, GetPartyHealth, GetNumberOfEnemies, IsKnocked, AgentHasEffect → BotCore-Combat.au3. |
+| KF-021 | Extract skillbar caching | Combat | Done | agent-10 | KF-010,KF-014,KF-015,KF-016,KF-017 | no | CacheSkillBar → BotCore-Combat.au3. |
+| KF-022 | Extract cast/use decision engine | Combat | Done | agent-10 | KF-018,KF-019,KF-020,KF-021 | no | CanCast, CanAttack, CanUse, GetBestTargetBySkillSlot → BotCore-Combat.au3. |
+| KF-023 | Extract active combat execution | Combat | Done | agent-10 | KF-018,KF-019,KF-020,KF-021,KF-022 | no | UseSkillSmart, UseSkills, Fight → BotCore-Combat.au3 (900 lines total). |
+| KF-024 | Add Froggy compatibility wrappers for combat subsystem | Combat | In Progress | agent-13 | KF-021,KF-022,KF-023 | no | Analysis in progress — checking if wrappers needed. |
+| KF-025 | Define loot policy callback interface | Loot | Done | agent-11 | KF-003,KF-004 | no | Policy documented in BotCore-Loot.au3 with FROGGY-SPECIFIC markers. |
+| KF-026 | Refactor pickup predicate into engine plus policy | Loot | Done | agent-11 | KF-013,KF-025 | no | CanPickUpEx extracted with policy sections marked → BotCore-Loot.au3. |
+| KF-027 | Extract loot pickup engine | Loot | Done | agent-11 | KF-013,KF-025,KF-026 | no | PickupLootEx → BotCore-Loot.au3 (318 lines total). |
+| KF-028 | Extract chest detection/open flow | Loot | Done | agent-11 | KF-013,KF-025,KF-026 | no | CheckForChest → BotCore-Loot.au3. |
+| KF-029 | Define waypoint action callback interface | Waypoints | In Progress | agent-12 | KF-003,KF-004 | no | Extraction in progress. |
+| KF-030 | Extract nearest-waypoint helper | Waypoints | Done | agent-8 | KF-001,KF-005 | yes | GetNearestWaypointIndex → BotCore-Waypoints.au3. |
+| KF-031 | Refactor movement step engine from AggroMoveToEX | Waypoints | In Progress | agent-12 | KF-023,KF-025,KF-029 | no | Extraction in progress. |
+| KF-032 | Refactor generic waypoint runner from MoveandAggroEx | Waypoints | In Progress | agent-12 | KF-028,KF-029,KF-030,KF-031 | no | Extraction in progress. |
+| KF-033 | Convert WipeManagement into Froggy route policy callback | Waypoints | In Progress | agent-12 | KF-029,KF-032 | no | Extraction in progress. |
+| KF-034 | Define run-stats state container and callback interface | Stats | Done | agent-8 | KF-003,KF-004 | yes | State globals defined in BotCore-RunStats.au3. |
+| KF-035 | Extract runtime timers and calculations | Stats | Done | agent-8 | KF-001,KF-034 | yes | AvgRunTime, BestRunTime, CurrentRunTime, TotalRunTime → BotCore-RunStats.au3 (88 lines). |
+| KF-036 | Extract GUI stat update bridge | Stats | In Progress | agent-13 | KF-034,KF-035 | no | Analysis in progress. |
+| KF-037 | Evaluate `LoadHeroConfigFromFile` for shared extraction | HeroSetup | Done | agent-1 | KF-001,KF-005 | yes | Extracted to BotCore-HeroSetup.au3 (88 lines). Generic config loader, reusable. |
+| KF-038 | Create post-phase integration branch/checkpoint plan | Process | Done | agent-1 | none | yes | `tests/INTEGRATION_CHECKPOINTS.md` with 7 merge gates. |
+| KF-039 | Integrate low-risk extraction batch into Froggy | Integration | Ready | unassigned | KF-008,KF-009,KF-010,KF-011,KF-012,KF-013 | no | All deps done. Remove duplicates from Froggy. |
+| KF-040 | Integrate skill classification batch into Froggy | Integration | Ready | unassigned | KF-014,KF-015,KF-016,KF-039 | no | All deps done. Remove duplicates from Froggy. |
+| KF-041 | Integrate combat subsystem batch into Froggy | Integration | Ready | unassigned | KF-017,KF-018,KF-019,KF-020,KF-021,KF-022,KF-023,KF-024,KF-040 | no | Deps done except KF-024 (in progress). |
+| KF-042 | Integrate loot subsystem batch into Froggy | Integration | Ready | unassigned | KF-025,KF-026,KF-027,KF-028,KF-041 | no | All extraction deps done. |
+| KF-043 | Integrate waypoint subsystem batch into Froggy | Integration | Blocked | unassigned | KF-029,KF-030,KF-031,KF-032,KF-033,KF-042 | no | Waiting on waypoint extraction (in progress). |
+| KF-044 | Integrate stats subsystem batch into Froggy | Integration | Ready | unassigned | KF-034,KF-035,KF-036,KF-043 | no | Deps done except KF-036 (in progress). |
 | KF-045 | Full Froggy regression pass | QA | Backlog | unassigned | KF-044,KF-006,KF-007 | no | Run Au3Check plus manual smoke checks across launch, setup, route, combat, looting, wipe recovery. |
 | KF-046 | Cleanup dead code and duplicate local wrappers | Cleanup | Backlog | unassigned | KF-045 | no | Remove old Froggy-embedded implementations after shared modules are verified. |
 | KF-047 | Update docs with new module map | Docs | Backlog | unassigned | KF-046 | yes | Update implementation docs and dependency notes to reflect extracted library ownership. |
