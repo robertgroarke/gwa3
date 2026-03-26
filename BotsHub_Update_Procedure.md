@@ -75,7 +75,11 @@ cp BotsHub-new/sqlite3.dll "GWA Censured/lib/botshub/"  # if present
 
 **Important:** Do NOT copy `BotsHub-new/BotsHub.au3` or `BotsHub-new/src/` — those are the BotsHub application, not libraries.
 
-### Step 3: Re-Add Crafting Hook Lines
+### Step 3: Re-Add Crafting Hook Lines + Comment Out Duplicates
+
+**In `botshub/Utils.au3`:** Comment out or delete the `NPCCoordinatesInTown` function (our custom version in `custom/NPC_Coordinates.au3` is a superset with Gadd's Encampment, Embark Beach traders, and Xunlai chest support).
+
+**In `botshub/GWA2_Assembly.au3`:** Re-add the 3 crafting hook lines:
 
 The crafting system hooks into `GWA2_Assembly.au3` at 3 points. After replacing the file, re-add these lines:
 
