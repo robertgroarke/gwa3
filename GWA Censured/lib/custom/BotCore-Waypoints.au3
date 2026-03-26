@@ -23,6 +23,12 @@
 ; Globals read : (none)
 ; Globals written: (none)
 ; ---------------------------------------------------------------------------
+;~ Navigate to the nearest signpost at given coordinates
+Func GoToSignpostNearXY($x, $y)
+	Local $signpost = GetNearestSignpostToCoords($x, $y)
+	GoToSignpost($signpost)
+EndFunc
+
 Func GetNearestWaypointIndex($aWaypoints)
 	Local $lNearestWaypoint, $lNearestDistance = 100000000
 	Local $lDistance
