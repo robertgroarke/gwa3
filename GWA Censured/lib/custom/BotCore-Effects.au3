@@ -146,3 +146,10 @@ Func GetAdrenaline($aSkillSlot)
     $aSkillSlot -= 1
     Return MemRead($aSkillbarPtr + 4 + $aSkillSlot * 20, "long")
 EndFunc
+
+;~ Returns raw memory pointer to a skill's data struct by skill ID
+;~ Used by BotCore-SkillRules.au3 and BotCore-Combat.au3 for reading
+;~ skill properties (type, range, effect flags, cast time, etc.)
+Func GetSkillPtr($aSkillID)
+	Return Ptr($skill_base_address + 0xA4 * $aSkillID)
+EndFunc

@@ -688,40 +688,6 @@ EndFunc
 
 
 
-; ============================================================
-; Functions added for Resign and Return capability
-; ============================================================
-
-
-
-; Helper for Logic Port
-; Helper for Logic Port
-Func GetSkillPtr($aSkillID)
-	; Return actual memory address of skill in game memory (not a copied struct)
-	; This matches GWA_Logic: $mSkillBase + 160 * $aSkillID
-	; 0xA4 = 164 bytes per skill (from GWA2: 0xA4 * $skillID)
-	Return Ptr($skill_base_address + 0xA4 * $aSkillID)
-EndFunc
-
-
-
-; Ported Helper: IsPressureSpiritSkill
-
-
-; Ported Helper: IsDisguiseskill
-
-
-
-
-
-
-
-
-; #Region Logic_Port — REMOVED
-; All 92 functions from this region have been extracted to BotCore modules:
-;   BotCore-Combat.au3, BotCore-SkillRules.au3, BotCore-Effects.au3,
-;   BotCore-Loot.au3, BotCore-RunStats.au3, BotCore-Travel.au3,
-;   BotCore-Waypoints.au3, BotCore-HeroSetup.au3
-; They are included via Froggy_Includes.au3 master include.
+; All reusable functions have been extracted to BotCore modules in lib/custom/.
 ; See Kanban_Froggy_Function_Extraction.md for details.
 
