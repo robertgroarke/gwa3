@@ -566,16 +566,3 @@ Func ReverseToSparkflySwamp()
 	Until WaitMapLoading($Sparkfly_Swamp) or TimerDiff($aTimer) > 60000
 EndFunc
 
-
-
-
-
-; DP helpers (UseDP, UseDP_Cycle, UseDP_Armor, etc.) are in BotCore-Travel.au3
-; GoToSignpostNearXY was unused — deleted
-
-
-
-
-; All reusable functions have been extracted to BotCore modules in lib/custom/.
-; See Kanban_Froggy_Function_Extraction.md for details.
-
