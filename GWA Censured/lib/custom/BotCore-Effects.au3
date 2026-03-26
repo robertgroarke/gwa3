@@ -111,17 +111,7 @@ Func GetEffectsPtr($aSkillID = 0, $aHeroNumber = 0, $aHeroId = GetHeroID($aHeroN
 	Return 0
 EndFunc
 
-; Renamed Helper for Logic Port to avoid conflict
-; Note: GetEffect() expects hero index (0=player, 1-7=heroes), not agent ID
-; For player effects, we use hero index 0
-Func AgentHasEffect($aSkillID, $aAgentID = -2)
-	; For simplicity, if checking player (-2), use hero index 0
-	; This function currently only supports checking player effects
-	Local $heroIndex = 0  ; Always check player for now
-	Local $effect = GetEffect($aSkillID, $heroIndex)
-	; GetEffect returns Null if effect not found, or DllStruct if found
-	Return ($effect <> Null And Not IsArray($effect))
-EndFunc
+; AgentHasEffect — defined in BotCore-Combat.au3
 
 ; =============================================================================
 ; KF-010 - Skillbar pointer helpers

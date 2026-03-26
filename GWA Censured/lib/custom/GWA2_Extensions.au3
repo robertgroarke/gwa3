@@ -38,23 +38,7 @@ Func GetItemIDFromModelID($modelID)
 	Next
 EndFunc
 
-;~ Get item from merchant corresponding to given modelID
-Func GetMerchantItemPtrByModelId($modelID)
-	Local $offsets[5] = [0, 0x18, 0x40, 0xB8]
-	Local $merchantBaseAddress = GetMerchantItemsBase()
-	Local $itemID = 0
-	Local $itemPtr = 0
-	For $i = 0 To GetMerchantItemsSize() -1
-		$itemID = MemRead($merchantBaseAddress + 4 * $i)
-		If ($itemID) Then
-			$offsets[4] = 4 * $itemID
-			$itemPtr = MemReadPtr($base_address_ptr, $offsets)[1]
-			If (MemRead($itemPtr + 0x2C) = $modelID) Then
-				Return Ptr($itemPtr)
-			EndIf
-		EndIf
-	Next
-EndFunc
+; GetMerchantItemPtrByModelID — provided by botshub/GWA2.au3
 
 
 ; ==================================================================================================
