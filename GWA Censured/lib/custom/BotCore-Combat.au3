@@ -1,9 +1,15 @@
 #include-once
 ; =============================================================================
-; BotCore-Combat.au3 — Combat State Container & State Reader Functions
+; BotCore-Combat.au3 — Combat State Container, State Readers & Target Selection
 ;
 ; KF-017: Defines the combat state globals (SkillBarCache, SkillbarSlot,
 ;         BestTargetPtr) with corrected sizing.
+; KF-018: Target selection helpers (GetBestTargetPtr, GetBestMeleeTarget,
+;         GetLowestAlly, GetNoHexEnemy, GetBalledEnchantedEnemy,
+;         GetMostBalledCastingEnemy, GetBestTargetBySkillSlot).
+; KF-019: Ally/summon targeting helpers (GetNearestSpiritPtrToAgent,
+;         GetNearestMinionPtrToAgent, GetNearestDeadAllyPtrToAgent,
+;         NeedEchoAlly, MostCondsAllyPtr, MostHexedAllyPtr).
 ; KF-020: Extracts combat state reader functions from Froggy_HM_v1.6.au3.
 ;
 ; Extracted from Froggy_HM_v1.6.au3 as part of the function extraction project.
@@ -188,4 +194,313 @@ Func AgentHasEffect($aSkillID, $aAgentID = -2)
     Local $lEffect = GetEffect($aSkillID, $lHeroIndex)
     ; GetEffect returns Null if effect not found, or DllStruct if found
     Return ($lEffect <> Null And Not IsArray($lEffect))
+EndFunc
+
+; =============================================================================
+; Section 6: Target Selection (KF-018)
+; =============================================================================
+; Extracted from Froggy_HM_v1.6.au3 lines 1310-1603. These functions select
+; the best enemy target based on range, filters (casting, hex, enchant), and
+; skill slot requirements. Several are thin wrappers around GetBestTargetPtr
+; with different filter combinations.
+;
+; GLOBALS READ:  $SkillBarCache, $SkillbarSlot
+; GLOBALS WRITE: $BestTargetPtr (via direct assignment in GetBestTargetBySkillSlot)
+;
+; NOTE: GetBestTargetBySkillSlot still writes $BestTargetPtr as a bare global
+; side-effect for compatibility with Fight()/UseSkills()/CanAttack() in Froggy.
+; Migration to SetBestTarget() will happen when those callers are extracted.
+
+; -----------------------------------------------------------------------------
+; GetBestTargetPtr() — Best Enemy Target with Filters
+; Returns the nearest living enemy agent within range, optionally filtered by
+; casting state, hex presence, and enchantment presence.
+;
+; @param $aRange      Distance threshold (default: 1350)
+; @param $casting     If True, only return enemies currently casting
+; @param $nohex       If True, only return enemies without hexes
+; @param $enchanted   If True, only return enemies with enchantments
+; @return             Agent struct of best target, or 0 if none found
+; -----------------------------------------------------------------------------
+Func GetBestTargetPtr($aRange = 1350, $casting = False, $nohex = False, $enchanted = False)
+    Local $lAgentArray = GetAgentArray(0xDB) ; 0xDB = All living NPCs
+    If Not IsArray($lAgentArray) Then Return 0
+
+    Local $lBestDist = 99999
+    Local $lBestPtr = 0
+    Local $lMe = GetAgentByID(-2)
+    Local $lEnemiesInRange = 0
+
+    For $i = 0 To UBound($lAgentArray) - 1
+        Local $lAgent = $lAgentArray[$i]
+        If GetIsDead($lAgent) Then ContinueLoop
+
+        ; CRITICAL: Filter for enemies only (Allegiance = 3 = FOE)
+        Local $lAllegiance = DllStructGetData($lAgent, 'Allegiance')
+        If $lAllegiance <> 3 Then ContinueLoop  ; Skip non-enemies
+
+        Local $lDist = GetDistance(GetMyAgent(), $lAgent)
+        If $lDist > $aRange Then ContinueLoop
+        $lEnemiesInRange += 1
+        Local $lID = DllStructGetData($lAgent, 'ID')
+
+        ; Apply filters
+        If $casting And Not GetIsCasting($lID) Then ContinueLoop
+        If $nohex And GetHasHex($lID) Then ContinueLoop
+        If $enchanted And Not GetHasEnchantment($lID) Then ContinueLoop
+
+        If $lDist < $lBestDist Then
+            $lBestDist = $lDist
+            $lBestPtr = $lAgent
+        EndIf
+    Next
+    Return $lBestPtr
+EndFunc
+
+; -----------------------------------------------------------------------------
+; GetBestMeleeTarget() — Nearest Enemy in Melee Range
+; Convenience wrapper: calls GetBestTargetPtr with short range (250).
+;
+; @param $aRange  Distance threshold (default: 250, melee range)
+; @return         Agent struct of nearest melee-range enemy, or 0
+; -----------------------------------------------------------------------------
+Func GetBestMeleeTarget($aRange = 250)
+    Return GetBestTargetPtr($aRange) ; Simplified
+EndFunc
+
+; -----------------------------------------------------------------------------
+; GetNoHexEnemy() — Nearest Enemy Without Hexes
+; Returns the nearest enemy that does not currently have a hex on it.
+;
+; @param $aRange  Distance threshold (default: 1320)
+; @return         Agent struct, or 0 if none found
+; -----------------------------------------------------------------------------
+Func GetNoHexEnemy($aRange = 1320)
+    Return GetBestTargetPtr($aRange, False, True)
+EndFunc
+
+; -----------------------------------------------------------------------------
+; GetBalledEnchantedEnemy() — Nearest Enchanted Enemy
+; Returns the nearest enemy that has an enchantment active.
+;
+; @param $aRange  Distance threshold
+; @return         Agent struct, or 0 if none found
+; -----------------------------------------------------------------------------
+Func GetBalledEnchantedEnemy($aRange)
+    Return GetBestTargetPtr($aRange, False, False, True)
+EndFunc
+
+; -----------------------------------------------------------------------------
+; GetMostBalledCastingEnemy() — Nearest Casting Enemy
+; Returns the nearest enemy currently casting a spell (for interrupts).
+;
+; @param $aRange  Distance threshold (default: 1320)
+; @return         Agent struct, or 0 if none found
+; -----------------------------------------------------------------------------
+Func GetMostBalledCastingEnemy($aRange = 1320)
+    Return GetBestTargetPtr($aRange, True)
+EndFunc
+
+; -----------------------------------------------------------------------------
+; GetLowestAlly() — Lowest Health Ally
+; Scans all living allied agents and returns the one with the lowest HP
+; fraction. Optionally excludes the player.
+;
+; @param $excludeself  If True, skip the player agent
+; @return              Agent struct of lowest-HP ally, or 0 if none
+; -----------------------------------------------------------------------------
+Func GetLowestAlly($excludeself = False)
+    Local $lLowestally = 0, $lLowestHP = 1.0
+    Local $lAgentArray = GetAgentArray(0xDB)
+    For $i = 0 To UBound($lAgentArray) - 1
+        If DllStructGetData($lAgentArray[$i], 'Allegiance') <> 1 Then ContinueLoop
+        If DllStructGetData($lAgentArray[$i], 'HP') <= 0 Then ContinueLoop
+        If $excludeself And ID($lAgentArray[$i]) = ID(-2) Then ContinueLoop
+        Local $lHP = GetHP($lAgentArray[$i])
+        If $lHP < $lLowestHP Then
+            $lLowestally = $lAgentArray[$i]
+            $lLowestHP = $lHP
+        EndIf
+    Next
+    Return $lLowestally
+EndFunc
+
+; -----------------------------------------------------------------------------
+; GetBestTargetBySkillSlot() — Target Selection by Skill Slot Properties
+; Reads the $target column of SkillBarCache for the given slot and dispatches
+; to the appropriate targeting function based on target type code:
+;   0 = self, 1 = spirit/minion, 3 = ally, 4 = other ally,
+;   5 = enemy, 6 = dead ally, 14 = minion
+;
+; SIDE EFFECT: Writes $BestTargetPtr (bare global) for compatibility with
+; Fight()/UseSkills()/CanAttack() in Froggy. Will migrate to SetBestTarget()
+; when those callers are extracted.
+;
+; @param $aSkillSlot   Skill bar slot (1-8)
+; @param $aAggroRange  Distance threshold (default: 1320)
+; @return              Agent struct of selected target, or 0
+; -----------------------------------------------------------------------------
+Func GetBestTargetBySkillSlot($aSkillSlot, $aAggroRange = 1320)
+    Local $MyPtr = GetAgentByID(-2)
+    Local $targetType = $SkillBarCache[$aSkillSlot][$target]
+    Switch $targetType
+        Case 0  ; self
+            If $SkillBarCache[$aSkillSlot][$type] == $Ward And GetDistance(GetMyAgent(), GetNearestEnemyToAgent(GetMyAgent())) > $aAggroRange Then Return False
+            $BestTargetPtr = $MyPtr
+        Case 1  ; spirit, minion
+            $BestTargetPtr = GetNearestSpiritPtrToAgent()
+        Case 3  ; ally
+            If $SkillBarCache[$aSkillSlot][$condremove] <> "" Then
+                $BestTargetPtr = MostCondsAllyPtr()
+            ElseIf $SkillBarCache[$aSkillSlot][$hexremove] <> "" Then
+                $BestTargetPtr = MostHexedAllyPtr()
+            ElseIf $SkillBarCache[$aSkillSlot][$precast] <> "" Then
+                $BestTargetPtr = $MyPtr
+            ElseIf $SkillBarCache[$aSkillSlot][$survive] <> "" Then
+                $BestTargetPtr = $MyPtr
+            ElseIf $SkillBarCache[$aSkillSlot][$echoes] <> "" Then
+                $BestTargetPtr = NeedEchoAlly($SkillBarCache[$aSkillSlot][$echoes])
+            Else
+                $BestTargetPtr = GetLowestAlly()
+            EndIf
+        Case 4  ; other ally
+            If $SkillBarCache[$aSkillSlot][$condremove] <> "" Then
+                $BestTargetPtr = MostCondsAllyPtr(True)
+            ElseIf $SkillBarCache[$aSkillSlot][$hexremove] <> "" Then
+                $BestTargetPtr = MostHexedAllyPtr(True)
+            ElseIf $SkillBarCache[$aSkillSlot][$precast] <> "" Then
+                $BestTargetPtr = $MyPtr
+            ElseIf $SkillBarCache[$aSkillSlot][$survive] <> "" Then
+                $BestTargetPtr = $MyPtr
+            ElseIf $SkillBarCache[$aSkillSlot][$echoes] <> "" Then
+                $BestTargetPtr = NeedEchoAlly($SkillBarCache[$aSkillSlot][$echoes])
+            Else
+                $BestTargetPtr = GetLowestAlly(True)
+            EndIf
+        Case 5  ; enemy
+            If $SkillBarCache[$aSkillSlot][$hexes] <> "" Then
+                $BestTargetPtr = GetNoHexEnemy($aAggroRange)
+                If $BestTargetPtr = 0 Then $BestTargetPtr = GetBestTargetPtr($aAggroRange)
+            ElseIf $SkillBarCache[$aSkillSlot][$enchantremove] <> "" Then
+                $BestTargetPtr = GetBalledEnchantedEnemy($aAggroRange)
+            ElseIf $SkillBarCache[$aSkillSlot][$attackskill] <> "" Then
+                $BestTargetPtr = GetBestMeleeTarget()
+            ElseIf $SkillBarCache[$aSkillSlot][$rupt] <> "" Then
+                $BestTargetPtr = GetMostBalledCastingEnemy($aAggroRange)
+            Else
+                $BestTargetPtr = GetBestTargetPtr($aAggroRange)
+            EndIf
+        Case 6  ; dead ally
+            $BestTargetPtr = GetNearestDeadAllyPtrToAgent()
+        Case 14 ; spirit, minion
+            $BestTargetPtr = GetNearestMinionPtrToAgent()
+    EndSwitch
+
+    If $BestTargetPtr <> 0 Then Return $BestTargetPtr
+    Return 0
+EndFunc
+
+; =============================================================================
+; Section 7: Ally/Summon Targeting (KF-019)
+; =============================================================================
+; Extracted from Froggy_HM_v1.6.au3 lines 1349-1627. These functions find
+; specific ally/summon targets for support skills (resurrect, condition/hex
+; removal, echo application, spirit/minion targeting).
+;
+; GLOBALS READ: None (use GWA2 API calls)
+
+; -----------------------------------------------------------------------------
+; GetNearestSpiritPtrToAgent() — Nearest Spirit
+; Returns the nearest NPC spirit to the specified agent.
+; NOTE: Simplified placeholder — uses GetNearestNPCToCoords which may not
+; filter specifically for spirits. Refine when spirit type ID is available.
+;
+; @param $aAgent  Agent ID (default: -2 = player)
+; @return         Agent struct, or result of GetNearestNPCToCoords
+; -----------------------------------------------------------------------------
+Func GetNearestSpiritPtrToAgent($aAgent = -2)
+    ; Simplified implementation
+    Return GetNearestNPCToCoords(GetX($aAgent), GetY($aAgent)) ; Placeholder
+EndFunc
+
+; -----------------------------------------------------------------------------
+; GetNearestMinionPtrToAgent() — Nearest Minion
+; Returns the nearest minion to the specified agent.
+; NOTE: Placeholder — always returns 0. Implement when minion allegiance/type
+; filtering is available in GWA2.
+;
+; @param $aAgent  Agent ID (default: -2 = player)
+; @return         0 (placeholder)
+; -----------------------------------------------------------------------------
+Func GetNearestMinionPtrToAgent($aAgent = -2)
+    Return 0 ; Placeholder
+EndFunc
+
+; -----------------------------------------------------------------------------
+; GetNearestDeadAllyPtrToAgent() — Nearest Dead Ally
+; Scans the party array and returns the first dead member found.
+; Used for resurrection skill targeting.
+;
+; @param $aAgent  Agent ID (default: -2 = player; currently unused)
+; @return         Agent struct of first dead party member, or 0
+; -----------------------------------------------------------------------------
+Func GetNearestDeadAllyPtrToAgent($aAgent = -2)
+    Local $party = GetParty()
+    For $i = 0 To UBound($party) - 1
+        If GetIsDead($party[$i]) Then Return $party[$i]
+    Next
+    Return 0
+EndFunc
+
+; -----------------------------------------------------------------------------
+; NeedEchoAlly() — Ally Needing Echo/Refrain
+; Returns an ally that needs the specified echo/refrain skill applied.
+; NOTE: Simplified placeholder — always returns the player agent. Implement
+; proper echo effect checking when multi-hero effect queries are available.
+;
+; @param $aSkillID  The echo/refrain skill ID to check for
+; @return           Agent struct (currently always player)
+; -----------------------------------------------------------------------------
+Func NeedEchoAlly($aSkillID)
+    Return GetAgentByID(-2) ; Simplified
+EndFunc
+
+; -----------------------------------------------------------------------------
+; MostCondsAllyPtr() — Ally with Most Conditions
+; Iterates party members and returns the one with the most conditions.
+; NOTE: Simplified placeholder — iterates heroes but does not actually count
+; conditions (complex effect checking not yet implemented). Returns the last
+; hero ID visited.
+;
+; @param $excludeself  If True, skip hero index 0 (player)
+; @return              Hero agent ID (placeholder logic)
+; -----------------------------------------------------------------------------
+Func MostCondsAllyPtr($excludeself = False)
+    Local $MostConditionedAlly = 0
+    Local $lMostConditions = 0
+    For $aHeroNumber = 0 To GetPartySize() - 1
+        If $excludeself = True And $aHeroNumber = 0 Then ContinueLoop
+        ; Logic simplified: assume random ally if complex effect checking fails
+        $MostConditionedAlly = GetHeroID($aHeroNumber)
+    Next
+    Return $MostConditionedAlly ; Placeholder
+EndFunc
+
+; -----------------------------------------------------------------------------
+; MostHexedAllyPtr() — Ally with Most Hexes
+; Iterates party members and returns the one with the most hexes.
+; NOTE: Simplified placeholder — iterates heroes but does not actually count
+; hexes (complex effect checking not yet implemented). Returns the last
+; hero ID visited.
+;
+; @param $excludeself  If True, skip hero index 0 (player)
+; @return              Hero agent ID (placeholder logic)
+; -----------------------------------------------------------------------------
+Func MostHexedAllyPtr($excludeself = False)
+    Local $lMostHexedally = 0
+    For $aHeroNumber = 0 To GetPartySize() - 1
+        If $excludeself = True And $aHeroNumber = 0 Then ContinueLoop
+        $lMostHexedally = GetHeroID($aHeroNumber)
+    Next
+    Return $lMostHexedally ; Placeholder
 EndFunc
