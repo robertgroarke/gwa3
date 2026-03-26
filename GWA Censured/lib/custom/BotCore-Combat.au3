@@ -504,3 +504,397 @@ Func MostHexedAllyPtr($excludeself = False)
     Next
     Return $lMostHexedally ; Placeholder
 EndFunc
+; =============================================================================
+; BotCore-Combat-CastEngine.au3.tmp
+;
+; TEMPORARY FILE -- merge into BotCore-Combat.au3 after both agents complete.
+;
+; KF-021: Skillbar caching (CacheSkillBar)
+; KF-022: Cast/use decision engine (CanCast, CanAttack, CanUse)
+; KF-023: Active combat execution (UseSkillSmart, UseSkills, Fight)
+;
+; Extracted from Froggy_HM_v1.6.au3 lines 1368-1659.
+; MemoryRead -> MemRead conversion: NOT NEEDED (source already uses MemRead).
+;
+; No #include needed -- all dependencies resolve through Froggy_Includes.au3.
+; =============================================================================
+
+; =============================================================================
+; GLOBALS DOCUMENTATION
+; =============================================================================
+;
+; GLOBALS READ:
+;   $SkillBarCache[9][23]  -- skill bar cache array (declared in BotCore-Combat.au3 Section 1-2)
+;   $SkillbarSlot[3500]    -- maps skill ID -> slot index (declared in BotCore-Combat.au3 Section 2)
+;   $BestTargetPtr         -- current best target (bare global, still used for compat)
+;   Skill type constants   -- $Hex, $Spell, $Enchantment, $Well, $Ward, $ItemSpell,
+;                             $WeaponSpell, $Attack, $Ritual, $Signet, $Glyph, $Shout,
+;                             $Preparation, $Trap, $Chant, $EchoRefrain, $Disguise
+;                             (from Skill_Types.au3)
+;   Skill ID constants     -- $Diversion, $Visions_of_Regret, $Backfire, $Soul_Leech,
+;                             $Mistrust, $Mark_of_Subversion, $Spiteful_Spirit,
+;                             $Ineptitude, $Clumsiness, $Wandering_Eye, $Well_of_Silence,
+;                             $Ignorance, $Quickening_Zephyr, $Shadow_Form,
+;                             $Glyph_of_Swiftness, $Shroud_Of_Distress,
+;                             $Shadow_Sanctuary_Luxon, $Shadow_Sanctuary_Kurzick,
+;                             $Shadow_Refuge, $Heart_of_Shadow, $Mystic_Regeneration,
+;                             $Shield_of_Judgment, $Shielding_Hands, $Shield_of_Absorption,
+;                             $Finish_Him, $I_Am_Unstoppable,
+;                             $Summon_Spirits_Kurzick, $Summon_Spirits_Luxon
+;                             (from Skill_IDs.au3)
+;   Cache column enum      -- $all, $ptr, $energyreq, $adrereq, $type, $target,
+;                             $hexes, $pressure, $bind, $survive, $attackskill,
+;                             $heal, $bond, $condremove, $hexremove, $enchantremove,
+;                             $precast, $chantsnshouts, $echoes, $rupt, $skilltype
+;                             (from BotCore-Combat.au3 Section 1)
+;   PvP skill ID variants -- $Visions_of_Regret_PvP, $Mistrust_PvP, $Wandering_Eye_PvP
+;
+; GLOBALS WRITTEN:
+;   $SkillBarCache[9][23]  -- populated by CacheSkillBar()
+;   $SkillbarSlot[3500]    -- populated by CacheSkillBar()
+;   $BestTargetPtr         -- set by CanAttack() as side-effect
+;
+; EXTERNAL FUNCTION DEPENDENCIES (not in this file):
+;   From BotCore-Combat.au3:
+;     Wipe(), IsKnocked(), AgentHasEffect(), GetNumberOfEnemies(),
+;     GetBestTargetBySkillSlot(), GetBestTargetPtr()
+;   From GWA2/botshub:
+;     GetMapLoading(), Disconnected(), IsRecharged(), GetEnergy(), GetHP(),
+;     GetAdrenaline(), GetSkillbarSkillRecharge(), GetEffectTimeRemaining(),
+;     GetSkillbarSkillID(), GetSkillPtr(), MemRead(), UseSkill(),
+;     ChangeTarget(), GetIsDead(), Attack(), CancelAll(), Move(),
+;     GetMyID(), ID(), X(), Y(), GetAgentByID(), DllStructGetData()
+;   From Froggy (not yet extracted):
+;     GetNearestEnemyDistance(), PickupLootEx(), Out()
+;   From BotCore-SkillRules.au3:
+;     IsHexSpell(), IsPressureSkill(), IsSurvivalSkill(), IsAttackSkill(),
+;     IsHealSkill(), IsBondSkill(), IsCondRemoveSkill(), IsHexRemoveSkill(),
+;     IsEnchantRemoveSkill(), IsPrecastSkill(), IsChantSkill(), IsShoutSkill(),
+;     IsEchoRefrainskill(), IsBindingSkill()
+; =============================================================================
+
+
+; #############################################################################
+; KF-021: SKILLBAR CACHING
+; #############################################################################
+
+; -----------------------------------------------------------------------------
+; CacheSkillBar() -- Populate SkillBarCache and SkillbarSlot Arrays
+;
+; Reads each skill slot (1-8) from the live skillbar, resolves the skill data
+; pointer, and populates both the $SkillBarCache[slot][column] matrix and the
+; reverse-lookup $SkillbarSlot[skillID] = slotNumber array.
+;
+; For each slot, reads from memory:
+;   - energy cost   (offset +28, 'long')
+;   - adrenaline    (offset +56, 'dword')
+;   - skill type    (offset +12, 'long')
+;   - target type   (offset +49, 'byte')
+;
+; Then classifies the skill using the Is*Skill() functions from
+; BotCore-SkillRules.au3 and stores the skill ID in the appropriate
+; cache column (hexes, pressure, survive, attackskill, heal, bond,
+; condremove, hexremove, enchantremove, precast, chantsnshouts, echoes, bind).
+;
+; GLOBALS READ:   (none -- populates from GWA2 API)
+; GLOBALS WRITTEN: $SkillBarCache, $SkillbarSlot
+;
+; @return  True on completion
+; -----------------------------------------------------------------------------
+Func CacheSkillBar()
+	Out("Mapping your skill bar")
+	Sleep(200)
+	For $i = 1 To 8
+		Local $aSkillID = GetSkillbarSkillID($i)
+		If $aSkillID = 0 Then ContinueLoop
+		$SkillbarSlot[$aSkillID] = $i
+		$SkillBarCache[$i][$all] = $aSkillID
+		$SkillBarCache[$i][$ptr] = GetSkillPtr($aSkillID)
+		$SkillBarCache[$i][$energyreq] = MemRead($SkillBarCache[$i][$ptr] + 28, 'long')
+		$SkillBarCache[$i][$adrereq] = MemRead($SkillBarCache[$i][$ptr] + 56, 'dword')
+		$SkillBarCache[$i][$type] = MemRead($SkillBarCache[$i][$ptr] + 12, "long")
+		$SkillBarCache[$i][$target] = MemRead($SkillBarCache[$i][$ptr] + 49, "byte")
+
+		If IsHexSpell($aSkillID) Then $SkillBarCache[$i][$hexes] = $aSkillID
+		If IsPressureSkill($aSkillID) Then $SkillBarCache[$i][$pressure] = $aSkillID
+		If IsSurvivalSkill($aSkillID) Then $SkillBarCache[$i][$survive] = $aSkillID
+		If IsAttackSkill($aSkillID) Then $SkillBarCache[$i][$attackskill] = $aSkillID
+		If IsHealSkill($aSkillID) Then $SkillBarCache[$i][$heal] = $aSkillID
+		If IsBondSkill($aSkillID) Then $SkillBarCache[$i][$bond] = $aSkillID
+		If IsCondRemoveSkill($aSkillID) Then $SkillBarCache[$i][$condremove] = $aSkillID
+		If IsHexRemoveSkill($aSkillID) Then $SkillBarCache[$i][$hexremove] = $aSkillID
+		If IsEnchantRemoveSkill($aSkillID) Then $SkillBarCache[$i][$enchantremove] = $aSkillID
+		If IsPrecastSkill($aSkillID) Then $SkillBarCache[$i][$precast] = $aSkillID
+		If IsChantSkill($aSkillID) Or IsShoutSkill($aSkillID) Then $SkillBarCache[$i][$chantsnshouts] = $aSkillID
+		If IsEchoRefrainskill($aSkillID) Then $SkillBarCache[$i][$echoes] = $aSkillID
+	Next
+	Out("Mapping your skill bar - completed")
+	Return True
+EndFunc
+
+
+; #############################################################################
+; KF-022: CAST / USE DECISION ENGINE
+; #############################################################################
+
+; -----------------------------------------------------------------------------
+; CanCast($aSkillSlot) -- Check If Skill Can Be Cast
+;
+; Validates that the game is in a castable state (explorable area, not dead,
+; not knocked down, not wiped, skill recharged) and then checks for debuffs
+; that would prevent the skill type from being used (e.g. Diversion blocks
+; spells, Ineptitude blocks attacks, Ignorance blocks signets, etc.).
+;
+; If $aSkillSlot = 0, treats the skill type as $Attack (basic attack check).
+;
+; GLOBALS READ:  $SkillBarCache (column $type)
+; GLOBALS WRITTEN: (none)
+;
+; @param $aSkillSlot  Skill bar slot (1-8), or 0 for basic attack check
+; @return             True if the skill/attack can be cast
+; -----------------------------------------------------------------------------
+Func CanCast($aSkillSlot = 0)
+	If GetMapLoading() == 2 Then Disconnected()
+	If GetMapLoading() <> 1 Then Return False  ; Can only cast in explorable areas
+	If IsKnocked() Or GetIsDead(-2) Or Wipe() = 1 Then Return False
+	If $aSkillSlot <> 0 And Not IsRecharged($aSkillSlot) Then Return False
+	Local $aType = $SkillBarCache[$aSkillSlot][$type]
+	If $aSkillSlot = 0 Then $aType = $Attack
+
+	Switch $aType
+		Case $Hex, $Spell, $Enchantment, $Well, $Ward, $ItemSpell, $WeaponSpell
+			If AgentHasEffect($Diversion) <> 0 Then Return False
+			If AgentHasEffect($Visions_of_Regret) <> 0 Then Return False
+			If AgentHasEffect($Visions_of_Regret_PvP) <> 0 Then Return False
+			If AgentHasEffect($Backfire) <> 0 Then Return False
+			If AgentHasEffect($Soul_Leech) <> 0 Then Return False
+			If AgentHasEffect($Mistrust) <> 0 Then Return False
+			If AgentHasEffect($Mistrust_PvP) <> 0 Then Return False
+			If AgentHasEffect($Mark_of_Subversion) <> 0 Then Return False
+			If AgentHasEffect($Spiteful_Spirit) <> 0 Then Return False
+		Case $Attack
+			If AgentHasEffect($Ineptitude) + AgentHasEffect($Clumsiness) + AgentHasEffect($Spiteful_Spirit) + AgentHasEffect($Wandering_Eye) + AgentHasEffect($Wandering_Eye_PvP) <> 0 Then
+				Out("Can't Attack")
+				Return False
+			EndIf
+		Case $Ritual, $Signet, $Glyph, $Shout, $Preparation, $Trap, $Chant, $EchoRefrain, $Disguise
+			If AgentHasEffect($Diversion) Then Return False
+		Case $Shout, $Chant
+			If AgentHasEffect($Well_of_Silence) Then Return False
+		Case $Signet
+			If AgentHasEffect($Ignorance) Then Return False
+	EndSwitch
+	Return True
+EndFunc
+
+; -----------------------------------------------------------------------------
+; CanAttack($aRange) -- Check If Player Can Attack an Enemy
+;
+; Finds the best enemy target in range via GetBestTargetPtr() and stores it
+; in $BestTargetPtr (side-effect). Then checks CanCast() for basic attack
+; ability (slot 0 = attack type).
+;
+; GLOBALS READ:   (none directly -- delegates to GetBestTargetPtr, CanCast)
+; GLOBALS WRITTEN: $BestTargetPtr (via GetBestTargetPtr assignment)
+;
+; @param $aRange  Distance threshold (default: 1320)
+; @return         True if an attackable enemy exists in range
+; -----------------------------------------------------------------------------
+Func CanAttack($aRange = 1320)
+	$BestTargetPtr = GetBestTargetPtr($aRange)
+	If $BestTargetPtr = 0 Then Return False
+	If CanCast() Then Return True
+	Return False
+EndFunc
+
+; -----------------------------------------------------------------------------
+; CanUse($aSkillSlot, $aAggroRange) -- Full Skill Usability Check
+;
+; Comprehensive check combining:
+;   1. CanCast() -- game state and debuff checks
+;   2. GetBestTargetBySkillSlot() -- valid target exists
+;   3. IsRecharged() -- skill not on cooldown
+;   4. Energy/adrenaline sufficiency (with Quickening Zephyr +30% cost)
+;   5. Skill-specific conditions:
+;      - Binding rituals: enemies must be in range
+;      - Survival skills: HP/effect thresholds (Shadow Form timing, HP gates)
+;      - Pressure skills: Finish Him requires target HP < 45%
+;      - Heal skills: lowest ally must be below 80% HP
+;
+; GLOBALS READ:  $SkillBarCache (multiple columns), $BestTargetPtr
+; GLOBALS WRITTEN: $BestTargetPtr (via GetBestTargetBySkillSlot side-effect)
+;
+; @param $aSkillSlot   Skill bar slot (1-8)
+; @param $aAggroRange  Distance threshold (default: 1320)
+; @return              True if the skill can and should be used now
+; -----------------------------------------------------------------------------
+Func CanUse($aSkillSlot, $aAggroRange = 1320)
+	Local $ZephyrEffect = $SkillBarCache[$aSkillSlot][$energyreq] * 30 / 100
+	Local $ZephyrAddition = $SkillBarCache[$aSkillSlot][$energyreq] + $ZephyrEffect
+
+	If $aSkillSlot = "" Then Return
+	If Not CanCast($aSkillSlot) Then Return False
+	If GetBestTargetBySkillSlot($aSkillSlot, $aAggroRange) = 0 Then Return False
+	If Not IsRecharged($aSkillSlot) Then Return False
+	If GetEnergy(-2) < $SkillBarCache[$aSkillSlot][$energyreq] Then Return False
+	If AgentHasEffect($Quickening_Zephyr, -2) And GetEnergy(-2) < $ZephyrAddition Then Return False
+	If $SkillBarCache[$aSkillSlot][$adrereq] <> 0 And GetAdrenaline($aSkillSlot) < $SkillBarCache[$aSkillSlot][$adrereq] Then Return False
+
+;~ BINDING RITUALS
+	If $SkillBarCache[$aSkillSlot][$bind] <> "" Then
+		Switch $SkillBarCache[$aSkillSlot][$bind]
+			Case $Summon_Spirits_Kurzick, $Summon_Spirits_Luxon
+				If GetNumberOfEnemies($aAggroRange) = 0 Then Return False
+		EndSwitch
+	EndIf
+
+;~ SURVIVAL SKILLS
+	If $SkillBarCache[$aSkillSlot][$survive] <> "" Then
+		Switch $SkillBarCache[$aSkillSlot][$survive]
+			Case $I_Am_Unstoppable
+				If GetEffectTimeRemaining($Shadow_Form) > 5000 And Not GetIsKnocked(-2) Then Return False
+			Case $Glyph_of_Swiftness
+				If GetEffectTimeRemaining($Shadow_Form) > 5000 Then Return False
+				If GetSkillbarSkillRecharge($SkillbarSlot[$Shadow_Form]) > 5000 Then Return False
+			Case $Shadow_Form
+				If GetEffectTimeRemaining($Shadow_Form) > 5000 Then Return False
+				If GetEffectTimeRemaining($Glyph_of_Swiftness) = 0 Then Return False
+			Case $Shroud_Of_Distress
+				If GetHP(-2) > 0.9 Then Return False
+				If GetEffectTimeRemaining($Shroud_Of_Distress) > 5000 Then Return False
+			Case $Shadow_Sanctuary_Luxon, $Shadow_Sanctuary_Kurzick, $Shadow_Refuge
+				If GetHP(-2) > 0.7 Then Return False
+			Case $Heart_of_Shadow
+				If GetHP(-2) > 0.5 Then Return False
+			Case $Mystic_Regeneration
+				If GetEffectTimeRemaining($Mystic_Regeneration) < 4000 Then Return True
+			Case $Shield_of_Judgment
+				If GetEffectTimeRemaining($Shielding_Hands) < 4500 And GetEffectTimeRemaining($Shield_of_Absorption) < 4500 Then Return False
+		EndSwitch
+	EndIf
+
+;~ PRESSURE SKILLS
+	If $SkillBarCache[$aSkillSlot][$pressure] <> "" Then
+		Switch $SkillBarCache[$aSkillSlot][$pressure]
+			Case $Finish_Him
+				If DllStructGetData(GetAgentByID(ID($BestTargetPtr)), 'Health') > 0.45 Then Return False
+		EndSwitch
+	EndIf
+
+;~ HEAL SKILLS
+	If $SkillBarCache[$aSkillSlot][$heal] <> "" Then
+		$lowestally = GetLowestAlly()
+		If IsHealSkill($SkillBarCache[$aSkillSlot][$heal]) And GetHP($lowestally) > 0.8 Then Return False
+	EndIf
+
+	Return True
+EndFunc
+
+
+; #############################################################################
+; KF-023: ACTIVE COMBAT EXECUTION
+; #############################################################################
+
+; -----------------------------------------------------------------------------
+; UseSkillSmart($aSkillSlot, $aTarget, $aTimeout, $aSkillbarPtr)
+;     Smart Skill Usage with Target Selection
+;
+; Fires a skill at the specified target, then polls until the skill is no
+; longer castable (recharging) or the timeout expires. Handles:
+;   - Dead target/player early exit
+;   - Energy depletion early exit
+;   - Target change before casting
+;   - Aftercast delay (reads float at skill ptr + 64, converts to ms)
+;
+; GLOBALS READ:  $SkillBarCache (column $energyreq), $SkillbarSlot
+; GLOBALS WRITTEN: (none)
+;
+; @param $aSkillSlot    Skill bar slot (1-8)
+; @param $aTarget       Target agent (default: -2 = player)
+; @param $aTimeout      Max wait in ms (default: 6000)
+; @param $aSkillbarPtr  Unused (legacy parameter)
+; @return               True on successful cast, empty otherwise
+; -----------------------------------------------------------------------------
+Func UseSkillSmart($aSkillSlot, $aTarget = -2, $aTimeout = 6000, $aSkillbarPtr = 0)
+	Local $lDeadlock = TimerInit(), $lAgentID = ID($aTarget)
+	If $lAgentID = 0 Or GetIsDead(-2) Then Return
+	If $lAgentID <> GetMyID() Then ChangeTarget($aTarget)
+	UseSkill($aSkillSlot, $aTarget)
+	Do
+		Sleep(50)
+		If GetIsDead($aTarget) Then Return
+		If GetEnergy(-2) < $SkillBarCache[$aSkillSlot][$energyreq] Then Return
+	Until Not CanCast($aSkillSlot) Or TimerDiff($lDeadlock) > $aTimeout
+	Sleep(MemRead(GetSkillPtr($SkillbarSlot[$aSkillSlot]) + 64, "float") * 1000) ; Aftercast
+	Return True
+EndFunc
+
+; -----------------------------------------------------------------------------
+; UseSkills($aAggroRange, $skilltype) -- Iterate Skillbar and Use Available Skills
+;
+; Loops through skill slots 1-8. For each slot:
+;   1. Checks for death/wipe/map-loading bail-out
+;   2. Skips slots where the $skilltype column is empty
+;   3. Calls CanUse() for full usability check
+;   4. Calls UseSkillSmart() with $BestTargetPtr (set by CanUse -> GetBestTargetBySkillSlot)
+;   5. Exits early if enemies leave aggro range
+;
+; GLOBALS READ:  $SkillBarCache (column $skilltype), $BestTargetPtr
+; GLOBALS WRITTEN: (none directly -- delegates to CanUse/UseSkillSmart)
+;
+; @param $aAggroRange  Distance threshold (default: 1000)
+; @param $skilltype    Cache column index to filter by (default: $all)
+; -----------------------------------------------------------------------------
+Func UseSkills($aAggroRange = 1000, $skilltype = $all)
+	For $aSkillSlot = 1 To 8
+		If GetIsDead(-2) Or Wipe() = 1 Or GetMapLoading() == 2 Then ExitLoop
+		If $SkillBarCache[$aSkillSlot][$skilltype] = "" Then ContinueLoop
+		If CanUse($aSkillSlot, $aAggroRange) Then UseSkillSmart($aSkillSlot, $BestTargetPtr)
+		If GetNearestEnemyDistance() > $aAggroRange Then Return
+	Next
+EndFunc
+
+; -----------------------------------------------------------------------------
+; Fight($aAggroRange, $careful) -- Main Combat Loop
+;
+; Outer combat loop that runs until enemies leave range, player dies, party
+; wipes, or a 4-minute safety timeout expires. Each iteration:
+;   1. (careful mode) Cancels current action
+;   2. Checks for attackable enemies via CanAttack()
+;   3. Initiates basic attack on $BestTargetPtr
+;   4. (careful mode) Moves toward target
+;   5. Calls UseSkills() to fire all available skills
+;   6. Checks if nearest enemy is still in range
+; After the loop, picks up loot within 3000 range.
+;
+; GLOBALS READ:  $BestTargetPtr (set by CanAttack -> GetBestTargetPtr)
+; GLOBALS WRITTEN: (none directly -- delegates to CanAttack which sets $BestTargetPtr)
+;
+; EXTERNAL DEPS (not yet extracted):
+;   GetNearestEnemyDistance() -- Froggy_HM_v1.6.au3 line 853
+;   PickupLootEx()           -- Froggy_HM_v1.6.au3 line 901
+;   Out()                    -- logging function
+;
+; @param $aAggroRange  Distance threshold (default: 1000)
+; @param $careful      If True, cancel actions and move toward target each tick
+; -----------------------------------------------------------------------------
+Func Fight($aAggroRange = 1000, $careful = False)
+	Out("Fighting enemies")
+	Local $TimerToGetOut = TimerInit()
+	Local $nearDist = 0
+	Do
+		If $careful Then CancelAll()
+		Local $canAtk = CanAttack($aAggroRange)
+		If $canAtk Then
+			Attack($BestTargetPtr, True)
+		EndIf
+		Sleep(100)
+		If $careful Then
+			Move(X($BestTargetPtr), Y($BestTargetPtr))
+			Sleep(300)
+		EndIf
+		UseSkills($aAggroRange, $all)
+		$nearDist = GetNearestEnemyDistance()
+	Until $nearDist > $aAggroRange Or GetIsDead(-2) Or Wipe() Or TimerDiff($TimerToGetOut) > 240000
+	PickupLootEx(3000)
+EndFunc
