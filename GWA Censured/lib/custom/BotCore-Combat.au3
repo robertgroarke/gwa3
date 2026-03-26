@@ -69,6 +69,9 @@ Global $SkillBarCache[9][23]
 ; which covers the full GW skill ID range (max ~3400).
 Global $SkillbarSlot[3500]
 
+; --- Best target pointer (used as side-effect global by targeting functions) ---
+Global $BestTargetPtr = 0
+
 ; --- Scalar combat state (in state container per CONVENTIONS.md) ---
 Global $g_CombatState = ObjCreate("Scripting.Dictionary")
 

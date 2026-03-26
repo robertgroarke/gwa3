@@ -25,6 +25,7 @@ Global $inventory_management_cache[]           ; Empty map
 Global $bags_count = 4
 Global $salvageKit = 0
 Global $bagEmptySlots = 0
+Global $district_name = 'International'
 
 ; === Globals expected by upstream Utils-Items_Modstructs.au3 ===
 Global $valuableModsByOSWeaponType[]           ; Empty map
