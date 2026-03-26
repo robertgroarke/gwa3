@@ -302,54 +302,8 @@ Func EnterTheDeep()
 EndFunc
 
 
-Func NPCCoordinatesInTown($town = $ID_EYE_OF_THE_NORTH, $type = 'Merchant')
-	Local $coordinates[] = [-1, -1]
-	Switch $type
-		Case 'Merchant'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2158
-					$coordinates[1] = -2006
-				Case $ID_EYE_OF_THE_NORTH
-					$coordinates[0] = -2700
-					$coordinates[1] = 1075
-				Case Else
-					Warn('For provided town coordinates of that NPC are not mapped yet')
-			EndSwitch
-		Case 'Basic material trader'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2997
-					$coordinates[1] = -2271
-				Case $ID_EYE_OF_THE_NORTH
-					$coordinates[0] = -1850
-					$coordinates[1] = 875
-				Case Else
-					Warn('For provided town coordinates of that NPC are not mapped yet')
-			EndSwitch
-		Case 'Rare material trader'
-			Switch $town
-				Case $ID_EMBARK_BEACH
-					$coordinates[0] = 2928
-					$coordinates[1] = -2452
-				Case $ID_EYE_OF_THE_NORTH
-					$coordinates[0] = -2100
-					$coordinates[1] = 1125
-				Case Else
-					Warn('For provided town coordinates of that NPC are not mapped yet')
-			EndSwitch
-		;Case 'Dye trader'
-		;Case 'Scroll trader'
-		;Case 'Consumables trader'
-		;Case 'Armorer'
-		;Case 'Weaponsmith'
-		;Case 'Xunlai chest'
-		;Case 'Skill trainer'
-		Case Else
-			Warn('Wrong NPC type provided')
-	EndSwitch
-	Return $coordinates
-EndFunc
+; NPCCoordinatesInTown — overridden by custom/NPC_Coordinates.au3 (extended version
+; with Gadd's Encampment, Embark Beach consumable traders, Xunlai chest support)
 #EndRegion Map and travel
 
 
