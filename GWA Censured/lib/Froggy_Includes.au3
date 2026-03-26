@@ -38,6 +38,16 @@
 #include 'custom\GWA2_Crafting.au3'
 #include 'custom\GWA2_Extensions.au3'
 
+; === BotCore Modules (extracted from Froggy) ===
+#include 'custom\BotCore-Effects.au3'
+#include 'custom\BotCore-SkillRules.au3'
+#include 'custom\BotCore-Travel.au3'
+#include 'custom\BotCore-Loot.au3'
+#include 'custom\BotCore-Combat.au3'
+#include 'custom\BotCore-Waypoints.au3'
+#include 'custom\BotCore-RunStats.au3'
+#include 'custom\BotCore-HeroSetup.au3'
+
 ; === Custom Libraries ===
 #include 'custom\GUI_Functions.au3'
 #include 'custom\Utils-Maintenance.au3'
