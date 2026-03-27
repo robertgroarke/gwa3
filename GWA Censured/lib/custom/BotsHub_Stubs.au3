@@ -32,9 +32,8 @@ Global $valuableModsByOSWeaponType[]           ; Empty map
 Global $weaponModsByType[]                     ; Empty map
 Global $weaponInscriptionsByType[]             ; Empty map
 
-; === Globals expected by upstream GWA2.au3 ===
-Global $ATTRIBUTES_BY_PROFESSION_MAP[]         ; Empty map
-Global $WEAPONS_MAX_DAMAGE_PER_LEVEL[]         ; Empty map
+; $ATTRIBUTES_BY_PROFESSION_MAP and $WEAPONS_MAX_DAMAGE_PER_LEVEL
+; are defined as Global Const in botshub/GWA2_ID_Items.au3 — do NOT stub them here
 
 ; === Map ID aliases — these are set AFTER botshub loads (see bottom of file) ===
 ; $ID_GADDS_CAMP, $ID_PLANT_FIBER defined at bottom after upstream IDs are available

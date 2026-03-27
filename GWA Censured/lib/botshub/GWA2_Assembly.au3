@@ -168,8 +168,9 @@ Global Const $USE_HERO_SKILL_STRUCT_PTR = DllStructGetPtr($USE_HERO_SKILL_STRUCT
 Global Const $BUY_ITEM_STRUCT = SafeDllStructCreate('ptr;dword;dword;dword;dword')
 Global Const $BUY_ITEM_STRUCT_PTR = DllStructGetPtr($BUY_ITEM_STRUCT)
 
-Global Const $CRAFT_ITEM_STRUCT = SafeDllStructCreate('ptr;dword;dword;ptr;dword;dword')
-Global Const $CRAFT_ITEM_STRUCT_PTR = DllStructGetPtr($CRAFT_ITEM_STRUCT)
+; $CRAFT_ITEM_STRUCT overridden by custom/GWA2_Crafting.au3 (7-field version for custom crafting system)
+; Global Const $CRAFT_ITEM_STRUCT = SafeDllStructCreate('ptr;dword;dword;ptr;dword;dword')
+; Global Const $CRAFT_ITEM_STRUCT_PTR = DllStructGetPtr($CRAFT_ITEM_STRUCT)
 
 Global Const $SEND_CHAT_STRUCT = SafeDllStructCreate('ptr;dword')
 Global Const $SEND_CHAT_STRUCT_PTR = DllStructGetPtr($SEND_CHAT_STRUCT)
