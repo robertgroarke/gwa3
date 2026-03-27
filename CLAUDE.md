@@ -30,6 +30,15 @@ This applies to ALL development actions without exception:
 
 If a remote is ever added, treat it as read-only unless the user explicitly says otherwise. Never configure or add git remotes without explicit instruction.
 
+## Secrets & Credentials
+
+| File | Contains | Rules |
+|---|---|---|
+| `GWA Censured/Accounts.json` | Guild Wars account emails, passwords, character names, GW paths | **NEVER commit. NEVER print credentials to chat. NEVER include in diffs or logs.** Read structure only — redact email/password values when displaying. |
+| `GWA Censured/Settings.ini` | Bot runtime config | Gitignored, may contain user preferences |
+
+**Accounts.json** is copied from the GW Launcher install (`C:\Users\Robert\Downloads\GWLauncher\Accounts.json`). It contains 5 accounts with login credentials. The file is gitignored via `Accounts.json` pattern. When reading this file programmatically, always redact `email` and `password` fields before any output.
+
 ---
 
 ## Project Overview

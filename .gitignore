@@ -37,6 +37,11 @@ FROGGY_DEPENDENCIES.md
 # === Backup directory ===
 Backup/
 
+# === Credentials / Secrets (NEVER commit) ===
+Accounts.json
+*.credentials
+*.secret
+
 # === Runtime / Debug output ===
 GWA Censured/Settings.ini
 GWA Censured/logs/
