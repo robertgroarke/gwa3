@@ -642,36 +642,68 @@ EndFunc
 ;~ @param $accountsFile - path to Accounts.json (default: script dir)
 ;~ @param $timeout - max seconds to wait for client to appear (default: 120)
 ;~ @return True on success (client connected), False on failure
-;~ Click the Play button on the GW character select screen
-;~ Uses the GW window handle to find and click the Play button area
-;~ @param $gwWindowTitle - title of the GW window (e.g. "Guild Wars - B E A S T R I T")
-;~ @return True if clicked, False if window not found
-Func GWLauncher_ClickPlay($gwWindowTitle = '')
+;~ Select a character and press Play on the GW character select screen
+;~ Uses PreGameContext memory structure to select the character by index,
+;~ then sends Enter key to press Play. No mouse interaction needed.
+;~
+;~ PreGameContext layout (from GWCA):
+;~   +0x000  frame_id
+;~   +0x124  chosen_character_index (uint32)
+;~   +0x148  chars array (Array<LoginCharacter>)
+;~   LoginCharacter: uint32 unk0, wchar_t name[20]
+;~
+;~ @param $characterName - character name to select (or '' for current selection)
+;~ @param $gwWindowTitle - GW window title for sending Enter key
+;~ @return True on success
+Func GWLauncher_ClickPlay($gwWindowTitle = '', $characterName = '')
+    ; Find GW window
     Local $hWnd = 0
     If $gwWindowTitle <> '' Then
-        $hWnd = WinWait($gwWindowTitle, '', 5)
+        $hWnd = WinWait($gwWindowTitle, '', 10)
     Else
-        ; Find any GW window
-        $hWnd = WinWait('Guild Wars', '', 5)
+        $hWnd = WinWait('Guild Wars', '', 10)
     EndIf
     If $hWnd = 0 Then
         ConsoleWrite('[GWLauncher] ClickPlay: GW window not found' & @CRLF)
         Return False
     EndIf
 
+    ; If character name provided, select it via PreGameContext
+    If $characterName <> '' Then
+        Local $processHandle = GetProcessHandle()
+        ; Read PreGameContext base from $pre_game_address
+        Local $preGamePtr = MemRead($pre_game_address)
+        If $preGamePtr <> 0 Then
+            ; Read chars array: offset 0x148 = buffer ptr, 0x14C = size
+            Local $charsPtr = MemRead($preGamePtr + 0x148)
+            Local $charsCount = MemRead($preGamePtr + 0x14C)
+            ConsoleWrite('[GWLauncher] PreGame: ' & $charsCount & ' characters at ' & Ptr($charsPtr) & @CRLF)
+
+            ; Each LoginCharacter is 4 + 20*2 = 44 bytes (uint32 + wchar[20])
+            Local $charSize = 44
+            For $c = 0 To $charsCount - 1
+                Local $nameAddr = $charsPtr + ($c * $charSize) + 4  ; skip uint32 unk0
+                Local $charName = MemRead($nameAddr, 'wchar[20]')
+                $charName = StringStripWS($charName, 3)
+                ConsoleWrite('[GWLauncher] Character ' & $c & ': "' & $charName & '"' & @CRLF)
+                If $charName = $characterName Then
+                    ; Write chosen_character_index
+                    MemWrite($preGamePtr + 0x124, $c, 'dword')
+                    ConsoleWrite('[GWLauncher] Selected character index ' & $c & @CRLF)
+                    Sleep(500)
+                    ExitLoop
+                EndIf
+            Next
+        Else
+            ConsoleWrite('[GWLauncher] PreGameContext not available (already in game?)' & @CRLF)
+        EndIf
+    EndIf
+
+    ; Press Enter to click Play (works on character select screen)
     WinActivate($hWnd)
-    Sleep(500)
-
-    ; Get window position and size
-    Local $pos = WinGetPos($hWnd)
-    If Not IsArray($pos) Then Return False
-
-    ; Play button is at approximately 80% from left, 97% from top
-    Local $playX = $pos[0] + Int($pos[2] * 0.80)
-    Local $playY = $pos[1] + Int($pos[3] * 0.97)
-
-    ConsoleWrite('[GWLauncher] ClickPlay: clicking at (' & $playX & ',' & $playY & ')' & @CRLF)
-    MouseClick('left', $playX, $playY, 1, 0)
+    Sleep(300)
+    ControlSend($hWnd, '', '', '{ENTER}')
+    ConsoleWrite('[GWLauncher] Sent Enter key to press Play' & @CRLF)
     Sleep(1000)
     Return True
 EndFunc
