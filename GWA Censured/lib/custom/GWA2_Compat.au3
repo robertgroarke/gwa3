@@ -24,3 +24,10 @@ EndFunc
 Func ClearMem()
 	ClearMemory(GetProcessHandle())
 EndFunc
+
+; Resolve agent parameter: converts -2 (self) to GetMyAgent() DllStruct
+; Old code used -2 as magic "self" value; upstream expects DllStruct or Null
+Func ResolveAgent($agent)
+	If Not IsDllStruct($agent) Then Return GetMyAgent()
+	Return $agent
+EndFunc

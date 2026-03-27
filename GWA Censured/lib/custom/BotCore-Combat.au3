@@ -247,10 +247,10 @@ Func GetBestTargetPtr($aRange = 1350, $casting = False, $nohex = False, $enchant
         $lEnemiesInRange += 1
         Local $lID = DllStructGetData($lAgent, 'ID')
 
-        ; Apply filters
-        If $casting And Not GetIsCasting($lID) Then ContinueLoop
-        If $nohex And GetHasHex($lID) Then ContinueLoop
-        If $enchanted And Not GetHasEnchantment($lID) Then ContinueLoop
+        ; Apply filters (pass agent struct, not ID — upstream expects DllStruct)
+        If $casting And Not GetIsCasting($lAgent) Then ContinueLoop
+        If $nohex And GetHasHex($lAgent) Then ContinueLoop
+        If $enchanted And Not GetHasEnchantment($lAgent) Then ContinueLoop
 
         If $lDist < $lBestDist Then
             $lBestDist = $lDist
@@ -659,7 +659,7 @@ EndFunc
 Func CanCast($aSkillSlot = 0)
 	If GetMapLoading() == 2 Then Disconnected()
 	If GetMapLoading() <> 1 Then Return False  ; Can only cast in explorable areas
-	If IsKnocked() Or GetIsDead(-2) Or Wipe() = 1 Then Return False
+	If IsKnocked() Or GetIsDead(GetMyAgent()) Or Wipe() = 1 Then Return False
 	If $aSkillSlot <> 0 And Not IsRecharged($aSkillSlot) Then Return False
 	Local $aType = $SkillBarCache[$aSkillSlot][$type]
 	If $aSkillSlot = 0 Then $aType = $Attack
@@ -739,8 +739,8 @@ Func CanUse($aSkillSlot, $aAggroRange = 1320)
 	If Not CanCast($aSkillSlot) Then Return False
 	If GetBestTargetBySkillSlot($aSkillSlot, $aAggroRange) = 0 Then Return False
 	If Not IsRecharged($aSkillSlot) Then Return False
-	If GetEnergy(-2) < $SkillBarCache[$aSkillSlot][$energyreq] Then Return False
-	If AgentHasEffect($Quickening_Zephyr, -2) And GetEnergy(-2) < $ZephyrAddition Then Return False
+	If GetEnergy(GetMyAgent()) < $SkillBarCache[$aSkillSlot][$energyreq] Then Return False
+	If AgentHasEffect($Quickening_Zephyr, -2) And GetEnergy(GetMyAgent()) < $ZephyrAddition Then Return False
 	If $SkillBarCache[$aSkillSlot][$adrereq] <> 0 And GetAdrenaline($aSkillSlot) < $SkillBarCache[$aSkillSlot][$adrereq] Then Return False
 
 ;~ BINDING RITUALS
@@ -755,7 +755,7 @@ Func CanUse($aSkillSlot, $aAggroRange = 1320)
 	If $SkillBarCache[$aSkillSlot][$survive] <> "" Then
 		Switch $SkillBarCache[$aSkillSlot][$survive]
 			Case $I_Am_Unstoppable
-				If GetEffectTimeRemaining($Shadow_Form) > 5000 And Not GetIsKnocked(-2) Then Return False
+				If GetEffectTimeRemaining($Shadow_Form) > 5000 And Not GetIsKnocked(GetMyAgent()) Then Return False
 			Case $Glyph_of_Swiftness
 				If GetEffectTimeRemaining($Shadow_Form) > 5000 Then Return False
 				If GetSkillbarSkillRecharge($SkillbarSlot[$Shadow_Form]) > 5000 Then Return False
@@ -819,14 +819,16 @@ EndFunc
 ; @return               True on successful cast, empty otherwise
 ; -----------------------------------------------------------------------------
 Func UseSkillSmart($aSkillSlot, $aTarget = -2, $aTimeout = 6000, $aSkillbarPtr = 0)
-	Local $lDeadlock = TimerInit(), $lAgentID = ID($aTarget)
-	If $lAgentID = 0 Or GetIsDead(-2) Then Return
+	; Resolve -2 (self) to actual agent struct — upstream functions expect DllStruct, not magic integers
+	If Not IsDllStruct($aTarget) Then $aTarget = GetMyAgent()
+	Local $lDeadlock = TimerInit(), $lAgentID = DllStructGetData($aTarget, 'ID')
+	If $lAgentID = 0 Or GetIsDead($aTarget) Then Return
 	If $lAgentID <> GetMyID() Then ChangeTarget($aTarget)
 	UseSkill($aSkillSlot, $aTarget)
 	Do
 		Sleep(50)
 		If GetIsDead($aTarget) Then Return
-		If GetEnergy(-2) < $SkillBarCache[$aSkillSlot][$energyreq] Then Return
+		If GetEnergy(GetMyAgent()) < $SkillBarCache[$aSkillSlot][$energyreq] Then Return
 	Until Not CanCast($aSkillSlot) Or TimerDiff($lDeadlock) > $aTimeout
 	Sleep(MemRead(GetSkillPtr($SkillbarSlot[$aSkillSlot]) + 64, "float") * 1000) ; Aftercast
 	Return True
@@ -850,7 +852,7 @@ EndFunc
 ; -----------------------------------------------------------------------------
 Func UseSkills($aAggroRange = 1000, $skilltype = $all)
 	For $aSkillSlot = 1 To 8
-		If GetIsDead(-2) Or Wipe() = 1 Or GetMapLoading() == 2 Then ExitLoop
+		If GetIsDead(GetMyAgent()) Or Wipe() = 1 Or GetMapLoading() == 2 Then ExitLoop
 		If $SkillBarCache[$aSkillSlot][$skilltype] = "" Then ContinueLoop
 		If CanUse($aSkillSlot, $aAggroRange) Then UseSkillSmart($aSkillSlot, $BestTargetPtr)
 		If GetNearestEnemyDistance() > $aAggroRange Then Return
@@ -898,6 +900,6 @@ Func Fight($aAggroRange = 1000, $careful = False)
 		EndIf
 		UseSkills($aAggroRange, $all)
 		$nearDist = GetNearestEnemyDistance()
-	Until $nearDist > $aAggroRange Or GetIsDead(-2) Or Wipe() Or TimerDiff($TimerToGetOut) > 240000
+	Until $nearDist > $aAggroRange Or GetIsDead(GetMyAgent()) Or Wipe() Or TimerDiff($TimerToGetOut) > 240000
 	PickupLootEx(3000)
 EndFunc
