@@ -27,7 +27,16 @@ SelectClient($targetClient)
 InitializeGameClientData(True, False)
 ConsoleWrite("Connected to client " & $targetClient & @CRLF)
 
-; Enable sniffer (skip UISnifferInit — we'll poll instead of PostMessage)
+; Debug: print label addresses before enabling
+ConsoleWrite("UISnifferProc label = " & GetLabel('UISnifferProc') & @CRLF)
+ConsoleWrite("UISnifferOriginal label = " & GetLabel('UISnifferOriginal') & @CRLF)
+ConsoleWrite("UISnifferEnabled label = " & GetLabel('UISnifferEnabled') & @CRLF)
+ConsoleWrite("UISnifferCounter label = " & GetLabel('UISnifferCounter') & @CRLF)
+ConsoleWrite("UISnifferMsgId label = " & GetLabel('UISnifferMsgId') & @CRLF)
+ConsoleWrite("UISnifferWParam label = " & GetLabel('UISnifferWParam') & @CRLF)
+ConsoleWrite("UIMessageStart label = " & GetLabel('UIMessageStart') & @CRLF)
+
+; Enable sniffer
 UISnifferEnable()
 ConsoleWrite("=== SNIFFER ENABLED ===" & @CRLF)
 ConsoleWrite("POLLING_ACTIVE" & @CRLF)
