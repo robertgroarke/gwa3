@@ -42,29 +42,122 @@ Global $iVanguardTitle, $iNornTitle, $iAsuraTitle, $iDeldrimorTitle
 
 
 
-ScanAndUpdateGameClients()
-
-Global $Form1 = GUICreate("Froggy HM", 300, 200)
-
-Global $Combo_Label = GUICtrlCreateLabel("Select Character:", 20, 15, 120, 20)
-Global $Char_Combo = GUICtrlCreateCombo("", 20, 35, 260, 25)
-Global $Launch_Button = GUICtrlCreateButton("Connect", 20, 70, 125, 30)
-Global $LaunchNew_Button = GUICtrlCreateButton("Launch New Client", 155, 70, 125, 30)
-Global $Refresh_Button = GUICtrlCreateButton("Refresh", 20, 110, 260, 25)
-
-; Populate character list (may be empty if no clients running)
-_PopulateClientList()
-
-GUICtrlSetOnEvent($Launch_Button, "LaunchEvent")
-GUICtrlSetOnEvent($LaunchNew_Button, "LaunchNewEvent")
-GUICtrlSetOnEvent($Refresh_Button, "RefreshEvent")
-GUISetOnEvent($GUI_EVENT_CLOSE, "CloseEvent")
-GUISetState(@SW_SHOW)
+; ============================================================================
+; Launch Mode Selection
+; ============================================================================
+; Command-line args:
+;   -character "NAME"     Headless: auto-launch/connect to character, skip GUI
+;   -autolaunch "NAME"    Headless: launch new client from Accounts.json, then connect
+;   (no args)             Interactive: show character select GUI
 
 Global $g_BotHasLaunched = False
-While Not $g_BotHasLaunched
-	Sleep(100)
-WEnd
+Global $g_Accounts = GWLauncher_LoadAccounts()
+
+; Check for command-line arguments
+Local $cmdCharacter = ''
+Local $cmdAutoLaunch = ''
+For $i = 1 To $CmdLine[0]
+	Switch $CmdLine[$i]
+		Case '-character'
+			If $i < $CmdLine[0] Then $cmdCharacter = $CmdLine[$i + 1]
+		Case '-autolaunch'
+			If $i < $CmdLine[0] Then $cmdAutoLaunch = $CmdLine[$i + 1]
+	EndSwitch
+Next
+
+If $cmdAutoLaunch <> '' Then
+	; Headless mode: launch new client and connect
+	ConsoleWrite('[Froggy] Headless auto-launch: ' & $cmdAutoLaunch & @CRLF)
+	If GWLauncher_AutoLaunchAndConnect($cmdAutoLaunch) Then
+		_ConnectToSelectedClient($cmdAutoLaunch)
+	Else
+		ConsoleWrite('[Froggy] Auto-launch failed for: ' & $cmdAutoLaunch & @CRLF)
+		Exit 1
+	EndIf
+ElseIf $cmdCharacter <> '' Then
+	; Headless mode: connect to existing client
+	ConsoleWrite('[Froggy] Headless connect: ' & $cmdCharacter & @CRLF)
+	ScanAndUpdateGameClients()
+	Local $idx = FindClientIndexByCharacterName($cmdCharacter)
+	If $idx > 0 Then
+		_ConnectToSelectedClient($cmdCharacter)
+	Else
+		; Not running — try to launch it
+		ConsoleWrite('[Froggy] Client not found, attempting auto-launch...' & @CRLF)
+		If GWLauncher_AutoLaunchAndConnect($cmdCharacter) Then
+			_ConnectToSelectedClient($cmdCharacter)
+		Else
+			ConsoleWrite('[Froggy] Failed to connect to: ' & $cmdCharacter & @CRLF)
+			Exit 1
+		EndIf
+	EndIf
+Else
+	; Interactive mode: show GUI
+	_ShowCharacterSelectGUI()
+EndIf
+
+; ============================================================================
+; Connection Helper
+; ============================================================================
+Func _ConnectToSelectedClient($characterName)
+	ScanAndUpdateGameClients()
+	Local $clientIndex = FindClientIndexByCharacterName($characterName)
+	If $clientIndex > 0 Then
+		SelectClient($clientIndex)
+		InitializeGameClientData(True, False)
+		$mBasePointer = MemRead(GetScannedAddress('ScanBasePointer', 8))
+		WinSetTitle(GetWindowHandle(), '', 'Guild Wars - ' & GetCharacterName())
+		$g_BotHasLaunched = True
+		ConsoleWrite('[Froggy] Connected to: ' & $characterName & @CRLF)
+	Else
+		ConsoleWrite('[Froggy] ERROR: Could not find client for: ' & $characterName & @CRLF)
+		Exit 1
+	EndIf
+EndFunc
+
+; ============================================================================
+; Interactive GUI Mode
+; ============================================================================
+Func _ShowCharacterSelectGUI()
+	ScanAndUpdateGameClients()
+
+	Global $Form1 = GUICreate("Froggy HM", 300, 240)
+
+	; Running clients section
+	Global $Combo_Label = GUICtrlCreateLabel("Running Clients:", 20, 10, 120, 20)
+	Global $Char_Combo = GUICtrlCreateCombo("", 20, 30, 260, 25)
+	Global $Launch_Button = GUICtrlCreateButton("Connect", 20, 60, 125, 28)
+	Global $Refresh_Button = GUICtrlCreateButton("Refresh", 155, 60, 125, 28)
+
+	; Launch new section
+	GUICtrlCreateLabel("— or launch from Accounts.json —", 20, 95, 260, 16)
+	Global $Account_Combo = GUICtrlCreateCombo("", 20, 115, 260, 25)
+	Global $LaunchNew_Button = GUICtrlCreateButton("Launch && Connect", 20, 145, 260, 28)
+
+	; Populate running clients
+	_PopulateClientList()
+
+	; Populate account list (names only, no credentials shown)
+	If UBound($g_Accounts) > 0 Then
+		Local $accountNames = GWLauncher_GetAccountNames($g_Accounts)
+		GUICtrlSetData($Account_Combo, $accountNames)
+	Else
+		GUICtrlSetData($Account_Combo, "(no Accounts.json found)")
+		GUICtrlSetState($LaunchNew_Button, $GUI_DISABLE)
+	EndIf
+
+	GUICtrlSetOnEvent($Launch_Button, "_GUI_ConnectEvent")
+	GUICtrlSetOnEvent($Refresh_Button, "_GUI_RefreshEvent")
+	GUICtrlSetOnEvent($LaunchNew_Button, "_GUI_LaunchNewEvent")
+	GUISetOnEvent($GUI_EVENT_CLOSE, "_GUI_CloseEvent")
+	GUISetState(@SW_SHOW)
+
+	While Not $g_BotHasLaunched
+		Sleep(100)
+	WEnd
+
+	GUIDelete($Form1)
+EndFunc
 
 Func _PopulateClientList()
 	Local $comboList = ""
@@ -81,68 +174,61 @@ Func _PopulateClientList()
 	EndIf
 EndFunc
 
-Func CloseEvent()
+Func _GUI_CloseEvent()
 	Exit
 EndFunc
 
-Func RefreshEvent()
+Func _GUI_RefreshEvent()
 	GUICtrlSetData($Combo_Label, "Scanning...")
 	ScanAndUpdateGameClients()
 	GUICtrlSetData($Char_Combo, "")
 	_PopulateClientList()
-	GUICtrlSetData($Combo_Label, "Select Character:")
+	GUICtrlSetData($Combo_Label, "Running Clients:")
 EndFunc
 
-Func LaunchNewEvent()
-	; Get GW path from registry or file browser
-	Local $gwPath = GWLauncher_GetGWPath()
-	If $gwPath = "" Or Not FileExists($gwPath) Then
-		$gwPath = FileOpenDialog("Select Gw.exe", @ProgramFilesDir, "Guild Wars (Gw.exe)", 1)
-		If @error Then Return
+Func _GUI_LaunchNewEvent()
+	Local $selectedAccount = GUICtrlRead($Account_Combo)
+	If $selectedAccount = "" Or $selectedAccount = "(no Accounts.json found)" Then Return
+
+	; Find account index by name
+	Local $acctIdx = GWLauncher_FindAccountByCharacter($g_Accounts, $selectedAccount)
+
+	If $acctIdx = -1 Then
+		MsgBox(48, "Error", "Account not found: " & $selectedAccount)
+		Return
 	EndIf
 
-	; Prompt for credentials (optional)
-	Local $email = InputBox("GW Login", "Email (leave blank to login manually):", "", "", 350, 130)
-	Local $password = ""
-	If $email <> "" Then
-		$password = InputBox("GW Login", "Password:", "", "*", 350, 130)
-	EndIf
+	GUICtrlSetData($Combo_Label, "Launching " & $selectedAccount & "...")
 
-	GUICtrlSetData($Combo_Label, "Launching GW client...")
-
-	; Launch with multiclient patch
-	Local $result = GWLauncher_Launch($gwPath, $email, $password)
+	; Launch the account
+	Local $result = GWLauncher_LaunchAccount($g_Accounts, $acctIdx)
 	If $result = 0 Then
 		MsgBox(48, "Error", "Failed to launch Guild Wars client.")
-		GUICtrlSetData($Combo_Label, "Select Character:")
+		GUICtrlSetData($Combo_Label, "Running Clients:")
 		Return
 	EndIf
 
 	GUICtrlSetData($Combo_Label, "Waiting for GW to load...")
 
-	; Wait for the new client to appear in the scan
+	; Wait for client to appear
 	Local $waitTimer = TimerInit()
-	Local $found = False
-	While TimerDiff($waitTimer) < 60000 ; 60 second timeout
-		Sleep(3000)
+	While TimerDiff($waitTimer) < 90000
+		Sleep(5000)
 		ScanAndUpdateGameClients()
-		If IsArray($game_clients) And $game_clients[0][0] > 0 Then
-			; Check if there's a new client we haven't seen before
-			GUICtrlSetData($Char_Combo, "")
-			_PopulateClientList()
-			$found = True
-			ExitLoop
+		Local $clientIdx = FindClientIndexByCharacterName($selectedAccount)
+		If $clientIdx > 0 Then
+			_ConnectToSelectedClient($selectedAccount)
+			Return
 		EndIf
+		GUICtrlSetData($Combo_Label, "Waiting... (" & Int(TimerDiff($waitTimer) / 1000) & "s)")
 	WEnd
 
-	If $found Then
-		GUICtrlSetData($Combo_Label, "Client ready! Select character:")
-	Else
-		GUICtrlSetData($Combo_Label, "Timeout — try Refresh")
-	EndIf
+	; Timeout — refresh list and let user retry
+	_PopulateClientList()
+	GUICtrlSetData($Combo_Label, "Timeout — try Connect or Refresh")
 EndFunc
 
-Func LaunchEvent()
+Func _GUI_ConnectEvent()
 	Local $charSel = GUICtrlRead($Char_Combo)
 	If $charSel = "" Then
 		MsgBox(48, "Error", "No character selected.")
@@ -150,20 +236,7 @@ Func LaunchEvent()
 	EndIf
 
 	GUICtrlSetData($Combo_Label, "Connecting...")
-	Global $Character_Select = $charSel
-	Local $clientIndex = FindClientIndexByCharacterName($Character_Select)
-
-	If $clientIndex > 0 Then
-		SelectClient($clientIndex)
-		InitializeGameClientData(True, False)
-		$mBasePointer = MemRead(GetScannedAddress('ScanBasePointer', 8))
-		WinSetTitle(GetWindowHandle(), '', 'Guild Wars - ' & GetCharacterName())
-		GUIDelete($Form1)
-		$g_BotHasLaunched = True
-	Else
-		MsgBox(48, "Error", "Could not find a GW client with character: '" & $Character_Select & "'")
-		GUICtrlSetData($Combo_Label, "Select Character:")
-	EndIf
+	_ConnectToSelectedClient($charSel)
 EndFunc
 
 GUI_SetOnStartFunc("onStart")

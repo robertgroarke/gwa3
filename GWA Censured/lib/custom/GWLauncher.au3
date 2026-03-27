@@ -1,4 +1,5 @@
 #include-once
+; JSON.au3 resolves through Froggy_Includes.au3 master include chain
 
 ; ============================================================================
 ; GWLauncher.au3 — Guild Wars Multiclient Launcher Module
@@ -8,9 +9,12 @@
 ; mutex check in a suspended process before resuming execution.
 ;
 ; Public API:
-;   GWLauncher_Launch()       — Launch a GW client (optionally with credentials)
-;   GWLauncher_GetGWPath()    — Read GW install path from registry
-;   GWLauncher_InjectDLL()    — Inject a DLL into a running process
+;   GWLauncher_Launch()             — Launch a GW client (optionally with credentials)
+;   GWLauncher_GetGWPath()          — Read GW install path from registry
+;   GWLauncher_InjectDLL()          — Inject a DLL into a running process
+;   GWLauncher_LoadAccounts()       — Load accounts from Accounts.json
+;   GWLauncher_LaunchAccount()      — Launch a specific account by index
+;   GWLauncher_AutoLaunchAndConnect() — Full headless: launch, wait, scan, connect
 ;
 ; Internal:
 ;   _GWLauncher_McPatch()         — Apply multiclient mutex patch
@@ -530,4 +534,166 @@ Func GWLauncher_InjectDLL($hProcess, $dllPath)
 
     ConsoleWrite("[GWLauncher] InjectDLL: DLL injection complete: " & $dllPath & @CRLF)
     Return True
+EndFunc
+
+
+; ============================================================================
+; Account Management
+; ============================================================================
+
+;~ Load accounts from Accounts.json
+;~ @param $filePath - path to Accounts.json (default: script dir)
+;~ @return Array of account maps, or empty array on failure
+;~   Each account map has keys: character, email, gwpath, password, extraargs, elevated, title, Name
+Func GWLauncher_LoadAccounts($filePath = '')
+    If $filePath = '' Then $filePath = @ScriptDir & '\Accounts.json'
+    If Not FileExists($filePath) Then
+        ConsoleWrite('[GWLauncher] Accounts file not found: ' & $filePath & @CRLF)
+        Local $empty[0]
+        Return $empty
+    EndIf
+
+    Local $json = FileRead($filePath)
+    Local $accounts = _JSON_Parse($json)
+    If @error Or Not IsArray($accounts) Then
+        ConsoleWrite('[GWLauncher] Failed to parse Accounts.json' & @CRLF)
+        Local $empty[0]
+        Return $empty
+    EndIf
+
+    ConsoleWrite('[GWLauncher] Loaded ' & UBound($accounts) & ' accounts' & @CRLF)
+    Return $accounts
+EndFunc
+
+;~ Get account names for display (redacted — no emails/passwords)
+;~ @param $accounts - array from GWLauncher_LoadAccounts()
+;~ @return Pipe-delimited string of character names for combo box
+Func GWLauncher_GetAccountNames($accounts)
+    Local $names = ''
+    For $i = 0 To UBound($accounts) - 1
+        Local $name = ''
+        Local $a = $accounts[$i]
+        If IsMap($a) Then
+            If MapExists($a, 'Name') Then $name = $a['Name']
+            If $name = '' And MapExists($a, 'character') Then $name = $a['character']
+            If $name = '' And MapExists($a, 'title') Then $name = $a['title']
+        EndIf
+        If $name = '' Then $name = 'Account ' & ($i + 1)
+        $names &= $name & '|'
+    Next
+    Return StringTrimRight($names, 1)
+EndFunc
+
+;~ Launch a specific account by index
+;~ @param $accounts - array from GWLauncher_LoadAccounts()
+;~ @param $index - 0-based index into accounts array
+;~ @return Result from GWLauncher_Launch(), or 0 on failure
+Func GWLauncher_LaunchAccount($accounts, $index)
+    If $index < 0 Or $index >= UBound($accounts) Then
+        ConsoleWrite('[GWLauncher] Invalid account index: ' & $index & @CRLF)
+        Return 0
+    EndIf
+
+    Local $acct = $accounts[$index]
+    If Not IsMap($acct) Then Return 0
+
+    Local $gwPath = ''
+    Local $email = ''
+    Local $password = ''
+    Local $character = ''
+    Local $extraArgs = ''
+
+    If MapExists($acct, 'gwpath') Then $gwPath = $acct['gwpath']
+    If MapExists($acct, 'email') Then $email = $acct['email']
+    If MapExists($acct, 'password') Then $password = $acct['password']
+    If MapExists($acct, 'character') Then $character = $acct['character']
+    If MapExists($acct, 'extraargs') Then $extraArgs = $acct['extraargs']
+
+    If $gwPath = '' Or Not FileExists($gwPath) Then
+        ConsoleWrite('[GWLauncher] GW path not found for account ' & $index & @CRLF)
+        Return 0
+    EndIf
+
+    Local $displayName = $character
+    If $displayName = '' Then $displayName = 'Account ' & ($index + 1)
+    ConsoleWrite('[GWLauncher] Launching account: ' & $displayName & @CRLF)
+
+    Return GWLauncher_Launch($gwPath, $email, $password, $character, $extraArgs)
+EndFunc
+
+;~ Find account index by character name (case-insensitive)
+;~ @return 0-based index, or -1 if not found
+Func GWLauncher_FindAccountByCharacter($accounts, $characterName)
+    For $i = 0 To UBound($accounts) - 1
+        Local $a = $accounts[$i]
+        If IsMap($a) Then
+            Local $name = ''
+            If MapExists($a, 'character') Then $name = $a['character']
+            If $name = '' And MapExists($a, 'Name') Then $name = $a['Name']
+            If StringLower($name) = StringLower($characterName) Then Return $i
+        EndIf
+    Next
+    Return -1
+EndFunc
+
+;~ Fully automated: launch account, wait for login, scan for client, connect
+;~ No UI interaction needed — designed for headless/scripted operation
+;~ @param $characterName - character name to launch and connect to
+;~ @param $accountsFile - path to Accounts.json (default: script dir)
+;~ @param $timeout - max seconds to wait for client to appear (default: 120)
+;~ @return True on success (client connected), False on failure
+Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeout = 120)
+    ConsoleWrite('[GWLauncher] Auto-launch: ' & $characterName & @CRLF)
+
+    ; Load accounts
+    Local $accounts = GWLauncher_LoadAccounts($accountsFile)
+    If UBound($accounts) = 0 Then
+        ConsoleWrite('[GWLauncher] No accounts loaded' & @CRLF)
+        Return False
+    EndIf
+
+    ; Find account by character name
+    Local $idx = GWLauncher_FindAccountByCharacter($accounts, $characterName)
+    If $idx = -1 Then
+        ConsoleWrite('[GWLauncher] Character not found in accounts: ' & $characterName & @CRLF)
+        Return False
+    EndIf
+
+    ; Check if already running
+    ScanAndUpdateGameClients()
+    If IsArray($game_clients) And $game_clients[0][0] > 0 Then
+        Local $existing = FindClientIndexByCharacterName($characterName)
+        If $existing > 0 Then
+            ConsoleWrite('[GWLauncher] Client already running, connecting...' & @CRLF)
+            SelectClient($existing)
+            Return True
+        EndIf
+    EndIf
+
+    ; Launch the account
+    Local $result = GWLauncher_LaunchAccount($accounts, $idx)
+    If $result = 0 Then
+        ConsoleWrite('[GWLauncher] Failed to launch client' & @CRLF)
+        Return False
+    EndIf
+
+    ; Wait for the client to appear in scan
+    ConsoleWrite('[GWLauncher] Waiting for client to log in (timeout: ' & $timeout & 's)...' & @CRLF)
+    Local $waitTimer = TimerInit()
+    While TimerDiff($waitTimer) < ($timeout * 1000)
+        Sleep(5000)
+        ScanAndUpdateGameClients()
+        If IsArray($game_clients) And $game_clients[0][0] > 0 Then
+            Local $clientIdx = FindClientIndexByCharacterName($characterName)
+            If $clientIdx > 0 Then
+                ConsoleWrite('[GWLauncher] Client found! Connecting to: ' & $characterName & @CRLF)
+                SelectClient($clientIdx)
+                Return True
+            EndIf
+        EndIf
+        ConsoleWrite('[GWLauncher] Still waiting... (' & Int(TimerDiff($waitTimer) / 1000) & 's)' & @CRLF)
+    WEnd
+
+    ConsoleWrite('[GWLauncher] Timeout waiting for client: ' & $characterName & @CRLF)
+    Return False
 EndFunc
