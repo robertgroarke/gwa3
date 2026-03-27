@@ -115,8 +115,9 @@ EndFunc
 
 ;~ Returns the map loading state:
 ;~   0 = Outpost, 1 = Explorable area, 2 = Loading
+;~ Delegates to upstream's GetMapType() which correctly dereferences instance_info_ptr
 Func GetMapLoading()
-	Return MemRead($instance_info_ptr)
+	Return GetMapType()
 EndFunc
 
 ;~ Returns True if logged into a character, False at character select

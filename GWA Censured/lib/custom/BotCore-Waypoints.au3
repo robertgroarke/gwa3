@@ -108,7 +108,7 @@ EndFunc   ;==>AggroMoveToEX
 ; ---------------------------------------------------------------------------
 Func WeCanMove($aRange = 1200)
 	Local $dist = GetNearestEnemyDistance()
-	; Out("Debug: WeCanMove Check Dist=" & $dist & " Range=" & $aRange)
+	Out("Debug: WeCanMove Dist=" & Round($dist) & " Range=" & $aRange & " CanMove=" & ($dist > $aRange))
 	If $dist < $aRange Then Return False
 	Return True
 EndFunc   ;==>WeCanMove
@@ -124,10 +124,10 @@ Func GetNearestEnemyDistance()
 	Local $target = GetNearestEnemyToAgent(GetMyAgent())
 	If IsDllStruct($target) Then
 		Local $d = GetDistance(GetMyAgent(), $target)
-		; Out("Debug: Found Enemy ID=" & DllStructGetData($target, 'ID') & " Dist=" & $d)
+		Out("Debug: Found Enemy ID=" & DllStructGetData($target, 'ID') & " Dist=" & Round($d))
 		Return $d
 	Else
-		; Out("Debug: No Enemy Found")
+		Out("Debug: No Enemy Found (GetNearestEnemyToAgent returned non-struct)")
 		Return 10000
 	EndIf
 EndFunc   ;==>GetNearestEnemyDistance
@@ -294,9 +294,12 @@ Func MoveandAggroEx($aWaypoints)
 				Boss()
 
 			Case Else
-				If GetMapLoading() = 1 Then
+				Local $mapState = GetMapLoading()
+				Out("Debug: Case Else waypoint " & $i & " MapLoading=" & $mapState & " FightRange=" & $aWaypoints[$i][2])
+				If $mapState = 1 Then
 					AggroMoveToEX($aWaypoints[$i][0], $aWaypoints[$i][1], $aWaypoints[$i][2])
 				Else
+					Out("Debug: SKIPPING AggroMoveToEX (MapLoading<>1)")
 					MoveTo($aWaypoints[$i][0], $aWaypoints[$i][1])
 				EndIf
 		EndSwitch
