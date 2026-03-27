@@ -179,14 +179,21 @@ Func GetProcessID()
 	Return GetPID()
 EndFunc
 
-; === Extension stubs (for optional modules not loaded) ===
-; These are no-ops unless an extension module overrides them
+; === Extension flags (enable framework extension hooks) ===
+Global $g_b_Scanner = True
+Global $g_b_AssemblerData = True
+Global $g_b_Assembler = True
+
+; === Extension stubs (call into loaded extension modules) ===
 
 Func Extend_Scanner()
+    If IsDeclared('g_b_UISniffer') Then ExtendScanner_UISniffer()
 EndFunc
 
 Func Extend_AssemblerData()
+    If IsDeclared('g_b_UISniffer') Then ExtendAssemblerData_UISniffer()
 EndFunc
 
 Func Extend_Assembler()
+    If IsDeclared('g_b_UISniffer') Then ExtendAssembler_UISniffer()
 EndFunc
