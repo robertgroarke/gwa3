@@ -79,6 +79,7 @@ Func LoadHeroConfigFromFile($sConfigName)
 			Local $sSkillTemplate2 = StringStripWS($aParts2[2], 3)
 			LoadSkillTemplate($sSkillTemplate2, $iHeroSlot)
 			$iHeroSlot += 1
+			Sleep(2000) ; Delay between hero template loads to avoid server rate-limit disconnect
 		EndIf
 	WEnd
 	FileClose($hFile)
