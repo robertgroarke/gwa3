@@ -76,9 +76,9 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
 
     If $email <> '' And $password <> '' Then
         $cmdLine &= ' -email "' & $email & '" -password "' & $password & '"'
-        If $character <> '' Then
-            $cmdLine &= ' -character "' & $character & '"'
-        EndIf
+        ; Use -character " " to auto-enter with last played character
+        ; GW doesn't reliably auto-play with full character names
+        $cmdLine &= ' -character " "'
     EndIf
 
     If $extraArgs <> '' Then
@@ -642,6 +642,40 @@ EndFunc
 ;~ @param $accountsFile - path to Accounts.json (default: script dir)
 ;~ @param $timeout - max seconds to wait for client to appear (default: 120)
 ;~ @return True on success (client connected), False on failure
+;~ Click the Play button on the GW character select screen
+;~ Uses the GW window handle to find and click the Play button area
+;~ @param $gwWindowTitle - title of the GW window (e.g. "Guild Wars - B E A S T R I T")
+;~ @return True if clicked, False if window not found
+Func GWLauncher_ClickPlay($gwWindowTitle = '')
+    Local $hWnd = 0
+    If $gwWindowTitle <> '' Then
+        $hWnd = WinWait($gwWindowTitle, '', 5)
+    Else
+        ; Find any GW window
+        $hWnd = WinWait('Guild Wars', '', 5)
+    EndIf
+    If $hWnd = 0 Then
+        ConsoleWrite('[GWLauncher] ClickPlay: GW window not found' & @CRLF)
+        Return False
+    EndIf
+
+    WinActivate($hWnd)
+    Sleep(500)
+
+    ; Get window position and size
+    Local $pos = WinGetPos($hWnd)
+    If Not IsArray($pos) Then Return False
+
+    ; Play button is at approximately 80% from left, 97% from top
+    Local $playX = $pos[0] + Int($pos[2] * 0.80)
+    Local $playY = $pos[1] + Int($pos[3] * 0.97)
+
+    ConsoleWrite('[GWLauncher] ClickPlay: clicking at (' & $playX & ',' & $playY & ')' & @CRLF)
+    MouseClick('left', $playX, $playY, 1, 0)
+    Sleep(1000)
+    Return True
+EndFunc
+
 ;~ Get the hero config name for a character from AccountConfigs.json
 ;~ @return Config name (e.g. "Mercs", "Standard") or "Standard" as default
 Func GWLauncher_GetHeroConfig($characterName, $configFile = '')
@@ -698,8 +732,11 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
     EndIf
 
     ; Wait for the client to appear in scan
+    ; The -character " " flag should auto-enter, but if it doesn't,
+    ; we'll click the Play button after 30 seconds as a fallback
     ConsoleWrite('[GWLauncher] Waiting for client to log in (timeout: ' & $timeout & 's)...' & @CRLF)
     Local $waitTimer = TimerInit()
+    Local $clickedPlay = False
     While TimerDiff($waitTimer) < ($timeout * 1000)
         Sleep(5000)
         ScanAndUpdateGameClients()
@@ -711,6 +748,14 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
                 Return True
             EndIf
         EndIf
+
+        ; If stuck on character select after 20 seconds, try clicking Play
+        If Not $clickedPlay And TimerDiff($waitTimer) > 20000 Then
+            ConsoleWrite('[GWLauncher] Client not in-game yet, clicking Play button...' & @CRLF)
+            GWLauncher_ClickPlay('Guild Wars - ' & $characterName)
+            $clickedPlay = True
+        EndIf
+
         ConsoleWrite('[GWLauncher] Still waiting... (' & Int(TimerDiff($waitTimer) / 1000) & 's)' & @CRLF)
     WEnd
 
