@@ -253,7 +253,7 @@ Func PickupLootEx($iMaxDist = 2000, $PickupTorch = False)
 			$lDeadlock = TimerInit()
 			$lPickupCounter = 0
 			Do
-				PickUpItem($lAgentID)
+				PickUpItem($lItem)
 				Sleep(250)
 				Out("Pickup")
 				$lPickupCounter += 1
