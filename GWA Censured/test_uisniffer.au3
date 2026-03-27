@@ -1,7 +1,7 @@
 #RequireAdmin
 #include "lib\Froggy_Includes.au3"
 
-ConsoleWrite("=== UIMessage Sniffer Test ===" & @CRLF)
+ConsoleWrite("=== UIMessage Sniffer Test (Polling Mode) ===" & @CRLF)
 
 ; Launch BEASTRIT
 Local $accounts = GWLauncher_LoadAccounts()
@@ -13,31 +13,59 @@ If $result = 0 Then
 EndIf
 ConsoleWrite("GW launched PID=" & $result[0] & @CRLF)
 
-; Wait for character select
 ConsoleWrite("Waiting 35s for char select..." & @CRLF)
 Sleep(35000)
 
-; Find the NEW client (should be the last one, or one without a name yet)
 ScanAndUpdateGameClients()
 ConsoleWrite("Clients: " & $game_clients[0][0] & @CRLF)
-Local $targetClient = $game_clients[0][0]  ; use the LAST client (newest)
+Local $targetClient = $game_clients[0][0]
 For $i = 1 To $game_clients[0][0]
     ConsoleWrite("  " & $i & ": " & $game_clients[$i][3] & @CRLF)
 Next
-ConsoleWrite("Using client " & $targetClient & @CRLF)
 
 SelectClient($targetClient)
 InitializeGameClientData(True, False)
-ConsoleWrite("Connected" & @CRLF)
+ConsoleWrite("Connected to client " & $targetClient & @CRLF)
 
-; Init and enable sniffer
-UISnifferInit()
+; Enable sniffer (skip UISnifferInit — we'll poll instead of PostMessage)
 UISnifferEnable()
-ConsoleWrite("=== SNIFFER READY ===" & @CRLF)
-ConsoleWrite("WAITING_FOR_CLICKS" & @CRLF)
+ConsoleWrite("=== SNIFFER ENABLED ===" & @CRLF)
+ConsoleWrite("POLLING_ACTIVE" & @CRLF)
 
-; Wait 90 seconds for clicks
-Sleep(90000)
+; Poll the shared memory buffer for captured messages
+Local $lastCounter = 0
+Local $processHandle = GetProcessHandle()
+Local $counterAddr = GetLabel('UISnifferCounter')
+Local $msgIdAddr = GetLabel('UISnifferMsgId')
+Local $wParamAddr = GetLabel('UISnifferWParam')
+Local $lParamAddr = GetLabel('UISnifferLParam')
+
+For $poll = 1 To 900  ; poll for 90 seconds (100ms intervals)
+    Sleep(100)
+
+    Local $counter = MemoryRead($processHandle, $counterAddr, 'dword')
+    If $counter <> $lastCounter Then
+        Local $msgId = MemoryRead($processHandle, $msgIdAddr, 'dword')
+        Local $wParamPtr = MemoryRead($processHandle, $wParamAddr, 'dword')
+        Local $lParamVal = MemoryRead($processHandle, $lParamAddr, 'dword')
+
+        ; Try to dereference wParam if it looks like a pointer
+        Local $wp0 = 0
+        Local $wp1 = 0
+        If $wParamPtr > 0x10000 Then
+            $wp0 = MemoryRead($processHandle, $wParamPtr, 'dword')
+            $wp1 = MemoryRead($processHandle, $wParamPtr + 4, 'dword')
+        EndIf
+
+        ConsoleWrite("[CAPTURE] #" & $counter & _
+            " MsgID=0x" & Hex($msgId, 8) & _
+            " wParam=0x" & Hex($wParamPtr, 8) & _
+            " [" & Hex($wp0, 8) & "," & Hex($wp1, 8) & "]" & _
+            " lParam=" & $lParamVal & @CRLF)
+
+        $lastCounter = $counter
+    EndIf
+Next
 
 UISnifferDisable()
 ConsoleWrite("=== DONE ===" & @CRLF)
