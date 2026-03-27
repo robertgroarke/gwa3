@@ -677,7 +677,13 @@ Func GWLauncher_ClickPlay($gwWindowTitle = '', $characterName = '')
             ; Read chars array: offset 0x148 = buffer ptr, 0x14C = size
             Local $charsPtr = MemRead($preGamePtr + 0x148)
             Local $charsCount = MemRead($preGamePtr + 0x14C)
-            ConsoleWrite('[GWLauncher] PreGame: ' & $charsCount & ' characters at ' & Ptr($charsPtr) & @CRLF)
+            ConsoleWrite('[GWLauncher] PreGame ptr=0x' & Hex($preGamePtr) & ' chars=' & $charsCount & ' at 0x' & Hex($charsPtr) & @CRLF)
+
+            ; Sanity check: GW accounts have at most 28 character slots
+            If $charsCount > 28 Or $charsCount <= 0 Or $charsPtr < 0x10000 Then
+                ConsoleWrite('[GWLauncher] Invalid chars array (count=' & $charsCount & ' ptr=0x' & Hex($charsPtr) & '). Skipping selection.' & @CRLF)
+                $charsCount = 0
+            EndIf
 
             ; Each LoginCharacter is 4 + 20*2 = 44 bytes (uint32 + wchar[20])
             Local $charSize = 44
