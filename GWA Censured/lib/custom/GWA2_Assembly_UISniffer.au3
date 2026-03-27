@@ -60,7 +60,7 @@ Func ExtendAssemblerData_UISniffer()
     _('UISnifferCounter/4')
     _('UISnifferEnabled/4')
     _('UISnifferMsgId/4')
-    _('UISnifferWParam/128')
+    _('UISnifferWParam/4')
     _('UISnifferLParam/4')
 EndFunc
 
@@ -96,16 +96,13 @@ Func ExtendAssembler_UISniffer()
     ; Read msgid
     _('mov eax,dword[esp+28]')
 
-    ; FILTER: only capture UI-level messages (high nibble 0x10 or 0x30)
-    _('mov ecx,eax')
-    _('shr ecx,18')           ; shift right 24 bits to get high byte
-    _('cmp ecx,10')           ; 0x10xxxxxx range (game events)
-    _('jz UISnifferCapture')
-    _('cmp ecx,30')           ; 0x30xxxxxx range (client->server commands)
-    _('jz UISnifferCapture')
-    _('ljmp UISnifferSkip')
+    ; FILTER: only capture messages >= 0x10000000 (skip low-level input/render)
+    ; Use AND to check if top nibble is set
+    _('test eax,eax')
+    _('jz UISnifferSkip')           ; skip msgid=0
+    _('cmp eax,10000000')           ; compare against 0x10000000
+    _('jb UISnifferSkip')           ; skip if below (rendering/input messages)
 
-    _('UISnifferCapture:')
     ; Save msgid
     _('mov dword[UISnifferMsgId],eax')
 
@@ -113,15 +110,9 @@ Func ExtendAssembler_UISniffer()
     _('mov eax,dword[esp+30]')
     _('mov dword[UISnifferLParam],eax')
 
-    ; Copy first 128 bytes of wParam data (wParam is a pointer)
-    _('mov esi,dword[esp+2C]')
-    _('test esi,esi')
-    _('jz UISnifferNoWParam')
-    ; lea edi, UISnifferWParam
-    _('mov edi,UISnifferWParam')
-    ; Copy 32 dwords = 128 bytes
-    _('mov ecx,20')
-    _('rep movsd')
+    ; Save wParam value (raw pointer or value — AutoIt reads the pointed-to data)
+    _('mov eax,dword[esp+2C]')
+    _('mov dword[UISnifferWParam],eax')
 
     _('UISnifferNoWParam:')
     ; Increment counter
@@ -246,26 +237,25 @@ Func _UISnifferCallback($hWnd, $iMsg, $wParam, $lParam)
     If $counter = $g_UISniffer_LastCounter Then Return 0
     $g_UISniffer_LastCounter = $counter
 
-    ; Read wParam data (first 32 bytes for display)
-    Local $wParamStruct = DllStructCreate('dword[8]')
-    DllCall($kernel_handle, 'bool', 'ReadProcessMemory', _
-        'handle', GetProcessHandle(), _
-        'ptr', $g_UISniffer_WParam_Addr, _
-        'ptr', DllStructGetPtr($wParamStruct), _
-        'ulong_ptr', 32, 'ulong_ptr*', 0)
-
-    Local $wp0 = DllStructGetData($wParamStruct, 1, 1)
-    Local $wp1 = DllStructGetData($wParamStruct, 1, 2)
-    Local $wp2 = DllStructGetData($wParamStruct, 1, 3)
-    Local $wp3 = DllStructGetData($wParamStruct, 1, 4)
+    ; Read wParam pointer from shared memory
+    Local $wParamPtr = MemoryRead(GetProcessHandle(), $g_UISniffer_WParam_Addr, 'dword')
 
     ; Read lParam from shared memory
     Local $lParamVal = MemoryRead(GetProcessHandle(), $g_UISniffer_LParam_Addr, 'dword')
 
+    ; If wParam is a pointer, try to read the first 4 dwords it points to
+    Local $wp0 = 0, $wp1 = 0, $wp2 = 0, $wp3 = 0
+    If $wParamPtr > 0x10000 Then ; looks like a valid pointer
+        $wp0 = MemoryRead(GetProcessHandle(), $wParamPtr, 'dword')
+        $wp1 = MemoryRead(GetProcessHandle(), $wParamPtr + 4, 'dword')
+        $wp2 = MemoryRead(GetProcessHandle(), $wParamPtr + 8, 'dword')
+        $wp3 = MemoryRead(GetProcessHandle(), $wParamPtr + 12, 'dword')
+    EndIf
+
     ; Format message
     Local $msgHex = '0x' & Hex($msgId, 8)
     Local $logLine = '[UISniffer] #' & $counter & ' MsgID=' & $msgHex & _
-        ' wP=[' & Hex($wp0,8) & ',' & Hex($wp1,8) & ',' & Hex($wp2,8) & ',' & Hex($wp3,8) & ']' & _
+        ' wP=0x' & Hex($wParamPtr, 8) & ' [' & Hex($wp0,8) & ',' & Hex($wp1,8) & ',' & Hex($wp2,8) & ',' & Hex($wp3,8) & ']' & _
         ' lP=' & $lParamVal
 
     ; Output to console and optionally to Froggy GUI
