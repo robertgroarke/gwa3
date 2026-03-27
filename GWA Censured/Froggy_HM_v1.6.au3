@@ -108,12 +108,8 @@ Func _ConnectToSelectedClient($characterName)
 		$mBasePointer = MemRead(GetScannedAddress('ScanBasePointer', 8))
 		WinSetTitle(GetWindowHandle(), '', 'Guild Wars - ' & GetCharacterName())
 
-		; Auto-select hero config based on character name
-		Local $heroConfig = GWLauncher_GetHeroConfig($characterName)
-		ConsoleWrite('[Froggy] Hero config for ' & $characterName & ': ' & $heroConfig & @CRLF)
-		If GUI_IsAddHeroesChecked() Then
-			LoadHeroConfigFromFile($heroConfig)
-		EndIf
+		; Auto-configure GUI and load heroes based on character name
+		GWLauncher_ConfigureFroggyGUI($characterName)
 
 		$g_BotHasLaunched = True
 		ConsoleWrite('[Froggy] Connected to: ' & $characterName & @CRLF)

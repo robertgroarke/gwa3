@@ -676,6 +676,27 @@ Func GWLauncher_ClickPlay($gwWindowTitle = '')
     Return True
 EndFunc
 
+;~ Set the Froggy GUI controls for a character (hero config, add heroes checkbox)
+;~ Call this AFTER the Froggy bot GUI is created but BEFORE clicking Start
+;~ @param $characterName - character name to look up config for
+Func GWLauncher_ConfigureFroggyGUI($characterName)
+    Local $heroConfig = GWLauncher_GetHeroConfig($characterName)
+    ConsoleWrite('[GWLauncher] Configuring GUI for ' & $characterName & ': heroes=' & $heroConfig & @CRLF)
+
+    ; Set the Add Heroes checkbox to checked
+    If Not GUI_IsAddHeroesChecked() Then
+        GUICtrlSetState($GUI_GroupSettings_CheckAddHeroes, $GUI_CHECKED)
+        ConsoleWrite('[GWLauncher] Checked Add Heroes' & @CRLF)
+    EndIf
+
+    ; Set the hero config dropdown
+    Local $hWnd = WinGetHandle('Froggy HM v1.6')
+    If $hWnd Then
+        ControlCommand($hWnd, '', '[CLASS:ComboBox; INSTANCE:1]', 'SelectString', $heroConfig)
+        ConsoleWrite('[GWLauncher] Set hero dropdown to: ' & $heroConfig & @CRLF)
+    EndIf
+EndFunc
+
 ;~ Get the hero config name for a character from AccountConfigs.json
 ;~ @return Config name (e.g. "Mercs", "Standard") or "Standard" as default
 Func GWLauncher_GetHeroConfig($characterName, $configFile = '')
