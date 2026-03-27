@@ -76,9 +76,9 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
 
     If $email <> '' And $password <> '' Then
         $cmdLine &= ' -email "' & $email & '" -password "' & $password & '"'
-        ; Use -character " " to auto-enter with last played character
-        ; GW doesn't reliably auto-play with full character names
-        $cmdLine &= ' -character " "'
+        If $character <> '' Then
+            $cmdLine &= ' -character "' & $character & '"'
+        EndIf
     EndIf
 
     If $extraArgs <> '' Then
