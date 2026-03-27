@@ -25,6 +25,7 @@ toolbox/
 gwca/
 BotsHub-original/
 BotsHub-latest/
+gwlauncher-ref/
 
 # === Upstream reference files (used for diffing) ===
 upstream_*.au3

@@ -34,6 +34,7 @@
 #include 'custom\Skill_Types.au3'
 
 ; === Custom Extensions ===
+#include 'custom\GWLauncher.au3'
 #include 'custom\NPC_Coordinates.au3'
 #include 'custom\GWA2_Crafting.au3'
 #include 'custom\GWA2_Extensions.au3'
