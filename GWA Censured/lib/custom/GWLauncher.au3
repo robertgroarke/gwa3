@@ -708,6 +708,41 @@ Func GWLauncher_ClickPlay($gwWindowTitle = '', $characterName = '')
     Return True
 EndFunc
 
+;~ Dismiss the "Reconnect to previous session?" dialog
+;~ Sends Right arrow (to select No) then Enter to confirm
+;~ @param $choice - "yes" or "no" (default: "no")
+;~ @param $gwWindowTitle - GW window title
+;~ @return True if dialog was found and dismissed
+Func GWLauncher_HandleReconnectDialog($choice = 'no', $gwWindowTitle = '')
+    Local $hWnd = 0
+    If $gwWindowTitle <> '' Then
+        $hWnd = WinWait($gwWindowTitle, '', 5)
+    Else
+        $hWnd = WinWait('Guild Wars', '', 5)
+    EndIf
+    If $hWnd = 0 Then Return False
+
+    WinActivate($hWnd)
+    Sleep(500)
+
+    ; The reconnect dialog has Yes (left) and No (right) buttons
+    ; Default focus might be on Yes. Arrow keys navigate between them.
+    If StringLower($choice) = 'no' Then
+        ; Press Right to move to No, then Enter to confirm
+        ControlSend($hWnd, '', '', '{RIGHT}')
+        Sleep(200)
+        ControlSend($hWnd, '', '', '{ENTER}')
+        ConsoleWrite('[GWLauncher] Reconnect dialog: selected No' & @CRLF)
+    Else
+        ; Press Enter to accept Yes (default/left button)
+        ControlSend($hWnd, '', '', '{ENTER}')
+        ConsoleWrite('[GWLauncher] Reconnect dialog: selected Yes' & @CRLF)
+    EndIf
+
+    Sleep(1000)
+    Return True
+EndFunc
+
 ;~ Set the Froggy GUI controls for a character (hero config, add heroes checkbox)
 ;~ Call this AFTER the Froggy bot GUI is created but BEFORE clicking Start
 ;~ @param $characterName - character name to look up config for
@@ -784,14 +819,34 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
         Return False
     EndIf
 
-    ; Wait for the client to appear in scan
-    ; The -character " " flag should auto-enter, but if it doesn't,
-    ; we'll click the Play button after 30 seconds as a fallback
+    ; Wait for GW window to appear, handle reconnect dialog, select character, press Play
     ConsoleWrite('[GWLauncher] Waiting for client to log in (timeout: ' & $timeout & 's)...' & @CRLF)
     Local $waitTimer = TimerInit()
+    Local $handledReconnect = False
     Local $clickedPlay = False
     While TimerDiff($waitTimer) < ($timeout * 1000)
         Sleep(5000)
+
+        ; Handle reconnect dialog if it appears (dismiss with No)
+        If Not $handledReconnect And TimerDiff($waitTimer) > 15000 Then
+            Local $gwTitle = 'Guild Wars - ' & $characterName
+            ; Also check generic title for when GW hasn't set character name yet
+            If WinExists($gwTitle) Or WinExists('Guild Wars Reforged') Or WinExists('Guild Wars') Then
+                GWLauncher_HandleReconnectDialog('no', $gwTitle)
+                $handledReconnect = True
+                Sleep(2000)
+            EndIf
+        EndIf
+
+        ; Press Play if still on character select after reconnect is handled
+        If $handledReconnect And Not $clickedPlay And TimerDiff($waitTimer) > 25000 Then
+            ConsoleWrite('[GWLauncher] Pressing Play via Enter key...' & @CRLF)
+            GWLauncher_ClickPlay('Guild Wars - ' & $characterName, $characterName)
+            $clickedPlay = True
+            Sleep(5000)
+        EndIf
+
+        ; Check if client is in-game
         ScanAndUpdateGameClients()
         If IsArray($game_clients) And $game_clients[0][0] > 0 Then
             Local $clientIdx = FindClientIndexByCharacterName($characterName)
@@ -800,13 +855,6 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
                 SelectClient($clientIdx)
                 Return True
             EndIf
-        EndIf
-
-        ; If stuck on character select after 20 seconds, try clicking Play
-        If Not $clickedPlay And TimerDiff($waitTimer) > 20000 Then
-            ConsoleWrite('[GWLauncher] Client not in-game yet, clicking Play button...' & @CRLF)
-            GWLauncher_ClickPlay('Guild Wars - ' & $characterName)
-            $clickedPlay = True
         EndIf
 
         ConsoleWrite('[GWLauncher] Still waiting... (' & Int(TimerDiff($waitTimer) / 1000) & 's)' & @CRLF)
