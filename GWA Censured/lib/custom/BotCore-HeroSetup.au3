@@ -77,13 +77,62 @@ Func LoadHeroConfigFromFile($sConfigName)
 		Local $aParts2 = StringSplit($sLine2, ",")
 		If $aParts2[0] >= 2 Then
 			Local $sSkillTemplate2 = StringStripWS($aParts2[2], 3)
-			LoadSkillTemplate($sSkillTemplate2, $iHeroSlot)
+			; Use lightweight skill-only load to avoid rate-limit disconnect
+			; Full LoadSkillTemplate sends 50+ packets per hero (attributes)
+			_LoadSkillBarOnly($sSkillTemplate2, $iHeroSlot)
 			$iHeroSlot += 1
-			Sleep(2000) ; Delay between hero template loads to avoid server rate-limit disconnect
+			Sleep(1000)
 		EndIf
 	WEnd
 	FileClose($hFile)
 
 	Out("Hero config loaded successfully")
 	Return True
+EndFunc
+
+;~ Lightweight skill template loader — loads ONLY the skillbar, skips attributes
+;~ This avoids sending 50+ attribute packets per hero which triggers rate-limit disconnects
+Func _LoadSkillBarOnly($buildTemplate, $heroIndex = 0)
+	Local $buildTemplateChars = StringSplit($buildTemplate, '')
+	_ArrayDelete($buildTemplateChars, 0)
+
+	$buildTemplate = ''
+	For $character In $buildTemplateChars
+		$buildTemplate &= Base64ToBin64($character)
+	Next
+
+	; Parse header
+	Local $templateType = Bin64ToDec(StringLeft($buildTemplate, 4))
+	$buildTemplate = StringTrimLeft($buildTemplate, 4)
+	If $templateType <> 14 Then Return False
+
+	Local $versionNumber = Bin64ToDec(StringLeft($buildTemplate, 4))
+	$buildTemplate = StringTrimLeft($buildTemplate, 4)
+
+	Local $professionBits = Bin64ToDec(StringLeft($buildTemplate, 2)) + 4
+	$buildTemplate = StringTrimLeft($buildTemplate, 2)
+
+	; Skip professions
+	$buildTemplate = StringTrimLeft($buildTemplate, $professionBits) ; primary
+	$buildTemplate = StringTrimLeft($buildTemplate, $professionBits) ; secondary
+
+	; Skip attributes
+	Local $attributesCount = Bin64ToDec(StringLeft($buildTemplate, 4))
+	$buildTemplate = StringTrimLeft($buildTemplate, 4)
+	Local $attributesBits = Bin64ToDec(StringLeft($buildTemplate, 4)) + 4
+	$buildTemplate = StringTrimLeft($buildTemplate, 4)
+	$buildTemplate = StringTrimLeft($buildTemplate, $attributesCount * ($attributesBits + 4))
+
+	; Parse skills
+	Local $skillsBits = Bin64ToDec(StringLeft($buildTemplate, 4)) + 8
+	$buildTemplate = StringTrimLeft($buildTemplate, 4)
+
+	Local $skills[8]
+	For $i = 0 To 7
+		$skills[$i] = Bin64ToDec(StringLeft($buildTemplate, $skillsBits))
+		$buildTemplate = StringTrimLeft($buildTemplate, $skillsBits)
+	Next
+
+	; Load ONLY the skillbar — no attribute changes
+	LoadSkillBar($skills[0], $skills[1], $skills[2], $skills[3], $skills[4], $skills[5], $skills[6], $skills[7], $heroIndex)
 EndFunc
