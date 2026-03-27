@@ -642,6 +642,26 @@ EndFunc
 ;~ @param $accountsFile - path to Accounts.json (default: script dir)
 ;~ @param $timeout - max seconds to wait for client to appear (default: 120)
 ;~ @return True on success (client connected), False on failure
+;~ Get the hero config name for a character from AccountConfigs.json
+;~ @return Config name (e.g. "Mercs", "Standard") or "Standard" as default
+Func GWLauncher_GetHeroConfig($characterName, $configFile = '')
+    If $configFile = '' Then $configFile = @ScriptDir & '\AccountConfigs.json'
+    If Not FileExists($configFile) Then Return 'Standard'
+
+    Local $parsed = _JSON_Parse(FileRead($configFile))
+    If @error Or Not IsMap($parsed) Then Return 'Standard'
+
+    If MapExists($parsed, $characterName) Then
+        Local $charConfig = $parsed[$characterName]
+        If IsMap($charConfig) And MapExists($charConfig, 'hero_config') Then
+            Return $charConfig['hero_config']
+        EndIf
+    EndIf
+
+    Return 'Standard'
+EndFunc
+
+;~ Fully automated: launch account, wait for login, scan for client, connect
 Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeout = 120)
     ConsoleWrite('[GWLauncher] Auto-launch: ' & $characterName & @CRLF)
 

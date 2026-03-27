@@ -39,6 +39,7 @@ Backup/
 
 # === Credentials / Secrets (NEVER commit) ===
 Accounts.json
+AccountConfigs.json
 *.credentials
 *.secret
 
