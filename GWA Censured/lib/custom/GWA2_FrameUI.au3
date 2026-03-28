@@ -876,22 +876,48 @@ Func ClickFrameButton($hash)
         'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ShellcodeAddr), _
         'ptr', DllStructGetPtr($sc), 'ulong_ptr', $p, 'ulong_ptr*', 0)
 
-    ; Execute via CreateRemoteThread. The thread may not return (SendFrameUIMsg
-    ; can block waiting for game-thread sync), but the UI message IS processed.
-    ; We wait briefly then close the handle — the thread will be cleaned up when
-    ; the game processes the message or when the process exits.
-    Local $th = DllCall($kernel_handle, 'handle', 'CreateRemoteThread', _
-        'handle', $processHandle, 'ptr', 0, 'ulong_ptr', 0, _
-        'ptr', Ptr($g_FrameClick_ShellcodeAddr), 'ptr', 0, 'dword', 0, 'dword*', 0)
-    If IsArray($th) And $th[0] <> 0 Then
-        ; Wait up to 2s — thread may complete or may block on game-thread sync
-        DllCall($kernel_handle, 'dword', 'WaitForSingleObject', 'handle', $th[0], 'dword', 2000)
-        DllCall($kernel_handle, 'bool', 'CloseHandle', 'handle', $th[0])
+    ; Use PostMessage to send WM_LBUTTONDOWN/UP to the game window.
+    ; This avoids injection-based approaches that change the assembly layout
+    ; (which breaks the second InitializeGameClientForGWA2 call's label resolution).
+    ; PostMessage is non-blocking and works at char select without moving the mouse.
+    Local $hWnd = $game_clients[$game_clients[0][0]][2]
+
+    ; Get frame position to compute click coordinates
+    ; For char select buttons, use approximate window-relative coordinates
+    ; Play button: ~78% x, ~96% y
+    ; Reconnect YES: ~42% x, ~52% y
+    ; Reconnect NO: ~58% x, ~52% y
+    Local $clientSize = WinGetClientSize($hWnd)
+    If Not IsArray($clientSize) Then
+        ConsoleWrite('[FrameUI] Could not get window size' & @CRLF)
+        Return False
     EndIf
 
-    ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
+    Local $clickX, $clickY
+    Switch $hash
+        Case $FRAME_HASH_PLAY_BUTTON
+            $clickX = Int($clientSize[0] * 0.78)
+            $clickY = Int($clientSize[1] * 0.96)
+        Case $FRAME_HASH_RECONNECT_YES
+            $clickX = Int($clientSize[0] * 0.42)
+            $clickY = Int($clientSize[1] * 0.52)
+        Case $FRAME_HASH_RECONNECT_NO
+            $clickX = Int($clientSize[0] * 0.58)
+            $clickY = Int($clientSize[1] * 0.52)
+        Case Else
+            ConsoleWrite('[FrameUI] Unknown button hash for PostMessage click: ' & $hash & @CRLF)
+            Return False
+    EndSwitch
 
-    ; Brief wait for game to process the UI event
+    Local $lParam = BitOR($clickY * 0x10000, BitAND($clickX, 0xFFFF))
+    ; WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202
+    DllCall('user32.dll', 'bool', 'PostMessageW', 'hwnd', $hWnd, 'uint', 0x0201, 'wparam', 1, 'lparam', $lParam)
+    Sleep(100)
+    DllCall('user32.dll', 'bool', 'PostMessageW', 'hwnd', $hWnd, 'uint', 0x0202, 'wparam', 0, 'lparam', $lParam)
+
+    ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' at ' & $clickX & ',' & $clickY & ' via PostMessage' & @CRLF)
+
+    ; Wait for game to process
     Sleep(500)
 
     Return True
