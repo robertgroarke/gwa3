@@ -444,6 +444,8 @@ Func RegisterScanPatterns()
 	AddScanPattern('TradePartner',				'6A008D45F8C745F801000000',												-0xC,	'hook')
 	; EncString Decoding
 	AddScanPattern('ValidateAsyncDecodeStr',	'',																		'',		'func',	'P:\Code\Engine\Text\TextApi.cpp',			'codedString')
+	; GameTick: frame processing function, safe for UI calls (GWCA hooks this for GameThread)
+	AddScanPattern('GameTick',					'',																		'',		'hook',	'P:\Code\Engine\Frame\FrApi.cpp',			'renderElapsed >= 0')
 	If IsDeclared('CHAT_LOG_STRUCT') Then ExtendScannerWithChatLog()
 EndFunc
 
@@ -803,6 +805,14 @@ Func MapScanResultsToLabels()
 	$tempValue = $scan_results['LoadFinished']
 	SetLabel('LoadFinishedStart', Ptr($tempValue))
 	SetLabel('LoadFinishedReturn', Ptr($tempValue + 0x5))
+	; GameTick: frame processing function (safe for UI calls at char select)
+	If MapExists($scan_results, 'GameTick') And $scan_results['GameTick'] <> 0 Then
+		$tempValue = $scan_results['GameTick']
+		SetLabel('GameTickStart', Ptr($tempValue))
+		SetLabel('GameTickReturn', Ptr($tempValue + 0x5))
+		Debug('GameTickStart: ' & GetLabel('GameTickStart'))
+	EndIf
+
 	$tempValue = $scan_results['Trader']
 	SetLabel('TraderStart', Ptr($tempValue))
 	SetLabel('TraderReturn', Ptr($tempValue + 0x5))
@@ -1343,6 +1353,7 @@ Func ModifyMemory()
 	AssemblerCreateData()
 	AssemblerCreateMain()
 	AssemblerCreateRenderingMod()
+	AssemblerCreateGameTick()
 	AssemblerCreateLoadFinished()
 	AssemblerCreateTradePartner()
 	AssemblerCreateCommands()
@@ -1395,6 +1406,16 @@ Func ModifyMemory()
 		WriteDetour('RenderingMod', 'RenderingModProc')
 		WriteDetour('LoadFinishedStart', 'LoadFinishedProc')
 		WriteDetour('TradePartnerStart', 'TradePartnerProc')
+		If GetLabel('GameTickStart') <> -1 Then
+			; Save original 5 bytes from GameTickStart into GameTickOrigCode
+			; then append a JMP to GameTickReturn — so GameTickProc can jump here
+			; to execute the original prologue and return to normal flow
+			Local $origBytes = MemoryRead($processHandle, GetLabel('GameTickStart'), 'byte[5]')
+			WriteBinary($processHandle, StringMid(String($origBytes), 3), GetLabel('GameTickOrigCode'))
+			WriteBinary($processHandle, 'E9' & SwapEndian(Hex(GetLabel('GameTickReturn') - GetLabel('GameTickOrigCode') - 5 - 5)), GetLabel('GameTickOrigCode') + 5)
+			WriteDetour('GameTickStart', 'GameTickProc')
+			Debug('GameTick hook installed')
+		EndIf
 		If IsDeclared('g_b_AssemblerWriteDetour') Then Extend_AssemblerWriteDetour()
 	EndIf
 EndFunc
@@ -1494,6 +1515,8 @@ Func AssemblerCreateData()
 	_('DecodeInputPtr/256')
 	; Output: decoded wchar string (max 1024 wchars)
 	_('DecodeOutputPtr/2048')
+	; GameTick: stores original 5 prologue bytes + JMP back (filled at runtime)
+	_('GameTickOrigCode/16')
 
 	If IsDeclared('g_b_AssemblerData') Then Extend_AssemblerData()
 
@@ -1610,34 +1633,45 @@ Func AssemblerCreateRenderingMod()
 	_('add esp,4')
 	_('cmp dword[DisableRendering],1')
 
-	; Execute queued commands during rendering (char select ONLY).
-	; Skip when MapIsLoaded=1 (in-game) — MainProc handles commands there.
-	; This prevents crashes when rendering hook code interferes with in-game UI.
-	_('cmp dword[MapIsLoaded],0')           ; 7 bytes
-	_('jnz_ingame -> 753D')                 ; 2 bytes: jnz +61 → skip to ljmp
-	_('pushad')                             ; 1 byte
-	_('pushfd')                             ; 1 byte
-	_('mov eax,dword[QueueCounter]')        ; 5 bytes
-	_('mov ecx,eax')                        ; 2 bytes
-	_('shl eax,8')                          ; 3 bytes
-	_('add eax,QueueBase')                  ; 5 bytes
-	_('mov ebx,dword[eax]')                 ; 2 bytes
-	_('test ebx,ebx')                       ; 2 bytes
-	_('jz_skip -> 7424')                    ; 2 bytes: jz +36 → skip to popfd/popad
-	_('mov dword[eax],0')                   ; 6 bytes
-	_('mov eax,ebx')                        ; 2 bytes
-	_('mov dword[RenderCmdPtr],eax')        ; 5 bytes
-	_('mov eax,ecx')                        ; 2 bytes
-	_('inc eax')                            ; 1 byte
-	_('cmp eax,QueueSize')                  ; 5 bytes
-	_('jnz_noreset -> 7502')                ; 2 bytes: jnz +2
-	_('xor eax,eax')                        ; 2 bytes
-	_('mov dword[QueueCounter],eax')        ; 5 bytes
-	_('call dword[RenderCmdPtr]')           ; 6 bytes
-	_('popfd')                              ; 1 byte
-	_('popad')                              ; 1 byte
+	; Queue processing REMOVED from rendering hook — it caused re-entrancy crashes
+	; when calling SendFrameUIMsg (UI calls during rendering callback).
+	; GameTickProc now handles command queue processing in the safe GameTick context.
 
 	_('ljmp RenderingModReturn')
+EndFunc
+
+; GameTick hook — processes command queue in the game's frame tick context.
+; Unlike the rendering callback, GameTick is safe for UI calls (SendFrameUIMsg)
+; because it runs in the same context as GWCA's GameThread::Enqueue.
+; Only processes queue at char select (MapIsLoaded=0) to avoid double-processing
+; with MainProc which handles the in-game case.
+Func AssemblerCreateGameTick()
+	_('GameTickProc:')
+	_('pushad')                                 ; 1 byte  (offset 0)
+	_('pushfd')                                 ; 1 byte  (offset 1)
+	_('cmp dword[MapIsLoaded],0')               ; 7 bytes (offset 2)
+	_('jnz_ingame -> 7539')                     ; 2 bytes (offset 9): jnz +57 → skip to popfd
+	_('mov eax,dword[QueueCounter]')            ; 5 bytes (offset 11)
+	_('mov ecx,eax')                            ; 2 bytes (offset 16)
+	_('shl eax,8')                              ; 3 bytes (offset 18)
+	_('add eax,QueueBase')                      ; 5 bytes (offset 21)
+	_('mov ebx,dword[eax]')                     ; 2 bytes (offset 26)
+	_('test ebx,ebx')                           ; 2 bytes (offset 28)
+	_('jz_empty -> 7424')                       ; 2 bytes (offset 30): jz +36 → skip to popfd
+	_('mov dword[eax],0')                       ; 6 bytes (offset 32)
+	_('mov eax,ebx')                            ; 2 bytes (offset 38)
+	_('mov dword[RenderCmdPtr],eax')            ; 5 bytes (offset 40)
+	_('mov eax,ecx')                            ; 2 bytes (offset 45)
+	_('inc eax')                                ; 1 byte  (offset 47)
+	_('cmp eax,QueueSize')                      ; 5 bytes (offset 48)
+	_('jnz_noreset -> 7502')                    ; 2 bytes (offset 53): jnz +2
+	_('xor eax,eax')                            ; 2 bytes (offset 55)
+	_('mov dword[QueueCounter],eax')            ; 5 bytes (offset 57)
+	_('call dword[RenderCmdPtr]')               ; 6 bytes (offset 62)
+	_('popfd')                                  ; 1 byte  (offset 68)
+	_('popad')                                  ; 1 byte  (offset 69)
+	; Jump to saved original prologue bytes (patched at runtime in ModifyMemory)
+	_('ljmp GameTickOrigCode')                  ; 5 bytes (offset 70)
 EndFunc
 
 Func AssemblerCreateLoadFinished()
