@@ -287,6 +287,17 @@ Func _FindModule($pid, $name)
     Return 0
 EndFunc
 
+;~ Get the frame context — replicates the function at gwca+0x25EC0
+;~ (called by MouseAction, NOT the exported GetFrameContext at +0x25D90).
+;~ Returns [frame+0x128] - 0x128 = the PARENT FRAME pointer.
+;~ This is the context that SendFrameUIMsg needs: ECX = context + 0xA8.
+Func _GetFrameContext($framePtr)
+    Local $ph = GetProcessHandle()
+    Local $relation = MemoryRead($ph, $framePtr + 0x128, 'dword')  ; FrameRelation*
+    If $relation = 0 Or $relation < 0x10000 Then Return 0
+    Return $relation - 0x128  ; parent Frame* = relation_ptr - offset_of_relation_in_Frame
+EndFunc
+
 ;~ Calibrate the CommandFrameClick ASM address (workaround for assembler .5 offset)
 ;~ Scans near the label for the instruction signature: 8B 48 04 (mov ecx,[eax+4])
 ;~ followed by 81 C1 A8 00 00 00 (add ecx, 0xA8)
@@ -743,9 +754,11 @@ Func ClickFrameButton_OLD($hash)
     Return True
 EndFunc
 
-;~ Click a frame button by hash using GWCA injection.
-;~ Injects gwca.dll, populates data section with game function pointers,
-;~ then calls GWCA's ButtonClick(Frame*) via the rendering hook command queue.
+;~ Click a frame button by hash. NATIVE implementation — no gwca.dll needed.
+;~ Replicates GWCA's ButtonClick chain:
+;~   1. GetFrameContext(Frame*) — pure memory reads, returns context pointer
+;~   2. SendFrameUIMsg(ECX=context+0xA8, msgid=0x31, wParam=&action, lParam=0)
+;~ Sends MouseDown then MouseUp via two shellcode calls through the rendering hook.
 Func ClickFrameButton($hash)
     Local $result = GetFrameByHash($hash)
     If $result[0] = 0 Then
@@ -756,73 +769,111 @@ Func ClickFrameButton($hash)
     Local $framePtr = Int($result[0])
     Local $frameId = $result[1]
     Local $processHandle = GetProcessHandle()
+    Local $childOffsetId = MemoryRead($processHandle, $framePtr + $FRAME_OFFSET_CHILD_OFFSET_ID, 'dword')
 
-    ; Check frame state
+    ; Check frame state: (state & 0x214) must equal 4 (created, not hidden/disabled)
     Local $state = MemoryRead($processHandle, $framePtr + $FRAME_OFFSET_STATE, 'dword')
-    If BitAND($state, $FRAME_STATE_CREATED) = 0 Then
-        ConsoleWrite('[FrameUI] Button not created' & @CRLF)
+    If BitAND($state, 0x214) <> 0x4 Then
+        ConsoleWrite('[FrameUI] Button not in clickable state (0x' & Hex($state) & ')' & @CRLF)
         Return False
     EndIf
 
-    ; One-time: inject gwca.dll and populate its data section
-    If Not $g_GWCA_Initialized Then
-        If Not _InitGWCAForButtonClick() Then Return False
+    ; Get frame context — replicates GWCA GetFrameContext
+    ; Walks callback entries backward, returns first non-null data field
+    Local $context = _GetFrameContext($framePtr)
+    If $context = 0 Then
+        ConsoleWrite('[FrameUI] GetFrameContext returned NULL' & @CRLF)
+        Return False
+    EndIf
+    ConsoleWrite('[FrameUI] Context=0x' & Hex($context) & ' for frame ' & $frameId & @CRLF)
+
+    ; Get SendFrameUIMsg game function address
+    Local $sendFrameFunc = Int(GetLabel('SendFrameUIMsg'))
+    If $sendFrameFunc = 0 Or $sendFrameFunc = -1 Then
+        ConsoleWrite('[FrameUI] SendFrameUIMsg not found' & @CRLF)
+        Return False
     EndIf
 
-    ; One-time shellcode allocation — calls GWCA ButtonClick(Frame*)
-    ; ButtonClick is cdecl: push Frame*, call, add esp 4, ret
+    ; Allocate shellcode + action data memory (one-time)
     If $g_FrameClick_ShellcodeAddr = 0 Then
         Local $mem = DllCall($kernel_handle, 'ptr', 'VirtualAllocEx', _
-            'handle', $processHandle, 'ptr', 0, 'ulong_ptr', 32, _
+            'handle', $processHandle, 'ptr', 0, 'ulong_ptr', 64, _
             'dword', 0x1000, 'dword', 0x40)
         If Not IsArray($mem) Or $mem[0] = 0 Then Return False
         $g_FrameClick_ShellcodeAddr = Int($mem[0])
+        $g_FrameClick_ActionDataAddr = $g_FrameClick_ShellcodeAddr + 32
+        ConsoleWrite('[FrameUI] Shellcode at 0x' & Hex($g_FrameClick_ShellcodeAddr) & @CRLF)
+    EndIf
 
-        Local $buttonClickAddr = $g_GWCA_ModuleBase + $GWCA_RVA_BUTTONCLICK
-        Local $fpAddr = Int(GetLabel('FrameClickFramePtr'))
+    ; Build shellcode for each action state (MouseDown=6, MouseUp=7)
+    ; Shellcode:
+    ;   mov ecx, <context + 0xA8>   ; B9 <le32>     (5 bytes) __thiscall this
+    ;   push 0                      ; 6A 00          (2 bytes) lParam
+    ;   push <actionDataAddr>       ; 68 <le32>      (5 bytes) wParam
+    ;   push <msgid>                ; 6A 31          (2 bytes) kMouseClick2
+    ;   call <sendFrameFunc>        ; E8 <rel32>     (5 bytes)
+    ;   ret                         ; C3             (1 byte)
+    ;                                         Total: 20 bytes
 
-        ; push [FrameClickFramePtr] ; call GWCA::ButtonClick ; add esp,4 ; ret
+    Local $thisPtr = $context + 0xA8
+
+    For $actionState = 0x6 To 0x7
+        ; Write kMouseAction struct to persistent memory
+        Local $ad = DllStructCreate('dword;dword;dword;dword;dword')
+        DllStructSetData($ad, 1, $frameId)
+        DllStructSetData($ad, 2, $childOffsetId)
+        DllStructSetData($ad, 3, $actionState)
+        DllStructSetData($ad, 4, 0)
+        DllStructSetData($ad, 5, 0)
+        DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+            'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ActionDataAddr), _
+            'ptr', DllStructGetPtr($ad), 'ulong_ptr', 20, 'ulong_ptr*', 0)
+
+        ; Build shellcode
         Local $sc = DllStructCreate('byte[20]')
         Local $p = 1
-        ; FF 35 <addr> = push dword [FrameClickFramePtr]
-        DllStructSetData($sc, 1, 0xFF, $p)
+        ; mov ecx, thisPtr
+        DllStructSetData($sc, 1, 0xB9, $p)
         $p += 1
-        DllStructSetData($sc, 1, 0x35, $p)
-        $p += 1
-        _WriteLE32($sc, $p, $fpAddr)
+        _WriteLE32($sc, $p, $thisPtr)
         $p += 4
-        ; E8 <rel32> = call ButtonClick
+        ; push 0
+        DllStructSetData($sc, 1, 0x6A, $p)
+        $p += 1
+        DllStructSetData($sc, 1, 0x00, $p)
+        $p += 1
+        ; push actionDataAddr
+        DllStructSetData($sc, 1, 0x68, $p)
+        $p += 1
+        _WriteLE32($sc, $p, $g_FrameClick_ActionDataAddr)
+        $p += 4
+        ; push 0x31 (kMouseClick2)
+        DllStructSetData($sc, 1, 0x6A, $p)
+        $p += 1
+        DllStructSetData($sc, 1, 0x31, $p)
+        $p += 1
+        ; call sendFrameFunc
         DllStructSetData($sc, 1, 0xE8, $p)
         $p += 1
-        _WriteLE32($sc, $p, $buttonClickAddr - ($g_FrameClick_ShellcodeAddr + $p - 1 + 4))
+        _WriteLE32($sc, $p, $sendFrameFunc - ($g_FrameClick_ShellcodeAddr + $p - 1 + 4))
         $p += 4
-        ; 83 C4 04 = add esp, 4
-        DllStructSetData($sc, 1, 0x83, $p)
-        $p += 1
-        DllStructSetData($sc, 1, 0xC4, $p)
-        $p += 1
-        DllStructSetData($sc, 1, 0x04, $p)
-        $p += 1
-        ; C3 = ret
+        ; ret
         DllStructSetData($sc, 1, 0xC3, $p)
 
+        ; Write shellcode to memory
         DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
             'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ShellcodeAddr), _
             'ptr', DllStructGetPtr($sc), 'ulong_ptr', $p, 'ulong_ptr*', 0)
-        ConsoleWrite('[FrameUI] Shellcode at 0x' & Hex($g_FrameClick_ShellcodeAddr) & _
-            ' calling GWCA ButtonClick at 0x' & Hex($buttonClickAddr) & @CRLF)
-    EndIf
 
-    ; Write Frame* to shared memory
-    MemoryWrite($processHandle, GetLabel('FrameClickFramePtr'), $framePtr, 'dword')
+        ; Queue via rendering hook
+        $queue_counter = MemoryRead($processHandle, GetLabel('QueueCounter'), 'dword')
+        Local $cmd = DllStructCreate('dword;dword')
+        DllStructSetData($cmd, 1, $g_FrameClick_ShellcodeAddr)
+        DllStructSetData($cmd, 2, 0)
+        Enqueue(DllStructGetPtr($cmd), DllStructGetSize($cmd))
 
-    ; Queue the click via rendering hook
-    ; GWCA ButtonClick handles MouseDown+MouseUp internally
-    $queue_counter = MemoryRead($processHandle, GetLabel('QueueCounter'), 'dword')
-    Local $cmd = DllStructCreate('dword;dword')
-    DllStructSetData($cmd, 1, $g_FrameClick_ShellcodeAddr)
-    DllStructSetData($cmd, 2, 0)
-    Enqueue(DllStructGetPtr($cmd), DllStructGetSize($cmd))
+        Sleep(100)  ; brief pause between MouseDown and MouseUp
+    Next
 
     ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
     Return True
