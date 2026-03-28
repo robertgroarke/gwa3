@@ -165,10 +165,27 @@ Func ExtendAssembler_FrameUI()
     _('ljmp CommandReturn')
 EndFunc
 
-; Cached calibrated address for CommandFrameClick
+; Cached state
 Global $g_FrameClick_CalibratedAddr = 0
 Global $g_FrameClick_ShellcodeAddr = 0
 Global $g_FrameClick_ActionDataAddr = 0
+Global $g_GWCA_ModuleBase = 0
+Global $g_GWCA_Initialized = False
+
+; GWCA function RVA offsets (from gwca.dll binary analysis)
+Global Const $GWCA_RVA_BUTTONCLICK = 0x255E0
+Global Const $GWCA_RVA_CLICK = 0x16660
+Global Const $GWCA_RVA_GETFRAMEBYID = 0x25CC0
+; GWCA data section offsets for function pointers
+Global Const $GWCA_DATA_SENDFRAME_ORIG = 0x8A39C
+Global Const $GWCA_DATA_SENDFRAME_HOOK = 0x8A3A0  ; CRITICAL — wrapper returns false if NULL
+Global Const $GWCA_DATA_GETCHILDFRAME = 0x8A37C
+Global Const $GWCA_DATA_ROOTFRAME = 0x8A410
+Global Const $GWCA_DATA_FRAMEHASHTBL = 0x8A3B0
+; Game function offsets from game base (consistent across instances)
+Global Const $GAME_OFF_SENDFRAMEUIMSG = 0x2286D0
+Global Const $GAME_OFF_GETCHILDFRAME = 0x20E2B0
+Global Const $GAME_OFF_ROOTFRAME = 0x22DC20
 
 ;~ Write a little-endian 32-bit value into a DllStruct at position $pos
 Func _WriteLE32(ByRef $struct, $pos, $value)
@@ -176,6 +193,98 @@ Func _WriteLE32(ByRef $struct, $pos, $value)
     DllStructSetData($struct, 1, BitAND(BitShift($value, 8), 0xFF), $pos + 1)
     DllStructSetData($struct, 1, BitAND(BitShift($value, 16), 0xFF), $pos + 2)
     DllStructSetData($struct, 1, BitAND(BitShift($value, 24), 0xFF), $pos + 3)
+EndFunc
+
+;~ Inject gwca.dll and populate its data section with game function pointers.
+;~ This enables GWCA's ButtonClick to work without calling GW::Initialize
+;~ (which would break our rendering hook).
+Func _InitGWCAForButtonClick()
+    Local $processHandle = GetProcessHandle()
+    Local $gwPID = $game_clients[$game_clients[0][0]][0]
+    Local $gwBase = $pe_sections_ranges[0][0] - 0x1000
+
+    ; Check if gwca.dll is already loaded
+    $g_GWCA_ModuleBase = _FindModule($gwPID, "gwca.dll")
+    If $g_GWCA_ModuleBase = 0 Then
+        ; Inject gwca.dll
+        ConsoleWrite('[FrameUI] Injecting gwca.dll...' & @CRLF)
+        Local $dllPath = @ScriptDir & "\..\toolbox\GWToolboxpp-master\Dependencies\GWCA\bin\gwca.dll"
+        If Not FileExists($dllPath) Then
+            $dllPath = "c:\Users\Robert\Documents\GWA Censured X BotsHub\toolbox\GWToolboxpp-master\Dependencies\GWCA\bin\gwca.dll"
+        EndIf
+        Local $dllPathW = StringToBinary($dllPath, 2) & Binary("0x0000")
+        Local $pathLen = BinaryLen($dllPathW)
+
+        Local $rp = DllCall($kernel_handle, 'ptr', 'VirtualAllocEx', _
+            'handle', $processHandle, 'ptr', 0, 'ulong_ptr', $pathLen, _
+            'dword', 0x1000, 'dword', 0x04)
+        If Not IsArray($rp) Or $rp[0] = 0 Then Return False
+
+        Local $pb = DllStructCreate('byte[' & $pathLen & ']')
+        DllStructSetData($pb, 1, $dllPathW)
+        DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+            'handle', $processHandle, 'ptr', $rp[0], _
+            'ptr', DllStructGetPtr($pb), 'ulong_ptr', $pathLen, 'ulong_ptr*', 0)
+
+        Local $k32 = DllCall('kernel32.dll', 'ptr', 'GetModuleHandleW', 'wstr', 'kernel32.dll')
+        Local $ll = DllCall('kernel32.dll', 'ptr', 'GetProcAddress', 'ptr', $k32[0], 'str', 'LoadLibraryW')
+        Local $th = DllCall($kernel_handle, 'handle', 'CreateRemoteThread', _
+            'handle', $processHandle, 'ptr', 0, 'ulong_ptr', 0, _
+            'ptr', $ll[0], 'ptr', $rp[0], 'dword', 0, 'dword*', 0)
+        If Not IsArray($th) Or $th[0] = 0 Then Return False
+
+        DllCall($kernel_handle, 'dword', 'WaitForSingleObject', 'handle', $th[0], 'dword', 10000)
+        Local $ec = DllCall($kernel_handle, 'bool', 'GetExitCodeThread', 'handle', $th[0], 'dword*', 0)
+        $g_GWCA_ModuleBase = $ec[2]
+        DllCall($kernel_handle, 'bool', 'CloseHandle', 'handle', $th[0])
+        DllCall($kernel_handle, 'bool', 'VirtualFreeEx', _
+            'handle', $processHandle, 'ptr', $rp[0], 'ulong_ptr', 0, 'dword', 0x8000)
+
+        If $g_GWCA_ModuleBase = 0 Then
+            ConsoleWrite('[FrameUI] ERROR: gwca.dll injection failed' & @CRLF)
+            Return False
+        EndIf
+    EndIf
+    ConsoleWrite('[FrameUI] gwca.dll at 0x' & Hex($g_GWCA_ModuleBase) & @CRLF)
+
+    ; Populate GWCA data section with game function pointers
+    ; DO NOT call GW::Initialize (it breaks our rendering hook)
+    Local $sendFrameAddr = $gwBase + $GAME_OFF_SENDFRAMEUIMSG
+    Local $getChildAddr = $gwBase + $GAME_OFF_GETCHILDFRAME
+    Local $rootFrameAddr = $gwBase + $GAME_OFF_ROOTFRAME
+    Local $frameArrayAddr = Int(GetLabel('FrameArray'))
+
+    ; CRITICAL: write to BOTH original (+0x8A39C) AND hooked (+0x8A3A0) pointers
+    ; GWCA's SendFrameUIMessage wrapper checks +0x8A3A0 and returns false if NULL
+    MemoryWrite($processHandle, $g_GWCA_ModuleBase + $GWCA_DATA_SENDFRAME_ORIG, $sendFrameAddr, 'dword')
+    MemoryWrite($processHandle, $g_GWCA_ModuleBase + $GWCA_DATA_SENDFRAME_HOOK, $sendFrameAddr, 'dword')
+    MemoryWrite($processHandle, $g_GWCA_ModuleBase + $GWCA_DATA_GETCHILDFRAME, $getChildAddr, 'dword')
+    MemoryWrite($processHandle, $g_GWCA_ModuleBase + $GWCA_DATA_ROOTFRAME, $rootFrameAddr, 'dword')
+    MemoryWrite($processHandle, $g_GWCA_ModuleBase + $GWCA_DATA_FRAMEHASHTBL, $frameArrayAddr, 'dword')
+
+    ConsoleWrite('[FrameUI] GWCA data populated (SendFrame=0x' & Hex($sendFrameAddr) & ')' & @CRLF)
+    $g_GWCA_Initialized = True
+    Return True
+EndFunc
+
+;~ Find a loaded module by name in a process. Returns base address or 0.
+Func _FindModule($pid, $name)
+    Local $sn = DllCall('kernel32.dll', 'handle', 'CreateToolhelp32Snapshot', 'dword', 0x8, 'dword', $pid)
+    If Not IsArray($sn) Or $sn[0] = -1 Then Return 0
+    Local $me = DllStructCreate('dword dwSize;dword th32ModuleID;dword th32ProcessID;dword GlblcntUsage;' & _
+        'dword ProccntUsage;ptr modBaseAddr;dword modBaseSize;handle hModule;wchar szModule[256];wchar szExePath[260]')
+    DllStructSetData($me, 'dwSize', DllStructGetSize($me))
+    Local $r = DllCall('kernel32.dll', 'bool', 'Module32FirstW', 'handle', $sn[0], 'struct*', $me)
+    While IsArray($r) And $r[0]
+        If StringLower(DllStructGetData($me, 'szModule')) = StringLower($name) Then
+            Local $base = Int(DllStructGetData($me, 'modBaseAddr'))
+            DllCall('kernel32.dll', 'bool', 'CloseHandle', 'handle', $sn[0])
+            Return $base
+        EndIf
+        $r = DllCall('kernel32.dll', 'bool', 'Module32NextW', 'handle', $sn[0], 'struct*', $me)
+    WEnd
+    DllCall('kernel32.dll', 'bool', 'CloseHandle', 'handle', $sn[0])
+    Return 0
 EndFunc
 
 ;~ Calibrate the CommandFrameClick ASM address (workaround for assembler .5 offset)
@@ -634,9 +743,9 @@ Func ClickFrameButton_OLD($hash)
     Return True
 EndFunc
 
-;~ Click a frame button by hash. Uses VirtualAllocEx shellcode + command queue.
-;~ Shellcode calls SendFrameUIMsg(__thiscall) and ends with RET (for rendering hook CALL).
-;~ Sends MouseDown (0x6) then MouseUp (0x7) = full click.
+;~ Click a frame button by hash using GWCA injection.
+;~ Injects gwca.dll, populates data section with game function pointers,
+;~ then calls GWCA's ButtonClick(Frame*) via the rendering hook command queue.
 Func ClickFrameButton($hash)
     Local $result = GetFrameByHash($hash)
     If $result[0] = 0 Then
@@ -647,7 +756,6 @@ Func ClickFrameButton($hash)
     Local $framePtr = Int($result[0])
     Local $frameId = $result[1]
     Local $processHandle = GetProcessHandle()
-    Local $childOffsetId = MemoryRead($processHandle, $framePtr + $FRAME_OFFSET_CHILD_OFFSET_ID, 'dword')
 
     ; Check frame state
     Local $state = MemoryRead($processHandle, $framePtr + $FRAME_OFFSET_STATE, 'dword')
@@ -656,48 +764,26 @@ Func ClickFrameButton($hash)
         Return False
     EndIf
 
-    ; Lazy init: write SendFrameUIMsg func ptr on first call
-    Local $sendFrameFunc = Int(GetLabel('SendFrameUIMsg'))
-    If $sendFrameFunc = 0 Or $sendFrameFunc = -1 Then
-        ConsoleWrite('[FrameUI] SendFrameUIMsg not found' & @CRLF)
-        Return False
-    EndIf
-    Local $funcPtrAddr = GetLabel('FrameClickFuncPtr')
-    If MemoryRead($processHandle, $funcPtrAddr, 'dword') = 0 Then
-        MemoryWrite($processHandle, $funcPtrAddr, $sendFrameFunc, 'dword')
-        ; Also write action data pointer once we know it
+    ; One-time: inject gwca.dll and populate its data section
+    If Not $g_GWCA_Initialized Then
+        If Not _InitGWCAForButtonClick() Then Return False
     EndIf
 
-    ; One-time shellcode allocation
+    ; One-time shellcode allocation — calls GWCA ButtonClick(Frame*)
+    ; ButtonClick is cdecl: push Frame*, call, add esp 4, ret
     If $g_FrameClick_ShellcodeAddr = 0 Then
         Local $mem = DllCall($kernel_handle, 'ptr', 'VirtualAllocEx', _
-            'handle', $processHandle, 'ptr', 0, 'ulong_ptr', 128, _
-            'dword', 0x1000, 'dword', 0x40)  ; PAGE_EXECUTE_READWRITE
+            'handle', $processHandle, 'ptr', 0, 'ulong_ptr', 32, _
+            'dword', 0x1000, 'dword', 0x40)
         If Not IsArray($mem) Or $mem[0] = 0 Then Return False
         $g_FrameClick_ShellcodeAddr = Int($mem[0])
-        $g_FrameClick_ActionDataAddr = $g_FrameClick_ShellcodeAddr + 48
-        ; Write action data address to shared memory for the shellcode to use
-        MemoryWrite($processHandle, GetLabel('FrameClickActionPtr'), $g_FrameClick_ActionDataAddr, 'dword')
-        ConsoleWrite('[FrameUI] Shellcode mem at 0x' & Hex($g_FrameClick_ShellcodeAddr) & _
-            ' ActionData at 0x' & Hex($g_FrameClick_ActionDataAddr) & @CRLF)
 
-        ; Build shellcode: reads Frame* + action data from fixed addresses, calls game func, RET
-        ; Layout: shellcode at +0, action data at +48
-        ;
-        ; mov ecx, [FrameClickFramePtr]    ; 8B 0D <addr>     (6 bytes)
-        ; add ecx, 0xA8                    ; 81 C1 A8 00 00 00 (6 bytes)
-        ; push 0                           ; 6A 00             (2 bytes)
-        ; push <actionDataAddr>             ; 68 <addr>         (5 bytes)
-        ; push dword [FrameClickMsgId]     ; FF 35 <addr>      (6 bytes)
-        ; call dword [FrameClickFuncPtr]   ; FF 15 <addr>      (6 bytes)
-        ; ret                              ; C3                 (1 byte)
-        ;                                                 Total: 32 bytes
-
-        Local $sc = DllStructCreate('byte[32]')
-        Local $p = 1
+        ; Shellcode: push [FrameClickFramePtr]; call GWCA::ButtonClick; add esp,4; ret
+        Local $buttonClickAddr = $g_GWCA_ModuleBase + $GWCA_RVA_BUTTONCLICK
         Local $fpAddr = Int(GetLabel('FrameClickFramePtr'))
-        Local $msgAddr = Int(GetLabel('FrameClickMsgId'))
-        Local $funcAddr = Int(GetLabel('FrameClickFuncPtr'))
+
+        Local $sc = DllStructCreate('byte[20]')
+        Local $p = 1
 
         ; mov ecx, [FrameClickFramePtr]
         DllStructSetData($sc, 1, 0x8B, $p)
