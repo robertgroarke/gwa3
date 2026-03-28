@@ -1563,10 +1563,9 @@ Func AssemblerCreateMain()
 	_('test ebx,40001')
 	_('jz RegularFlow')
 
-	; HandleCase: at char select ([field_198]==0), skip queue processing here.
-	; GameTickProc handles queue at char select (safe context for UI calls).
-	; MainProc uses 'jmp ebx' which lacks a return address, so shellcode
-	; ending with 'ret' would crash. GameTickProc uses 'call' instead.
+	; HandleCase: at char select ([field_198]==0), skip to MainExit.
+	; MainProc doesn't fire at char select anyway (game doesn't call hooked func).
+	; Queue processing at char select is handled by RenderingModProc instead.
 	_('HandleCase:')
 	_('jmp MainExit')
 
@@ -1629,12 +1628,39 @@ EndFunc
 
 Func AssemblerCreateRenderingMod()
 	_('RenderingModProc:')
+
+	; Queue processing MUST come BEFORE "cmp dword[DisableRendering],1" because
+	; the assembler auto-generates an unconditional JMP after that cmp, making
+	; everything after it dead code. Queue processing at char select (MapIsLoaded=0)
+	; is the only way to execute commands since MainProc doesn't fire at char select.
+	_('cmp dword[MapIsLoaded],0')           ; 7 bytes (offset 0)
+	_('jnz_ingame -> 753D')                 ; 2 bytes (offset 7): jnz +61 → skip to add esp,4
+	_('pushad')                             ; 1 byte  (offset 9)
+	_('pushfd')                             ; 1 byte  (offset 10)
+	_('mov eax,dword[QueueCounter]')        ; 5 bytes (offset 11)
+	_('mov ecx,eax')                        ; 2 bytes (offset 16)
+	_('shl eax,8')                          ; 3 bytes (offset 18)
+	_('add eax,QueueBase')                  ; 5 bytes (offset 21)
+	_('mov ebx,dword[eax]')                 ; 2 bytes (offset 26)
+	_('test ebx,ebx')                       ; 2 bytes (offset 28)
+	_('jz_skip -> 7424')                    ; 2 bytes (offset 30): jz +36 → skip to popfd/popad
+	_('mov dword[eax],0')                   ; 6 bytes (offset 32)
+	_('mov eax,ebx')                        ; 2 bytes (offset 38)
+	_('mov dword[RenderCmdPtr],eax')        ; 5 bytes (offset 40)
+	_('mov eax,ecx')                        ; 2 bytes (offset 45)
+	_('inc eax')                            ; 1 byte  (offset 47)
+	_('cmp eax,QueueSize')                  ; 5 bytes (offset 48)
+	_('jnz_noreset -> 7502')                ; 2 bytes (offset 53): jnz +2
+	_('xor eax,eax')                        ; 2 bytes (offset 55)
+	_('mov dword[QueueCounter],eax')        ; 5 bytes (offset 57)
+	_('call dword[RenderCmdPtr]')           ; 6 bytes (offset 62)
+	_('popfd')                              ; 1 byte  (offset 68)
+	_('popad')                              ; 1 byte  (offset 69)
+
+	; Original rendering hook code (add esp,4 + DisableRendering check)
 	_('add esp,4')
 	_('cmp dword[DisableRendering],1')
-
-	; Queue processing REMOVED from rendering hook — it caused re-entrancy crashes
-	; when calling SendFrameUIMsg (UI calls during rendering callback).
-	; GameTickProc now handles command queue processing in the safe GameTick context.
+	; Note: assembler auto-generates unconditional ljmp RenderingModReturn after this cmp
 
 	_('ljmp RenderingModReturn')
 EndFunc

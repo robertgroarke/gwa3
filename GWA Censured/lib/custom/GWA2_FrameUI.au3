@@ -812,7 +812,7 @@ Func ClickFrameButton($hash)
     ; We call <target> directly, so we must pre-apply the -0x24 adjustment.
     ; thisPtr = context + 0xA8 - 0x24 = context + 0x84
     ;
-    ; Shellcode:
+    ; Shellcode (called via RenderingModProc's "call dword[RenderCmdPtr]"):
     ;   mov ecx, <context + 0x84>   ; B9 <le32>     (5 bytes) __thiscall this
     ;   push 0                      ; 6A 00          (2 bytes) lParam
     ;   push <actionDataAddr>       ; 68 <le32>      (5 bytes) wParam
@@ -838,7 +838,7 @@ Func ClickFrameButton($hash)
         'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ActionDataAddr), _
         'ptr', DllStructGetPtr($ad), 'ulong_ptr', 20, 'ulong_ptr*', 0)
 
-    ; Build shellcode
+    ; Build shellcode (ends with ret — called via RenderingModProc's "call dword[RenderCmdPtr]")
     Local $sc = DllStructCreate('byte[20]')
     Local $p = 1
     ; mov ecx, thisPtr
@@ -874,8 +874,9 @@ Func ClickFrameButton($hash)
         'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ShellcodeAddr), _
         'ptr', DllStructGetPtr($sc), 'ulong_ptr', $p, 'ulong_ptr*', 0)
 
-    ; Queue for GameTickProc to execute (safe context for UI calls)
-    $queue_counter = MemoryRead($processHandle, GetLabel('QueueCounter'), 'dword')
+    ; Queue for RenderingModProc to execute on the game thread.
+    ; SendFrameUIMsg requires game-thread context (CreateRemoteThread deadlocks).
+    ; RenderingModProc fires every frame and processes queue at char select (MapIsLoaded=0).
     Local $cmd = DllStructCreate('dword;dword')
     DllStructSetData($cmd, 1, $g_FrameClick_ShellcodeAddr)
     DllStructSetData($cmd, 2, 0)
@@ -883,7 +884,7 @@ Func ClickFrameButton($hash)
 
     ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
 
-    ; Brief wait for GameTick hook to process the command
+    ; Wait for HandleCase to process the command
     Sleep(500)
 
     Return True
