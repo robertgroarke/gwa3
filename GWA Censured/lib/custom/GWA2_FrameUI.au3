@@ -906,11 +906,22 @@ Func ClickFrameButton($hash)
             Return False
     EndSwitch
 
+    ; GW's DirectX renderer only processes real mouse input (not PostMessage/ControlClick).
+    ; Must use MouseClick which physically moves the cursor.
     WinActivate($hWnd)
+    Sleep(300)
+    WinMove($hWnd, '', 0, 0)  ; Move window to top-left for predictable coordinates
     Sleep(200)
-    ControlClick($hWnd, '', '', 'left', 1, $clickX, $clickY)
+    Local $pos = WinGetPos($hWnd)
+    Local $cSize = WinGetClientSize($hWnd)
+    ; Client area offset from window pos (title bar + border)
+    Local $borderX = ($pos[2] - $cSize[0]) / 2
+    Local $titleY = $pos[3] - $cSize[1] - $borderX
+    Local $absX = $pos[0] + $borderX + $clickX
+    Local $absY = $pos[1] + $titleY + $clickY
+    MouseClick('left', $absX, $absY, 1, 5)
 
-    ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' at client ' & $clickX & ',' & $clickY & @CRLF)
+    ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' at abs ' & $absX & ',' & $absY & ' (client ' & $clickX & ',' & $clickY & ')' & @CRLF)
 
     ; Wait for game to process
     Sleep(500)
