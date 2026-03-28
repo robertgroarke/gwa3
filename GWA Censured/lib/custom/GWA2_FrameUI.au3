@@ -876,14 +876,52 @@ Func ClickFrameButton($hash)
         'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ShellcodeAddr), _
         'ptr', DllStructGetPtr($sc), 'ulong_ptr', $p, 'ulong_ptr*', 0)
 
-    ; Queue for RenderingModProc to execute on the game thread.
-    ; The rendering hook processes queued commands at char select (MapIsLoaded=0).
-    Local $cmd = DllStructCreate('dword;dword')
-    DllStructSetData($cmd, 1, $g_FrameClick_ShellcodeAddr)
-    DllStructSetData($cmd, 2, 0)
-    Enqueue(DllStructGetPtr($cmd), DllStructGetSize($cmd))
+    ; Click via ControlClick — sends a mouse click to the game window at
+    ; button-relative coordinates. No injection changes needed.
+    Local $hWnd = $game_clients[$game_clients[0][0]][2]
 
-    ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
+    ; Button coordinates relative to client area
+    ; Play button: ~78% x, ~96% y
+    ; Reconnect YES: ~42% x, ~52% y
+    ; Reconnect NO: ~58% x, ~52% y
+    Local $clientSize = WinGetClientSize($hWnd)
+    If Not IsArray($clientSize) Then
+        ConsoleWrite('[FrameUI] Could not get window size' & @CRLF)
+        Return False
+    EndIf
+
+    Local $clickX, $clickY
+    Switch $hash
+        Case $FRAME_HASH_PLAY_BUTTON
+            $clickX = Int($clientSize[0] * 0.78)
+            $clickY = Int($clientSize[1] * 0.96)
+        Case $FRAME_HASH_RECONNECT_YES
+            $clickX = Int($clientSize[0] * 0.42)
+            $clickY = Int($clientSize[1] * 0.52)
+        Case $FRAME_HASH_RECONNECT_NO
+            $clickX = Int($clientSize[0] * 0.58)
+            $clickY = Int($clientSize[1] * 0.52)
+        Case Else
+            ConsoleWrite('[FrameUI] Unknown button hash: ' & $hash & @CRLF)
+            Return False
+    EndSwitch
+
+    ; GW's DirectX renderer only processes real mouse input (not PostMessage/ControlClick).
+    ; Must use MouseClick which physically moves the cursor.
+    WinActivate($hWnd)
+    Sleep(300)
+    WinMove($hWnd, '', 0, 0)  ; Move window to top-left for predictable coordinates
+    Sleep(200)
+    Local $pos = WinGetPos($hWnd)
+    Local $cSize = WinGetClientSize($hWnd)
+    ; Client area offset from window pos (title bar + border)
+    Local $borderX = ($pos[2] - $cSize[0]) / 2
+    Local $titleY = $pos[3] - $cSize[1] - $borderX
+    Local $absX = $pos[0] + $borderX + $clickX
+    Local $absY = $pos[1] + $titleY + $clickY
+    MouseClick('left', $absX, $absY, 1, 5)
+
+    ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' at abs ' & $absX & ',' & $absY & ' (client ' & $clickX & ',' & $clickY & ')' & @CRLF)
 
     ; Wait for game to process
     Sleep(500)
@@ -905,13 +943,9 @@ Func IsReconnectDialogShowing()
     Return IsFrameVisible($FRAME_HASH_RECONNECT_YES)
 EndFunc
 
-;~ Press Play at character select — native via rendering hook queue
+;~ Press Play at character select — uses mouse click (GW ignores synthetic input)
 Func PressPlayButton()
-    If Not IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Then
-        ConsoleWrite('[FrameUI] Play button not visible' & @CRLF)
-        Return False
-    EndIf
-    Return ClickFrameButton($FRAME_HASH_PLAY_BUTTON)
+    Return PressPlayButton_MOUSE()
 EndFunc
 
 Func PressPlayButton_MOUSE()
@@ -935,18 +969,29 @@ Func PressPlayButton_MOUSE()
     Return True
 EndFunc
 
-;~ Dismiss reconnect dialog with Yes or No — native via rendering hook queue
+;~ Dismiss reconnect dialog with Yes or No using mouse click
 Func DismissReconnectDialog($choice = 'no')
     If Not IsReconnectDialogShowing() Then
         ConsoleWrite('[FrameUI] No reconnect dialog showing' & @CRLF)
         Return False
     EndIf
 
+    Local $hWnd = GetWindowHandle()
+    If $hWnd = 0 Then Return False
+
+    WinActivate($hWnd)
+    Sleep(300)
+    Local $pos = WinGetPos($hWnd)
+    If Not IsArray($pos) Then Return False
+
     If $choice = 'yes' Then
-        ConsoleWrite('[FrameUI] Clicking reconnect YES' & @CRLF)
-        Return ClickFrameButton($FRAME_HASH_RECONNECT_YES)
+        Local $btnX = $pos[0] + Int($pos[2] * 0.42)
     Else
-        ConsoleWrite('[FrameUI] Clicking reconnect NO' & @CRLF)
-        Return ClickFrameButton($FRAME_HASH_RECONNECT_NO)
+        Local $btnX = $pos[0] + Int($pos[2] * 0.58)
     EndIf
+    Local $btnY = $pos[1] + Int($pos[3] * 0.52)
+
+    ConsoleWrite('[FrameUI] Clicking reconnect ' & $choice & ' at ' & $btnX & ',' & $btnY & @CRLF)
+    MouseClick('left', $btnX, $btnY, 1, 3)
+    Return True
 EndFunc
