@@ -104,7 +104,12 @@ Func _ConnectToSelectedClient($characterName)
 	Local $clientIndex = FindClientIndexByCharacterName($characterName)
 	If $clientIndex > 0 Then
 		SelectClient($clientIndex)
-		InitializeGameClientData(True, False)
+		; Skip re-init if already initialized (autolaunch did it at char select)
+		If Not IsDeclared('g_GWA2_Initialized') Or $g_GWA2_Initialized = False Then
+			InitializeGameClientData(True, False)
+		Else
+			ConsoleWrite('[Froggy] Skipping re-init (already initialized at char select)' & @CRLF)
+		EndIf
 		$mBasePointer = MemRead(GetScannedAddress('ScanBasePointer', 8))
 		WinSetTitle(GetWindowHandle(), '', 'Guild Wars - ' & GetCharacterName())
 
@@ -247,6 +252,13 @@ GUI_SetOnStartFunc("onStart")
 GUI_SetOnStopFunc("onStop")
 GUI_SetOnResumeFunc("onResume")
 GUI_Create()
+
+; Re-apply hero config AFTER GUI_Create (which resets the dropdown to alphabetical default)
+If $cmdAutoLaunch <> '' Then
+	GWLauncher_ConfigureFroggyGUI($cmdAutoLaunch)
+ElseIf $cmdCharacter <> '' Then
+	GWLauncher_ConfigureFroggyGUI($cmdCharacter)
+EndIf
 
 Global $gReturnMap = $Gadds_Encampment
 Global $gPickupCoins = True
