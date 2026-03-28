@@ -1476,6 +1476,7 @@ EndFunc
 
 Func AssemblerCreateData()
 	_('SavedIndex/4')
+	_('RenderCmdPtr/4')
 	_('QueueCounter/4')
 	_('TraderQuoteID/4')
 	_('TraderCostID/4')
@@ -1610,33 +1611,34 @@ Func AssemblerCreateRenderingMod()
 	_('cmp dword[DisableRendering],1')
 
 	; Execute queued commands during rendering (for char select)
-	; Shellcode MUST end with RET. We save/restore full state around the call.
-	_('pushad')
-	_('pushfd')
-	_('mov eax,dword[QueueCounter]')
-	_('mov ecx,eax')
-	_('shl eax,8')
-	_('add eax,QueueBase')
-	_('mov ebx,dword[eax]')
-	_('test ebx,ebx')
-	_('jz RenderSkipQueue')
-	_('mov dword[eax],0')
-	_('mov eax,ecx')
-	_('inc eax')
-	_('cmp eax,QueueSize')
-	_('jnz RenderNoReset')
-	_('xor eax,eax')
-	_('RenderNoReset:')
-	_('mov dword[QueueCounter],eax')
-	_('popfd')
-	_('popad')
-	; Call shellcode with clean stack (pushad/popfd already popped)
-	_('call_ebx -> FFD3')           ; CALL ebx (shellcode must RET)
-	_('pushad')                     ; re-save for the skip path
-	_('pushfd')
-	_('RenderSkipQueue:')
-	_('popfd')
-	_('popad')
+	; Shellcode MUST end with RET. Uses hardcoded jump offsets to avoid .5 label error.
+	_('pushad')                             ; 1 byte
+	_('pushfd')                             ; 1 byte
+	_('mov eax,dword[QueueCounter]')        ; 5 bytes
+	_('mov ecx,eax')                        ; 2 bytes
+	_('shl eax,8')                          ; 3 bytes
+	_('add eax,QueueBase')                  ; 5 bytes
+	_('mov ebx,dword[eax]')                 ; 2 bytes
+	_('test ebx,ebx')                       ; 2 bytes
+	_('jz_skip -> 7428')                    ; 2 bytes: jz +40 (skip to popfd/popad/ljmp)
+	_('mov dword[eax],0')                   ; 6 bytes
+	_('mov eax,ebx')                        ; 2 bytes
+	_('mov dword[RenderCmdPtr],eax')        ; 5 bytes
+	_('mov eax,ecx')                        ; 2 bytes
+	_('inc eax')                            ; 1 byte
+	_('cmp eax,QueueSize')                  ; 5 bytes
+	_('jnz_noreset -> 7502')                ; 2 bytes: jnz +2 (skip xor)
+	_('xor eax,eax')                        ; 2 bytes
+	; RenderNoReset:
+	_('mov dword[QueueCounter],eax')        ; 5 bytes
+	_('popfd')                              ; 1 byte
+	_('popad')                              ; 1 byte
+	_('call dword[RenderCmdPtr]')           ; 6 bytes: FF 15 <addr>
+	_('pushad')                             ; 1 byte
+	_('pushfd')                             ; 1 byte
+	; RenderSkipQueue:                        (jz lands here: popfd)
+	_('popfd')                              ; 1 byte
+	_('popad')                              ; 1 byte
 
 	_('ljmp RenderingModReturn')
 EndFunc
