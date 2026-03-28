@@ -602,27 +602,35 @@ Func ClickFrameButton($hash)
             ' CommandReturn at 0x' & Hex($crActual) & @CRLF)
     EndIf
 
-    ; Write action data to persistent memory
+    ; Write Frame* to shared memory
+    MemoryWrite($processHandle, GetLabel('FrameClickFramePtr'), Int($framePtr), 'dword')
+
+    ; Click = MouseDown (0x6) then MouseUp (0x7) — two separate calls
+    ; Send MouseDown first
     Local $actionData = DllStructCreate('dword;dword;dword;dword;dword')
     DllStructSetData($actionData, 1, $frameId)
     DllStructSetData($actionData, 2, $childOffsetId)
-    DllStructSetData($actionData, 3, 0x8)   ; MouseClick
+    DllStructSetData($actionData, 3, 0x6)   ; MouseDown
     DllStructSetData($actionData, 4, 0)
     DllStructSetData($actionData, 5, 0)
     DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
         'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ActionDataAddr), _
         'ptr', DllStructGetPtr($actionData), 'ulong_ptr', 20, 'ulong_ptr*', 0)
 
-    ; Write Frame* to shared memory
-    MemoryWrite($processHandle, GetLabel('FrameClickFramePtr'), Int($framePtr), 'dword')
-
-    ; Queue the shellcode address as the command handler
     Local $struct = DllStructCreate('dword;dword')
     DllStructSetData($struct, 1, $g_FrameClick_ShellcodeAddr)
     DllStructSetData($struct, 2, 0)
     Enqueue(DllStructGetPtr($struct), DllStructGetSize($struct))
+    Sleep(100)
 
-    ConsoleWrite('[FrameUI] Clicked: hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
+    ; Send MouseUp
+    DllStructSetData($actionData, 3, 0x7)   ; MouseUp
+    DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+        'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ActionDataAddr), _
+        'ptr', DllStructGetPtr($actionData), 'ulong_ptr', 20, 'ulong_ptr*', 0)
+    Enqueue(DllStructGetPtr($struct), DllStructGetSize($struct))
+
+    ConsoleWrite('[FrameUI] Clicked (MouseDown+Up): hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
     Return True
 EndFunc
 
