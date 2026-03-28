@@ -821,8 +821,10 @@ Func ClickFrameButton($hash)
     ;   ret                         ; C3             (1 byte)
     ;                                         Total: 20 bytes
 
-    ; Pre-apply the -0x24 offset that "add ecx,-0x24" would have done
-    Local $thisPtr = $context + 0x84
+    ; Use context + 0xA8 (callbacks pointer) as ECX — matches GWCA ButtonFrame::Click
+    ; The -0x24 adjustment (for the scanner's "add ecx,-0x24" pattern) was incorrect:
+    ; SendFrameUIMsg expects the callbacks pointer directly, not adjusted.
+    Local $thisPtr = $context + 0xA8
 
     ; Single MouseUp (0x7) — matches GWCA ButtonClick behavior
     Local $actionState = 0x7
