@@ -876,14 +876,11 @@ Func ClickFrameButton($hash)
         'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ShellcodeAddr), _
         'ptr', DllStructGetPtr($sc), 'ulong_ptr', $p, 'ulong_ptr*', 0)
 
-    ; Use PostMessage to send WM_LBUTTONDOWN/UP to the game window.
-    ; This avoids injection-based approaches that change the assembly layout
-    ; (which breaks the second InitializeGameClientForGWA2 call's label resolution).
-    ; PostMessage is non-blocking and works at char select without moving the mouse.
+    ; Click via ControlClick — sends a mouse click to the game window at
+    ; button-relative coordinates. No injection changes needed.
     Local $hWnd = $game_clients[$game_clients[0][0]][2]
 
-    ; Get frame position to compute click coordinates
-    ; For char select buttons, use approximate window-relative coordinates
+    ; Button coordinates relative to client area
     ; Play button: ~78% x, ~96% y
     ; Reconnect YES: ~42% x, ~52% y
     ; Reconnect NO: ~58% x, ~52% y
@@ -905,17 +902,18 @@ Func ClickFrameButton($hash)
             $clickX = Int($clientSize[0] * 0.58)
             $clickY = Int($clientSize[1] * 0.52)
         Case Else
-            ConsoleWrite('[FrameUI] Unknown button hash for PostMessage click: ' & $hash & @CRLF)
+            ConsoleWrite('[FrameUI] Unknown button hash: ' & $hash & @CRLF)
             Return False
     EndSwitch
 
-    Local $lParam = BitOR($clickY * 0x10000, BitAND($clickX, 0xFFFF))
-    ; WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202
-    DllCall('user32.dll', 'bool', 'PostMessageW', 'hwnd', $hWnd, 'uint', 0x0201, 'wparam', 1, 'lparam', $lParam)
-    Sleep(100)
-    DllCall('user32.dll', 'bool', 'PostMessageW', 'hwnd', $hWnd, 'uint', 0x0202, 'wparam', 0, 'lparam', $lParam)
+    WinActivate($hWnd)
+    Sleep(200)
+    Local $pos = WinGetPos($hWnd)
+    Local $absX = $pos[0] + $clickX + 8   ; +8 for window border
+    Local $absY = $pos[1] + $clickY + 31  ; +31 for title bar
+    MouseClick('left', $absX, $absY, 1, 3)
 
-    ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' at ' & $clickX & ',' & $clickY & ' via PostMessage' & @CRLF)
+    ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' at ' & $absX & ',' & $absY & @CRLF)
 
     ; Wait for game to process
     Sleep(500)
