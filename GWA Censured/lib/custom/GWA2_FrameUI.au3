@@ -908,12 +908,9 @@ Func ClickFrameButton($hash)
 
     WinActivate($hWnd)
     Sleep(200)
-    Local $pos = WinGetPos($hWnd)
-    Local $absX = $pos[0] + $clickX + 8   ; +8 for window border
-    Local $absY = $pos[1] + $clickY + 31  ; +31 for title bar
-    MouseClick('left', $absX, $absY, 1, 3)
+    ControlClick($hWnd, '', '', 'left', 1, $clickX, $clickY)
 
-    ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' at ' & $absX & ',' & $absY & @CRLF)
+    ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' at client ' & $clickX & ',' & $clickY & @CRLF)
 
     ; Wait for game to process
     Sleep(500)
