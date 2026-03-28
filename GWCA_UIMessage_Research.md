@@ -170,12 +170,34 @@ Commands now execute at char select via the rendering hook:
 - The wParam struct format may be wrong — GWCA's MouseAction builds a complex struct
 - Or the function needs specific frame context that we're not providing
 
+### Additional Findings (2026-03-28 continued)
+
+**RenderingMod hook NOT called at char select** — despite JMP being installed.
+Queue commands written to the rendering hook are never consumed. Neither MainProc
+nor RenderingMod hooks fire at char select.
+
+**CreateRemoteThread calls work but function does nothing** — tested 5 different
+ECX/msgid combinations via CreateRemoteThread. All return silently, no crash,
+no click. The function likely requires game-thread-specific context (TLS, render
+state, event loop context) that CreateRemoteThread cannot provide.
+
+**Callback entries are valid** — Play button has 4 callback entries, all with
+flag = -2147483648 (0x80000000, negative = active). The dispatch code should
+call them. But even calling the callback directly via CreateRemoteThread has no effect.
+
+### Current Approach: Need Game Thread Execution
+The fundamental blocker is executing code on the GAME THREAD at char select:
+- MainProc hook: NOT called at char select
+- RenderingMod hook: NOT called at char select
+- CreateRemoteThread: runs but game functions ignore non-game-thread calls
+- Engine hook: exists but not hooked by default, might fire at char select
+
 ### Next Steps
-1. Try different wParam formats (NULL, simpler structs, different action states)
-2. Try calling the Play button's callback function directly (0x0077D6B0)
-3. Or: inject gwca.dll, run GW::Initialize on game thread via rendering hook, then use ButtonFrame::Click
-4. If click works: implement PressPlayButton/DismissReconnect using frame hashes
-5. Integrate into GWLauncher_AutoLaunchAndConnect
+1. **Hook the Engine function** (scan pattern `568B3085F67478...`) — may fire at char select
+2. **Use GWCA's GameThread::Enqueue** after injecting gwca.dll + GW::Initialize
+3. **Find PreGame-specific hook points** — the char select has its own event loop
+4. **Patch the game's own rendering callback** to check our queue
+5. If any execution path works: use SendFrameUIMsg(frame+0xA8, 0x31, &action, 0)
 
 ---
 

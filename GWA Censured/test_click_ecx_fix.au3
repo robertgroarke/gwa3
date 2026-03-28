@@ -83,16 +83,62 @@ ConsoleWrite("Connected PID=" & $gwPID & @CRLF)
 WinActivate($gwHWnd)
 Sleep(2000)
 
-; Verify rendering hook
+; Verify rendering hook with diagnostic shellcode
+; Write shellcode that sets a marker value, not just RET
+Local $marker = _Alloc(4)
+MemoryWrite($processHandle, $marker, 0xDEAD, 'dword')
+
+Local $diagSc = _Alloc(32)
+Local $diagBuf = DllStructCreate('byte[32]')
+Local $dp = 1
+; mov dword [marker], 0xBEEF
+DllStructSetData($diagBuf, 1, 0xC7, $dp)
+$dp += 1
+DllStructSetData($diagBuf, 1, 0x05, $dp)
+$dp += 1
+_WriteLE32($diagBuf, $dp, $marker)
+$dp += 4
+_WriteLE32($diagBuf, $dp, 0xBEEF)
+$dp += 4
+; ret
+DllStructSetData($diagBuf, 1, 0xC3, $dp)
+DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+	'handle', $processHandle, 'ptr', Ptr($diagSc), _
+	'ptr', DllStructGetPtr($diagBuf), 'ulong_ptr', $dp, 'ulong_ptr*', 0)
+
+; Sync queue counter and enqueue
 Local $pre = MemoryRead($processHandle, GetLabel('QueueCounter'), 'dword')
-Local $nop = _Alloc(4)
-_WriteByte($nop, 0xC3)
 $queue_counter = $pre
-_Enqueue($nop)
-Sleep(1000)
-Local $post = MemoryRead($processHandle, GetLabel('QueueCounter'), 'dword')
-If $post = $pre Then
-	ConsoleWrite("ERROR: Rendering hook not active" & @CRLF)
+ConsoleWrite("QueueCounter=" & $pre & " QueueBase=0x" & Hex(Int(GetLabel('QueueBase'))) & @CRLF)
+
+Local $diagCmd = DllStructCreate('dword;dword')
+DllStructSetData($diagCmd, 1, $diagSc)
+DllStructSetData($diagCmd, 2, 0)
+Enqueue(DllStructGetPtr($diagCmd), DllStructGetSize($diagCmd))
+
+; Wait and check multiple times
+Local $hookWorked = False
+For $wait = 1 To 5
+	Sleep(1000)
+	Local $markerVal = MemoryRead($processHandle, $marker, 'dword')
+	Local $post = MemoryRead($processHandle, GetLabel('QueueCounter'), 'dword')
+	ConsoleWrite("  Check " & $wait & ": marker=0x" & Hex($markerVal) & " counter=" & $post & @CRLF)
+	If $markerVal = 0xBEEF Or $post <> $pre Then
+		$hookWorked = True
+		ExitLoop
+	EndIf
+	; Re-activate window each try
+	WinActivate($gwHWnd)
+Next
+
+If Not $hookWorked Then
+	; Try MainProc path too — maybe HandleCase processes the queue
+	ConsoleWrite("Rendering hook not active. Checking MainProc..." & @CRLF)
+	; Read the queue slot to see if our command is still there
+	Local $slotAddr = Int(GetLabel('QueueBase')) + (256 * $pre)
+	Local $slotVal = MemoryRead($processHandle, $slotAddr, 'dword')
+	ConsoleWrite("Queue slot " & $pre & " at 0x" & Hex($slotAddr) & " = 0x" & Hex($slotVal) & @CRLF)
+	ConsoleWrite("ERROR: No hook is processing the queue" & @CRLF)
 	Exit 1
 EndIf
 ConsoleWrite("Rendering hook ACTIVE" & @CRLF)
