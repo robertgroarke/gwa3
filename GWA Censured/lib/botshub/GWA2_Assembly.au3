@@ -1556,20 +1556,12 @@ Func AssemblerCreateMain()
 	_('test ebx,40001')
 	_('jz RegularFlow')
 
-	; HandleCase: at char select ([field_198]==0), still execute commands
-	; Changed from original which discarded commands (jmp MainExit)
-	; Now behaves like RegularFlow — saves index and executes via jmp ebx
+	; HandleCase: at char select ([field_198]==0), skip queue processing here.
+	; GameTickProc handles queue at char select (safe context for UI calls).
+	; MainProc uses 'jmp ebx' which lacks a return address, so shellcode
+	; ending with 'ret' would crash. GameTickProc uses 'call' instead.
 	_('HandleCase:')
-	_('mov eax,dword[QueueCounter]')
-	_('mov ecx,eax')
-	_('shl eax,8')
-	_('add eax,QueueBase')
-	_('mov ebx,dword[eax]')
-	_('test ebx,ebx')
-	_('jz MainExit')
-	_('mov dword[SavedIndex],ecx')
-	_('mov dword[eax],0')
-	_('jmp ebx')
+	_('jmp MainExit')
 
 	_('RegularFlow:')
 	_('mov eax,dword[QueueCounter]')
