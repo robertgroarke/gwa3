@@ -705,10 +705,10 @@ Func GWLauncher_ClickPlay($gwWindowTitle = '', $characterName = '')
         EndIf
     EndIf
 
-    ; Press Enter to click Play (works on character select screen)
+    ; Press Enter to click Play (Send to foreground — ControlSend doesn't work with DirectX)
     WinActivate($hWnd)
-    Sleep(300)
-    ControlSend($hWnd, '', '', '{ENTER}')
+    Sleep(500)
+    Send('{ENTER}')
     ConsoleWrite('[GWLauncher] Sent Enter key to press Play' & @CRLF)
     Sleep(1000)
     Return True
@@ -763,9 +763,9 @@ Func GWLauncher_ConfigureFroggyGUI($characterName)
     EndIf
 
     ; Set the hero config dropdown
-    Local $hWnd = WinGetHandle('Froggy HM v1.6')
-    If $hWnd Then
-        ControlCommand($hWnd, '', '[CLASS:ComboBox; INSTANCE:1]', 'SelectString', $heroConfig)
+    If IsDeclared('GUI_GroupSettings_ComboHeroConfig') Then
+        ; Use ControlCommand with the main GUI handle
+        ControlCommand($GUI, '', $GUI_GroupSettings_ComboHeroConfig, 'SelectString', $heroConfig)
         ConsoleWrite('[GWLauncher] Set hero dropdown to: ' & $heroConfig & @CRLF)
     EndIf
 EndFunc
@@ -832,16 +832,34 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
     ConsoleWrite('[GWLauncher] Phase 1: Waiting 15s for GW window...' & @CRLF)
     Sleep(15000)
 
-    ; Phase 2: Handle reconnect dialog (dismiss with No)
-    ConsoleWrite('[GWLauncher] Phase 2: Handling reconnect dialog...' & @CRLF)
+    ; Phase 2: Skip blind reconnect handling — sending Right arrow with no dialog
+    ; changes the character carousel selection. Instead, we'll just press Enter later
+    ; which either dismisses reconnect (Yes = rejoin) or presses Play directly.
+    ConsoleWrite('[GWLauncher] Phase 2: Skipping reconnect (will press Enter in Phase 3)' & @CRLF)
     Local $gwTitle = 'Guild Wars'
-    ; Try character-specific title first, then generic
     If WinExists('Guild Wars - ' & $characterName) Then $gwTitle = 'Guild Wars - ' & $characterName
-    GWLauncher_HandleReconnectDialog('no', $gwTitle)
-    Sleep(3000)
 
-    ; Phase 3: Press Play
-    ConsoleWrite('[GWLauncher] Phase 3: Pressing Play...' & @CRLF)
+    ; Phase 2b: Connect to the client at char select so we can read PreGameContext
+    ConsoleWrite('[GWLauncher] Phase 2b: Connecting to client for character selection...' & @CRLF)
+    ScanAndUpdateGameClients()
+    Local $launchedPID = $result[0]
+    Local $charSelectIdx = -1
+    For $ci = 1 To $game_clients[0][0]
+        If $game_clients[$ci][0] = $launchedPID Then
+            $charSelectIdx = $ci
+            ExitLoop
+        EndIf
+    Next
+    If $charSelectIdx = -1 Then
+        ; Fallback: try last client
+        $charSelectIdx = $game_clients[0][0]
+    EndIf
+    SelectClient($charSelectIdx)
+    InitializeGameClientForGWA2(False)
+    ConsoleWrite('[GWLauncher] Initialized client ' & $charSelectIdx & ' (PID=' & $game_clients[$charSelectIdx][0] & ')' & @CRLF)
+
+    ; Phase 3: Select character and press Play
+    ConsoleWrite('[GWLauncher] Phase 3: Selecting character and pressing Play...' & @CRLF)
     GWLauncher_ClickPlay($gwTitle, $characterName)
     Sleep(5000)
 
