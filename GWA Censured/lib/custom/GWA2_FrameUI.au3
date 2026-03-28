@@ -771,14 +771,14 @@ Func ClickFrameButton($hash)
     Local $processHandle = GetProcessHandle()
     Local $childOffsetId = MemoryRead($processHandle, $framePtr + $FRAME_OFFSET_CHILD_OFFSET_ID, 'dword')
 
-    ; Check frame state: (state & 0x214) must equal 4 (created, not hidden/disabled)
+    ; Check frame state
     Local $state = MemoryRead($processHandle, $framePtr + $FRAME_OFFSET_STATE, 'dword')
-    If BitAND($state, 0x214) <> 0x4 Then
-        ConsoleWrite('[FrameUI] Button not in clickable state (0x' & Hex($state) & ')' & @CRLF)
+    If BitAND($state, $FRAME_STATE_CREATED) = 0 Then
+        ConsoleWrite('[FrameUI] Button not created' & @CRLF)
         Return False
     EndIf
 
-    ; Get frame context — parent frame via [frame+0x128] - 0x128
+        ; Get frame context — parent frame via [frame+0x128] - 0x128
     Local $context = _GetFrameContext($framePtr)
     If $context = 0 Then
         ConsoleWrite('[FrameUI] GetFrameContext returned NULL' & @CRLF)
