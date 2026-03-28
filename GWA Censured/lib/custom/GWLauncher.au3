@@ -762,11 +762,24 @@ Func GWLauncher_ConfigureFroggyGUI($characterName)
         ConsoleWrite('[GWLauncher] Checked Add Heroes' & @CRLF)
     EndIf
 
-    ; Set the hero config dropdown
+    ; Set the hero config dropdown — GUICtrlSetData with 3rd param sets the selection
     If IsDeclared('GUI_GroupSettings_ComboHeroConfig') Then
-        ; Use ControlCommand with the main GUI handle
-        ControlCommand($GUI, '', $GUI_GroupSettings_ComboHeroConfig, 'SelectString', $heroConfig)
-        ConsoleWrite('[GWLauncher] Set hero dropdown to: ' & $heroConfig & @CRLF)
+        Local $currentData = GUICtrlRead($GUI_GroupSettings_ComboHeroConfig)
+        ; Re-read the combo items and re-set with our desired default
+        Local $sConfigPath = @ScriptDir & "\hero_configs\*.txt"
+        Local $sConfigList = ""
+        Local $hSearch = FileFindFirstFile($sConfigPath)
+        If $hSearch <> -1 Then
+            While 1
+                Local $sFile = FileFindNextFile($hSearch)
+                If @error Then ExitLoop
+                Local $sName = StringTrimRight($sFile, 4)
+                $sConfigList &= ($sConfigList = "" ? "" : "|") & $sName
+            WEnd
+            FileClose($hSearch)
+            GUICtrlSetData($GUI_GroupSettings_ComboHeroConfig, $sConfigList, $heroConfig)
+        EndIf
+        ConsoleWrite('[GWLauncher] Set hero dropdown to: ' & $heroConfig & ' (was: ' & $currentData & ')' & @CRLF)
     EndIf
 EndFunc
 
