@@ -48,8 +48,41 @@ If IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Then
     ConsoleWrite(@CRLF & "=== Pressing Play ===" & @CRLF)
     Local $playResult = GetFrameByHash($FRAME_HASH_PLAY_BUTTON)
     ConsoleWrite("Play frame: ptr=0x" & Hex($playResult[0]) & " id=" & $playResult[1] & @CRLF)
+    ; Clear result flag
+    MemoryWrite(GetProcessHandle(), GetLabel('FrameClickResult'), 0, 'dword')
+
+    ; Test: queue a KNOWN WORKING command first (CommandUIMsg with harmless msgid)
+    ; to confirm the queue works
+    ConsoleWrite("Testing queue with harmless CommandUIMsg..." & @CRLF)
+    Local $testStruct = DllStructCreate('dword;dword;dword')
+    DllStructSetData($testStruct, 1, GetLabel('CommandUIMsg'))
+    DllStructSetData($testStruct, 2, 0x10000175)  ; kCheckUIState (harmless)
+    DllStructSetData($testStruct, 3, 0)
+    Enqueue(DllStructGetPtr($testStruct), DllStructGetSize($testStruct))
+    Sleep(1000)
+    ConsoleWrite("Test command queued and processed (no crash = queue works)" & @CRLF)
+
+    ; Read queue state before click
+    Local $queueCounter = MemoryRead(GetProcessHandle(), GetLabel('QueuePtr'), 'dword')
+    ConsoleWrite("Queue counter before: " & $queueCounter & @CRLF)
+
     PressPlayButton()
-    Sleep(5000)
+    Sleep(500)
+
+    ; Read queue entry to see what was written
+    Local $queueBase = GetLabel('QueueBase')
+    ConsoleWrite("QueueBase = 0x" & Hex(Int($queueBase)) & @CRLF)
+    ; Read the queue slot that was just written
+    ; Queue counter increments mod QueueSize, each slot is 256 bytes
+    Local $slotAddr = Int($queueBase) + ($queueCounter * 256)
+    Local $slotVal = MemoryRead(GetProcessHandle(), $slotAddr, 'dword')
+    ConsoleWrite("Queue slot[" & $queueCounter & "] first dword = 0x" & Hex($slotVal) & @CRLF)
+
+    Sleep(3000)
+    ; Check if ASM actually executed
+    Local $execResult = MemoryRead(GetProcessHandle(), GetLabel('FrameClickResult'), 'dword')
+    ConsoleWrite("FrameClickResult = " & $execResult & " (1 = ASM executed)" & @CRLF)
+    Sleep(2000)
     _ScreenCapture_CaptureWnd(@ScriptDir & '\tests\frame_click_after.png', $hWnd)
 
     ; Check if we started loading

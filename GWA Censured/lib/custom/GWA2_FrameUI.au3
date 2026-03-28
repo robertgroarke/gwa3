@@ -119,7 +119,7 @@ Func ExtendAssemblerData_FrameUI()
     _('FrameClickFramePtr/4')    ; Frame* to click
     _('FrameClickMsgId/4')       ; UIMessage to send (0x31 = kMouseClick2)
     _('FrameClickActionPtr/4')   ; Pointer to FrameClickAction (set during init)
-    _('FrameClickAction/20')     ; kMouseAction struct (5 dwords)
+    _('FrameClickAction/32')     ; kMouseAction struct (8 dwords, matches GWCA MouseAction)
     _('FrameClickResult/4')      ; Result flag
 EndFunc
 
@@ -155,11 +155,13 @@ Func ExtendAssembler_FrameUI()
     _('CommandFrameClick:')
     ; Read from persistent shared memory (not the zeroed queue entry)
     _('mov ecx,dword[FrameClickFramePtr]')  ; ecx = Frame*
-    _('add ecx,84')                          ; ecx = frame + 0x84 (this ptr for __thiscall)
+    _('add ecx,A8')                          ; ecx = frame + 0xA8 (callbacks array = this ptr)
     _('push 0')                              ; lParam = NULL
     _('push dword[FrameClickActionPtr]')     ; wParam = address of kMouseAction struct
     _('push dword[FrameClickMsgId]')         ; msgid (0x31)
     _('call dword[FrameClickFuncPtr]')       ; indirect call (__thiscall, callee cleans stack)
+    ; Write 1 to FrameClickResult to confirm execution
+    _('mov dword[FrameClickResult],1')
     _('ljmp CommandReturn')
 EndFunc
 
@@ -178,17 +180,17 @@ Func _CalibrateFrameClickAddr($labelAddr)
         'handle', $processHandle, 'ptr', Ptr($labelAddr - 8), _
         'ptr', DllStructGetPtr($scanBuf), 'ulong_ptr', 24, 'ulong_ptr*', 0)
 
-    ; Look for 8B 0D (mov ecx, [imm32]) followed by 81 C1 84 (add ecx, 0x84)
+    ; Look for 8B 0D (mov ecx, [imm32]) followed by 81 C1 A8 (add ecx, 0xA8)
     ; First instruction: mov ecx,dword[FrameClickFramePtr] = 8B 0D xx xx xx xx
-    ; Second instruction: add ecx,84 = 81 C1 84 00 00 00
+    ; Second instruction: add ecx,A8 = 81 C1 A8 00 00 00
     For $i = 1 To 15
         If DllStructGetData($scanBuf, 1, $i) = 0x8B And _
            DllStructGetData($scanBuf, 1, $i+1) = 0x0D Then
-            ; Verify: 6 bytes later should be 81 C1 84 (add ecx, 0x84)
+            ; Verify: 6 bytes later should be 81 C1 A8 (add ecx, 0xA8)
             If $i + 8 <= 24 And _
                DllStructGetData($scanBuf, 1, $i+6) = 0x81 And _
                DllStructGetData($scanBuf, 1, $i+7) = 0xC1 And _
-               DllStructGetData($scanBuf, 1, $i+8) = 0x84 Then
+               DllStructGetData($scanBuf, 1, $i+8) = 0xA8 Then
                 $g_FrameClick_CalibratedAddr = $labelAddr - 8 + ($i - 1)
                 ConsoleWrite('[FrameUI] CommandFrameClick calibrated: label=0x' & Hex($labelAddr) & _
                     ' actual=0x' & Hex($g_FrameClick_CalibratedAddr) & _
@@ -365,25 +367,48 @@ Func ClickFrameButton($hash)
 
     ; Write Frame* to FrameClickFramePtr
     MemoryWrite($processHandle, GetLabel('FrameClickFramePtr'), Int($framePtr), 'dword')
-    ; Write msgid to FrameClickMsgId (0x2B from gwca.dll MouseAction code, not 0x31)
-    MemoryWrite($processHandle, GetLabel('FrameClickMsgId'), 0x2B, 'dword')
-    ; Write kMouseAction to FrameClickAction (5 dwords = 20 bytes)
-    MemoryWrite($processHandle, GetLabel('FrameClickAction'), $frameId, 'dword')
-    MemoryWrite($processHandle, GetLabel('FrameClickAction') + 4, $childOffsetId, 'dword')
-    MemoryWrite($processHandle, GetLabel('FrameClickAction') + 8, 0x8, 'dword')  ; MouseClick
-    MemoryWrite($processHandle, GetLabel('FrameClickAction') + 12, 0, 'dword')
-    MemoryWrite($processHandle, GetLabel('FrameClickAction') + 16, 0, 'dword')
+    ; Write msgid (0x31 = kMouseClick2, used by GWCA's ButtonFrame::Click)
+    MemoryWrite($processHandle, GetLabel('FrameClickMsgId'), 0x31, 'dword')
+    ; Write kMouseAction struct (8 dwords = 32 bytes)
+    ; Layout from GWCA MouseAction code at gwca.dll 0x100173D0:
+    ;   [0x00] frame_id        (from frame+0xBC)
+    ;   [0x04] child_offset_id (from frame+0xB8)
+    ;   [0x08] action_state    (0x8 = MouseClick)
+    ;   [0x0C] 0
+    ;   [0x10] 0
+    ;   [0x14] 0
+    ;   [0x18] frame[0x1C4]
+    ;   [0x1C] 0
+    Local $actionBase = GetLabel('FrameClickAction')
+    Local $field1C4 = MemoryRead($processHandle, $framePtr + 0x1C4, 'dword')
+    MemoryWrite($processHandle, $actionBase + 0, $frameId, 'dword')
+    MemoryWrite($processHandle, $actionBase + 4, $childOffsetId, 'dword')
+    MemoryWrite($processHandle, $actionBase + 8, 0x8, 'dword')   ; MouseClick
+    MemoryWrite($processHandle, $actionBase + 12, 0, 'dword')
+    MemoryWrite($processHandle, $actionBase + 16, 0, 'dword')
+    MemoryWrite($processHandle, $actionBase + 20, 0, 'dword')
+    MemoryWrite($processHandle, $actionBase + 24, $field1C4, 'dword')
+    MemoryWrite($processHandle, $actionBase + 28, 0, 'dword')
 
-    ; Queue the command (only need the handler address in the queue entry)
-    Local $labelAddr = Int(GetLabel('CommandFrameClick'))
-    Local $actualAddr = _CalibrateFrameClickAddr($labelAddr)
-
-    Local $struct = DllStructCreate('dword')
-    DllStructSetData($struct, 1, $actualAddr)
+    ; Use CommandUIMsg (proven working) with kMouseClick2 (0x31)
+    ; CommandUIMsg calls SendUIMessage(msgid, &data[8], 0)
+    ; The global SendUIMessage should route kMouseClick2 to the frame by frame_id
+    Local $field1C4 = MemoryRead($processHandle, $framePtr + 0x1C4, 'dword')
+    Local $struct = DllStructCreate('dword;dword;dword;dword;dword;dword;dword;dword;dword;dword')
+    DllStructSetData($struct, 1, GetLabel('CommandUIMsg'))
+    DllStructSetData($struct, 2, 0x31)           ; kMouseClick2
+    DllStructSetData($struct, 3, $frameId)        ; action.frame_id
+    DllStructSetData($struct, 4, $childOffsetId)  ; action.child_offset_id
+    DllStructSetData($struct, 5, 0x8)             ; MouseClick state
+    DllStructSetData($struct, 6, 0)
+    DllStructSetData($struct, 7, 0)
+    DllStructSetData($struct, 8, 0)
+    DllStructSetData($struct, 9, $field1C4)       ; frame[0x1C4]
+    DllStructSetData($struct, 10, 0)
     Enqueue(DllStructGetPtr($struct), DllStructGetSize($struct))
 
-    ConsoleWrite('[FrameUI] Clicked button hash=' & $hash & ' frame_id=' & $frameId & _
-        ' child_off=' & $childOffsetId & ' cmdAddr=0x' & Hex($actualAddr) & @CRLF)
+    ConsoleWrite('[FrameUI] Clicked via CommandUIMsg: hash=' & $hash & ' frame_id=' & $frameId & _
+        ' child_off=' & $childOffsetId & ' 1C4=0x' & Hex($field1C4) & @CRLF)
     Return True
 EndFunc
 
