@@ -188,14 +188,42 @@ Compare the UI click approach with diagnosing and fixing the existing `CraftItem
 
 ## Key Data Points for Investigation
 
-### Frame Discovery at Craft Dialog
-When the vendor dialog is open, we need to find frame hashes for:
-- [ ] Craft tab button
-- [ ] Sell tab button
-- [ ] Each item row in the list
-- [ ] The "Craft" action button
-- [ ] The "Goodbye" button
-- [ ] Quantity selector
+### Frame Discovery Results (2026-03-28)
+
+**Merchant root**: hash=3613855137, id=102
+
+**Dialog frame hierarchy** (parent=104, the main content area):
+| Hash | ID | childOff | Cbs | Likely Element |
+|---|---|---|---|---|
+| 1517397806 | 790 | 0 | 4 | **Craft tab** |
+| 3738633661 | 791 | 1 | 4 | **Sell tab** |
+| 835947118 | 553 | 2 | 4 | **Craft action button** (bottom-left) |
+| 1599557336 | 505 | 3 | 1 | Label/header text |
+| 458991075 | 27 | 4 | 1 | Item detail area |
+| 1214056301 | 504 | 5 | 4 | **Item list scrollable area** |
+| 3068881268 | 554 | 6 | 4 | **Goodbye button** (bottom-right) |
+
+**Item rows** (repeating pattern, parent=960/964/966):
+- Each item row has 6 child frames with consistent hashes:
+  - hash=1852904459 (childOff=4) — item entry container
+  - hash=3963670690 (childOff=5) — item icon/checkbox
+  - hash=1820256588 (childOff=0) — item text/label
+  - hash=3282622945 (childOff=3) — material info
+  - hash=3216064980 (childOff=1) — price/cost info
+- Items have sequential childOff values (112-150+)
+- Some item children are disabled (greyed out = can't craft)
+
+**Tab structure**: Two tabs (Craft=childOff 0, Sell=childOff 1) — the "Sell" tab (id=791) is visible but inactive, "Craft" tab (id=790) is the active tab.
+
+**NOTE**: The Craft action button (hash=835947118) and Goodbye button (hash=3068881268) are the key targets for UI-based crafting.
+
+### GWCA + BotsHub Coexistence Issue
+GWCA injection (for ButtonClick) can cause crashes when combined with BotsHub hooks, especially during:
+- BotsHub re-initialization on the same process
+- Opening vendor dialogs while GWCA is loaded
+- Map transitions
+
+**Mitigation**: Inject GWCA only when needed, ButtonClick, zero +0x8A3A0, FreeLibrary immediately. Don't keep GWCA loaded during normal bot operations.
 
 ### GWCA DLL Function RVAs (from disassembly)
 | Function | RVA | Notes |
