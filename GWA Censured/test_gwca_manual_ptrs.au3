@@ -124,8 +124,14 @@ Local $getChildAddr = $gwBase + 0x20E2B0
 Local $rootFrameAddr = $gwBase + 0x22DC20
 Local $frameArrayAddr = Int(GetLabel('FrameArray'))
 
-ConsoleWrite("Writing SendFrameUIMsg: 0x" & Hex($sendFrameAddr) & " -> +0x8A39C" & @CRLF)
+; +0x8A39C = original SendFrameUIMsg (used by some code paths)
+ConsoleWrite("Writing SendFrameUIMsg (orig): 0x" & Hex($sendFrameAddr) & " -> +0x8A39C" & @CRLF)
 MemoryWrite($processHandle, $gwcaBase + 0x8A39C, $sendFrameAddr, 'dword')
+
+; +0x8A3A0 = HOOKED SendFrameUIMsg — GWCA wrapper checks this and RETURNS FALSE if null!
+; This was the root cause of all GWCA ButtonClick failures.
+ConsoleWrite("Writing SendFrameUIMsg (hooked): 0x" & Hex($sendFrameAddr) & " -> +0x8A3A0 ***KEY***" & @CRLF)
+MemoryWrite($processHandle, $gwcaBase + 0x8A3A0, $sendFrameAddr, 'dword')
 
 ConsoleWrite("Writing GetChildFrame: 0x" & Hex($getChildAddr) & " -> +0x8A37C" & @CRLF)
 MemoryWrite($processHandle, $gwcaBase + 0x8A37C, $getChildAddr, 'dword')
@@ -136,9 +142,22 @@ MemoryWrite($processHandle, $gwcaBase + 0x8A410, $rootFrameAddr, 'dword')
 ConsoleWrite("Writing FrameHashTable: 0x" & Hex($frameArrayAddr) & " -> +0x8A3B0" & @CRLF)
 MemoryWrite($processHandle, $gwcaBase + 0x8A3B0, $frameArrayAddr, 'dword')
 
+; Also need to check what function MouseAction calls at +0x25EC0 (GetFrameContext-like)
+; This function may need additional data pointers. Let's dump its first bytes to see.
+Local $gfcBytes = DllStructCreate('byte[16]')
+DllCall($kernel_handle, 'bool', 'ReadProcessMemory', _
+	'handle', $processHandle, 'ptr', Ptr($gwcaBase + 0x25EC0), _
+	'ptr', DllStructGetPtr($gfcBytes), 'ulong_ptr', 16, 'ulong_ptr*', 0)
+Local $hex = ""
+For $b = 1 To 16
+	$hex &= Hex(DllStructGetData($gfcBytes, 1, $b), 2) & " "
+Next
+ConsoleWrite("GetFrameContext-like @ +0x25EC0: " & $hex & @CRLF)
+
 ; Verify
 ConsoleWrite("Verify: " & @CRLF)
-ConsoleWrite("  SendFrame: 0x" & Hex(MemoryRead($processHandle, $gwcaBase + 0x8A39C, 'dword')) & @CRLF)
+ConsoleWrite("  SendFrame orig: 0x" & Hex(MemoryRead($processHandle, $gwcaBase + 0x8A39C, 'dword')) & @CRLF)
+ConsoleWrite("  SendFrame hook: 0x" & Hex(MemoryRead($processHandle, $gwcaBase + 0x8A3A0, 'dword')) & @CRLF)
 ConsoleWrite("  GetChild: 0x" & Hex(MemoryRead($processHandle, $gwcaBase + 0x8A37C, 'dword')) & @CRLF)
 ConsoleWrite("  Root: 0x" & Hex(MemoryRead($processHandle, $gwcaBase + 0x8A410, 'dword')) & @CRLF)
 ConsoleWrite("  HashTbl: 0x" & Hex(MemoryRead($processHandle, $gwcaBase + 0x8A3B0, 'dword')) & @CRLF)

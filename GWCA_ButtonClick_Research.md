@@ -174,10 +174,190 @@ struct kMouseAction {
 
 ---
 
-### Open Questions
+---
 
-1. **What additional GWCA data pointers does ButtonClick need?** — Need to read the .cpp implementation, not just headers
-2. **Is SendFrameUIMsg actually the right function?** — It's also the "Action" function. Maybe it dispatches actions, not frame UI messages
-3. **Does clicking Play require a network packet?** — The button handler might send a server request, not just a UI dispatch
-4. **What is InteractionMessage?** — The callback signature takes this struct, not raw args. Need to understand its layout
-5. **Hash seed values** — Not populated in manual test. Might be needed for GetFrameById
+## GWCA Function Disassembly (from gwca.dll binary)
+
+### ButtonClick @ +0x255E0 (14 bytes)
+```x86
+push ebp
+mov ebp, esp
+mov ecx, [ebp+8]    ; ecx = Frame* btn_frame
+test ecx, ecx       ; null check
+jz return_false
+pop ebp
+jmp 0x16660          ; TAIL CALL → ButtonFrame::Click (ecx=Frame*)
+return_false:
+xor al, al           ; return false
+pop ebp
+ret
+```
+Simply null-checks, then tail-calls `Click()` with ECX=Frame*.
+
+### ButtonFrame::Click @ +0x16660 (35 bytes)
+```x86
+push esi
+push 6               ; ActionState::MouseDown
+mov esi, ecx         ; save Frame*
+call MouseAction     ; → +0x173D0
+test al, al
+jz fail              ; if MouseDown failed, return false
+push 7               ; ActionState::MouseUp
+mov ecx, esi         ; restore Frame*
+call MouseAction     ; → +0x173D0
+test al, al
+jz fail
+mov al, 1            ; return true
+pop esi
+ret
+fail:
+xor al, al           ; return false
+pop esi
+ret
+```
+Calling convention: `__thiscall`. ECX=Frame*. Calls MouseAction(6) then MouseAction(7).
+
+### ButtonFrame::MouseAction @ +0x173D0 (CRITICAL)
+```x86
+push ebp
+mov ebp, esp
+sub esp, 0x24                    ; 36 bytes locals
+mov eax, [0x100884C0]            ; stack cookie
+xor eax, ebp
+mov [ebp-4], eax
+push esi
+mov esi, ecx                     ; esi = this (Frame*)
+
+; *** CHECK FRAME STATE ***
+mov eax, [esi+0x18C]             ; frame_state
+and eax, 0x214                   ; mask created|hidden|disabled
+cmp eax, 4                       ; must be exactly 0x4 (created only)
+jnz return_false                 ; BAIL if hidden or disabled
+
+; *** GET FRAME CONTEXT ***
+push esi                          ; arg = Frame*
+call 0x25EC0                      ; GetFrameContext-like function
+mov edx, eax                      ; edx = context
+add esp, 4                        ; cdecl cleanup
+test edx, edx
+jz return_false                   ; BAIL if context is null
+
+; Check context's frame_state too
+mov ecx, [edx+0x18C]
+shr ecx, 2
+test cl, 1                        ; check created bit
+jz return_false
+
+; *** BUILD kMouseAction STRUCT ON STACK ***
+mov eax, [esi+0xBC]              ; frame_id (from Frame struct)
+mov [ebp-0x24], eax              ; action.frame_id
+mov eax, [esi+0xB8]              ; child_offset_id
+mov [ebp-0x20], eax              ; action.child_offset_id
+mov eax, [esi+0x1C4]             ; field_0x1C4
+mov [ebp-0x0C], eax              ; action field
+lea eax, [ebp-0x10]
+mov [ebp-0x18], eax              ; INTERNAL POINTER to local!
+mov eax, [ebp+8]                 ; ActionState from stack arg
+mov [ebp-0x1C], eax              ; action.current_state
+
+; *** CALL GWCA SendFrameUIMessage ***
+lea eax, [ebp-0x24]              ; eax = &kMouseAction struct
+push 0                            ; lParam = 0
+push eax                          ; wParam = &kMouseAction
+push 0x31                         ; msgid = kMouseClick2 (0x31)
+push edx                          ; Frame CONTEXT (NOT Frame*!)
+; zero remaining action fields
+mov [ebp-0x14], 0
+mov [ebp-0x10], 0
+mov [ebp-0x08], 0
+call SendFrameUIMessage           ; → +0x274D0 (GWCA wrapper)
+add esp, 16                       ; cdecl: 4 args cleaned
+; ... stack cookie check, ret 4
+```
+
+**CRITICAL FINDINGS:**
+1. First arg to SendFrameUIMessage is **FRAME CONTEXT** (from GetFrameContext), NOT Frame*
+2. Uses msgid **0x31** (kMouseClick2)
+3. Reads frame_id from offset **0xBC** and child_offset_id from **0xB8** (matches our code)
+4. Action struct contains an **internal pointer** to a local variable (stack-relative)
+5. Also reads field_0x1C4 from Frame
+
+### GWCA SendFrameUIMessage @ +0x274D0 (CRITICAL)
+```x86
+push ebp
+mov ebp, esp
+sub esp, 0x24
+cmp dword [0x1008A3A0], 0        ; *** CHECK: hooked func ptr must be non-null ***
+push ebx
+jz return_false                   ; IF NULL → RETURN FALSE (not initialized!)
+
+mov ebx, [ebp+8]                 ; first arg = frame CONTEXT
+test ebx, ebx
+jz return_false
+
+; ... FNV-1a hash of msgid for hook dispatch ...
+
+; Eventually calls the game function:
+lea ecx, [ebx+0xA8]              ; ECX = context+0xA8 (for __thiscall game func)
+push lParam
+push wParam
+push msgid
+call [0x1008A3A0]                 ; call HOOKED game SendFrameUIMsg
+```
+
+**ROOT CAUSE FOUND:**
+- `[0x1008A3A0]` = gwcaBase + 0x8A3A0 = the **hooked SendFrameUIMsg pointer**
+- We populated +0x8A39C (original) but NOT +0x8A3A0 (hooked)!
+- GWCA wrapper checks +0x8A3A0 and **returns false if it's NULL**
+- ALL GWCA ButtonClick attempts silently returned false because this pointer was 0
+
+### GetFrameContext-like function @ +0x25EC0
+Called by MouseAction with Frame* as arg. Returns a "context" pointer. The context appears to be a different object than the Frame — possibly a parent frame, a frame controller, or a UI context. GWCA SendFrameUIMessage then uses context+0xA8 as the __thiscall ECX for the game's actual dispatch function.
+
+---
+
+## BREAKTHROUGH: Play Button Clicked Successfully (2026-03-28)
+
+### What Worked
+`test_gwca_manual_ptrs.au3` with the `+0x8A3A0` fix **successfully clicked the Play button**.
+The game entered map loading (confirmed by user observation). Then crashed during/after load.
+
+### The Fix That Worked
+Write the game's SendFrameUIMsg address to **BOTH** GWCA data offsets:
+- `+0x8A39C` = original function pointer
+- **`+0x8A3A0` = hooked function pointer** (GWCA wrapper checks this — returns false if NULL)
+
+### Why It Crashed
+The crash after map load is likely caused by:
+1. **GWCA's hook dispatch accesses uninitialized hook tables** — the SendFrameUIMessage wrapper does FNV hashing and hook dispatch at `gwcaBase + 0x854A4` area, which is all zeros since GW::Initialize was never called
+2. **The rendering hook continues to fire** after map load, and GWCA's code may access invalid state
+3. **Interaction between BotsHub hooks and GWCA code** in the now-active game state
+
+### Implementation Path
+The approach is:
+1. Inject gwca.dll (LoadLibraryW via CreateRemoteThread)
+2. Skip Scanner::Initialize and GW::Initialize entirely
+3. Manually populate GWCA data section with known function pointers:
+   - `+0x8A39C`: game SendFrameUIMsg (game_base + 0x2286D0)
+   - `+0x8A3A0`: same address (hooked ptr, checked by GWCA wrapper)
+   - `+0x8A37C`: game GetChildFrame (game_base + 0x20E2B0)
+   - `+0x8A410`: game RootFrame (game_base + 0x22DC20)
+   - `+0x8A3B0`: FrameArray label address
+4. Call ButtonClick(frame_ptr) via rendering hook shellcode
+5. After click, unload gwca.dll or stop using it
+
+### Remaining Pointers to Populate
+| Offset | Content | Needed By |
+|---|---|---|
+| **+0x8A3A0** | SendFrameUIMsg (hooked ptr) | GWCA SendFrameUIMessage — **CRITICAL, must be non-null** |
+| +0x8A39C | SendFrameUIMsg (original) | Some code paths |
+| +0x8A37C | GetChildFrame | GetFrameContext chain |
+| +0x8A410 | RootFrame | GetFrameById |
+| +0x8A3B0 | Frame hash table | GetFrameById |
+| +0x884C0 | Stack cookie seed | MouseAction (read-only, CRT sets this) |
+
+### Crash Prevention TODO
+- Investigate the exact crash point (likely in GWCA hook dispatch at 0x854A4 area)
+- Consider: write a NOP/passthrough hook at +0x8A3A0 instead of the game function directly
+- Or: unload gwca.dll after click succeeds (FreeLibrary)
+- Or: populate the hook dispatch table at +0x854A4 with empty/stub entries
