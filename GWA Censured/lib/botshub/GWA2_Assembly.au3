@@ -272,7 +272,7 @@ Global $trade_hack_address
 Global $labels_map[]
 
 ; [labelName, bytePattern, resultOffset, patternType, assertSourceFile, assertMessage]
-Global $scan_patterns[59][6]
+Global $scan_patterns[64][6]
 Global $scan_patterns_count = 0
 ; [file, message]
 Global $assertions_patterns_cache[]
