@@ -167,6 +167,17 @@ EndFunc
 
 ; Cached calibrated address for CommandFrameClick
 Global $g_FrameClick_CalibratedAddr = 0
+Global $g_FrameClick_ShellcodeAddr = 0
+Global $g_FrameClick_ActionDataAddr = 0
+
+;~ Write a little-endian 32-bit value into a DllStruct at position $pos
+Func _WriteLE32(ByRef $struct, $pos, $value)
+    Local $tmp = DllStructCreate('dword')
+    DllStructSetData($tmp, 1, $value)
+    For $b = 1 To 4
+        DllStructSetData($struct, 1, DllStructGetData($tmp, 1, $b), $pos + $b - 1)
+    Next
+EndFunc
 
 ;~ Calibrate the CommandFrameClick ASM address (workaround for assembler .5 offset)
 ;~ Scans near the label for the instruction signature: 8B 48 04 (mov ecx,[eax+4])
@@ -390,25 +401,228 @@ Func ClickFrameButton($hash)
     MemoryWrite($processHandle, $actionBase + 24, $field1C4, 'dword')
     MemoryWrite($processHandle, $actionBase + 28, 0, 'dword')
 
-    ; Use CommandUIMsg (proven working) with kMouseClick2 (0x31)
-    ; CommandUIMsg calls SendUIMessage(msgid, &data[8], 0)
-    ; The global SendUIMessage should route kMouseClick2 to the frame by frame_id
-    Local $field1C4 = MemoryRead($processHandle, $framePtr + 0x1C4, 'dword')
-    Local $struct = DllStructCreate('dword;dword;dword;dword;dword;dword;dword;dword;dword;dword')
-    DllStructSetData($struct, 1, GetLabel('CommandUIMsg'))
-    DllStructSetData($struct, 2, 0x31)           ; kMouseClick2
-    DllStructSetData($struct, 3, $frameId)        ; action.frame_id
-    DllStructSetData($struct, 4, $childOffsetId)  ; action.child_offset_id
-    DllStructSetData($struct, 5, 0x8)             ; MouseClick state
-    DllStructSetData($struct, 6, 0)
-    DllStructSetData($struct, 7, 0)
-    DllStructSetData($struct, 8, 0)
-    DllStructSetData($struct, 9, $field1C4)       ; frame[0x1C4]
-    DllStructSetData($struct, 10, 0)
+    ; Write shellcode directly into the FrameClickAction data region (RWX memory)
+    ; Data labels have integer offsets (no .5 error), so the address is exact.
+    ; The shellcode calls SendFrameUIMsg(__thiscall) with the right parameters.
+    ;
+    ; Shellcode (at FrameClickAction address):
+    ;   mov ecx, [FrameClickFramePtr]    ; 8B 0D <addr>
+    ;   add ecx, 0xA8                    ; 81 C1 A8 00 00 00
+    ;   push 0                           ; 6A 00
+    ;   push FrameClickActionPtr_value   ; FF 35 <addr>  (push [addr] = push wParam ptr)
+    ;   push 0x31                        ; 6A 31
+    ;   call [FrameClickFuncPtr]         ; FF 15 <addr>
+    ;   jmp CommandReturn                ; E9 <rel32>
+
+    ; First, we need to write the kMouseAction data to a separate location
+    ; since FrameClickAction itself will hold shellcode now.
+    ; Use FrameClickResult + 4 as the action data location (we have space)
+
+    ; Actually, let's use a simpler approach: write action data BEFORE the shellcode
+    ; Put action data at FrameClickFramePtr+8 to FrameClickFramePtr+28 (FrameClickMsgId area)
+    ; Then put shellcode at FrameClickAction
+
+    ; Hmm, this is getting messy. Let me just write raw shellcode bytes into
+    ; the FrameClickAction region and point the queue at it.
+
+    Local $sendFunc = Int(GetLabel('SendFrameUIMsg'))
+    Local $framePtrAddr = Int(GetLabel('FrameClickFramePtr'))
+    Local $actionAddr = Int(GetLabel('FrameClickAction'))
+    Local $cmdReturnLabel = Int(GetLabel('CommandReturn'))
+
+    ; Write the action struct data into FrameClickMsgId area (before FrameClickAction)
+    ; We'll use FrameClickActionPtr as the action data pointer
+    Local $actionDataAddr = Int(GetLabel('FrameClickActionPtr'))  ; reuse as data storage
+    ; Actually, FrameClickActionPtr is only 4 bytes. Let me use FrameClickResult area
+    ; which is 4 bytes at the end. Not enough.
+
+    ; Better: write action data into the end of the 32-byte FrameClickAction region
+    ; Shellcode takes ~25 bytes, action data at actionAddr+25 (7 bytes of space left)
+    ; Not enough for 20 bytes of action data.
+
+    ; Simplest: allocate another data region or use the existing FrameClickResult space.
+    ; But we only have 4 bytes there.
+
+    ; OK, completely different approach: use FrameClickAction (32 bytes) for the action data
+    ; and write shellcode to FrameClickResult area (4 bytes is too small)
+
+    ; The REAL simplest approach: just make the shellcode read everything from shared memory
+    ; and call the game function. Write the shellcode once during init, then just
+    ; update the shared memory values and queue the shellcode address each time.
+
+    ; One-time shellcode init
+    If $g_FrameClick_ShellcodeAddr = 0 Then
+        ; Build shellcode bytes
+        ; The shellcode region is FrameClickAction (32 bytes, RWX)
+        ; Action data goes to a separate 20-byte block we carve from the 32 bytes
+        ; Shellcode: ~23 bytes, leaves 9 bytes unused
+
+        ; Actually: write action data to shared memory FIRST (FrameClickFramePtr+8..+28)
+        ; Then shellcode at FrameClickAction reads from fixed addresses
+
+        ; Let me just use VirtualAllocEx for a clean 64-byte region
+        Local $shellMem = DllCall($kernel_handle, 'ptr', 'VirtualAllocEx', _
+            'handle', $processHandle, 'ptr', 0, 'ulong_ptr', 64, _
+            'dword', 0x1000, 'dword', 0x40)
+        If Not IsArray($shellMem) Or $shellMem[0] = 0 Then
+            ConsoleWrite('[FrameUI] VirtualAllocEx for shellcode failed' & @CRLF)
+            Return False
+        EndIf
+        $g_FrameClick_ShellcodeAddr = Int($shellMem[0])
+        $g_FrameClick_ActionDataAddr = $g_FrameClick_ShellcodeAddr + 32  ; action data at +32
+
+        ; Build shellcode that reads from shared memory
+        Local $sc = DllStructCreate('byte[32]')
+        Local $p = 1
+
+        ; mov ecx, [FrameClickFramePtr]  = 8B 0D <le32>
+        DllStructSetData($sc, 1, 0x8B, $p)
+        $p += 1
+        DllStructSetData($sc, 1, 0x0D, $p)
+        $p += 1
+        _WriteLE32($sc, $p, $framePtrAddr)
+        $p += 4
+
+        ; add ecx, 0xA8  = 81 C1 A8 00 00 00
+        DllStructSetData($sc, 1, 0x81, $p)
+        $p += 1
+        DllStructSetData($sc, 1, 0xC1, $p)
+        $p += 1
+        _WriteLE32($sc, $p, 0xA8)
+        $p += 4
+
+        ; push 0  = 6A 00
+        DllStructSetData($sc, 1, 0x6A, $p)
+        $p += 1
+        DllStructSetData($sc, 1, 0x00, $p)
+        $p += 1
+
+        ; push <actionDataAddr>  = 68 <le32>
+        DllStructSetData($sc, 1, 0x68, $p)
+        $p += 1
+        _WriteLE32($sc, $p, $g_FrameClick_ActionDataAddr)
+        $p += 4
+
+        ; push 0x31  = 6A 31
+        DllStructSetData($sc, 1, 0x6A, $p)
+        $p += 1
+        DllStructSetData($sc, 1, 0x31, $p)
+        $p += 1
+
+        ; call [FrameClickFuncPtr]  = FF 15 <le32>
+        DllStructSetData($sc, 1, 0xFF, $p)
+        $p += 1
+        DllStructSetData($sc, 1, 0x15, $p)
+        $p += 1
+        _WriteLE32($sc, $p, Int(GetLabel('FrameClickFuncPtr')))
+        $p += 4
+
+        ; jmp CommandReturn  = E9 <rel32>
+        ; But CommandReturn label has .5 error... use calibrated address
+        ; Actually, RegularFlow section of MainProc runs AFTER the handler returns
+        ; via ljmp CommandReturn. The handler should just RET or JMP to CommandReturn.
+        ; BUT: we entered via jmp ebx (no return address on stack), so we can't RET.
+        ; We need to JMP to CommandReturn.
+        ; CommandReturn label has .5 offset. We need to calibrate it too.
+        ; For now, just use the raw label value (it's close enough or use NOP sled)
+
+        ; Actually, I realize: the other commands all use `ljmp CommandReturn`
+        ; which resolves during assembly. Since our shellcode is NOT in the assembly,
+        ; we need to compute the jump target ourselves.
+
+        ; CommandReturn is in the MainProc code. Its label should have the same .5 offset
+        ; as all other code labels. But since we're jumping FROM allocated memory
+        ; (not from the assembly region), the relative offset calculation is different.
+
+        ; Just use an absolute JMP: FF 25 <addr> where addr points to CommandReturn address
+        ; But we don't have the calibrated CommandReturn address...
+
+        ; Simplest: just RET from the shellcode. The main loop did `jmp ebx` (no CALL),
+        ; so there's no return address. We need to somehow return to the main loop.
+        ; The main loop after processing: goes to MainExit.
+
+        ; Actually, looking at how existing commands work: they use `ljmp CommandReturn`
+        ; which is a JMP (not RET). CommandReturn then:
+        ;   mov ecx,[SavedIndex]
+        ;   mov edx,[QueueCounter]
+        ;   ...
+        ;   jmp MainExit
+
+        ; For our shellcode, we need to jump there. But we don't have the address.
+        ; UNLESS we store it in shared memory.
+
+        ; Store CommandReturn address in a known location
+        ; Use FrameClickResult (4 bytes) to store the calibrated CommandReturn addr
+        ; ... but CommandReturn also has the .5 offset issue
+
+        ; FOR NOW: just do a tight infinite-avoidance by jumping to MainExit
+        ; which the main loop eventually reaches anyway. OR:
+        ; Store the return address in shared memory before enqueuing.
+
+        ; Actually, the simplest: ret 0 — the main loop pushes nothing, so
+        ; the stack frame from before the main loop gets popped... that would crash.
+
+        ; OK let me try: don't jump anywhere, just crash gracefully...
+        ; NO. Let me store CommandReturn address.
+
+        ; Write CommandReturn address to FrameClickResult
+        ; CommandReturn has .5 offset. Use calibration on it.
+        Local $crLabel = Int(GetLabel('CommandReturn'))
+        ; CommandReturn starts with: mov ecx,[SavedIndex] = 8B 0D <addr>
+        ; Scan near the label for this signature
+        Local $crBuf = DllStructCreate('byte[16]')
+        DllCall($kernel_handle, 'bool', 'ReadProcessMemory', _
+            'handle', $processHandle, 'ptr', Ptr($crLabel - 8), _
+            'ptr', DllStructGetPtr($crBuf), 'ulong_ptr', 16, 'ulong_ptr*', 0)
+        Local $crActual = $crLabel
+        For $ci = 1 To 13
+            If DllStructGetData($crBuf, 1, $ci) = 0x8B And _
+               DllStructGetData($crBuf, 1, $ci+1) = 0x0D Then
+                $crActual = $crLabel - 8 + ($ci - 1)
+                ExitLoop
+            EndIf
+        Next
+        MemoryWrite($processHandle, GetLabel('FrameClickResult'), $crActual, 'dword')
+
+        ; Now add JMP to CommandReturn via [FrameClickResult]
+        DllStructSetData($sc, 1, 0xFF, $p)
+        $p += 1
+        DllStructSetData($sc, 1, 0x25, $p)  ; JMP [imm32]
+        $p += 1
+        _WriteLE32($sc, $p, Int(GetLabel('FrameClickResult')))
+        $p += 4
+
+        ; Write shellcode to allocated memory
+        DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+            'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ShellcodeAddr), _
+            'ptr', DllStructGetPtr($sc), 'ulong_ptr', $p - 1, 'ulong_ptr*', 0)
+
+        ConsoleWrite('[FrameUI] Shellcode at 0x' & Hex($g_FrameClick_ShellcodeAddr) & _
+            ' ActionData at 0x' & Hex($g_FrameClick_ActionDataAddr) & _
+            ' CommandReturn at 0x' & Hex($crActual) & @CRLF)
+    EndIf
+
+    ; Write action data to persistent memory
+    Local $actionData = DllStructCreate('dword;dword;dword;dword;dword')
+    DllStructSetData($actionData, 1, $frameId)
+    DllStructSetData($actionData, 2, $childOffsetId)
+    DllStructSetData($actionData, 3, 0x8)   ; MouseClick
+    DllStructSetData($actionData, 4, 0)
+    DllStructSetData($actionData, 5, 0)
+    DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+        'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ActionDataAddr), _
+        'ptr', DllStructGetPtr($actionData), 'ulong_ptr', 20, 'ulong_ptr*', 0)
+
+    ; Write Frame* to shared memory
+    MemoryWrite($processHandle, GetLabel('FrameClickFramePtr'), Int($framePtr), 'dword')
+
+    ; Queue the shellcode address as the command handler
+    Local $struct = DllStructCreate('dword;dword')
+    DllStructSetData($struct, 1, $g_FrameClick_ShellcodeAddr)
+    DllStructSetData($struct, 2, 0)
     Enqueue(DllStructGetPtr($struct), DllStructGetSize($struct))
 
-    ConsoleWrite('[FrameUI] Clicked via CommandUIMsg: hash=' & $hash & ' frame_id=' & $frameId & _
-        ' child_off=' & $childOffsetId & ' 1C4=0x' & Hex($field1C4) & @CRLF)
+    ConsoleWrite('[FrameUI] Clicked: hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
     Return True
 EndFunc
 
