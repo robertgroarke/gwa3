@@ -874,8 +874,8 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
     If IsAtCharSelect() Then
         ; Handle reconnect dialog if present
         If IsReconnectDialogShowing() Then
-            ConsoleWrite('[GWLauncher] Reconnect dialog detected — clicking No' & @CRLF)
-            DismissReconnectDialog('no')
+            ConsoleWrite('[GWLauncher] Reconnect dialog detected — clicking Yes (reconnect)' & @CRLF)
+            DismissReconnectDialog('yes')
             Sleep(3000)
         EndIf
 

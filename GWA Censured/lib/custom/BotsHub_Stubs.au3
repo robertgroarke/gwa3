@@ -200,11 +200,11 @@ Func Extend_Scanner()
 EndFunc
 
 Func Extend_AssemblerData()
-    ; UISniffer DISABLED — its UIMessage hook crashes GW at material trader
+    If IsDeclared('g_b_UISniffer') Then ExtendAssemblerData_UISniffer()
     If IsDeclared('g_b_FrameUI') Then ExtendAssemblerData_FrameUI()
 EndFunc
 
 Func Extend_Assembler()
-    ; UISniffer DISABLED — its UIMessage hook crashes GW at material trader
+    If IsDeclared('g_b_UISniffer') Then ExtendAssembler_UISniffer()
     If IsDeclared('g_b_FrameUI') Then ExtendAssembler_FrameUI()
 EndFunc
