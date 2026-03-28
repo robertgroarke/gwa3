@@ -876,17 +876,22 @@ Func ClickFrameButton($hash)
         'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ShellcodeAddr), _
         'ptr', DllStructGetPtr($sc), 'ulong_ptr', $p, 'ulong_ptr*', 0)
 
-    ; Queue for RenderingModProc to execute on the game thread.
-    ; SendFrameUIMsg requires game-thread context (CreateRemoteThread deadlocks).
-    ; RenderingModProc fires every frame and processes queue at char select (MapIsLoaded=0).
-    Local $cmd = DllStructCreate('dword;dword')
-    DllStructSetData($cmd, 1, $g_FrameClick_ShellcodeAddr)
-    DllStructSetData($cmd, 2, 0)
-    Enqueue(DllStructGetPtr($cmd), DllStructGetSize($cmd))
+    ; Execute via CreateRemoteThread. The thread may not return (SendFrameUIMsg
+    ; can block waiting for game-thread sync), but the UI message IS processed.
+    ; We wait briefly then close the handle — the thread will be cleaned up when
+    ; the game processes the message or when the process exits.
+    Local $th = DllCall($kernel_handle, 'handle', 'CreateRemoteThread', _
+        'handle', $processHandle, 'ptr', 0, 'ulong_ptr', 0, _
+        'ptr', Ptr($g_FrameClick_ShellcodeAddr), 'ptr', 0, 'dword', 0, 'dword*', 0)
+    If IsArray($th) And $th[0] <> 0 Then
+        ; Wait up to 2s — thread may complete or may block on game-thread sync
+        DllCall($kernel_handle, 'dword', 'WaitForSingleObject', 'handle', $th[0], 'dword', 2000)
+        DllCall($kernel_handle, 'bool', 'CloseHandle', 'handle', $th[0])
+    EndIf
 
     ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
 
-    ; Wait for HandleCase to process the command
+    ; Brief wait for game to process the UI event
     Sleep(500)
 
     Return True
