@@ -707,12 +707,12 @@ Func ClickFrameButton($hash)
         _WriteLE32($sc, $p, $fpAddr)
         $p += 4
 
-        ; add ecx, 0xA8
+        ; add ecx, 0x84  (game call site uses frame+0x84, not +0xA8)
         DllStructSetData($sc, 1, 0x81, $p)
         $p += 1
         DllStructSetData($sc, 1, 0xC1, $p)
         $p += 1
-        _WriteLE32($sc, $p, 0xA8)
+        _WriteLE32($sc, $p, 0x84)
         $p += 4
 
         ; push 0 (lParam)
@@ -766,8 +766,8 @@ Func ClickFrameButton($hash)
     ConsoleWrite('[FrameUI] Callback[0] = 0x' & Hex($cbFunc) & @CRLF)
 
     For $actionState = 0x6 To 0x7
-        ; Write msgid
-        MemoryWrite($processHandle, GetLabel('FrameClickMsgId'), 0x31, 'dword')
+        ; Write msgid (0x2B from game's own call site, not 0x31 from GWCA)
+        MemoryWrite($processHandle, GetLabel('FrameClickMsgId'), 0x2B, 'dword')
 
         ; Write action data
         Local $ad = DllStructCreate('dword;dword;dword;dword;dword')
@@ -814,9 +814,15 @@ Func PressPlayButton()
         ConsoleWrite('[FrameUI] Play button not visible' & @CRLF)
         Return False
     EndIf
+    Return ClickFrameButton($FRAME_HASH_PLAY_BUTTON)
+EndFunc
 
-    ; Get the GW window and click the Play button
-    ; Play button is at bottom-right of char select screen (~78% x, ~96% y)
+Func PressPlayButton_MOUSE()
+    If Not IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Then
+        ConsoleWrite('[FrameUI] Play button not visible' & @CRLF)
+        Return False
+    EndIf
+
     Local $hWnd = GetWindowHandle()
     If $hWnd = 0 Then Return False
 

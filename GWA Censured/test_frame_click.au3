@@ -51,7 +51,6 @@ If IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Then
     ; Clear result flag
     MemoryWrite(GetProcessHandle(), GetLabel('FrameClickResult'), 0, 'dword')
 
-    ; Read queue state before click
     Local $queueCounter = MemoryRead(GetProcessHandle(), GetLabel('QueueCounter'), 'dword')
     ConsoleWrite("Queue counter before: " & $queueCounter & @CRLF)
 
@@ -68,6 +67,11 @@ If IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Then
     ConsoleWrite("Queue slot[" & $queueCounter & "] first dword = 0x" & Hex($slotVal) & @CRLF)
 
     Sleep(3000)
+    ; Check queue state after click
+    Local $qcAfter = MemoryRead(GetProcessHandle(), GetLabel('QueueCounter'), 'dword')
+    Local $rcpAfter = MemoryRead(GetProcessHandle(), GetLabel('RenderCmdPtr'), 'dword')
+    ConsoleWrite("QueueCounter after: " & $qcAfter & @CRLF)
+    ConsoleWrite("RenderCmdPtr after: 0x" & Hex($rcpAfter) & @CRLF)
     ; Check if ASM actually executed
     Local $execResult = MemoryRead(GetProcessHandle(), GetLabel('FrameClickResult'), 'dword')
     ConsoleWrite("FrameClickResult = " & $execResult & " (1 = ASM executed)" & @CRLF)
