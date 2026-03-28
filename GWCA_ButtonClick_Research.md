@@ -356,8 +356,35 @@ The approach is:
 | +0x8A3B0 | Frame hash table | GetFrameById |
 | +0x884C0 | Stack cookie seed | MouseAction (read-only, CRT sets this) |
 
-### Crash Prevention TODO
-- Investigate the exact crash point (likely in GWCA hook dispatch at 0x854A4 area)
-- Consider: write a NOP/passthrough hook at +0x8A3A0 instead of the game function directly
-- Or: unload gwca.dll after click succeeds (FreeLibrary)
-- Or: populate the hook dispatch table at +0x854A4 with empty/stub entries
+### Crash Prevention — SOLVED (2026-03-28)
+Shellcode zeros `+0x8A3A0` immediately after ButtonClick returns. This prevents
+subsequent GWCA wrapper calls from entering the crash-prone hook dispatch code.
+After map load, FreeLibrary unloads gwca.dll entirely.
+
+**Result**: ButtonClick returns 1 (true), game enters map, no crash.
+- IsAtCharSelect: False
+- MyID: 42 (character loaded)
+- Region: 2 (Europe)
+- PreGame: 0 (in-game)
+- Game process stable
+
+### Complete Working Sequence
+```
+1. Launch GW client, wait ~40s for char select
+2. BotsHub InitializeGameClientForGWA2(False) — sets up rendering hook
+3. Inject gwca.dll via CreateRemoteThread(LoadLibraryW) — no Scanner/GW init
+4. Populate GWCA data section from BotsHub scan values:
+   +0x8A39C = game SendFrameUIMsg (game_base + 0x2286D0)
+   +0x8A3A0 = same (CRITICAL — wrapper returns false if null)
+   +0x8A37C = game GetChildFrame (game_base + 0x20E2B0)
+   +0x8A410 = game RootFrame (game_base + 0x22DC20)
+   +0x8A3B0 = FrameArray label address
+5. Build shellcode:
+   push frame_ptr
+   call gwca+0x255E0 (ButtonClick)
+   add esp, 4
+   mov dword [gwca+0x8A3A0], 0  ← neutralize GWCA
+   ret
+6. Queue shellcode via rendering hook
+7. FreeLibrary gwca.dll after success
+```
