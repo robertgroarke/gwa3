@@ -162,6 +162,14 @@ ConsoleWrite("Command queued at slot " & ($queue_counter) & @CRLF)
 
 Sleep(2000)
 
+; Check if queue slot was consumed
+Local $slotAddr = Int(GetLabel('QueueBase')) + (($queue_counter - 1) * 256)
+If $queue_counter > 0 Then
+    Local $slotVal = MemoryRead($processHandle, $slotAddr, 'dword')
+    ConsoleWrite("Queue slot[" & ($queue_counter - 1) & "] = 0x" & Hex($slotVal) & " (0=consumed)" & @CRLF)
+EndIf
+ConsoleWrite("Game QueueCounter now: " & MemoryRead($processHandle, GetLabel('QueueCounter'), 'dword') & @CRLF)
+
 ; Check test flag
 Local $flag = MemoryRead($processHandle, $testFlagAddr, 'dword')
 ConsoleWrite("Test flag = " & $flag & " (1 = shellcode executed)" & @CRLF)
