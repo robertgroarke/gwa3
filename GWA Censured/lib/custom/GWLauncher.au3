@@ -832,15 +832,8 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
     ConsoleWrite('[GWLauncher] Phase 1: Waiting 15s for GW window...' & @CRLF)
     Sleep(15000)
 
-    ; Phase 2: Skip blind reconnect handling — sending Right arrow with no dialog
-    ; changes the character carousel selection. Instead, we'll just press Enter later
-    ; which either dismisses reconnect (Yes = rejoin) or presses Play directly.
-    ConsoleWrite('[GWLauncher] Phase 2: Skipping reconnect (will press Enter in Phase 3)' & @CRLF)
-    Local $gwTitle = 'Guild Wars'
-    If WinExists('Guild Wars - ' & $characterName) Then $gwTitle = 'Guild Wars - ' & $characterName
-
-    ; Phase 2b: Connect to the client at char select so we can read PreGameContext
-    ConsoleWrite('[GWLauncher] Phase 2b: Connecting to client for character selection...' & @CRLF)
+    ; Phase 2: Connect to client and initialize framework
+    ConsoleWrite('[GWLauncher] Phase 2: Connecting to client...' & @CRLF)
     ScanAndUpdateGameClients()
     Local $launchedPID = $result[0]
     Local $charSelectIdx = -1
@@ -850,18 +843,40 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
             ExitLoop
         EndIf
     Next
-    If $charSelectIdx = -1 Then
-        ; Fallback: try last client
-        $charSelectIdx = $game_clients[0][0]
-    EndIf
+    If $charSelectIdx = -1 Then $charSelectIdx = $game_clients[0][0]
     SelectClient($charSelectIdx)
     InitializeGameClientForGWA2(False)
-    ConsoleWrite('[GWLauncher] Initialized client ' & $charSelectIdx & ' (PID=' & $game_clients[$charSelectIdx][0] & ')' & @CRLF)
+    ConsoleWrite('[GWLauncher] Initialized client ' & $charSelectIdx & @CRLF)
 
-    ; Phase 3: Select character and press Play
-    ConsoleWrite('[GWLauncher] Phase 3: Selecting character and pressing Play...' & @CRLF)
-    GWLauncher_ClickPlay($gwTitle, $characterName)
-    Sleep(5000)
+    ; Phase 3: Handle reconnect dialog and press Play using frame system
+    ; (no mouse, no keyboard — programmatic via SendFrameUIMsg)
+    ConsoleWrite('[GWLauncher] Phase 3: Frame-based char select handling...' & @CRLF)
+
+    ; Wait for char select to be ready (frames populated)
+    Local $waitReady = TimerInit()
+    While Not IsAtCharSelect() And TimerDiff($waitReady) < 10000
+        Sleep(500)
+    WEnd
+
+    If IsAtCharSelect() Then
+        ; Handle reconnect dialog if present
+        If IsReconnectDialogShowing() Then
+            ConsoleWrite('[GWLauncher] Reconnect dialog detected — clicking No' & @CRLF)
+            DismissReconnectDialog('no')
+            Sleep(3000)
+        EndIf
+
+        ; Press Play programmatically
+        If IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Then
+            ConsoleWrite('[GWLauncher] Pressing Play (programmatic)...' & @CRLF)
+            PressPlayButton()
+            Sleep(5000)
+        Else
+            ConsoleWrite('[GWLauncher] Play button not visible' & @CRLF)
+        EndIf
+    Else
+        ConsoleWrite('[GWLauncher] Not at char select — may have auto-loaded' & @CRLF)
+    EndIf
 
     ; Phase 4: Wait for client to appear in-game (map loaded)
     Local $waitTimer = TimerInit()

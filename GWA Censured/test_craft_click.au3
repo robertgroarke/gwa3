@@ -276,16 +276,70 @@ Func _GWCA_InjectClickFree($frameHash)
 	Enqueue(DllStructGetPtr($cmd), DllStructGetSize($cmd))
 	ConsoleWrite('[CraftClick] Click queued, waiting...' & @CRLF)
 
-	; Wait for execution (check +0x8A3A0 becomes 0)
+	; Wait for execution — use a marker write to CONFIRM shellcode ran
+	Local $execMarker = DllCall($kernel_handle, 'ptr', 'VirtualAllocEx', _
+		'handle', $ph, 'ptr', 0, 'ulong_ptr', 4, 'dword', 0x1000, 'dword', 0x40)
+	Local $markerAddr = 0
+	If IsArray($execMarker) And $execMarker[0] <> 0 Then
+		$markerAddr = Int($execMarker[0])
+		MemoryWrite($ph, $markerAddr, 0xAAAA, 'dword')
+
+		; Build a second shellcode that just writes 0xBBBB to marker then ret
+		Local $confirmSc = DllCall($kernel_handle, 'ptr', 'VirtualAllocEx', _
+			'handle', $ph, 'ptr', 0, 'ulong_ptr', 16, 'dword', 0x1000, 'dword', 0x40)
+		If IsArray($confirmSc) And $confirmSc[0] <> 0 Then
+			Local $csc = Int($confirmSc[0])
+			Local $cb = DllStructCreate('byte[16]')
+			Local $cp = 1
+			DllStructSetData($cb, 1, 0xC7, $cp)
+			$cp += 1
+			DllStructSetData($cb, 1, 0x05, $cp)
+			$cp += 1
+			_WriteLE32($cb, $cp, $markerAddr)
+			$cp += 4
+			_WriteLE32($cb, $cp, 0xBBBB)
+			$cp += 4
+			DllStructSetData($cb, 1, 0xC3, $cp)
+			DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+				'handle', $ph, 'ptr', Ptr($csc), 'ptr', DllStructGetPtr($cb), 'ulong_ptr', $cp, 'ulong_ptr*', 0)
+
+			; Queue the confirm shellcode AFTER the click shellcode
+			Sleep(200)
+			$queue_counter = MemoryRead($ph, GetLabel('QueueCounter'), 'dword')
+			Local $cmd2 = DllStructCreate('dword;dword')
+			DllStructSetData($cmd2, 1, $csc)
+			DllStructSetData($cmd2, 2, 0)
+			Enqueue(DllStructGetPtr($cmd2), DllStructGetSize($cmd2))
+		EndIf
+	EndIf
+
+	; Wait for BOTH shellcodes to execute
 	Local $waitStart = TimerInit()
-	While MemoryRead($ph, $gwcaBase + 0x8A3A0, 'dword') <> 0
-		Sleep(100)
-		If TimerDiff($waitStart) > 5000 Then
-			ConsoleWrite('[CraftClick] WARNING: Click may not have executed' & @CRLF)
-			ExitLoop
+	Local $executed = False
+	While TimerDiff($waitStart) < 8000
+		Sleep(200)
+		If $markerAddr <> 0 Then
+			Local $mv = MemoryRead($ph, $markerAddr, 'dword')
+			If $mv = 0xBBBB Then
+				$executed = True
+				ExitLoop
+			EndIf
 		EndIf
 	WEnd
-	ConsoleWrite('[CraftClick] Click executed (hook ptr zeroed)' & @CRLF)
+
+	If $executed Then
+		ConsoleWrite('[CraftClick] Click + confirm executed successfully' & @CRLF)
+	Else
+		ConsoleWrite('[CraftClick] WARNING: Shellcode did NOT execute (hook inactive?)' & @CRLF)
+		ConsoleWrite('[CraftClick] Marker=0x' & Hex(MemoryRead($ph, $markerAddr, 'dword')) & @CRLF)
+		ConsoleWrite('[CraftClick] QueueCounter=' & MemoryRead($ph, GetLabel('QueueCounter'), 'dword') & @CRLF)
+	EndIf
+
+	; Cleanup marker memory
+	If $markerAddr <> 0 Then
+		DllCall($kernel_handle, 'bool', 'VirtualFreeEx', _
+			'handle', $ph, 'ptr', Ptr($markerAddr), 'ulong_ptr', 0, 'dword', 0x8000)
+	EndIf
 
 	; --- DON'T FreeLibrary immediately ---
 	; FreeLibrary while game code is still running causes crashes.

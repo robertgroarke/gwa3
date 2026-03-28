@@ -211,15 +211,41 @@ E8 ...      ; call SendFrameUIMsg
 Its prologue: `mov esi,[ebp+8]; mov eax,[esi+4]; sub eax,1` — reads field_4 from
 the first argument struct.
 
-### Next Steps (2026-03-28)
-1. **Manually populate GWCA data section** with our known function pointers, then call
-   ButtonClick via rendering hook (bypasses GW::Initialize hook conflict)
-2. **Reverse-engineer the wParam struct** at the game's 0x2B call site — lea eax,[ebp-0x14]
-   builds a local struct that might have specific fields the dispatcher needs
-3. **Try global UIMessage** (game+0x1B02C0 offset) instead of frame-level dispatch —
-   maybe there's a UIMessage ID that triggers "enter game" globally
-4. **Try direct network packet** for "enter game" — bypass UI entirely
-5. If any execution path works: use SendFrameUIMsg(frame+0xA8, 0x31, &action, 0)
+### SOLVED: Native ButtonClick (2026-03-28)
+
+**Working approach — NO gwca.dll needed:**
+
+1. `_GetFrameContext(Frame*)` = `[frame+0x128] - 0x128` = parent frame pointer
+   - GWCA's MouseAction calls an INTERNAL function at `+0x25EC0` (not exported `+0x25D90`)
+   - This function simply reads the `FrameRelation` pointer and subtracts its offset
+   - Returns the PARENT FRAME, which is the "context" for SendFrameUIMsg
+
+2. Build kMouseAction: `{frame_id, child_offset_id, action_state, 0, 0}`
+
+3. Call `SendFrameUIMsg(__thiscall)`:
+   - ECX = `context + 0xA8` (parent frame's callback array)
+   - Stack: `msgid=0x31, wParam=&kMouseAction, lParam=0`
+
+4. Send MouseDown (action_state=6) then MouseUp (action_state=7)
+
+5. Execute via rendering hook on the game thread
+
+**Why all previous attempts failed:**
+- We used `frame + 0xA8` or `frame + 0x84` as ECX — WRONG
+- The function needs `PARENT_FRAME + 0xA8`, not `BUTTON_FRAME + 0xA8`
+- GWCA approach also failed initially because `+0x8A3A0` (hooked ptr) was NULL
+- `_WriteLE32` was broken (only wrote low byte) — ALL shellcode was corrupted
+
+**Key functions:**
+- `SendFrameUIMsg`: game + 0x2286D0 (scan pattern `83 C1 DC E8`, offset 3)
+- `GetFrameContext`: pure memory read — `[frame+0x128] - 0x128`
+- Frame detection: walk FrameArray, compare `frame_hash_id` at offset 0x134
+
+**Known frame hashes:**
+- Play button: 184818986
+- Play greyed: 41327607
+- Reconnect YES: 1398610279
+- Reconnect NO: 3600335809
 
 ---
 
