@@ -895,21 +895,16 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
     ConsoleWrite('[GWLauncher] Phase 4: Waiting for map load...' & @CRLF)
     Local $waitTimer = TimerInit()
     While TimerDiff($waitTimer) < (($timeout - 25) * 1000)
-        Sleep(3000)
+        Sleep(5000)
 
-        ; Check if we've left char select
-        If Not IsAtCharSelect() Then
-            ConsoleWrite('[GWLauncher] Left char select — waiting for map load...' & @CRLF)
-            Sleep(10000)  ; Wait for map to fully load
-
-            ScanAndUpdateGameClients()
-            If IsArray($game_clients) And $game_clients[0][0] > 0 Then
-                Local $clientIdx = FindClientIndexByCharacterName($characterName)
-                If $clientIdx > 0 Then
-                    ConsoleWrite('[GWLauncher] Client found! Connecting to: ' & $characterName & @CRLF)
-                    SelectClient($clientIdx)
-                    Return True
-                EndIf
+        ; Try to find the client by character name (works once in-game)
+        ScanAndUpdateGameClients()
+        If IsArray($game_clients) And $game_clients[0][0] > 0 Then
+            Local $clientIdx = FindClientIndexByCharacterName($characterName)
+            If $clientIdx > 0 Then
+                ConsoleWrite('[GWLauncher] Client found! Connecting to: ' & $characterName & @CRLF)
+                SelectClient($clientIdx)
+                Return True
             EndIf
         EndIf
 
