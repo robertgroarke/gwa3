@@ -251,8 +251,11 @@ GUI_Create()
 Global $gReturnMap = $Gadds_Encampment
 Global $gPickupCoins = True
 
-; Combat state enum + $SkillBarCache + $SkillbarSlot moved to BotCore-Combat.au3
-; $PressureSpiritSkills removed (dead — write-only, never read)
+; Auto-start in headless mode
+If $cmdAutoLaunch <> '' Or $cmdCharacter <> '' Then
+	ConsoleWrite('[Froggy] Headless mode: auto-starting bot' & @CRLF)
+	onStart()
+EndIf
 
 While 1
 	Sleep(200)

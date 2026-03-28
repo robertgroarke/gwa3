@@ -825,34 +825,31 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
         Return False
     EndIf
 
-    ; Wait for GW window to appear, handle reconnect dialog, select character, press Play
+    ; Wait for GW window, handle reconnect, press Play, then connect
     ConsoleWrite('[GWLauncher] Waiting for client to log in (timeout: ' & $timeout & 's)...' & @CRLF)
+
+    ; Phase 1: Wait for GW window to appear (15s)
+    ConsoleWrite('[GWLauncher] Phase 1: Waiting 15s for GW window...' & @CRLF)
+    Sleep(15000)
+
+    ; Phase 2: Handle reconnect dialog (dismiss with No)
+    ConsoleWrite('[GWLauncher] Phase 2: Handling reconnect dialog...' & @CRLF)
+    Local $gwTitle = 'Guild Wars'
+    ; Try character-specific title first, then generic
+    If WinExists('Guild Wars - ' & $characterName) Then $gwTitle = 'Guild Wars - ' & $characterName
+    GWLauncher_HandleReconnectDialog('no', $gwTitle)
+    Sleep(3000)
+
+    ; Phase 3: Press Play
+    ConsoleWrite('[GWLauncher] Phase 3: Pressing Play...' & @CRLF)
+    GWLauncher_ClickPlay($gwTitle, $characterName)
+    Sleep(5000)
+
+    ; Phase 4: Wait for client to appear in-game (map loaded)
     Local $waitTimer = TimerInit()
-    Local $handledReconnect = False
-    Local $clickedPlay = False
-    While TimerDiff($waitTimer) < ($timeout * 1000)
+    While TimerDiff($waitTimer) < (($timeout - 25) * 1000)
         Sleep(5000)
 
-        ; Handle reconnect dialog if it appears (dismiss with No)
-        If Not $handledReconnect And TimerDiff($waitTimer) > 15000 Then
-            Local $gwTitle = 'Guild Wars - ' & $characterName
-            ; Also check generic title for when GW hasn't set character name yet
-            If WinExists($gwTitle) Or WinExists('Guild Wars Reforged') Or WinExists('Guild Wars') Then
-                GWLauncher_HandleReconnectDialog('no', $gwTitle)
-                $handledReconnect = True
-                Sleep(2000)
-            EndIf
-        EndIf
-
-        ; Press Play if still on character select after reconnect is handled
-        If $handledReconnect And Not $clickedPlay And TimerDiff($waitTimer) > 25000 Then
-            ConsoleWrite('[GWLauncher] Pressing Play via Enter key...' & @CRLF)
-            GWLauncher_ClickPlay('Guild Wars - ' & $characterName, $characterName)
-            $clickedPlay = True
-            Sleep(5000)
-        EndIf
-
-        ; Check if client is in-game
         ScanAndUpdateGameClients()
         If IsArray($game_clients) And $game_clients[0][0] > 0 Then
             Local $clientIdx = FindClientIndexByCharacterName($characterName)
@@ -863,7 +860,7 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
             EndIf
         EndIf
 
-        ConsoleWrite('[GWLauncher] Still waiting... (' & Int(TimerDiff($waitTimer) / 1000) & 's)' & @CRLF)
+        ConsoleWrite('[GWLauncher] Still waiting... (' & Int((TimerDiff($waitTimer) / 1000) + 25) & 's)' & @CRLF)
     WEnd
 
     ConsoleWrite('[GWLauncher] Timeout waiting for client: ' & $characterName & @CRLF)
