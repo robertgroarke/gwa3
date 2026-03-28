@@ -186,17 +186,25 @@ Global $g_b_Assembler = True
 
 ; === Extension stubs (call into loaded extension modules) ===
 
+Global $g_b_AddPattern = True
+
+Func Extend_AddPattern()
+    ; GameTick: the game's frame processing function (called every tick, safe for UI calls)
+    ; GWCA hooks this for GameThread::Enqueue — it's safe to call SendFrameUIMsg from here
+    AddScanPattern('GameTick', '', '', 'hook', 'P:\Code\Engine\Frame\FrApi.cpp', 'renderElapsed >= 0')
+EndFunc
+
 Func Extend_Scanner()
-    If IsDeclared('g_b_UISniffer') Then ExtendScanner_UISniffer()
+    ; UISniffer DISABLED — its UIMessage hook crashes GW at material trader
     If IsDeclared('g_b_FrameUI') Then ExtendScanner_FrameUI()
 EndFunc
 
 Func Extend_AssemblerData()
-    If IsDeclared('g_b_UISniffer') Then ExtendAssemblerData_UISniffer()
+    ; UISniffer DISABLED — its UIMessage hook crashes GW at material trader
     If IsDeclared('g_b_FrameUI') Then ExtendAssemblerData_FrameUI()
 EndFunc
 
 Func Extend_Assembler()
-    If IsDeclared('g_b_UISniffer') Then ExtendAssembler_UISniffer()
+    ; UISniffer DISABLED — its UIMessage hook crashes GW at material trader
     If IsDeclared('g_b_FrameUI') Then ExtendAssembler_FrameUI()
 EndFunc
