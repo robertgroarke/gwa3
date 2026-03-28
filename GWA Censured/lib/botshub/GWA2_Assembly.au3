@@ -1410,11 +1410,18 @@ Func ModifyMemory()
 			; Save original 5 bytes from GameTickStart into GameTickOrigCode
 			; then append a JMP to GameTickReturn — so GameTickProc can jump here
 			; to execute the original prologue and return to normal flow
-			Local $origBytes = MemoryRead($processHandle, GetLabel('GameTickStart'), 'byte[5]')
-			WriteBinary($processHandle, StringMid(String($origBytes), 3), GetLabel('GameTickOrigCode'))
+			Local $origBuf = DllStructCreate('byte[5]')
+			DllCall($kernel_handle, 'bool', 'ReadProcessMemory', _
+				'handle', $processHandle, 'ptr', GetLabel('GameTickStart'), _
+				'ptr', DllStructGetPtr($origBuf), 'ulong_ptr', 5, 'ulong_ptr*', 0)
+			Local $origHex = ''
+			For $bi = 1 To 5
+				$origHex &= Hex(DllStructGetData($origBuf, 1, $bi), 2)
+			Next
+			WriteBinary($processHandle, $origHex, GetLabel('GameTickOrigCode'))
 			WriteBinary($processHandle, 'E9' & SwapEndian(Hex(GetLabel('GameTickReturn') - GetLabel('GameTickOrigCode') - 5 - 5)), GetLabel('GameTickOrigCode') + 5)
 			WriteDetour('GameTickStart', 'GameTickProc')
-			Debug('GameTick hook installed')
+			Debug('GameTick hook installed, original bytes: ' & $origHex)
 		EndIf
 		If IsDeclared('g_b_AssemblerWriteDetour') Then Extend_AssemblerWriteDetour()
 	EndIf

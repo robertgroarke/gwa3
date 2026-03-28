@@ -874,7 +874,7 @@ Func ClickFrameButton($hash)
         'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ShellcodeAddr), _
         'ptr', DllStructGetPtr($sc), 'ulong_ptr', $p, 'ulong_ptr*', 0)
 
-    ; Queue via rendering hook
+    ; Queue for GameTickProc to execute (safe context for UI calls)
     $queue_counter = MemoryRead($processHandle, GetLabel('QueueCounter'), 'dword')
     Local $cmd = DllStructCreate('dword;dword')
     DllStructSetData($cmd, 1, $g_FrameClick_ShellcodeAddr)
@@ -883,7 +883,7 @@ Func ClickFrameButton($hash)
 
     ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
 
-    ; Brief wait for rendering hook to process the commands
+    ; Brief wait for GameTick hook to process the command
     Sleep(500)
 
     Return True
