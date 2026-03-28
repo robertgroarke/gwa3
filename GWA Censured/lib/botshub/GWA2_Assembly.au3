@@ -1540,11 +1540,18 @@ Func AssemblerCreateMain()
 	_('test ebx,40001')
 	_('jz RegularFlow')
 
-	; HandleCase: at char select ([field_198]==0), skip to MainExit.
-	; MainProc doesn't fire at char select anyway (game doesn't call hooked func).
-	; Queue processing at char select is handled by RenderingModProc instead.
+	; HandleCase: at char select ([field_198]==0), process queued commands
 	_('HandleCase:')
-	_('jmp MainExit')
+	_('mov eax,dword[QueueCounter]')
+	_('mov ecx,eax')
+	_('shl eax,8')
+	_('add eax,QueueBase')
+	_('mov ebx,dword[eax]')
+	_('test ebx,ebx')
+	_('jz MainExit')
+	_('mov dword[SavedIndex],ecx')
+	_('mov dword[eax],0')
+	_('jmp ebx')
 
 	_('RegularFlow:')
 	_('mov eax,dword[QueueCounter]')
@@ -1611,40 +1618,6 @@ Func AssemblerCreateRenderingMod()
 	; Queue processing at char select is handled by ClickFrameButton using
 	; CreateRemoteThread with WaitForSingleObject (polling for game thread readiness).
 	_('ljmp RenderingModReturn')
-EndFunc
-
-; GameTick hook — processes command queue in the game's frame tick context.
-; Unlike the rendering callback, GameTick is safe for UI calls (SendFrameUIMsg)
-; because it runs in the same context as GWCA's GameThread::Enqueue.
-; Only processes queue at char select (MapIsLoaded=0) to avoid double-processing
-; with MainProc which handles the in-game case.
-Func AssemblerCreateGameTick()
-	_('GameTickProc:')
-	_('pushad')                                 ; 1 byte  (offset 0)
-	_('pushfd')                                 ; 1 byte  (offset 1)
-	_('cmp dword[MapIsLoaded],0')               ; 7 bytes (offset 2)
-	_('jnz_ingame -> 7539')                     ; 2 bytes (offset 9): jnz +57 → skip to popfd
-	_('mov eax,dword[QueueCounter]')            ; 5 bytes (offset 11)
-	_('mov ecx,eax')                            ; 2 bytes (offset 16)
-	_('shl eax,8')                              ; 3 bytes (offset 18)
-	_('add eax,QueueBase')                      ; 5 bytes (offset 21)
-	_('mov ebx,dword[eax]')                     ; 2 bytes (offset 26)
-	_('test ebx,ebx')                           ; 2 bytes (offset 28)
-	_('jz_empty -> 7424')                       ; 2 bytes (offset 30): jz +36 → skip to popfd
-	_('mov dword[eax],0')                       ; 6 bytes (offset 32)
-	_('mov eax,ebx')                            ; 2 bytes (offset 38)
-	_('mov dword[RenderCmdPtr],eax')            ; 5 bytes (offset 40)
-	_('mov eax,ecx')                            ; 2 bytes (offset 45)
-	_('inc eax')                                ; 1 byte  (offset 47)
-	_('cmp eax,QueueSize')                      ; 5 bytes (offset 48)
-	_('jnz_noreset -> 7502')                    ; 2 bytes (offset 53): jnz +2
-	_('xor eax,eax')                            ; 2 bytes (offset 55)
-	_('mov dword[QueueCounter],eax')            ; 5 bytes (offset 57)
-	_('call dword[RenderCmdPtr]')               ; 6 bytes (offset 62)
-	_('popfd')                                  ; 1 byte  (offset 68)
-	_('popad')                                  ; 1 byte  (offset 69)
-	; Jump to saved original prologue bytes (patched at runtime in ModifyMemory)
-	_('ljmp GameTickOrigCode')                  ; 5 bytes (offset 70)
 EndFunc
 
 Func AssemblerCreateLoadFinished()

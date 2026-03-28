@@ -859,7 +859,6 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
     If $charSelectIdx = -1 Then $charSelectIdx = $game_clients[0][0]
     SelectClient($charSelectIdx)
     InitializeGameClientForGWA2(False)
-    Global $g_GWA2_Initialized = True
     ConsoleWrite('[GWLauncher] Initialized client ' & $charSelectIdx & @CRLF)
 
     ; Phase 3: Handle reconnect dialog and press Play using frame system
