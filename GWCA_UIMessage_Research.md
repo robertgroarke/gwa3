@@ -162,41 +162,63 @@ Commands now execute at char select via the rendering hook:
 - Added queue processing to RenderingModProc: `call ebx` with shellcode ending in RET
 - HandleCase in MainProc also patched to execute commands (was discarding them)
 
-### Current Blocker
-`SendFrameUIMsg(0x007986D0)` is called with:
-- ECX = `frame_ptr + 0xA8` (callbacks array as __thiscall this pointer)
-- Stack: `msgid (0x31 kMouseClick2), wParam (&kMouseAction), lParam (0)`
-- Function returns without error but button doesn't respond
-- The wParam struct format may be wrong — GWCA's MouseAction builds a complex struct
-- Or the function needs specific frame context that we're not providing
+### Previous Blocker (RESOLVED — was _WriteLE32 bug)
+The `_WriteLE32` function was broken: it used DllStructGetData element indexing on a
+dword field, which only returns the full value for element 1 and 0 for elements 2-4.
+This means ALL shellcode addresses and call offsets were corrupted (only low byte
+written, rest zeroed). Every previous click attempt used garbage shellcode.
 
-### Additional Findings (2026-03-28 continued)
+**Fixed 2026-03-28**: Replaced with BitShift/BitAND byte extraction. Confirmed by
+reading back shellcode bytes and verifying marker writes in game memory.
 
-**RenderingMod hook NOT called at char select** — despite JMP being installed.
-Queue commands written to the rendering hook are never consumed. Neither MainProc
-nor RenderingMod hooks fire at char select.
+### Current Blocker (2026-03-28)
+With correct shellcode (verified via marker test), SendFrameUIMsg still doesn't click:
+- Tested ECX = frame+0x84, frame+0xA8, cbBuf, frame_ptr
+- Tested msgid = 0x2F, 0x31, 0x22, 0x2B (game uses 0x2B at actual call site)
+- Tested wParam = action struct, NULL
+- All return cleanly, no crash, no click
+- The function at game+0x2286D0 IS SendFrameUIMsg and is NOT hooked by BotsHub
 
-**CreateRemoteThread calls work but function does nothing** — tested 5 different
-ECX/msgid combinations via CreateRemoteThread. All return silently, no crash,
-no click. The function likely requires game-thread-specific context (TLS, render
-state, event loop context) that CreateRemoteThread cannot provide.
+### Key Discoveries (2026-03-28)
 
-**Callback entries are valid** — Play button has 4 callback entries, all with
-flag = -2147483648 (0x80000000, negative = active). The dispatch code should
-call them. But even calling the callback directly via CreateRemoteThread has no effect.
+**Rendering hook IS active at char select** on fresh clients. Marker writes from
+shellcode confirm execution. Queue counter advances correctly.
 
-### Current Approach: Need Game Thread Execution
-The fundamental blocker is executing code on the GAME THREAD at char select:
-- MainProc hook: NOT called at char select
-- RenderingMod hook: NOT called at char select
-- CreateRemoteThread: runs but game functions ignore non-game-thread calls
-- Engine hook: exists but not hooked by default, might fire at char select
+**`_WriteLE32` was the root cause** of ALL previous failures. Fixed now.
 
-### Next Steps
-1. **Hook the Engine function** (scan pattern `568B3085F67478...`) — may fire at char select
-2. **Use GWCA's GameThread::Enqueue** after injecting gwca.dll + GW::Initialize
-3. **Find PreGame-specific hook points** — the char select has its own event loop
-4. **Patch the game's own rendering callback** to check our queue
+**GW::Initialize breaks BotsHub rendering hook** — every time. GWCA hooks the same
+game functions as BotsHub (including rendering). After GW::Initialize, the rendering
+hook stops processing commands. Scanner::Initialize alone does NOT cause this.
+
+**Scanner::Initialize alone doesn't populate GWCA data** — the actual pattern scanning
+happens in GW::Initialize when each module calls Scanner::Find.
+
+**SendFrameUIMsg = Action** — both BotsHub scan labels resolve to game+0x2286D0. This
+is a general frame message dispatcher: `__thiscall(callbacks, msgid, wParam, lParam)`.
+It checks msgid in sequence (9, 11, ...) and dispatches. NOT hooked (starts with
+`55 8B EC` original prologue).
+
+**Game call site uses msgid 0x2B** at the scan pattern location. The hex context:
+```
+6A 00       ; push 0 (lParam)
+50          ; push eax (wParam = local struct ptr)
+6A 2B       ; push 0x2B (msgid)
+83 C1 DC    ; add ecx, -0x24 → ECX = frame+0x84
+E8 ...      ; call SendFrameUIMsg
+```
+
+**callback[0] takes a STRUCT pointer** as first arg, not individual (frame, msg, wp, lp).
+Its prologue: `mov esi,[ebp+8]; mov eax,[esi+4]; sub eax,1` — reads field_4 from
+the first argument struct.
+
+### Next Steps (2026-03-28)
+1. **Manually populate GWCA data section** with our known function pointers, then call
+   ButtonClick via rendering hook (bypasses GW::Initialize hook conflict)
+2. **Reverse-engineer the wParam struct** at the game's 0x2B call site — lea eax,[ebp-0x14]
+   builds a local struct that might have specific fields the dispatcher needs
+3. **Try global UIMessage** (game+0x1B02C0 offset) instead of frame-level dispatch —
+   maybe there's a UIMessage ID that triggers "enter game" globally
+4. **Try direct network packet** for "enter game" — bypass UI entirely
 5. If any execution path works: use SendFrameUIMsg(frame+0xA8, 0x31, &action, 0)
 
 ---
