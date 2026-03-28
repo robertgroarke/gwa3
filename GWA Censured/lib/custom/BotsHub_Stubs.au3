@@ -188,12 +188,15 @@ Global $g_b_Assembler = True
 
 Func Extend_Scanner()
     If IsDeclared('g_b_UISniffer') Then ExtendScanner_UISniffer()
+    If IsDeclared('g_b_FrameUI') Then ExtendScanner_FrameUI()
 EndFunc
 
 Func Extend_AssemblerData()
     If IsDeclared('g_b_UISniffer') Then ExtendAssemblerData_UISniffer()
+    If IsDeclared('g_b_FrameUI') Then ExtendAssemblerData_FrameUI()
 EndFunc
 
 Func Extend_Assembler()
     If IsDeclared('g_b_UISniffer') Then ExtendAssembler_UISniffer()
+    If IsDeclared('g_b_FrameUI') Then ExtendAssembler_FrameUI()
 EndFunc
