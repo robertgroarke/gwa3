@@ -172,11 +172,10 @@ Global $g_FrameClick_ActionDataAddr = 0
 
 ;~ Write a little-endian 32-bit value into a DllStruct at position $pos
 Func _WriteLE32(ByRef $struct, $pos, $value)
-    Local $tmp = DllStructCreate('dword')
-    DllStructSetData($tmp, 1, $value)
-    For $b = 1 To 4
-        DllStructSetData($struct, 1, DllStructGetData($tmp, 1, $b), $pos + $b - 1)
-    Next
+    DllStructSetData($struct, 1, BitAND($value, 0xFF), $pos)
+    DllStructSetData($struct, 1, BitAND(BitShift($value, 8), 0xFF), $pos + 1)
+    DllStructSetData($struct, 1, BitAND(BitShift($value, 16), 0xFF), $pos + 2)
+    DllStructSetData($struct, 1, BitAND(BitShift($value, 24), 0xFF), $pos + 3)
 EndFunc
 
 ;~ Calibrate the CommandFrameClick ASM address (workaround for assembler .5 offset)
