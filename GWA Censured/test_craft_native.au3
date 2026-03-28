@@ -52,7 +52,24 @@ ConsoleWrite("Connected PID=" & $myPID & @CRLF)
 WinActivate($gwHWnd)
 Sleep(1000)
 
-; --- Verify command queue works ---
+; --- Handle char select first (needs GWCA for Play click) ---
+If IsAtCharSelect() Then
+	ConsoleWrite("At char select. Clicking Play via GWCA..." & @CRLF)
+	ClickFrameButton($FRAME_HASH_PLAY_BUTTON)
+	Local $lt = TimerInit()
+	While GetMyID() = 0 Or GetMaxAgents() = 0
+		Sleep(500)
+		If TimerDiff($lt) > 60000 Then
+			ConsoleWrite("ERROR: Map load timeout" & @CRLF)
+			Exit 1
+		EndIf
+	WEnd
+	Sleep(5000)  ; extra settle time for hooks to stabilize
+	ConsoleWrite("In game! MapID=" & GetMapID() & @CRLF)
+EndIf
+
+; --- NOW verify command queue (in-game, MainProc should be active) ---
+ConsoleWrite("Testing command queue..." & @CRLF)
 Local $marker = _AllocRWX(4)
 MemoryWrite($processHandle, $marker, 0xAAAA, 'dword')
 Local $nopSc = _AllocRWX(16)
@@ -77,26 +94,12 @@ DllStructSetData($cmd, 2, 0)
 Enqueue(DllStructGetPtr($cmd), DllStructGetSize($cmd))
 Sleep(2000)
 If MemoryRead($processHandle, $marker, 'dword') <> 0xBBBB Then
-	ConsoleWrite("ERROR: Command queue not active!" & @CRLF)
-	Exit 1
-EndIf
-ConsoleWrite("Command queue: OK" & @CRLF)
-
-; --- Handle char select or travel ---
-If IsAtCharSelect() Then
-	ConsoleWrite("At char select. Clicking Play via GWCA (one-shot)..." & @CRLF)
-	ClickFrameButton($FRAME_HASH_PLAY_BUTTON)
-	Local $lt = TimerInit()
-	While GetMyID() = 0 Or GetMaxAgents() = 0
-		Sleep(500)
-		If TimerDiff($lt) > 60000 Then
-			ConsoleWrite("ERROR: Map load timeout" & @CRLF)
-			Exit 1
-		EndIf
-	WEnd
-	Sleep(3000)
-	ConsoleWrite("In game! MapID=" & GetMapID() & @CRLF)
-	; Re-verify command queue after entering game
+	ConsoleWrite("WARNING: Command queue not active — GWCA may have broken hooks" & @CRLF)
+	ConsoleWrite("Trying to re-initialize hooks..." & @CRLF)
+	; Re-run InitializeGameClientForGWA2 to re-inject hooks
+	InitializeGameClientForGWA2(False)
+	$processHandle = GetProcessHandle()
+	Sleep(2000)
 	MemoryWrite($processHandle, $marker, 0xAAAA, 'dword')
 	$queue_counter = MemoryRead($processHandle, GetLabel('QueueCounter'), 'dword')
 	DllStructSetData($cmd, 1, $nopSc)
@@ -104,11 +107,11 @@ If IsAtCharSelect() Then
 	Enqueue(DllStructGetPtr($cmd), DllStructGetSize($cmd))
 	Sleep(2000)
 	If MemoryRead($processHandle, $marker, 'dword') <> 0xBBBB Then
-		ConsoleWrite("ERROR: Queue still broken after map load!" & @CRLF)
+		ConsoleWrite("ERROR: Command queue STILL broken after reinit" & @CRLF)
 		Exit 1
 	EndIf
-	ConsoleWrite("Command queue: OK after map load" & @CRLF)
 EndIf
+ConsoleWrite("Command queue: OK" & @CRLF)
 If GetMapID() <> $MAP_EMBARK_BEACH Then
 	ConsoleWrite("Traveling to Embark Beach..." & @CRLF)
 	TravelToOutpost($MAP_EMBARK_BEACH)
@@ -121,11 +124,21 @@ ConsoleWrite("At Embark Beach." & @CRLF)
 If Not IsFrameVisible($FRAME_HASH_MERCHANT_WINDOW) Then
 	ConsoleWrite("Walking to Eyja..." & @CRLF)
 	MoveTo(3336, 627)
-	Sleep(1000)
+	Sleep(2000)
+	; Try wider radius to find Eyja
 	Local $eyja = GetNearestNPCToCoords(3336, 627)
 	If $eyja = 0 Then
-		ConsoleWrite("ERROR: Eyja not found" & @CRLF)
-		Exit 1
+		ConsoleWrite("Not found at default coords. Trying GoToConsumableTrader..." & @CRLF)
+		GoToConsumableTrader("Eyja")
+		Sleep(2000)
+		; Re-check merchant window
+		If IsFrameVisible($FRAME_HASH_MERCHANT_WINDOW) Then
+			ConsoleWrite("Merchant opened via GoToConsumableTrader!" & @CRLF)
+			$eyja = 1  ; dummy value, dialog is open
+		Else
+			ConsoleWrite("ERROR: Still can't find Eyja" & @CRLF)
+			Exit 1
+		EndIf
 	EndIf
 	GoToNPC($eyja)
 	Sleep(1000)
