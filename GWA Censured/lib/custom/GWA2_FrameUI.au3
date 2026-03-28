@@ -943,13 +943,9 @@ Func IsReconnectDialogShowing()
     Return IsFrameVisible($FRAME_HASH_RECONNECT_YES)
 EndFunc
 
-;~ Press Play at character select using mouse click with state verification
+;~ Press Play at character select — uses mouse click (GW ignores synthetic input)
 Func PressPlayButton()
-    If Not IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Then
-        ConsoleWrite('[FrameUI] Play button not visible' & @CRLF)
-        Return False
-    EndIf
-    Return ClickFrameButton($FRAME_HASH_PLAY_BUTTON)
+    Return PressPlayButton_MOUSE()
 EndFunc
 
 Func PressPlayButton_MOUSE()
@@ -973,18 +969,29 @@ Func PressPlayButton_MOUSE()
     Return True
 EndFunc
 
-;~ Dismiss reconnect dialog with Yes or No using native frame click (no mouse)
+;~ Dismiss reconnect dialog with Yes or No using mouse click
 Func DismissReconnectDialog($choice = 'no')
     If Not IsReconnectDialogShowing() Then
         ConsoleWrite('[FrameUI] No reconnect dialog showing' & @CRLF)
         Return False
     EndIf
 
+    Local $hWnd = GetWindowHandle()
+    If $hWnd = 0 Then Return False
+
+    WinActivate($hWnd)
+    Sleep(300)
+    Local $pos = WinGetPos($hWnd)
+    If Not IsArray($pos) Then Return False
+
     If $choice = 'yes' Then
-        ConsoleWrite('[FrameUI] Clicking reconnect YES' & @CRLF)
-        Return ClickFrameButton($FRAME_HASH_RECONNECT_YES)
+        Local $btnX = $pos[0] + Int($pos[2] * 0.42)
     Else
-        ConsoleWrite('[FrameUI] Clicking reconnect NO' & @CRLF)
-        Return ClickFrameButton($FRAME_HASH_RECONNECT_NO)
+        Local $btnX = $pos[0] + Int($pos[2] * 0.58)
     EndIf
+    Local $btnY = $pos[1] + Int($pos[3] * 0.52)
+
+    ConsoleWrite('[FrameUI] Clicking reconnect ' & $choice & ' at ' & $btnX & ',' & $btnY & @CRLF)
+    MouseClick('left', $btnX, $btnY, 1, 3)
+    Return True
 EndFunc
