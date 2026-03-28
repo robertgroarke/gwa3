@@ -155,11 +155,27 @@ The BotsHub assembler accumulates a fractional `.5` byte in `$asm_injection_size
 - `ClickFrameButton($hash)` — shellcode never executes because HandleCase discards it
 - Need to patch HandleCase before any char select commands work
 
+### Execution Pipeline — SOLVED (2026-03-28)
+Commands now execute at char select via the rendering hook:
+- **MainProc hook**: NOT called at char select (game state checks fail)
+- **RenderingModProc hook**: IS called at char select (rendering active)
+- Added queue processing to RenderingModProc: `call ebx` with shellcode ending in RET
+- HandleCase in MainProc also patched to execute commands (was discarding them)
+
+### Current Blocker
+`SendFrameUIMsg(0x007986D0)` is called with:
+- ECX = `frame_ptr + 0xA8` (callbacks array as __thiscall this pointer)
+- Stack: `msgid (0x31 kMouseClick2), wParam (&kMouseAction), lParam (0)`
+- Function returns without error but button doesn't respond
+- The wParam struct format may be wrong — GWCA's MouseAction builds a complex struct
+- Or the function needs specific frame context that we're not providing
+
 ### Next Steps
-1. Patch HandleCase to execute commands at char select
-2. Test SendFrameUIMessage with correct params (ECX=frame+0xA8, 3 stack args)
-3. If click works: implement PressPlayButton/DismissReconnect using frame hashes
-4. Integrate into GWLauncher_AutoLaunchAndConnect
+1. Try different wParam formats (NULL, simpler structs, different action states)
+2. Try calling the Play button's callback function directly (0x0077D6B0)
+3. Or: inject gwca.dll, run GW::Initialize on game thread via rendering hook, then use ButtonFrame::Click
+4. If click works: implement PressPlayButton/DismissReconnect using frame hashes
+5. Integrate into GWLauncher_AutoLaunchAndConnect
 
 ---
 
