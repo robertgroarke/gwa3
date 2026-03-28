@@ -1611,16 +1611,17 @@ Func AssemblerCreateRenderingMod()
 	_('cmp dword[DisableRendering],1')
 
 	; Execute queued commands during rendering (for char select)
-	; Shellcode MUST end with RET. Uses hardcoded jump offsets to avoid .5 label error.
-	_('pushad')                             ; 1 byte
-	_('pushfd')                             ; 1 byte
+	; Shellcode MUST end with RET. Uses hardcoded jump offsets.
+	; Saves ALL state, runs shellcode, restores ALL state (no register leaks).
+	_('pushad')                             ; 1 byte  (save original regs)
+	_('pushfd')                             ; 1 byte  (save original flags)
 	_('mov eax,dword[QueueCounter]')        ; 5 bytes
 	_('mov ecx,eax')                        ; 2 bytes
 	_('shl eax,8')                          ; 3 bytes
 	_('add eax,QueueBase')                  ; 5 bytes
 	_('mov ebx,dword[eax]')                 ; 2 bytes
 	_('test ebx,ebx')                       ; 2 bytes
-	_('jz_skip -> 7428')                    ; 2 bytes: jz +40 (skip to popfd/popad/ljmp)
+	_('jz_skip -> 7424')                    ; 2 bytes: jz +36 → skip to popfd/popad
 	_('mov dword[eax],0')                   ; 6 bytes
 	_('mov eax,ebx')                        ; 2 bytes
 	_('mov dword[RenderCmdPtr],eax')        ; 5 bytes
@@ -1631,14 +1632,12 @@ Func AssemblerCreateRenderingMod()
 	_('xor eax,eax')                        ; 2 bytes
 	; RenderNoReset:
 	_('mov dword[QueueCounter],eax')        ; 5 bytes
-	_('popfd')                              ; 1 byte
-	_('popad')                              ; 1 byte
+	; Call shellcode from within pushad/pushfd block
+	; (regs will be trashed but we restore from the saved copies on stack)
 	_('call dword[RenderCmdPtr]')           ; 6 bytes: FF 15 <addr>
-	_('pushad')                             ; 1 byte
-	_('pushfd')                             ; 1 byte
-	; RenderSkipQueue:                        (jz lands here: popfd)
-	_('popfd')                              ; 1 byte
-	_('popad')                              ; 1 byte
+	; RenderSkipQueue:                        (jz lands here: popfd/popad)
+	_('popfd')                              ; 1 byte  (restore original flags)
+	_('popad')                              ; 1 byte  (restore original regs)
 
 	_('ljmp RenderingModReturn')
 EndFunc
