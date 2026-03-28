@@ -223,7 +223,16 @@ GWCA injection (for ButtonClick) can cause crashes when combined with BotsHub ho
 - Opening vendor dialogs while GWCA is loaded
 - Map transitions
 
-**Mitigation**: Inject GWCA only when needed, ButtonClick, zero +0x8A3A0, FreeLibrary immediately. Don't keep GWCA loaded during normal bot operations.
+**Mitigation**: `ClickFrameButton()` has been updated to use a **native approach** — no gwca.dll needed. It computes the frame context via `_GetFrameContext()` (pure memory reads: `[frame+0x128] - 0x128`), then calls the game's own `SendFrameUIMsg` directly via shellcode. This works through the BotsHub command queue without any external DLL.
+
+**GWCA is NOT needed at all.** The native `ClickFrameButton()` works for both char select (Play button) and in-game (vendor buttons). At char select, commands execute via the rendering hook. In-game, both MainProc and RenderingModProc process the queue.
+
+### Craft Button Click Status (2026-03-28)
+- Command queue confirmed working on fresh clients (no gwca.dll)
+- ClickFrameButton updated to native approach (no gwca.dll in-game)
+- Need to test: select item row → click Craft button → verify gold decreases
+- NPC navigation to Eyja needs improvement (coords/timing issues)
+- Craft button hash=835947118 identified but needs click verification
 
 ### GWCA DLL Function RVAs (from disassembly)
 | Function | RVA | Notes |

@@ -22,33 +22,45 @@ Global Const $MAP_EMBARK_BEACH = 857
 
 ConsoleWrite("=== Native Frame Click Test ===" & @CRLF)
 
-; --- Launch a FRESH client (don't kill existing ones) ---
-ConsoleWrite("Launching fresh BEASTRIT client..." & @CRLF)
-Local $accounts = GWLauncher_LoadAccounts()
-Local $accIdx = GWLauncher_FindAccountByCharacter($accounts, "B E A S T R I T")
-Local $launchResult = GWLauncher_LaunchAccount($accounts, $accIdx)
-Local $myPID = $launchResult[0]
-ConsoleWrite("Launched PID=" & $myPID & ", waiting 40s..." & @CRLF)
-Sleep(40000)
-
+; --- Connect to existing client or launch fresh ---
 ScanAndUpdateGameClients()
 Local $targetIdx = -1
+
+; Try to find BEASTRIT by name or use newest client without gwca
 For $i = 1 To $game_clients[0][0]
-	If $game_clients[$i][0] = $myPID Then
+	ConsoleWrite("  Client " & $i & ": PID=" & $game_clients[$i][0] & " title='" & $game_clients[$i][1] & "'" & @CRLF)
+	If StringInStr($game_clients[$i][1], "B E A S T R I T") Or StringInStr($game_clients[$i][1], "BEASTRIT") Then
 		$targetIdx = $i
-		ExitLoop
 	EndIf
 Next
+
+If $targetIdx = -1 And $game_clients[0][0] > 0 Then
+	$targetIdx = $game_clients[0][0]
+	ConsoleWrite("Using last client as fallback" & @CRLF)
+EndIf
+
 If $targetIdx = -1 Then
-	ConsoleWrite("ERROR: Can't find launched client PID=" & $myPID & @CRLF)
-	Exit 1
+	ConsoleWrite("No GW client. Launching BEASTRIT..." & @CRLF)
+	Local $accounts = GWLauncher_LoadAccounts()
+	Local $accIdx = GWLauncher_FindAccountByCharacter($accounts, "B E A S T R I T")
+	Local $launchResult = GWLauncher_LaunchAccount($accounts, $accIdx)
+	ConsoleWrite("PID=" & $launchResult[0] & ", waiting 40s..." & @CRLF)
+	Sleep(40000)
+	ScanAndUpdateGameClients()
+	For $i = 1 To $game_clients[0][0]
+		If $game_clients[$i][0] = $launchResult[0] Then
+			$targetIdx = $i
+			ExitLoop
+		EndIf
+	Next
+	If $targetIdx = -1 Then $targetIdx = $game_clients[0][0]
 EndIf
 
 SelectClient($targetIdx)
 InitializeGameClientForGWA2(False)
 Local $processHandle = GetProcessHandle()
 Local $gwHWnd = $game_clients[$targetIdx][2]
-ConsoleWrite("Connected PID=" & $myPID & @CRLF)
+ConsoleWrite("Connected PID=" & $game_clients[$targetIdx][0] & @CRLF)
 WinActivate($gwHWnd)
 Sleep(1000)
 
