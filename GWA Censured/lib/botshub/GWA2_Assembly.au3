@@ -1610,11 +1610,13 @@ Func AssemblerCreateRenderingMod()
 	_('add esp,4')
 	_('cmp dword[DisableRendering],1')
 
-	; Execute queued commands during rendering (for char select)
-	; Shellcode MUST end with RET. Uses hardcoded jump offsets.
-	; Saves ALL state, runs shellcode, restores ALL state (no register leaks).
-	_('pushad')                             ; 1 byte  (save original regs)
-	_('pushfd')                             ; 1 byte  (save original flags)
+	; Execute queued commands during rendering (char select ONLY).
+	; Skip when MapIsLoaded=1 (in-game) — MainProc handles commands there.
+	; This prevents crashes when rendering hook code interferes with in-game UI.
+	_('cmp dword[MapIsLoaded],0')           ; 7 bytes
+	_('jnz_ingame -> 753D')                 ; 2 bytes: jnz +61 → skip to ljmp
+	_('pushad')                             ; 1 byte
+	_('pushfd')                             ; 1 byte
 	_('mov eax,dword[QueueCounter]')        ; 5 bytes
 	_('mov ecx,eax')                        ; 2 bytes
 	_('shl eax,8')                          ; 3 bytes
@@ -1628,16 +1630,12 @@ Func AssemblerCreateRenderingMod()
 	_('mov eax,ecx')                        ; 2 bytes
 	_('inc eax')                            ; 1 byte
 	_('cmp eax,QueueSize')                  ; 5 bytes
-	_('jnz_noreset -> 7502')                ; 2 bytes: jnz +2 (skip xor)
+	_('jnz_noreset -> 7502')                ; 2 bytes: jnz +2
 	_('xor eax,eax')                        ; 2 bytes
-	; RenderNoReset:
 	_('mov dword[QueueCounter],eax')        ; 5 bytes
-	; Call shellcode from within pushad/pushfd block
-	; (regs will be trashed but we restore from the saved copies on stack)
-	_('call dword[RenderCmdPtr]')           ; 6 bytes: FF 15 <addr>
-	; RenderSkipQueue:                        (jz lands here: popfd/popad)
-	_('popfd')                              ; 1 byte  (restore original flags)
-	_('popad')                              ; 1 byte  (restore original regs)
+	_('call dword[RenderCmdPtr]')           ; 6 bytes
+	_('popfd')                              ; 1 byte
+	_('popad')                              ; 1 byte
 
 	_('ljmp RenderingModReturn')
 EndFunc

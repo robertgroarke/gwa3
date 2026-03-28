@@ -778,8 +778,7 @@ Func ClickFrameButton($hash)
         Return False
     EndIf
 
-    ; Get frame context — replicates GWCA GetFrameContext
-    ; Walks callback entries backward, returns first non-null data field
+    ; Get frame context — parent frame via [frame+0x128] - 0x128
     Local $context = _GetFrameContext($framePtr)
     If $context = 0 Then
         ConsoleWrite('[FrameUI] GetFrameContext returned NULL' & @CRLF)
@@ -876,6 +875,10 @@ Func ClickFrameButton($hash)
     Next
 
     ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
+
+    ; Brief wait for rendering hook to process the commands
+    Sleep(500)
+
     Return True
 EndFunc
 
