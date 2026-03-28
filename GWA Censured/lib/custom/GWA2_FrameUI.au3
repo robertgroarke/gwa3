@@ -273,7 +273,8 @@ EndFunc
 
 ;~ Click a button frame by its hash. Uses SendFrameUIMessage with kMouseClick2.
 ;~ This replicates what GWCA ButtonFrame::Click() does internally.
-Func ClickFrameButton($hash)
+Func ClickFrameButton_OLD($hash)
+    ; OLD implementation — replaced by clean version below
     Local $result = GetFrameByHash($hash)
     If $result[0] = 0 Then
         ConsoleWrite('[FrameUI] Button hash ' & $hash & ' not found' & @CRLF)
@@ -631,6 +632,152 @@ Func ClickFrameButton($hash)
     Enqueue(DllStructGetPtr($struct), DllStructGetSize($struct))
 
     ConsoleWrite('[FrameUI] Clicked (MouseDown+Up): hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
+    Return True
+EndFunc
+
+;~ Click a frame button by hash. Uses VirtualAllocEx shellcode + command queue.
+;~ Shellcode calls SendFrameUIMsg(__thiscall) and ends with RET (for rendering hook CALL).
+;~ Sends MouseDown (0x6) then MouseUp (0x7) = full click.
+Func ClickFrameButton($hash)
+    Local $result = GetFrameByHash($hash)
+    If $result[0] = 0 Then
+        ConsoleWrite('[FrameUI] Button hash ' & $hash & ' not found' & @CRLF)
+        Return False
+    EndIf
+
+    Local $framePtr = Int($result[0])
+    Local $frameId = $result[1]
+    Local $processHandle = GetProcessHandle()
+    Local $childOffsetId = MemoryRead($processHandle, $framePtr + $FRAME_OFFSET_CHILD_OFFSET_ID, 'dword')
+
+    ; Check frame state
+    Local $state = MemoryRead($processHandle, $framePtr + $FRAME_OFFSET_STATE, 'dword')
+    If BitAND($state, $FRAME_STATE_CREATED) = 0 Then
+        ConsoleWrite('[FrameUI] Button not created' & @CRLF)
+        Return False
+    EndIf
+
+    ; Lazy init: write SendFrameUIMsg func ptr on first call
+    Local $sendFrameFunc = Int(GetLabel('SendFrameUIMsg'))
+    If $sendFrameFunc = 0 Or $sendFrameFunc = -1 Then
+        ConsoleWrite('[FrameUI] SendFrameUIMsg not found' & @CRLF)
+        Return False
+    EndIf
+    Local $funcPtrAddr = GetLabel('FrameClickFuncPtr')
+    If MemoryRead($processHandle, $funcPtrAddr, 'dword') = 0 Then
+        MemoryWrite($processHandle, $funcPtrAddr, $sendFrameFunc, 'dword')
+    EndIf
+
+    ; One-time shellcode allocation
+    If $g_FrameClick_ShellcodeAddr = 0 Then
+        Local $mem = DllCall($kernel_handle, 'ptr', 'VirtualAllocEx', _
+            'handle', $processHandle, 'ptr', 0, 'ulong_ptr', 128, _
+            'dword', 0x1000, 'dword', 0x40)  ; PAGE_EXECUTE_READWRITE
+        If Not IsArray($mem) Or $mem[0] = 0 Then Return False
+        $g_FrameClick_ShellcodeAddr = Int($mem[0])
+        $g_FrameClick_ActionDataAddr = $g_FrameClick_ShellcodeAddr + 48
+        ConsoleWrite('[FrameUI] Shellcode mem at 0x' & Hex($g_FrameClick_ShellcodeAddr) & @CRLF)
+
+        ; Build shellcode: reads Frame* + action data from fixed addresses, calls game func, RET
+        ; Layout: shellcode at +0, action data at +48
+        ;
+        ; mov ecx, [FrameClickFramePtr]    ; 8B 0D <addr>     (6 bytes)
+        ; add ecx, 0xA8                    ; 81 C1 A8 00 00 00 (6 bytes)
+        ; push 0                           ; 6A 00             (2 bytes)
+        ; push <actionDataAddr>             ; 68 <addr>         (5 bytes)
+        ; push dword [FrameClickMsgId]     ; FF 35 <addr>      (6 bytes)
+        ; call dword [FrameClickFuncPtr]   ; FF 15 <addr>      (6 bytes)
+        ; ret                              ; C3                 (1 byte)
+        ;                                                 Total: 32 bytes
+
+        Local $sc = DllStructCreate('byte[32]')
+        Local $p = 1
+        Local $fpAddr = Int(GetLabel('FrameClickFramePtr'))
+        Local $msgAddr = Int(GetLabel('FrameClickMsgId'))
+        Local $funcAddr = Int(GetLabel('FrameClickFuncPtr'))
+
+        ; mov ecx, [FrameClickFramePtr]
+        DllStructSetData($sc, 1, 0x8B, $p)
+        $p += 1
+        DllStructSetData($sc, 1, 0x0D, $p)
+        $p += 1
+        _WriteLE32($sc, $p, $fpAddr)
+        $p += 4
+
+        ; add ecx, 0xA8
+        DllStructSetData($sc, 1, 0x81, $p)
+        $p += 1
+        DllStructSetData($sc, 1, 0xC1, $p)
+        $p += 1
+        _WriteLE32($sc, $p, 0xA8)
+        $p += 4
+
+        ; push 0 (lParam)
+        DllStructSetData($sc, 1, 0x6A, $p)
+        $p += 1
+        DllStructSetData($sc, 1, 0x00, $p)
+        $p += 1
+
+        ; push actionDataAddr (wParam)
+        DllStructSetData($sc, 1, 0x68, $p)
+        $p += 1
+        _WriteLE32($sc, $p, $g_FrameClick_ActionDataAddr)
+        $p += 4
+
+        ; push dword [FrameClickMsgId] (msgid)
+        DllStructSetData($sc, 1, 0xFF, $p)
+        $p += 1
+        DllStructSetData($sc, 1, 0x35, $p)
+        $p += 1
+        _WriteLE32($sc, $p, $msgAddr)
+        $p += 4
+
+        ; call dword [FrameClickFuncPtr]
+        DllStructSetData($sc, 1, 0xFF, $p)
+        $p += 1
+        DllStructSetData($sc, 1, 0x15, $p)
+        $p += 1
+        _WriteLE32($sc, $p, $funcAddr)
+        $p += 4
+
+        ; ret
+        DllStructSetData($sc, 1, 0xC3, $p)
+
+        DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+            'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ShellcodeAddr), _
+            'ptr', DllStructGetPtr($sc), 'ulong_ptr', $p, 'ulong_ptr*', 0)
+    EndIf
+
+    ; Write Frame* to shared memory
+    MemoryWrite($processHandle, GetLabel('FrameClickFramePtr'), $framePtr, 'dword')
+
+    ; Click = MouseDown (0x6) then MouseUp (0x7)
+    For $actionState = 0x6 To 0x7
+        ; Write msgid
+        MemoryWrite($processHandle, GetLabel('FrameClickMsgId'), 0x31, 'dword')
+
+        ; Write action data
+        Local $ad = DllStructCreate('dword;dword;dword;dword;dword')
+        DllStructSetData($ad, 1, $frameId)
+        DllStructSetData($ad, 2, $childOffsetId)
+        DllStructSetData($ad, 3, $actionState)
+        DllStructSetData($ad, 4, 0)
+        DllStructSetData($ad, 5, 0)
+        DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+            'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ActionDataAddr), _
+            'ptr', DllStructGetPtr($ad), 'ulong_ptr', 20, 'ulong_ptr*', 0)
+
+        ; Sync queue counter and enqueue
+        $queue_counter = MemoryRead($processHandle, GetLabel('QueueCounter'), 'dword')
+        Local $cmd = DllStructCreate('dword;dword')
+        DllStructSetData($cmd, 1, $g_FrameClick_ShellcodeAddr)
+        DllStructSetData($cmd, 2, 0)
+        Enqueue(DllStructGetPtr($cmd), DllStructGetSize($cmd))
+
+        Sleep(50)  ; brief pause between MouseDown and MouseUp
+    Next
+
+    ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
     Return True
 EndFunc
 
