@@ -444,8 +444,9 @@ Func RegisterScanPatterns()
 	AddScanPattern('TradePartner',				'6A008D45F8C745F801000000',												-0xC,	'hook')
 	; EncString Decoding
 	AddScanPattern('ValidateAsyncDecodeStr',	'',																		'',		'func',	'P:\Code\Engine\Text\TextApi.cpp',			'codedString')
-	; GameTick: frame processing function, safe for UI calls (GWCA hooks this for GameThread)
-	AddScanPattern('GameTick',					'',																		'',		'hook',	'P:\Code\Engine\Frame\FrApi.cpp',			'renderElapsed >= 0')
+	; GameTick scan REMOVED — assertion path doesn't fire during gameplay, and
+	; installing a detour there corrupts game code that IS reached (crashes at trader).
+	; Char select queue processing uses RenderingModProc instead.
 	If IsDeclared('CHAT_LOG_STRUCT') Then ExtendScannerWithChatLog()
 EndFunc
 
@@ -805,14 +806,6 @@ Func MapScanResultsToLabels()
 	$tempValue = $scan_results['LoadFinished']
 	SetLabel('LoadFinishedStart', Ptr($tempValue))
 	SetLabel('LoadFinishedReturn', Ptr($tempValue + 0x5))
-	; GameTick: frame processing function (safe for UI calls at char select)
-	If MapExists($scan_results, 'GameTick') And $scan_results['GameTick'] <> 0 Then
-		$tempValue = $scan_results['GameTick']
-		SetLabel('GameTickStart', Ptr($tempValue))
-		SetLabel('GameTickReturn', Ptr($tempValue + 0x5))
-		Debug('GameTickStart: ' & GetLabel('GameTickStart'))
-	EndIf
-
 	$tempValue = $scan_results['Trader']
 	SetLabel('TraderStart', Ptr($tempValue))
 	SetLabel('TraderReturn', Ptr($tempValue + 0x5))
@@ -1353,7 +1346,6 @@ Func ModifyMemory()
 	AssemblerCreateData()
 	AssemblerCreateMain()
 	AssemblerCreateRenderingMod()
-	AssemblerCreateGameTick()
 	AssemblerCreateLoadFinished()
 	AssemblerCreateTradePartner()
 	AssemblerCreateCommands()
@@ -1406,23 +1398,11 @@ Func ModifyMemory()
 		WriteDetour('RenderingMod', 'RenderingModProc')
 		WriteDetour('LoadFinishedStart', 'LoadFinishedProc')
 		WriteDetour('TradePartnerStart', 'TradePartnerProc')
-		If GetLabel('GameTickStart') <> -1 Then
-			; Save original 5 bytes from GameTickStart into GameTickOrigCode
-			; then append a JMP to GameTickReturn — so GameTickProc can jump here
-			; to execute the original prologue and return to normal flow
-			Local $origBuf = DllStructCreate('byte[5]')
-			DllCall($kernel_handle, 'bool', 'ReadProcessMemory', _
-				'handle', $processHandle, 'ptr', GetLabel('GameTickStart'), _
-				'ptr', DllStructGetPtr($origBuf), 'ulong_ptr', 5, 'ulong_ptr*', 0)
-			Local $origHex = ''
-			For $bi = 1 To 5
-				$origHex &= Hex(DllStructGetData($origBuf, 1, $bi), 2)
-			Next
-			WriteBinary($processHandle, $origHex, GetLabel('GameTickOrigCode'))
-			WriteBinary($processHandle, 'E9' & SwapEndian(Hex(GetLabel('GameTickReturn') - GetLabel('GameTickOrigCode') - 5 - 5)), GetLabel('GameTickOrigCode') + 5)
-			WriteDetour('GameTickStart', 'GameTickProc')
-			Debug('GameTick hook installed, original bytes: ' & $origHex)
-		EndIf
+		; GameTick hook DISABLED — the assertion path (renderElapsed >= 0) doesn't
+		; execute during normal gameplay, so the hook never fires. Worse, installing
+		; a detour at the assertion location overwrites game code that CAN be reached
+		; (e.g., during material trader interactions), causing crashes.
+		; Queue processing at char select is handled by RenderingModProc instead.
 		If IsDeclared('g_b_AssemblerWriteDetour') Then Extend_AssemblerWriteDetour()
 	EndIf
 EndFunc
@@ -1522,9 +1502,6 @@ Func AssemblerCreateData()
 	_('DecodeInputPtr/256')
 	; Output: decoded wchar string (max 1024 wchars)
 	_('DecodeOutputPtr/2048')
-	; GameTick: stores original 5 prologue bytes + JMP back (filled at runtime)
-	_('GameTickOrigCode/16')
-
 	If IsDeclared('g_b_AssemblerData') Then Extend_AssemblerData()
 
 	_('QueueBase/' & 256 * GetLabel('QueueSize'))
