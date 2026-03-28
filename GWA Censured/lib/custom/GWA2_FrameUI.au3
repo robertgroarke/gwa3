@@ -804,9 +804,16 @@ Func ClickFrameButton($hash)
         ConsoleWrite('[FrameUI] Shellcode at 0x' & Hex($g_FrameClick_ShellcodeAddr) & @CRLF)
     EndIf
 
-    ; Build shellcode for each action state (MouseDown=6, MouseUp=7)
+    ; GWCA sends a SINGLE MouseUp (0x7) for ButtonClick — NOT MouseDown+MouseUp.
+    ; The game has a dedicated MouseClick (0x8) action state for complete clicks,
+    ; but GWCA's ButtonClick uses MouseUp. Sending MouseDown first corrupts UI state.
+    ;
+    ; ECX note: scanner pattern "83 C1 DC E8" = "add ecx,-0x24; call <target>".
+    ; We call <target> directly, so we must pre-apply the -0x24 adjustment.
+    ; thisPtr = context + 0xA8 - 0x24 = context + 0x84
+    ;
     ; Shellcode:
-    ;   mov ecx, <context + 0xA8>   ; B9 <le32>     (5 bytes) __thiscall this
+    ;   mov ecx, <context + 0x84>   ; B9 <le32>     (5 bytes) __thiscall this
     ;   push 0                      ; 6A 00          (2 bytes) lParam
     ;   push <actionDataAddr>       ; 68 <le32>      (5 bytes) wParam
     ;   push <msgid>                ; 6A 31          (2 bytes) kMouseClick2
@@ -814,65 +821,65 @@ Func ClickFrameButton($hash)
     ;   ret                         ; C3             (1 byte)
     ;                                         Total: 20 bytes
 
-    Local $thisPtr = $context + 0xA8
+    ; Pre-apply the -0x24 offset that "add ecx,-0x24" would have done
+    Local $thisPtr = $context + 0x84
 
-    For $actionState = 0x6 To 0x7
-        ; Write kMouseAction struct to persistent memory
-        Local $ad = DllStructCreate('dword;dword;dword;dword;dword')
-        DllStructSetData($ad, 1, $frameId)
-        DllStructSetData($ad, 2, $childOffsetId)
-        DllStructSetData($ad, 3, $actionState)
-        DllStructSetData($ad, 4, 0)
-        DllStructSetData($ad, 5, 0)
-        DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
-            'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ActionDataAddr), _
-            'ptr', DllStructGetPtr($ad), 'ulong_ptr', 20, 'ulong_ptr*', 0)
+    ; Single MouseUp (0x7) — matches GWCA ButtonClick behavior
+    Local $actionState = 0x7
 
-        ; Build shellcode
-        Local $sc = DllStructCreate('byte[20]')
-        Local $p = 1
-        ; mov ecx, thisPtr
-        DllStructSetData($sc, 1, 0xB9, $p)
-        $p += 1
-        _WriteLE32($sc, $p, $thisPtr)
-        $p += 4
-        ; push 0
-        DllStructSetData($sc, 1, 0x6A, $p)
-        $p += 1
-        DllStructSetData($sc, 1, 0x00, $p)
-        $p += 1
-        ; push actionDataAddr
-        DllStructSetData($sc, 1, 0x68, $p)
-        $p += 1
-        _WriteLE32($sc, $p, $g_FrameClick_ActionDataAddr)
-        $p += 4
-        ; push 0x31 (kMouseClick2)
-        DllStructSetData($sc, 1, 0x6A, $p)
-        $p += 1
-        DllStructSetData($sc, 1, 0x31, $p)
-        $p += 1
-        ; call sendFrameFunc
-        DllStructSetData($sc, 1, 0xE8, $p)
-        $p += 1
-        _WriteLE32($sc, $p, $sendFrameFunc - ($g_FrameClick_ShellcodeAddr + $p - 1 + 4))
-        $p += 4
-        ; ret
-        DllStructSetData($sc, 1, 0xC3, $p)
+    ; Write kMouseAction struct to persistent memory
+    Local $ad = DllStructCreate('dword;dword;dword;dword;dword')
+    DllStructSetData($ad, 1, $frameId)
+    DllStructSetData($ad, 2, $childOffsetId)
+    DllStructSetData($ad, 3, $actionState)
+    DllStructSetData($ad, 4, 0)
+    DllStructSetData($ad, 5, 0)
+    DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+        'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ActionDataAddr), _
+        'ptr', DllStructGetPtr($ad), 'ulong_ptr', 20, 'ulong_ptr*', 0)
 
-        ; Write shellcode to memory
-        DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
-            'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ShellcodeAddr), _
-            'ptr', DllStructGetPtr($sc), 'ulong_ptr', $p, 'ulong_ptr*', 0)
+    ; Build shellcode
+    Local $sc = DllStructCreate('byte[20]')
+    Local $p = 1
+    ; mov ecx, thisPtr
+    DllStructSetData($sc, 1, 0xB9, $p)
+    $p += 1
+    _WriteLE32($sc, $p, $thisPtr)
+    $p += 4
+    ; push 0
+    DllStructSetData($sc, 1, 0x6A, $p)
+    $p += 1
+    DllStructSetData($sc, 1, 0x00, $p)
+    $p += 1
+    ; push actionDataAddr
+    DllStructSetData($sc, 1, 0x68, $p)
+    $p += 1
+    _WriteLE32($sc, $p, $g_FrameClick_ActionDataAddr)
+    $p += 4
+    ; push 0x31 (kMouseClick2)
+    DllStructSetData($sc, 1, 0x6A, $p)
+    $p += 1
+    DllStructSetData($sc, 1, 0x31, $p)
+    $p += 1
+    ; call sendFrameFunc
+    DllStructSetData($sc, 1, 0xE8, $p)
+    $p += 1
+    _WriteLE32($sc, $p, $sendFrameFunc - ($g_FrameClick_ShellcodeAddr + $p - 1 + 4))
+    $p += 4
+    ; ret
+    DllStructSetData($sc, 1, 0xC3, $p)
 
-        ; Queue via rendering hook
-        $queue_counter = MemoryRead($processHandle, GetLabel('QueueCounter'), 'dword')
-        Local $cmd = DllStructCreate('dword;dword')
-        DllStructSetData($cmd, 1, $g_FrameClick_ShellcodeAddr)
-        DllStructSetData($cmd, 2, 0)
-        Enqueue(DllStructGetPtr($cmd), DllStructGetSize($cmd))
+    ; Write shellcode to memory
+    DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+        'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ShellcodeAddr), _
+        'ptr', DllStructGetPtr($sc), 'ulong_ptr', $p, 'ulong_ptr*', 0)
 
-        Sleep(100)  ; brief pause between MouseDown and MouseUp
-    Next
+    ; Queue via rendering hook
+    $queue_counter = MemoryRead($processHandle, GetLabel('QueueCounter'), 'dword')
+    Local $cmd = DllStructCreate('dword;dword')
+    DllStructSetData($cmd, 1, $g_FrameClick_ShellcodeAddr)
+    DllStructSetData($cmd, 2, 0)
+    Enqueue(DllStructGetPtr($cmd), DllStructGetSize($cmd))
 
     ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
 
