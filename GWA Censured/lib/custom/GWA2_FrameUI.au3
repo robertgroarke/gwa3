@@ -758,6 +758,14 @@ Func ClickFrameButton($hash)
     MemoryWrite($processHandle, GetLabel('FrameClickFramePtr'), $framePtr, 'dword')
 
     ; Click = MouseDown (0x6) then MouseUp (0x7)
+    ; Also write the callback function address for direct-call fallback
+    Local $cbBuffer = MemoryRead($processHandle, $framePtr + 0xA8, 'dword')
+    Local $cbFunc = 0
+    If $cbBuffer > 0x10000 Then
+        $cbFunc = MemoryRead($processHandle, $cbBuffer, 'dword')
+    EndIf
+    ConsoleWrite('[FrameUI] Callback[0] = 0x' & Hex($cbFunc) & @CRLF)
+
     For $actionState = 0x6 To 0x7
         ; Write msgid
         MemoryWrite($processHandle, GetLabel('FrameClickMsgId'), 0x31, 'dword')

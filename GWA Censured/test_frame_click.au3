@@ -51,19 +51,8 @@ If IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Then
     ; Clear result flag
     MemoryWrite(GetProcessHandle(), GetLabel('FrameClickResult'), 0, 'dword')
 
-    ; Test: queue a KNOWN WORKING command first (CommandUIMsg with harmless msgid)
-    ; to confirm the queue works
-    ConsoleWrite("Testing queue with harmless CommandUIMsg..." & @CRLF)
-    Local $testStruct = DllStructCreate('dword;dword;dword')
-    DllStructSetData($testStruct, 1, GetLabel('CommandUIMsg'))
-    DllStructSetData($testStruct, 2, 0x10000175)  ; kCheckUIState (harmless)
-    DllStructSetData($testStruct, 3, 0)
-    Enqueue(DllStructGetPtr($testStruct), DllStructGetSize($testStruct))
-    Sleep(1000)
-    ConsoleWrite("Test command queued and processed (no crash = queue works)" & @CRLF)
-
     ; Read queue state before click
-    Local $queueCounter = MemoryRead(GetProcessHandle(), GetLabel('QueuePtr'), 'dword')
+    Local $queueCounter = MemoryRead(GetProcessHandle(), GetLabel('QueueCounter'), 'dword')
     ConsoleWrite("Queue counter before: " & $queueCounter & @CRLF)
 
     PressPlayButton()
