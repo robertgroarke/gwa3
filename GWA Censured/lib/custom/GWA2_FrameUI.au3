@@ -99,6 +99,8 @@ Func ExtendScanner_FrameUI()
                 Local $funcAddr = $callAddr + 5 + $rel
 
                 SetLabel('SendFrameUIMsg', Ptr($funcAddr))
+                ; NOTE: Can't write to shared memory yet — data labels not allocated until after assembly
+                ; The func ptr will be written lazily in ClickFrameButton() on first use
                 ConsoleWrite('[FrameUI] SendFrameUIMsg: 0x' & Hex($funcAddr) & ' (call at 0x' & Hex($callAddr) & ')' & @CRLF)
                 $found = True
                 ExitLoop 2
@@ -113,8 +115,10 @@ EndFunc
 
 ;~ Allocate shared memory for frame click data
 Func ExtendAssemblerData_FrameUI()
+    _('FrameClickFuncPtr/4')     ; Pointer to game's SendFrameUIMessage function
     _('FrameClickFramePtr/4')    ; Frame* to click
     _('FrameClickMsgId/4')       ; UIMessage to send (0x31 = kMouseClick2)
+    _('FrameClickActionPtr/4')   ; Pointer to FrameClickAction (set during init)
     _('FrameClickAction/20')     ; kMouseAction struct (5 dwords)
     _('FrameClickResult/4')      ; Result flag
 EndFunc
@@ -135,15 +139,27 @@ Func ExtendAssembler_FrameUI()
     ;   [20] = kMouseAction.action_state (0x8 = MouseClick)
     ;   [24] = kMouseAction.wparam (0)
     ;   [28] = kMouseAction.lparam (0)
+    ; CommandFrameClick: calls game's SendFrameUIMessage via __thiscall
+    ; ECX = frame_ptr + 0x84 (game does: ecx=frame+0xA8, add ecx,-0x24)
+    ; Stack: msgid, wParam (ptr to action struct), lParam (0)
+    ;
+    ; Command struct:
+    ;   [0]  = CommandFrameClick address
+    ;   [4]  = Frame* pointer
+    ;   [8]  = UIMessage id (0x31 for kMouseClick2)
+    ;   [12] = kMouseAction.frame_id
+    ;   [16] = kMouseAction.child_offset_id
+    ;   [20] = kMouseAction.action_state (0x8 = MouseClick)
+    ;   [24] = kMouseAction.wparam (0)
+    ;   [28] = kMouseAction.lparam (0)
     _('CommandFrameClick:')
-    _('mov ecx,dword[eax+4]')     ; ecx = Frame* pointer
-    _('add ecx,A8')                ; ecx = &frame->callbacks (this pointer for __thiscall)
-    _('push 0')                    ; lParam = NULL
-    _('mov edx,eax')
-    _('add edx,C')                 ; edx = &kMouseAction data (offset 12)
-    _('push edx')                  ; wParam = pointer to action struct
-    _('push dword[eax+8]')        ; msgid (0x31 = kMouseClick2)
-    _('call SendFrameUIMsg')       ; __thiscall: ecx=this, stack=[msgid, wParam, lParam]
+    ; Read from persistent shared memory (not the zeroed queue entry)
+    _('mov ecx,dword[FrameClickFramePtr]')  ; ecx = Frame*
+    _('add ecx,84')                          ; ecx = frame + 0x84 (this ptr for __thiscall)
+    _('push 0')                              ; lParam = NULL
+    _('push dword[FrameClickActionPtr]')     ; wParam = address of kMouseAction struct
+    _('push dword[FrameClickMsgId]')         ; msgid (0x31)
+    _('call dword[FrameClickFuncPtr]')       ; indirect call (__thiscall, callee cleans stack)
     _('ljmp CommandReturn')
 EndFunc
 
@@ -162,16 +178,23 @@ Func _CalibrateFrameClickAddr($labelAddr)
         'handle', $processHandle, 'ptr', Ptr($labelAddr - 8), _
         'ptr', DllStructGetPtr($scanBuf), 'ulong_ptr', 24, 'ulong_ptr*', 0)
 
-    ; Look for 8B 48 04 (mov ecx, [eax+4]) — first instruction of CommandFrameClick
-    For $i = 1 To 21
+    ; Look for 8B 0D (mov ecx, [imm32]) followed by 81 C1 84 (add ecx, 0x84)
+    ; First instruction: mov ecx,dword[FrameClickFramePtr] = 8B 0D xx xx xx xx
+    ; Second instruction: add ecx,84 = 81 C1 84 00 00 00
+    For $i = 1 To 15
         If DllStructGetData($scanBuf, 1, $i) = 0x8B And _
-           DllStructGetData($scanBuf, 1, $i+1) = 0x48 And _
-           DllStructGetData($scanBuf, 1, $i+2) = 0x04 Then
-            $g_FrameClick_CalibratedAddr = $labelAddr - 8 + ($i - 1)
-            ConsoleWrite('[FrameUI] CommandFrameClick calibrated: label=0x' & Hex($labelAddr) & _
-                ' actual=0x' & Hex($g_FrameClick_CalibratedAddr) & _
-                ' offset=' & ($g_FrameClick_CalibratedAddr - $labelAddr) & @CRLF)
-            Return $g_FrameClick_CalibratedAddr
+           DllStructGetData($scanBuf, 1, $i+1) = 0x0D Then
+            ; Verify: 6 bytes later should be 81 C1 84 (add ecx, 0x84)
+            If $i + 8 <= 24 And _
+               DllStructGetData($scanBuf, 1, $i+6) = 0x81 And _
+               DllStructGetData($scanBuf, 1, $i+7) = 0xC1 And _
+               DllStructGetData($scanBuf, 1, $i+8) = 0x84 Then
+                $g_FrameClick_CalibratedAddr = $labelAddr - 8 + ($i - 1)
+                ConsoleWrite('[FrameUI] CommandFrameClick calibrated: label=0x' & Hex($labelAddr) & _
+                    ' actual=0x' & Hex($g_FrameClick_CalibratedAddr) & _
+                    ' offset=' & ($g_FrameClick_CalibratedAddr - $labelAddr) & @CRLF)
+                Return $g_FrameClick_CalibratedAddr
+            EndIf
         EndIf
     Next
 
@@ -318,127 +341,49 @@ Func ClickFrameButton($hash)
     ; Command struct: [4: CommandFrameClick] [4: frame_ptr] [4: msgid]
     ;                 [20: kMouseAction = {frame_id, child_offset_id, state, wp, lp}]
 
-    ; Call SendFrameUIMessage directly via remote shellcode injection
-    ; The game function is __thiscall: ECX = &frame[0xA8], stack = msgid, wParam, lParam
-    ;
-    ; We allocate memory in the game process, write shellcode + data, execute it,
-    ; then free the memory. This bypasses the command queue and label offset issues.
-
+    ; Lazy init: write SendFrameUIMsg function pointer and action ptr on first call
     Local $sendFrameFunc = Int(GetLabel('SendFrameUIMsg'))
-    If $sendFrameFunc = 0 Then
-        ConsoleWrite('[FrameUI] SendFrameUIMsg not available' & @CRLF)
+    If $sendFrameFunc = 0 Or $sendFrameFunc = -1 Then
+        ConsoleWrite('[FrameUI] SendFrameUIMsg not found — cannot click' & @CRLF)
         Return False
     EndIf
 
+    Local $funcPtrAddr = GetLabel('FrameClickFuncPtr')
+    Local $currentFuncPtr = MemoryRead(GetProcessHandle(), $funcPtrAddr, 'dword')
+    If $currentFuncPtr = 0 Then
+        MemoryWrite(GetProcessHandle(), $funcPtrAddr, $sendFrameFunc, 'dword')
+        MemoryWrite(GetProcessHandle(), GetLabel('FrameClickActionPtr'), Int(GetLabel('FrameClickAction')), 'dword')
+        ConsoleWrite('[FrameUI] Initialized: FuncPtr=0x' & Hex($sendFrameFunc) & _
+            ' ActionPtr=0x' & Hex(Int(GetLabel('FrameClickAction'))) & @CRLF)
+    EndIf
+
+    ; Write action data to PERSISTENT shared memory (not the queue, which gets zeroed)
+    ; The main loop zeroes the queue entry before dispatching the command handler,
+    ; so any pointers into the queue entry would be invalid by the time the game
+    ; function reads the wParam data.
     Local $processHandle = GetProcessHandle()
-    Local $fp = Int($framePtr)  ; 32-bit frame pointer
 
-    ; Allocate memory for shellcode + data (256 bytes is plenty)
-    Local $mem = DllCall($kernel_handle, 'ptr', 'VirtualAllocEx', _
-        'handle', $processHandle, 'ptr', 0, 'ulong_ptr', 256, _
-        'dword', 0x1000, 'dword', 0x40)  ; MEM_COMMIT | PAGE_EXECUTE_READWRITE
-    If Not IsArray($mem) Or $mem[0] = 0 Then
-        ConsoleWrite('[FrameUI] VirtualAllocEx failed' & @CRLF)
-        Return False
-    EndIf
-    Local $codeAddr = $mem[0]
-    Local $dataAddr = $codeAddr + 64  ; action struct at offset 64
+    ; Write Frame* to FrameClickFramePtr
+    MemoryWrite($processHandle, GetLabel('FrameClickFramePtr'), Int($framePtr), 'dword')
+    ; Write msgid to FrameClickMsgId (0x2B from gwca.dll MouseAction code, not 0x31)
+    MemoryWrite($processHandle, GetLabel('FrameClickMsgId'), 0x2B, 'dword')
+    ; Write kMouseAction to FrameClickAction (5 dwords = 20 bytes)
+    MemoryWrite($processHandle, GetLabel('FrameClickAction'), $frameId, 'dword')
+    MemoryWrite($processHandle, GetLabel('FrameClickAction') + 4, $childOffsetId, 'dword')
+    MemoryWrite($processHandle, GetLabel('FrameClickAction') + 8, 0x8, 'dword')  ; MouseClick
+    MemoryWrite($processHandle, GetLabel('FrameClickAction') + 12, 0, 'dword')
+    MemoryWrite($processHandle, GetLabel('FrameClickAction') + 16, 0, 'dword')
 
-    ; Build kMouseAction struct at dataAddr
-    ; {frame_id, child_offset_id, action_state, wparam, lparam}
-    Local $actionData = DllStructCreate('dword;dword;dword;dword;dword')
-    DllStructSetData($actionData, 1, $frameId)
-    DllStructSetData($actionData, 2, $childOffsetId)
-    DllStructSetData($actionData, 3, 0x8)   ; MouseClick
-    DllStructSetData($actionData, 4, 0)
-    DllStructSetData($actionData, 5, 0)
+    ; Queue the command (only need the handler address in the queue entry)
+    Local $labelAddr = Int(GetLabel('CommandFrameClick'))
+    Local $actualAddr = _CalibrateFrameClickAddr($labelAddr)
 
-    DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
-        'handle', $processHandle, 'ptr', $dataAddr, _
-        'ptr', DllStructGetPtr($actionData), 'ulong_ptr', 20, 'ulong_ptr*', 0)
+    Local $struct = DllStructCreate('dword')
+    DllStructSetData($struct, 1, $actualAddr)
+    Enqueue(DllStructGetPtr($struct), DllStructGetSize($struct))
 
-    ; Build shellcode:
-    ;   mov ecx, <frame_ptr + 0xA8>   ; B9 xx xx xx xx  (this pointer)
-    ;   push 0                         ; 6A 00           (lParam)
-    ;   push <dataAddr>                ; 68 xx xx xx xx  (wParam = &action)
-    ;   push 0x31                      ; 6A 31           (msgid = kMouseClick2)
-    ;   call <sendFrameFunc>           ; E8 xx xx xx xx
-    ;   ret                            ; C3
-    Local $thisPtr = $fp + 0xA8
-    Local $shellcode = DllStructCreate('byte[32]')
-    Local $pos = 1
-
-    ; mov ecx, thisPtr
-    DllStructSetData($shellcode, 1, 0xB9, $pos)
-    $pos += 1
-    Local $tpBytes = DllStructCreate('dword')
-    DllStructSetData($tpBytes, 1, $thisPtr)
-    For $b = 1 To 4
-        DllStructSetData($shellcode, 1, DllStructGetData($tpBytes, 1, $b), $pos)
-        $pos += 1
-    Next
-
-    ; push 0 (lParam)
-    DllStructSetData($shellcode, 1, 0x6A, $pos)
-    $pos += 1
-    DllStructSetData($shellcode, 1, 0x00, $pos)
-    $pos += 1
-
-    ; push dataAddr (wParam)
-    DllStructSetData($shellcode, 1, 0x68, $pos)
-    $pos += 1
-    Local $daBytes = DllStructCreate('dword')
-    DllStructSetData($daBytes, 1, Int($dataAddr))
-    For $b = 1 To 4
-        DllStructSetData($shellcode, 1, DllStructGetData($daBytes, 1, $b), $pos)
-        $pos += 1
-    Next
-
-    ; push 0x31 (msgid)
-    DllStructSetData($shellcode, 1, 0x6A, $pos)
-    $pos += 1
-    DllStructSetData($shellcode, 1, 0x31, $pos)
-    $pos += 1
-
-    ; call sendFrameFunc (E8 rel32)
-    DllStructSetData($shellcode, 1, 0xE8, $pos)
-    $pos += 1
-    Local $callOffset = $sendFrameFunc - (Int($codeAddr) + $pos - 1 + 4)
-    Local $coBytes = DllStructCreate('int')
-    DllStructSetData($coBytes, 1, $callOffset)
-    For $b = 1 To 4
-        DllStructSetData($shellcode, 1, DllStructGetData($coBytes, 1, $b), $pos)
-        $pos += 1
-    Next
-
-    ; ret
-    DllStructSetData($shellcode, 1, 0xC3, $pos)
-
-    ; Write shellcode
-    DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
-        'handle', $processHandle, 'ptr', $codeAddr, _
-        'ptr', DllStructGetPtr($shellcode), 'ulong_ptr', $pos, 'ulong_ptr*', 0)
-
-    ; Execute via CreateRemoteThread
-    Local $thread = DllCall($kernel_handle, 'handle', 'CreateRemoteThread', _
-        'handle', $processHandle, 'ptr', 0, 'ulong_ptr', 0, _
-        'ptr', $codeAddr, 'ptr', 0, 'dword', 0, 'dword*', 0)
-
-    If IsArray($thread) And $thread[0] <> 0 Then
-        ; Wait for thread to complete (max 5 seconds)
-        DllCall($kernel_handle, 'dword', 'WaitForSingleObject', _
-            'handle', $thread[0], 'dword', 5000)
-        DllCall($kernel_handle, 'bool', 'CloseHandle', 'handle', $thread[0])
-        ConsoleWrite('[FrameUI] Clicked button hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
-    Else
-        ConsoleWrite('[FrameUI] CreateRemoteThread failed' & @CRLF)
-    EndIf
-
-    ; Free shellcode memory
-    DllCall($kernel_handle, 'bool', 'VirtualFreeEx', _
-        'handle', $processHandle, 'ptr', $codeAddr, _
-        'ulong_ptr', 0, 'dword', 0x8000)  ; MEM_RELEASE
-
+    ConsoleWrite('[FrameUI] Clicked button hash=' & $hash & ' frame_id=' & $frameId & _
+        ' child_off=' & $childOffsetId & ' cmdAddr=0x' & Hex($actualAddr) & @CRLF)
     Return True
 EndFunc
 
