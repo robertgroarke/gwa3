@@ -666,6 +666,7 @@ Func ClickFrameButton($hash)
     Local $funcPtrAddr = GetLabel('FrameClickFuncPtr')
     If MemoryRead($processHandle, $funcPtrAddr, 'dword') = 0 Then
         MemoryWrite($processHandle, $funcPtrAddr, $sendFrameFunc, 'dword')
+        ; Also write action data pointer once we know it
     EndIf
 
     ; One-time shellcode allocation
@@ -676,7 +677,10 @@ Func ClickFrameButton($hash)
         If Not IsArray($mem) Or $mem[0] = 0 Then Return False
         $g_FrameClick_ShellcodeAddr = Int($mem[0])
         $g_FrameClick_ActionDataAddr = $g_FrameClick_ShellcodeAddr + 48
-        ConsoleWrite('[FrameUI] Shellcode mem at 0x' & Hex($g_FrameClick_ShellcodeAddr) & @CRLF)
+        ; Write action data address to shared memory for the shellcode to use
+        MemoryWrite($processHandle, GetLabel('FrameClickActionPtr'), $g_FrameClick_ActionDataAddr, 'dword')
+        ConsoleWrite('[FrameUI] Shellcode mem at 0x' & Hex($g_FrameClick_ShellcodeAddr) & _
+            ' ActionData at 0x' & Hex($g_FrameClick_ActionDataAddr) & @CRLF)
 
         ; Build shellcode: reads Frame* + action data from fixed addresses, calls game func, RET
         ; Layout: shellcode at +0, action data at +48
@@ -718,10 +722,12 @@ Func ClickFrameButton($hash)
         DllStructSetData($sc, 1, 0x00, $p)
         $p += 1
 
-        ; push actionDataAddr (wParam)
-        DllStructSetData($sc, 1, 0x68, $p)
+        ; push actionDataAddr (wParam) — stored in FrameClickActionPtr
+        DllStructSetData($sc, 1, 0xFF, $p)  ; FF 35 = push [imm32]
         $p += 1
-        _WriteLE32($sc, $p, $g_FrameClick_ActionDataAddr)
+        DllStructSetData($sc, 1, 0x35, $p)
+        $p += 1
+        _WriteLE32($sc, $p, Int(GetLabel('FrameClickActionPtr')))
         $p += 4
 
         ; push dword [FrameClickMsgId] (msgid)
