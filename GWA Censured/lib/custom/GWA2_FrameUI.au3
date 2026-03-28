@@ -809,25 +809,55 @@ Func IsReconnectDialogShowing()
     Return IsFrameVisible($FRAME_HASH_RECONNECT_YES)
 EndFunc
 
-;~ Press Play at character select
+;~ Press Play at character select using mouse click with state verification
 Func PressPlayButton()
     If Not IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Then
         ConsoleWrite('[FrameUI] Play button not visible' & @CRLF)
         Return False
     EndIf
-    Return ClickFrameButton($FRAME_HASH_PLAY_BUTTON)
+
+    ; Get the GW window and click the Play button
+    ; Play button is at bottom-right of char select screen (~78% x, ~96% y)
+    Local $hWnd = GetWindowHandle()
+    If $hWnd = 0 Then Return False
+
+    WinActivate($hWnd)
+    Sleep(300)
+    Local $pos = WinGetPos($hWnd)
+    If Not IsArray($pos) Then Return False
+
+    Local $playX = $pos[0] + Int($pos[2] * 0.78)
+    Local $playY = $pos[1] + Int($pos[3] * 0.96)
+    ConsoleWrite('[FrameUI] Clicking Play at ' & $playX & ',' & $playY & @CRLF)
+    MouseClick('left', $playX, $playY, 1, 3)
+    Return True
 EndFunc
 
-;~ Dismiss reconnect dialog with Yes or No
+;~ Dismiss reconnect dialog with Yes or No using mouse click with state verification
 Func DismissReconnectDialog($choice = 'no')
     If Not IsReconnectDialogShowing() Then
         ConsoleWrite('[FrameUI] No reconnect dialog showing' & @CRLF)
         Return False
     EndIf
 
+    Local $hWnd = GetWindowHandle()
+    If $hWnd = 0 Then Return False
+
+    WinActivate($hWnd)
+    Sleep(300)
+    Local $pos = WinGetPos($hWnd)
+    If Not IsArray($pos) Then Return False
+
+    ; Reconnect dialog buttons are centered in the screen
+    ; YES is on the left (~42% x), NO is on the right (~58% x), both at ~52% y
     If $choice = 'yes' Then
-        Return ClickFrameButton($FRAME_HASH_RECONNECT_YES)
+        Local $btnX = $pos[0] + Int($pos[2] * 0.42)
     Else
-        Return ClickFrameButton($FRAME_HASH_RECONNECT_NO)
+        Local $btnX = $pos[0] + Int($pos[2] * 0.58)
     EndIf
+    Local $btnY = $pos[1] + Int($pos[3] * 0.52)
+
+    ConsoleWrite('[FrameUI] Clicking reconnect ' & $choice & ' at ' & $btnX & ',' & $btnY & @CRLF)
+    MouseClick('left', $btnX, $btnY, 1, 3)
+    Return True
 EndFunc
