@@ -872,18 +872,24 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
     WEnd
 
     If IsAtCharSelect() Then
-        ; Handle reconnect dialog if present
+        ; Handle reconnect dialog if present — must dismiss BEFORE pressing Play
         If IsReconnectDialogShowing() Then
             ConsoleWrite('[GWLauncher] Reconnect dialog detected — clicking Yes (reconnect)' & @CRLF)
             DismissReconnectDialog('yes')
-            Sleep(3000)
+            ; Wait for reconnect to process and either load into game or return to char select
+            ConsoleWrite('[GWLauncher] Waiting for reconnect to process...' & @CRLF)
+            Sleep(5000)
+            ; If reconnect succeeded, we'll be in-game (not at char select)
+            ; If reconnect failed (session expired), we'll still be at char select
         EndIf
 
-        ; Press Play programmatically
-        If IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Then
+        ; Press Play if still at char select (reconnect may have loaded us in-game)
+        If IsAtCharSelect() And IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Then
             ConsoleWrite('[GWLauncher] Pressing Play (programmatic)...' & @CRLF)
             PressPlayButton()
-            Sleep(5000)
+            Sleep(1000)
+        ElseIf Not IsAtCharSelect() Then
+            ConsoleWrite('[GWLauncher] Reconnect loaded into game — skipping Play' & @CRLF)
         Else
             ConsoleWrite('[GWLauncher] Play button not visible' & @CRLF)
         EndIf
@@ -891,7 +897,7 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
         ConsoleWrite('[GWLauncher] Not at char select — may have auto-loaded' & @CRLF)
     EndIf
 
-    ; Phase 4: Wait for character to leave char select and enter game
+    ; Phase 4: Wait for map to fully load before returning
     ConsoleWrite('[GWLauncher] Phase 4: Waiting for map load...' & @CRLF)
     Local $waitTimer = TimerInit()
     While TimerDiff($waitTimer) < (($timeout - 25) * 1000)
@@ -902,9 +908,16 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
         If IsArray($game_clients) And $game_clients[0][0] > 0 Then
             Local $clientIdx = FindClientIndexByCharacterName($characterName)
             If $clientIdx > 0 Then
-                ConsoleWrite('[GWLauncher] Client found! Connecting to: ' & $characterName & @CRLF)
+                ; Found client — but verify map is loaded before returning
                 SelectClient($clientIdx)
-                Return True
+                InitializeGameClientForGWA2(False)
+                Local $mapLoaded = MemoryRead(GetProcessHandle(), GetLabel('MapIsLoaded'), 'dword')
+                If $mapLoaded = 1 Then
+                    ConsoleWrite('[GWLauncher] Client in-game! Connecting to: ' & $characterName & @CRLF)
+                    Return True
+                Else
+                    ConsoleWrite('[GWLauncher] Client found but map not loaded yet...' & @CRLF)
+                EndIf
             EndIf
         EndIf
 
