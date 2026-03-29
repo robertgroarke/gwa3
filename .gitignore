@@ -10,6 +10,15 @@ temp_format_*.au3
 # === Archives ===
 *.zip
 
+# === Third-party tools (installed, not our code) ===
+tools/ghidra_12.0.4_PUBLIC/
+tools/jdk-21.0.10+7/
+tools/ghidra_projects/
+
+# === JVM crash/replay logs ===
+hs_err_pid*.log
+replay_pid*.log
+
 # === Binaries / Executables ===
 *.exe
 *.dll
@@ -26,6 +35,7 @@ gwca/
 BotsHub-original/
 BotsHub-latest/
 gwlauncher-ref/
+tests/_py4gw_src/
 
 # === Upstream reference files (used for diffing) ===
 upstream_*.au3
