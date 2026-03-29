@@ -83,23 +83,23 @@ function renderBots(bots) {
     const gold = bot.gold || {};
     const stats = bot.stats || {};
     const settings = bot.settings || {};
+    const logLines = (bot.log || []).join('\n');
 
     return `
-    <div class="bot-card ${selectedBot === bot._id ? 'selected' : ''}"
-         onclick="selectBot('${bot._id}', ${JSON.stringify(bot.log || []).replace(/"/g, '&quot;')})">
+    <div class="bot-card ${selectedBot === bot._id ? 'selected' : ''}">
       <div class="bot-header">
         <span class="bot-name">${bot.character || bot._id}</span>
         <span class="status-badge status-${state}">${state}</span>
       </div>
       <div class="bot-stats">
-        <span class="label">Map</span><span class="value">${mapName}</span>
-        <span class="label">Runs</span><span class="value">${stats.run_count || 0} (${stats.fail_count || 0} fails)</span>
-        <span class="label">Gold</span><span class="value">${formatGold(gold.character)} / ${formatGold(gold.storage)}</span>
-        <span class="label">Best</span><span class="value">${stats.best_run_time || '---'}</span>
-        <span class="label">Avg</span><span class="value">${stats.avg_run_time || '---'}</span>
-        <span class="label">Total</span><span class="value">${stats.total_time || '---'}</span>
-        <span class="label">Config</span><span class="value">${settings.hero_config || '---'}</span>
-        <span class="label">Uptime</span><span class="value">${formatUptime(bot.uptime_seconds)}</span>
+        <div class="bot-stat"><span class="label">Map</span><span class="value">${mapName}</span></div>
+        <div class="bot-stat"><span class="label">Runs</span><span class="value">${stats.run_count || 0}/${stats.fail_count || 0}</span></div>
+        <div class="bot-stat"><span class="label">Gold</span><span class="value">${formatGold(gold.character)}/${formatGold(gold.storage)}</span></div>
+        <div class="bot-stat"><span class="label">Best</span><span class="value">${stats.best_run_time || '---'}</span></div>
+        <div class="bot-stat"><span class="label">Avg</span><span class="value">${stats.avg_run_time || '---'}</span></div>
+        <div class="bot-stat"><span class="label">Total</span><span class="value">${stats.total_time || '---'}</span></div>
+        <div class="bot-stat"><span class="label">Config</span><span class="value">${settings.hero_config || '---'}</span></div>
+        <div class="bot-stat"><span class="label">Uptime</span><span class="value">${formatUptime(bot.uptime_seconds)}</span></div>
       </div>
       <div class="bot-actions" onclick="event.stopPropagation()">
         ${bot.bot_running
@@ -108,8 +108,14 @@ function renderBots(bots) {
         }
         <button class="btn-danger" onclick="sendCommand('${bot._id}', 'kill')">Kill</button>
       </div>
-    </div>`;
+    </div>
+    <div class="bot-log" id="log-${bot._id}"><pre>${escapeHtml(logLines)}</pre></div>`;
   }).join('');
+
+  // Auto-scroll all log boxes to bottom
+  for (const el of document.querySelectorAll('.bot-log pre')) {
+    el.scrollTop = el.scrollHeight;
+  }
 
   // Aggregate stats
   const totalRuns = realBots.reduce((s, b) => s + ((b.stats || {}).run_count || 0), 0);
@@ -118,9 +124,8 @@ function renderBots(bots) {
   document.getElementById('agg-online').textContent = `${online}/${realBots.length}`;
   document.getElementById('health-badge').textContent = `${online} online`;
 
-  // Update log if a bot is selected
-  if (selectedBot) {
-    const bot = realBots.find(b => b._id === selectedBot);
+  // (legacy log panel update removed — each card has its own log now)
+  if (false) {
     if (bot && bot.log) updateLog(bot.log);
   }
 }
@@ -189,6 +194,10 @@ function formatUptime(secs) {
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
   return `${h}h ${m}m`;
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 // ---- Init ----
