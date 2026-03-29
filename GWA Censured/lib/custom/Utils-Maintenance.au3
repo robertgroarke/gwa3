@@ -171,18 +171,8 @@ Func BuyConsumablesInEmbarkBeach()
         Local $missingIron = $cycleIron - GetMaterialCount($ID_IRON_INGOT)
         Local $missingDust = $cycleDust - GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
         
-        If $missingIron > 0 Or $missingDust > 0 Then
-            ; Check strictly missing items to decide trader
-            If $missingIron > 0 Then
-                GoToMaterialTrader($ID_EMBARK_BEACH, False) ; Common
-                BuyMaterialSafe($ID_IRON_INGOT, $missingIron)
-            EndIf
-            
-            If $missingDust > 0 Then
-                GoToMaterialTrader($ID_EMBARK_BEACH, True) ; Rare
-                BuyMaterialSafe($ID_PILE_OF_GLITTERING_DUST, $missingDust)
-            EndIf
-        EndIf
+        If $missingIron > 0 Then BuyMaterialSafe($ID_IRON_INGOT, $missingIron)
+        If $missingDust > 0 Then BuyMaterialSafe($ID_PILE_OF_GLITTERING_DUST, $missingDust)
         
         If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
         
@@ -207,17 +197,10 @@ Func BuyConsumablesInEmbarkBeach()
         Local $missingFiber = $cycleFiber - GetMaterialCount($ID_PLANT_FIBER)
         Local $missingBone = $cycleBone - GetMaterialCount($ID_BONE)
         
-        If $missingGranite > 0 Or $missingDust > 0 Or $missingFiber > 0 Or $missingBone > 0 Then
-            GoToMaterialTrader($ID_EMBARK_BEACH, False) ; Start Common
-            If $missingGranite > 0 Then BuyMaterialSafe($ID_GRANITE_SLAB, $missingGranite)
-            If $missingFiber > 0 Then BuyMaterialSafe($ID_PLANT_FIBER, $missingFiber)
-            If $missingBone > 0 Then BuyMaterialSafe($ID_BONE, $missingBone)
-            
-            If $missingDust > 0 Then
-                GoToMaterialTrader($ID_EMBARK_BEACH, True) ; Switch to Rare
-                BuyMaterialSafe($ID_PILE_OF_GLITTERING_DUST, $missingDust)
-            EndIf
-        EndIf
+        If $missingGranite > 0 Then BuyMaterialSafe($ID_GRANITE_SLAB, $missingGranite)
+        If $missingFiber > 0 Then BuyMaterialSafe($ID_PLANT_FIBER, $missingFiber)
+        If $missingBone > 0 Then BuyMaterialSafe($ID_BONE, $missingBone)
+        If $missingDust > 0 Then BuyMaterialSafe($ID_PILE_OF_GLITTERING_DUST, $missingDust)
         
         If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
         
@@ -242,12 +225,8 @@ Func BuyConsumablesInEmbarkBeach()
         Local $missingFeather = $cycleFeather - GetMaterialCount($ID_FEATHER)
         Local $missingDust = $cycleDust - GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
         
-        If $missingFeather > 0 Or $missingDust > 0 Then
-            GoToMaterialTrader($ID_EMBARK_BEACH, True) ; Both match Rare? No, Feather/Dust are Rare?
-            ; Dust/Feather are Rare in Embark?
-            BuyMaterialSafe($ID_FEATHER, $missingFeather)
-            BuyMaterialSafe($ID_PILE_OF_GLITTERING_DUST, $missingDust)
-        EndIf
+        If $missingFeather > 0 Then BuyMaterialSafe($ID_FEATHER, $missingFeather)
+        If $missingDust > 0 Then BuyMaterialSafe($ID_PILE_OF_GLITTERING_DUST, $missingDust)
         
         If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
         
@@ -268,11 +247,8 @@ Func BuyConsumablesInEmbarkBeach()
         Local $missingIron = $cycleIron - GetMaterialCount($ID_IRON_INGOT)
         Local $missingBone = $cycleBone - GetMaterialCount($ID_BONE)
         
-        If $missingIron > 0 Or $missingBone > 0 Then
-            GoToMaterialTrader($ID_EMBARK_BEACH)
-            BuyMaterialSafe($ID_IRON_INGOT, $missingIron)
-            BuyMaterialSafe($ID_BONE, $missingBone)
-        EndIf
+        If $missingIron > 0 Then BuyMaterialSafe($ID_IRON_INGOT, $missingIron)
+        If $missingBone > 0 Then BuyMaterialSafe($ID_BONE, $missingBone)
         
         If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
         
@@ -293,15 +269,7 @@ EndFunc
 
 
 Func GoToRareMaterialTrader($townID)
-    Local $traderName = "Rare Material Trader"
-    Local $coords = NPCCoordinatesInTown($townID, $traderName)
-    If $coords[0] <> 0 Then
-        MoveTo($coords[0], $coords[1])
-        Local $npc = GetNearestNPCToCoords($coords[0], $coords[1])
-        GoToNPC($npc)
-    Else
-        Out("Could not find Rare Material Trader in town " & $townID)
-    EndIf
+    Return GoToMaterialTrader($townID, True)
 EndFunc
 
 
@@ -395,21 +363,36 @@ Func GoToMaterialTrader($townID, $forceRare = False)
 
     Local $coords = NPCCoordinatesInTown($townID, $traderName)
     If $coords[0] = 0 Or $coords[0] = -1 Then
-        ; Fallback: try the other type
         $traderName = "Rare material trader"
         $coords = NPCCoordinatesInTown($townID, $traderName)
     EndIf
-    
-    If $coords[0] <> 0 And $coords[0] <> -1 Then
-        MoveTo($coords[0], $coords[1])
-        Local $npc = GetNearestNPCToCoords($coords[0], $coords[1])
-        GoToNPC($npc)
-        Sleep(500)
-        Dialog($npc)
-        Sleep(1000)
-    Else
+
+    If $coords[0] = 0 Or $coords[0] = -1 Then
         Out("Could not find Material Trader in town " & $townID)
+        Return False
     EndIf
+
+    MoveTo($coords[0], $coords[1])
+    Sleep(2000)
+
+    ; Retry NPC finding — agents may take time to load after walking
+    Local $npc = Null
+    For $attempt = 1 To 4
+        $npc = GetNearestNPCToCoords($coords[0], $coords[1])
+        If IsDllStruct($npc) Then ExitLoop
+        Sleep(2000)
+    Next
+
+    If Not IsDllStruct($npc) Then
+        Out("Material Trader NPC not in range at (" & $coords[0] & "," & $coords[1] & ")")
+        Return False
+    EndIf
+
+    GoToNPC($npc)
+    Sleep(500)
+    Dialog($npc)
+    Sleep(1000)
+    Return True
 EndFunc
 
 Func GoToConsumableTrader($name)
@@ -482,7 +465,10 @@ EndFunc
 
 Func BuyMaterialSafe($id, $amount)
     Local $useRare = ($id = $ID_FEATHER Or $id = $ID_PILE_OF_GLITTERING_DUST Or $id = 2212)
-    GoToMaterialTrader($ID_EMBARK_BEACH, $useRare)
+    If Not GoToMaterialTrader($ID_EMBARK_BEACH, $useRare) Then
+        Out("Failed to reach material trader for ID " & $id)
+        Return
+    EndIf
 
     For $retry = 1 To 3
         BuyMaterialIfMissing($id, $amount, 10)
