@@ -54,3 +54,4 @@
 ; === Custom Libraries ===
 #include 'custom\GUI_Functions.au3'
 #include 'custom\Utils-Maintenance.au3'
+#include 'custom\WebIPC.au3'

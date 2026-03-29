@@ -112,6 +112,7 @@ Func _ConnectToSelectedClient($characterName)
 		GWLauncher_ConfigureFroggyGUI($characterName)
 
 		$g_BotHasLaunched = True
+		WebIPC_Init($characterName)
 		ConsoleWrite('[Froggy] Connected to: ' & $characterName & @CRLF)
 	Else
 		ConsoleWrite('[Froggy] ERROR: Could not find client for: ' & $characterName & @CRLF)
@@ -266,8 +267,12 @@ EndIf
 
 While 1
 	Sleep(200)
+	WebIPC_WriteStatus()
+	WebIPC_CheckCommand()
 	While $BotRunning
 		Sleep(250)
+		WebIPC_WriteStatus()
+		WebIPC_CheckCommand()
 
 		$OpenedChestAgentIDs[0] = ""
 		ReDim $OpenedChestAgentIDs[1]

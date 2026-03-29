@@ -604,6 +604,7 @@ Func Out($Text, $TimeStamp = True, $ShowSeconds = False)
 	If $TimeStamp Then $Out &= String_GetTimeStamp($ShowSeconds) & " "
 	GUICtrlSetData($GUI_idConsole, GUI_GetConsoleText() & $Out & $Text & "")
 	_GUICtrlEdit_Scroll($GUI_idConsole, $SB_SCROLLCARET)
+	WebIPC_AppendLog($Out & $Text)
 EndFunc
 
 Func GUI_SetRunTime($iTicks)
