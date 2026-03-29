@@ -65,6 +65,8 @@ tests/gsudo.zip
 GWA Censured/Settings.ini
 GWA Censured/logs/
 GWA Censured/debug_scripts/*.txt
+GWA Censured/tests/*.txt
+GWA Censured/tests/*.png
 
 # === BotsHub-master specific ===
 BotsHub-master/logs/**
