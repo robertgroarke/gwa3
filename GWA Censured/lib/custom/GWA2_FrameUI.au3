@@ -892,6 +892,159 @@ Func ClickFrameButton($hash)
 EndFunc
 
 ; =============================================================================
+; Child Frame Navigation
+; =============================================================================
+
+;~ Find all direct children of a frame by scanning FrameArray for matching parent pointers.
+;~ Returns array of child Frame pointers sorted by child_offset_id.
+Func GetChildFrames($framePtr)
+    Local $processHandle = GetProcessHandle()
+    Local $parentRelAddr = Int($framePtr) + 0x128  ; Address of parent's FrameRelation
+
+    Local $frameArrayAddr = Int(GetLabel('FrameArray'))
+    Local $bufferPtr = MemoryRead($processHandle, $frameArrayAddr, 'dword')
+    Local $arraySize = MemoryRead($processHandle, $frameArrayAddr + 4, 'dword')
+    If $arraySize <= 0 Or $arraySize > 5000 Then
+        Local $empty[0]
+        Return $empty
+    EndIf
+
+    ; Collect children
+    Local $children[64][2]  ; [framePtr, childOffsetId] — max 64 children
+    Local $count = 0
+
+    For $i = 0 To $arraySize - 1
+        Local $fp = MemoryRead($processHandle, $bufferPtr + ($i * 4), 'dword')
+        If $fp = 0 Or $fp < 0x10000 Then ContinueLoop
+
+        Local $parentPtr = MemoryRead($processHandle, $fp + 0x128, 'dword')
+        If $parentPtr = $parentRelAddr Then
+            Local $childOff = MemoryRead($processHandle, $fp + 0xB8, 'dword')
+            If $count < 64 Then
+                $children[$count][0] = $fp
+                $children[$count][1] = $childOff
+                $count += 1
+            EndIf
+        EndIf
+    Next
+
+    ; Sort by child_offset_id and return frame pointers
+    ; Simple insertion sort
+    For $i = 1 To $count - 1
+        Local $key0 = $children[$i][0]
+        Local $key1 = $children[$i][1]
+        Local $j = $i - 1
+        While $j >= 0 And $children[$j][1] > $key1
+            $children[$j + 1][0] = $children[$j][0]
+            $children[$j + 1][1] = $children[$j][1]
+            $j -= 1
+        WEnd
+        $children[$j + 1][0] = $key0
+        $children[$j + 1][1] = $key1
+    Next
+
+    Local $result[$count]
+    For $i = 0 To $count - 1
+        $result[$i] = $children[$i][0]
+    Next
+    Return $result
+EndFunc
+
+;~ Navigate a child path (e.g. "0,0,6") from a parent frame.
+;~ Each index selects the Nth child (sorted by child_offset_id).
+;~ Returns the final child Frame pointer, or 0 on failure.
+Func NavigateFramePath($framePtr, $path)
+    Local $parts = StringSplit($path, ",")
+    Local $current = Int($framePtr)
+
+    For $p = 1 To $parts[0]
+        Local $targetIdx = Int($parts[$p])
+        Local $kids = GetChildFrames($current)
+        If $targetIdx >= UBound($kids) Then
+            ConsoleWrite('[FrameUI] Path error at step ' & $p & ': index ' & $targetIdx & _
+                ' but only ' & UBound($kids) & ' children' & @CRLF)
+            Return 0
+        EndIf
+        $current = Int($kids[$targetIdx])
+    Next
+
+    Return $current
+EndFunc
+
+;~ Click a frame by its pointer (not hash). Works in-game via CommandFrameClick queue.
+;~ Uses the existing FrameClick shared memory + CommandFrameClick ASM stub.
+Func ClickFrameByPtr($framePtr)
+    Local $processHandle = GetProcessHandle()
+    Local $fp = Int($framePtr)
+
+    Local $frameId = MemoryRead($processHandle, $fp + 0xBC, 'dword')
+    Local $childOffsetId = MemoryRead($processHandle, $fp + 0xB8, 'dword')
+
+    ; Get context (parent frame) — CommandFrameClick adds 0xA8 to FrameClickFramePtr
+    Local $context = _GetFrameContext($fp)
+    If $context = 0 Then
+        ConsoleWrite('[FrameUI] ClickFrameByPtr: GetFrameContext returned NULL' & @CRLF)
+        Return False
+    EndIf
+
+    ; Get SendFrameUIMsg function address
+    Local $sendFrameFunc = Int(GetLabel('SendFrameUIMsg'))
+    If $sendFrameFunc = 0 Or $sendFrameFunc = -1 Then
+        ConsoleWrite('[FrameUI] ClickFrameByPtr: SendFrameUIMsg not found' & @CRLF)
+        Return False
+    EndIf
+
+    ; Write to shared memory labels used by CommandFrameClick ASM
+    Local $funcPtrAddr = Int(GetLabel('FrameClickFuncPtr'))
+    Local $framePtrAddr = Int(GetLabel('FrameClickFramePtr'))
+    Local $msgIdAddr = Int(GetLabel('FrameClickMsgId'))
+    Local $actionPtrAddr = Int(GetLabel('FrameClickActionPtr'))
+    Local $actionAddr = Int(GetLabel('FrameClickAction'))
+    Local $resultAddr = Int(GetLabel('FrameClickResult'))
+
+    ; Write SendFrameUIMsg function pointer
+    MemoryWrite($processHandle, $funcPtrAddr, $sendFrameFunc, 'dword')
+    ; Write context pointer (CommandFrameClick adds 0xA8)
+    MemoryWrite($processHandle, $framePtrAddr, $context, 'dword')
+    ; Write message ID (0x31 = kMouseClick2)
+    MemoryWrite($processHandle, $msgIdAddr, 0x31, 'dword')
+    ; Write pointer to action struct
+    MemoryWrite($processHandle, $actionPtrAddr, $actionAddr, 'dword')
+
+    ; Write kMouseAction struct: [frame_id, child_offset_id, action_state, 0, 0, 0, 0, 0]
+    Local $action = DllStructCreate('dword;dword;dword;dword;dword;dword;dword;dword')
+    DllStructSetData($action, 1, $frameId)
+    DllStructSetData($action, 2, $childOffsetId)
+    DllStructSetData($action, 3, 0x7)  ; MouseUp (single click, matches GWCA)
+    DllStructSetData($action, 4, 0)
+    DllStructSetData($action, 5, 0)
+    DllStructSetData($action, 6, 0)
+    DllStructSetData($action, 7, 0)
+    DllStructSetData($action, 8, 0)
+    DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+        'handle', $processHandle, 'ptr', Ptr($actionAddr), _
+        'ptr', DllStructGetPtr($action), 'ulong_ptr', 32, 'ulong_ptr*', 0)
+
+    ; Clear result flag
+    MemoryWrite($processHandle, $resultAddr, 0, 'dword')
+
+    ; Enqueue CommandFrameClick
+    Local $cmdAddr = Int(GetLabel('CommandFrameClick'))
+    Local $cmd = DllStructCreate('dword;dword')
+    DllStructSetData($cmd, 1, $cmdAddr)
+    DllStructSetData($cmd, 2, 0)
+    Enqueue(DllStructGetPtr($cmd), DllStructGetSize($cmd))
+
+    ConsoleWrite('[FrameUI] ClickFrameByPtr: fid=' & $frameId & ' childOff=' & $childOffsetId & @CRLF)
+
+    ; Wait for execution
+    Sleep(500)
+    Local $result = MemoryRead($processHandle, $resultAddr, 'dword')
+    ConsoleWrite('[FrameUI] ClickFrameByPtr result: ' & $result & @CRLF)
+    Return ($result = 1)
+EndFunc
+
+; =============================================================================
 ; Char Select Helpers
 ; =============================================================================
 
