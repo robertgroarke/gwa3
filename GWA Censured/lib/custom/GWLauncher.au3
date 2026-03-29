@@ -874,8 +874,10 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
     If IsAtCharSelect() Then
         ; Handle reconnect dialog if present — must dismiss BEFORE pressing Play
         If IsReconnectDialogShowing() Then
-            ConsoleWrite('[GWLauncher] Reconnect dialog detected — clicking Yes (reconnect)' & @CRLF)
-            DismissReconnectDialog('yes')
+            ConsoleWrite('[GWLauncher] Reconnect dialog detected — clicking No' & @CRLF)
+            DismissReconnectDialog('no')
+            ; Note: clicking YES reconnects to previous session (e.g. Sparkfly)
+            ; clicking NO dismisses and stays at char select (then Play enters Gadd's)
             ; Wait for reconnect to process and either load into game or return to char select
             ConsoleWrite('[GWLauncher] Waiting for reconnect to process...' & @CRLF)
             Sleep(5000)
