@@ -781,6 +781,12 @@ Func GWLauncher_ConfigureFroggyGUI($characterName)
         EndIf
         ConsoleWrite('[GWLauncher] Set hero dropdown to: ' & $heroConfig & ' (was: ' & $currentData & ')' & @CRLF)
     EndIf
+
+    ; Enable Buy Consets checkbox for autolaunch mode
+    If IsDeclared('GUI_GroupSettings_CheckBuyConsets') Then
+        GUICtrlSetState($GUI_GroupSettings_CheckBuyConsets, $GUI_CHECKED)
+        ConsoleWrite('[GWLauncher] Enabled Buy Consets' & @CRLF)
+    EndIf
 EndFunc
 
 ;~ Get the hero config name for a character from AccountConfigs.json
