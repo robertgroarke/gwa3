@@ -101,6 +101,10 @@ header h1 { font-size: 1.2rem; color: #8b9dc3; }
 .bot-actions .btn-danger:hover { background: #7f1d1d; }
 .bot-actions .btn-success { border-color: #166534; color: #4ade80; }
 .bot-actions .btn-success:hover { background: #166534; }
+.bot-actions .btn-launch { border-color: #1e40af; color: #60a5fa; }
+.bot-actions .btn-launch:hover { background: #1e40af; color: white; }
+.bot-card.bot-offline { opacity: 0.6; }
+.bot-card.bot-offline:hover { opacity: 0.85; }
 
 /* Bot Log — inline scrollable log per card */
 .bot-log {

@@ -2,6 +2,7 @@ const API = '';
 let token = localStorage.getItem('gwa-token');
 let selectedBot = null;
 let eventSource = null;
+let allCharacters = [];
 
 // Map IDs to human-readable names
 const MAP_NAMES = {
@@ -53,7 +54,7 @@ document.getElementById('token-input').addEventListener('keydown', e => {
 async function showDashboard() {
   document.getElementById('login-page').classList.add('hidden');
   document.getElementById('dashboard-page').classList.remove('hidden');
-  loadCharacters();
+  await loadCharacters();
   connectSSE();
   // Initial load
   const res = await api('/api/bots');
@@ -74,19 +75,27 @@ function connectSSE() {
 function renderBots(bots) {
   const grid = document.getElementById('bot-grid');
 
-  // Filter out test entries
-  const realBots = bots.filter(b => b.character && b._id !== 'testbot');
+  // Merge IPC data with known accounts — show all 5 always
+  const ipcMap = {};
+  bots.filter(b => b.character && b._id !== 'testbot').forEach(b => { ipcMap[b._id] = b; });
 
-  grid.innerHTML = realBots.map(bot => {
+  const allBots = allCharacters.map(name => {
+    const id = name.replace(/ /g, '').toLowerCase();
+    return ipcMap[id] || { _id: id, character: name, state: 'offline', _offline: true };
+  });
+
+  grid.innerHTML = allBots.map(bot => {
+    const isOffline = bot._offline || bot.state === 'offline' || bot.state === 'stale';
+    const isLive = !bot._offline && bot.state !== 'offline' && bot.state !== 'stale';
     const state = bot.state || 'offline';
-    const mapName = MAP_NAMES[bot.map_id] || `Map ${bot.map_id}`;
+    const mapName = MAP_NAMES[bot.map_id] || (bot.map_id ? `Map ${bot.map_id}` : '---');
     const gold = bot.gold || {};
     const stats = bot.stats || {};
     const settings = bot.settings || {};
     const logLines = (bot.log || []).join('\n');
 
     return `
-    <div class="bot-card ${selectedBot === bot._id ? 'selected' : ''}">
+    <div class="bot-card ${selectedBot === bot._id ? 'selected' : ''} ${isOffline ? 'bot-offline' : ''}">
       <div class="bot-header">
         <span class="bot-name">${bot.character || bot._id}</span>
         <span class="status-badge status-${state}">${state}</span>
@@ -102,14 +111,16 @@ function renderBots(bots) {
         <div class="bot-stat"><span class="label">Uptime</span><span class="value">${formatUptime(bot.uptime_seconds)}</span></div>
       </div>
       <div class="bot-actions" onclick="event.stopPropagation()">
-        ${bot.bot_running
+        ${isLive && bot.bot_running
           ? `<button onclick="sendCommand('${bot._id}', 'stop')">Stop</button>`
-          : `<button class="btn-success" onclick="sendCommand('${bot._id}', 'start')">Start</button>`
+          : isLive
+            ? `<button class="btn-success" onclick="sendCommand('${bot._id}', 'start')">Resume</button>`
+            : `<button class="btn-launch" onclick="launchBotDirect('${bot.character}')">Launch</button>`
         }
-        <button class="btn-danger" onclick="sendCommand('${bot._id}', 'kill')">Kill</button>
+        ${isLive ? `<button class="btn-danger" onclick="sendCommand('${bot._id}', 'kill')">Kill</button>` : ''}
       </div>
     </div>
-    <div class="bot-log" id="log-${bot._id}"><pre>${escapeHtml(logLines)}</pre></div>`;
+    ${logLines ? `<div class="bot-log" id="log-${bot._id}"><pre>${escapeHtml(logLines)}</pre></div>` : ''}`;
   }).join('');
 
   // Auto-scroll all log boxes to bottom
@@ -118,10 +129,10 @@ function renderBots(bots) {
   }
 
   // Aggregate stats
-  const totalRuns = realBots.reduce((s, b) => s + ((b.stats || {}).run_count || 0), 0);
-  const online = realBots.filter(b => b.state !== 'offline' && b.state !== 'stale').length;
+  const totalRuns = allBots.reduce((s, b) => s + ((b.stats || {}).run_count || 0), 0);
+  const online = allBots.filter(b => !b._offline && b.state !== 'offline' && b.state !== 'stale').length;
   document.getElementById('agg-runs').textContent = totalRuns;
-  document.getElementById('agg-online').textContent = `${online}/${realBots.length}`;
+  document.getElementById('agg-online').textContent = `${online}/${allBots.length}`;
   document.getElementById('health-badge').textContent = `${online} online`;
 
   // (legacy log panel update removed — each card has its own log now)
@@ -164,9 +175,40 @@ async function sendCommand(botId, action) {
 async function loadCharacters() {
   const res = await api('/api/config/accounts');
   if (!res.ok) return;
-  const chars = await res.json();
+  allCharacters = await res.json();
   const sel = document.getElementById('launch-character');
-  sel.innerHTML = chars.map(c => `<option value="${c}">${c}</option>`).join('');
+  sel.innerHTML = allCharacters.map(c => `<option value="${c}">${c}</option>`).join('');
+}
+
+async function launchBotDirect(character) {
+  await api('/api/bots/launch', {
+    method: 'POST',
+    body: JSON.stringify({ character }),
+  });
+}
+
+async function launchAllBots() {
+  for (const name of allCharacters) {
+    await api('/api/bots/launch', {
+      method: 'POST',
+      body: JSON.stringify({ character: name }),
+    });
+    await new Promise(r => setTimeout(r, 3000)); // stagger launches
+  }
+}
+
+async function killAllBots() {
+  const res = await api('/api/bots');
+  if (!res.ok) return;
+  const bots = await res.json();
+  for (const bot of bots) {
+    if (bot._id && bot._id !== 'testbot' && bot.state !== 'offline') {
+      await api(`/api/bots/${bot._id}/command`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'kill' }),
+      });
+    }
+  }
 }
 
 function showLaunchModal() { document.getElementById('launch-modal').classList.remove('hidden'); }
