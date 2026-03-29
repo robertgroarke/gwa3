@@ -227,12 +227,38 @@ GWCA injection (for ButtonClick) can cause crashes when combined with BotsHub ho
 
 **GWCA is NOT needed at all.** The native `ClickFrameButton()` works for both char select (Play button) and in-game (vendor buttons). At char select, commands execute via the rendering hook. In-game, both MainProc and RenderingModProc process the queue.
 
-### Craft Button Click Status (2026-03-28)
-- Command queue confirmed working on fresh clients (no gwca.dll)
-- ClickFrameButton updated to native approach (no gwca.dll in-game)
-- Need to test: select item row → click Craft button → verify gold decreases
-- NPC navigation to Eyja needs improvement (coords/timing issues)
-- Craft button hash=835947118 identified but needs click verification
+### Native TransactItem — VERIFIED WORKING (2026-03-28)
+
+From GWCA `MerchantMgr.cpp`, the game's `TransactItem` is cdecl:
+```cpp
+void TransactItem(
+    TransactionType type,         // 3 = CrafterBuy
+    uint32_t gold_give,           // cost (e.g., 250 for Grail)
+    TransactionInfo give,         // {item_count, *item_ids, *item_quantities}
+    uint32_t gold_recv,           // 0 for crafting
+    TransactionInfo recv          // {1, &crafted_item_id, &quantity}
+);
+```
+**Scan pattern**: `85 FF 74 1D 8B 4D 14 EB 08` at offset -0x7F
+Confirmed: resolves to **same address** as BotsHub's `Transaction` label.
+
+**Test results (DISCOPANIC at Embark Beach):**
+- TransactItem found (first bytes: `55 8B EC 81 EC C4 00`)
+- Full pipeline: launch → Play → travel → Eyja dialog → merchant enum
+- Grail of Might found (itemID=1067, index=0)
+- Shellcode executed via command queue — **no crash, game stable**
+- Gold unchanged (expected — no Iron Ingots in inventory)
+
+**Approach C (native TransactItem) is the winner:**
+1. No gwca.dll injection (avoids hook conflicts)
+2. No UI frame click complexity
+3. Uses the same function BotsHub already calls
+4. Works via standard command queue
+
+### Integration Path
+The existing `CommandCraftItemEx2` ASM already calls TransactItem with opcode 3.
+If `CraftItemSafe` has issues, the problem is in struct population — not the call.
+The test shellcode proves the function works when called correctly.
 
 ### GWCA DLL Function RVAs (from disassembly)
 | Function | RVA | Notes |
