@@ -20,17 +20,52 @@ Global Const $MAP_EMBARK_BEACH = 857
 
 ConsoleWrite("=== Native TransactItem Craft Test ===" & @CRLF)
 
-; --- Connect ---
+; --- Find DISCOPANIC or launch fresh ---
 ScanAndUpdateGameClients()
-If $game_clients[0][0] = 0 Then
-	ConsoleWrite("ERROR: No GW client" & @CRLF)
-	Exit 1
+Local $targetIdx = -1
+For $i = 1 To $game_clients[0][0]
+	ConsoleWrite("  Client " & $i & ": PID=" & $game_clients[$i][0] & " '" & $game_clients[$i][1] & "'" & @CRLF)
+	If StringInStr($game_clients[$i][1], "D I S C O P A N I C") Or StringInStr($game_clients[$i][1], "DISCOPANIC") Then
+		$targetIdx = $i
+	EndIf
+Next
+
+; If not found by title, use the last client (newest launched)
+If $targetIdx = -1 Then
+	$targetIdx = $game_clients[0][0]
+	ConsoleWrite("Using last client " & $targetIdx & " (PID=" & $game_clients[$targetIdx][0] & ")" & @CRLF)
 EndIf
-SelectClient($game_clients[0][0])
+
+If $targetIdx = -1 Then
+	ConsoleWrite("DISCOPANIC not found. Launching..." & @CRLF)
+	Local $accounts = GWLauncher_LoadAccounts()
+	Local $accIdx = GWLauncher_FindAccountByCharacter($accounts, "D I S C O P A N I C")
+	If $accIdx = -1 Then
+		ConsoleWrite("ERROR: Account not found" & @CRLF)
+		Exit 1
+	EndIf
+	Local $launchResult = GWLauncher_LaunchAccount($accounts, $accIdx)
+	If $launchResult = 0 Then
+		ConsoleWrite("ERROR: Launch failed" & @CRLF)
+		Exit 1
+	EndIf
+	ConsoleWrite("Launched PID=" & $launchResult[0] & ", waiting 55s..." & @CRLF)
+	Sleep(55000)
+	ScanAndUpdateGameClients()
+	For $i = 1 To $game_clients[0][0]
+		If $game_clients[$i][0] = $launchResult[0] Then
+			$targetIdx = $i
+			ExitLoop
+		EndIf
+	Next
+	If $targetIdx = -1 Then $targetIdx = $game_clients[0][0]
+EndIf
+
+SelectClient($targetIdx)
 InitializeGameClientForGWA2(False)
 Local $processHandle = GetProcessHandle()
-Local $gwHWnd = $game_clients[$game_clients[0][0]][2]
-ConsoleWrite("PID=" & $game_clients[$game_clients[0][0]][0] & @CRLF)
+Local $gwHWnd = $game_clients[$targetIdx][2]
+ConsoleWrite("Connected PID=" & $game_clients[$targetIdx][0] & @CRLF)
 WinActivate($gwHWnd)
 Sleep(1000)
 
@@ -90,25 +125,42 @@ ConsoleWrite("First bytes: " & $hex & @CRLF)
 Local $botshubTransaction = Int(GetLabel('Transaction'))
 ConsoleWrite("BotsHub Transaction label: 0x" & Hex($botshubTransaction) & @CRLF)
 
-; --- Handle travel ---
-If IsAtCharSelect() Then
-	ConsoleWrite("At char select. Clicking Play..." & @CRLF)
-	ClickFrameButton($FRAME_HASH_PLAY_BUTTON)
-	Local $t = TimerInit()
-	While GetMyID() = 0 Or GetMaxAgents() = 0
-		Sleep(500)
-		If TimerDiff($t) > 60000 Then ExitLoop
-	WEnd
-	Sleep(3000)
-EndIf
+; --- Wait for character to be in-game ---
+ConsoleWrite("Waiting for character to load..." & @CRLF)
+WinActivate($gwHWnd)
 
+Local $loadWait = TimerInit()
+Local $clickedPlay = False
+While GetMyID() = 0
+	Sleep(1000)
+	WinActivate($gwHWnd)  ; keep window focused for rendering hook
+
+	; Check for char select after initial load
+	If Not $clickedPlay And TimerDiff($loadWait) > 5000 Then
+		If IsAtCharSelect() Then
+			ConsoleWrite("At char select. Clicking Play..." & @CRLF)
+			ClickFrameButton($FRAME_HASH_PLAY_BUTTON)
+			$clickedPlay = True
+			Sleep(5000)
+		EndIf
+	EndIf
+
+	If TimerDiff($loadWait) > 120000 Then
+		ConsoleWrite("ERROR: Character load timeout (MyID=" & GetMyID() & " charsel=" & IsAtCharSelect() & ")" & @CRLF)
+		Exit 1
+	EndIf
+WEnd
+Sleep(5000)  ; settle time after map load
+ConsoleWrite("In game! MyID=" & GetMyID() & " MapID=" & GetMapID() & @CRLF)
+
+; --- Travel to Embark Beach ---
 If GetMapID() <> $MAP_EMBARK_BEACH Then
 	ConsoleWrite("Traveling to Embark Beach..." & @CRLF)
 	TravelToOutpost($MAP_EMBARK_BEACH)
 	WaitMapLoading($MAP_EMBARK_BEACH, 30000)
-	Sleep(3000)
+	Sleep(5000)
 EndIf
-ConsoleWrite("MapID=" & GetMapID() & @CRLF)
+ConsoleWrite("At Embark Beach. MapID=" & GetMapID() & @CRLF)
 
 ; --- Walk to Eyja and open dialog ---
 ConsoleWrite("Going to Eyja..." & @CRLF)
@@ -119,13 +171,17 @@ EndIf
 Sleep(2000)
 ConsoleWrite("Dialog opened with Eyja" & @CRLF)
 
-; --- Find Grail of Might in merchant list ---
-ConsoleWrite("Finding Grail of Might in merchant list..." & @CRLF)
-Local $grailModelID = 24861  ; Grail of Might
-
-; Use the existing merchant items lookup
-Local $merchantBase = GetMerchantItemsBase()
-Local $merchantSize = GetMerchantItemsSize()
+; --- Wait for merchant items to populate ---
+ConsoleWrite("Waiting for merchant items..." & @CRLF)
+Local $merchWait = TimerInit()
+Local $merchantBase = 0
+Local $merchantSize = 0
+While $merchantSize = 0
+	Sleep(500)
+	$merchantBase = GetMerchantItemsBase()
+	$merchantSize = GetMerchantItemsSize()
+	If TimerDiff($merchWait) > 10000 Then ExitLoop
+WEnd
 ConsoleWrite("Merchant items: base=0x" & Hex($merchantBase) & " size=" & $merchantSize & @CRLF)
 
 If $merchantBase = 0 Or $merchantSize = 0 Then
@@ -133,18 +189,35 @@ If $merchantBase = 0 Or $merchantSize = 0 Then
 	Exit 1
 EndIf
 
-; Find grail item ID in merchant list
+; --- Find Grail of Might in merchant list ---
+Local $grailModelID = 24861  ; Grail of Might
+
+; Find grail item ID in merchant list using BotsHub's item pointer chain
 Local $grailItemID = 0
+Local $base_ptr = MemoryRead($processHandle, GetLabel('BasePointer'), 'dword')
 For $i = 0 To $merchantSize - 1
 	Local $mItemID = MemoryRead($processHandle, $merchantBase + 4 * $i, 'dword')
 	If $mItemID > 0 Then
-		; Look up model ID through item pointer chain
-		Local $itemPtr = GetItemByID($mItemID)
-		If IsDllStruct($itemPtr) Then
-			If DllStructGetData($itemPtr, 'ModelID') = $grailModelID Then
-				$grailItemID = $mItemID
-				ConsoleWrite("Found Grail of Might: itemID=" & $grailItemID & " at merchant index " & $i & @CRLF)
-				ExitLoop
+		; Resolve item ptr through chain: [base][0x18][0x40][0xB8][itemID*4]
+		Local $ptr1 = MemoryRead($processHandle, $base_ptr, 'dword')
+		If $ptr1 > 0x10000 Then
+			Local $ptr2 = MemoryRead($processHandle, $ptr1 + 0x18, 'dword')
+			If $ptr2 > 0x10000 Then
+				Local $ptr3 = MemoryRead($processHandle, $ptr2 + 0x40, 'dword')
+				If $ptr3 > 0x10000 Then
+					Local $ptr4 = MemoryRead($processHandle, $ptr3 + 0xB8, 'dword')
+					If $ptr4 > 0x10000 Then
+						Local $itemPtr = MemoryRead($processHandle, $ptr4 + 4 * $mItemID, 'dword')
+						If $itemPtr > 0x10000 Then
+							Local $modelID = MemoryRead($processHandle, $itemPtr + 0x2C, 'dword')
+							If $modelID = $grailModelID Then
+								$grailItemID = $mItemID
+								ConsoleWrite("Found Grail: itemID=" & $grailItemID & " index=" & $i & @CRLF)
+								ExitLoop
+							EndIf
+						EndIf
+					EndIf
+				EndIf
 			EndIf
 		EndIf
 	EndIf
@@ -161,21 +234,23 @@ ConsoleWrite("Finding materials..." & @CRLF)
 Local $ironModelID = 945
 Local $dustModelID = 929
 
-; Count materials
-Local $ironCount = CountItemInBagsByModelID($ironModelID)
-Local $dustCount = CountItemInBagsByModelID($dustModelID)
+; Count materials (use the lib function available in our includes)
+Local $ironCount = _GWA2_CountItemInBagsByModelID($ironModelID)
+Local $dustCount = _GWA2_CountItemInBagsByModelID($dustModelID)
 ConsoleWrite("Iron Ingots: " & $ironCount & " (need 50)" & @CRLF)
 ConsoleWrite("Glittering Dust: " & $dustCount & " (need 50)" & @CRLF)
 
 If $ironCount < 50 Or $dustCount < 50 Then
-	ConsoleWrite("ERROR: Not enough materials" & @CRLF)
-	Exit 1
+	ConsoleWrite("WARNING: Not enough materials — will attempt anyway to test function call" & @CRLF)
 EndIf
 
-; Get item IDs for material stacks
+; Get item IDs for material stacks (may be 0 if not in inventory)
 Local $ironItemID = GetItemIDFromModelID($ironModelID)
 Local $dustItemID = GetItemIDFromModelID($dustModelID)
 ConsoleWrite("Iron ItemID=" & $ironItemID & " Dust ItemID=" & $dustItemID & @CRLF)
+; If no materials, use dummy IDs (call will fail but won't crash)
+If $ironItemID = 0 Then $ironItemID = 1
+If $dustItemID = 0 Then $dustItemID = 2
 
 ; --- Build TransactItem call ---
 ; cdecl: TransactItem(type=3, gold_give=250, give={2, &ids, &qtys}, gold_recv=0, recv={1, &recvId, &recvQty})
