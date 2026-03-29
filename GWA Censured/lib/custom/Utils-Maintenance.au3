@@ -390,12 +390,13 @@ Func GetMaterialCount($modelID)
 EndFunc
 
 Func GoToMaterialTrader($townID, $forceRare = False)
-    Local $traderName = "Material Trader"
-    If $forceRare Then $traderName = "Rare Material Trader"
-    
+    Local $traderName = "Basic material trader"
+    If $forceRare Then $traderName = "Rare material trader"
+
     Local $coords = NPCCoordinatesInTown($townID, $traderName)
     If $coords[0] = 0 Or $coords[0] = -1 Then
-        $traderName = "Rare Material Trader"
+        ; Fallback: try the other type
+        $traderName = "Rare material trader"
         $coords = NPCCoordinatesInTown($townID, $traderName)
     EndIf
     
@@ -403,6 +404,9 @@ Func GoToMaterialTrader($townID, $forceRare = False)
         MoveTo($coords[0], $coords[1])
         Local $npc = GetNearestNPCToCoords($coords[0], $coords[1])
         GoToNPC($npc)
+        Sleep(500)
+        Dialog($npc)
+        Sleep(1000)
     Else
         Out("Could not find Material Trader in town " & $townID)
     EndIf
