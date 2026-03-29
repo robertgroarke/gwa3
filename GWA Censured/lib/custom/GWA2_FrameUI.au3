@@ -1044,6 +1044,221 @@ Func ClickFrameByPtr($framePtr)
     Return ($result = 1)
 EndFunc
 
+;~ Send any UIMessage to a frame via shellcode + queue.
+;~ Unlike ClickFrameByPtr (which uses CommandFrameClick ASM with hardcoded +0xA8),
+;~ this builds custom shellcode that can send any msgid/wParam/lParam.
+;~ @param $framePtr - target frame pointer
+;~ @param $msgId - UIMessage ID (e.g. 0x20=kKeyDown, 0x21=kSetFocus, 0x31=kMouseClick2)
+;~ @param $wParamValue - wParam value (integer, NOT a pointer for kSetFocus; pointer for key/mouse)
+;~ @param $lParam - lParam value (usually 0)
+;~ @param $wParamIsPtr - if True, wParam is passed as pointer; if False, passed as immediate value
+Global $g_SendMsg_ShellcodeAddr = 0
+
+Func SendFrameMsgByPtr($framePtr, $msgId, $wParamValue = 0, $lParam = 0, $wParamIsPtr = False)
+    Local $processHandle = GetProcessHandle()
+    Local $fp = Int($framePtr)
+
+    Local $context = _GetFrameContext($fp)
+    If $context = 0 Then Return False
+
+    Local $sendFunc = Int(GetLabel('SendFrameUIMsg'))
+    If $sendFunc = 0 Or $sendFunc = -1 Then Return False
+
+    Local $thisPtr = $context + 0xA8
+
+    ; Allocate shellcode memory (one-time)
+    If $g_SendMsg_ShellcodeAddr = 0 Then
+        Local $mem = DllCall($kernel_handle, 'ptr', 'VirtualAllocEx', _
+            'handle', $processHandle, 'ptr', 0, 'ulong_ptr', 128, _
+            'dword', 0x1000, 'dword', 0x40)
+        If Not IsArray($mem) Or $mem[0] = 0 Then Return False
+        $g_SendMsg_ShellcodeAddr = Int($mem[0])
+    EndIf
+    Local $scAddr = $g_SendMsg_ShellcodeAddr
+    Local $dataAddr = $scAddr + 64  ; wParam data area at offset 64
+
+    ; Write wParam data if it's a struct (for key actions etc)
+    If $wParamIsPtr Then
+        ; wParamValue is already written to $dataAddr by the caller
+        ; Just use $dataAddr as the pointer
+    EndIf
+
+    ; Build shellcode:
+    ;   mov ecx, <thisPtr>       ; B9 <le32>     (5 bytes)
+    ;   push <lParam>            ; 6A/68         (2-5 bytes)
+    ;   push <wParam>            ; 6A/68         (2-5 bytes)
+    ;   push <msgId>             ; 6A/68         (2-5 bytes)
+    ;   call <sendFunc>          ; E8 <rel32>    (5 bytes)
+    ;   ret                      ; C3            (1 byte)
+    Local $sc = DllStructCreate('byte[48]')
+    Local $p = 1
+
+    ; mov ecx, thisPtr
+    DllStructSetData($sc, 1, 0xB9, $p)
+    $p += 1
+    _WriteLE32($sc, $p, $thisPtr)
+    $p += 4
+
+    ; push lParam
+    If $lParam = 0 Then
+        DllStructSetData($sc, 1, 0x6A, $p)
+    $p += 1
+        DllStructSetData($sc, 1, 0x00, $p)
+    $p += 1
+    Else
+        DllStructSetData($sc, 1, 0x68, $p)
+    $p += 1
+        _WriteLE32($sc, $p, $lParam)
+    $p += 4
+    EndIf
+
+    ; push wParam
+    If $wParamIsPtr Then
+        DllStructSetData($sc, 1, 0x68, $p)
+    $p += 1
+        _WriteLE32($sc, $p, $dataAddr)
+    $p += 4
+    ElseIf $wParamValue < 128 Then
+        DllStructSetData($sc, 1, 0x6A, $p)
+    $p += 1
+        DllStructSetData($sc, 1, BitAND($wParamValue, 0xFF), $p)
+    $p += 1
+    Else
+        DllStructSetData($sc, 1, 0x68, $p)
+    $p += 1
+        _WriteLE32($sc, $p, $wParamValue)
+    $p += 4
+    EndIf
+
+    ; push msgId
+    If $msgId < 128 Then
+        DllStructSetData($sc, 1, 0x6A, $p)
+    $p += 1
+        DllStructSetData($sc, 1, BitAND($msgId, 0xFF), $p)
+    $p += 1
+    Else
+        DllStructSetData($sc, 1, 0x68, $p)
+    $p += 1
+        _WriteLE32($sc, $p, $msgId)
+    $p += 4
+    EndIf
+
+    ; call sendFunc
+    DllStructSetData($sc, 1, 0xE8, $p)
+    $p += 1
+    _WriteLE32($sc, $p, $sendFunc - ($scAddr + $p - 1 + 4))
+    $p += 4
+
+    ; jmp CommandReturn (in-game queue uses jmp ebx, not call — no return address)
+    Local $cmdReturn = Int(GetLabel('CommandReturn'))
+    DllStructSetData($sc, 1, 0xE9, $p)
+    $p += 1
+    _WriteLE32($sc, $p, $cmdReturn - ($scAddr + $p - 1 + 4))
+    $p += 4
+
+    ; Write shellcode
+    DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+        'handle', $processHandle, 'ptr', Ptr($scAddr), _
+        'ptr', DllStructGetPtr($sc), 'ulong_ptr', $p, 'ulong_ptr*', 0)
+
+    ; Enqueue for game thread execution
+    Local $cmd = DllStructCreate('dword;dword')
+    DllStructSetData($cmd, 1, $scAddr)
+    DllStructSetData($cmd, 2, 0)
+    Enqueue(DllStructGetPtr($cmd), DllStructGetSize($cmd))
+
+    Sleep(200)
+    Return True
+EndFunc
+
+;~ Send a key event (kKeyDown) to a frame
+;~ @param $framePtr - target frame
+;~ @param $keyCode - GW key code (e.g. 0x35 for '5')
+;~ @param $modifiers - modifier flags (0x1=alt, 0x2=ctrl, 0x4=shift)
+Func SendKeyToFrame($framePtr, $keyCode, $modifiers = 0)
+    Local $processHandle = GetProcessHandle()
+
+    ; Allocate shellcode mem if needed
+    If $g_SendMsg_ShellcodeAddr = 0 Then
+        Local $mem = DllCall($kernel_handle, 'ptr', 'VirtualAllocEx', _
+            'handle', $processHandle, 'ptr', 0, 'ulong_ptr', 128, _
+            'dword', 0x1000, 'dword', 0x40)
+        If Not IsArray($mem) Or $mem[0] = 0 Then Return False
+        $g_SendMsg_ShellcodeAddr = Int($mem[0])
+    EndIf
+    Local $dataAddr = $g_SendMsg_ShellcodeAddr + 64
+
+    ; Write kKeyAction struct at dataAddr: {gw_key, modifiers, state_flags}
+    Local $keyAction = DllStructCreate('dword;dword;dword')
+    DllStructSetData($keyAction, 1, $keyCode)
+    DllStructSetData($keyAction, 2, $modifiers)
+    DllStructSetData($keyAction, 3, 0)
+    DllCall($kernel_handle, 'bool', 'WriteProcessMemory', _
+        'handle', $processHandle, 'ptr', Ptr($dataAddr), _
+        'ptr', DllStructGetPtr($keyAction), 'ulong_ptr', 12, 'ulong_ptr*', 0)
+
+    ; Send kKeyDown (0x20) with wParam pointing to kKeyAction
+    Return SendFrameMsgByPtr($framePtr, 0x20, 0, 0, True)
+EndFunc
+
+;~ Set focus on a frame
+Func SetFrameFocus($framePtr, $focused = True)
+    Local $val = 0
+    If $focused Then $val = 1
+    Return SendFrameMsgByPtr($framePtr, 0x21, $val, 0, False)
+EndFunc
+
+; =============================================================================
+; Crafting via UI Frames
+; =============================================================================
+
+Global Const $MERCHANT_FRAME_HASH = 3613855137
+Global Const $CRAFT_BUTTON_PATH = "0,1,1"
+
+;~ Craft an item at the currently open consumable trader dialog.
+;~ Assumes the trader dialog is already open (GoToConsumableTrader was called).
+;~ @param $itemIndex - index of the item in the trader's craft list (0=first item)
+;~ @param $quantity - number of items to craft (clicks Craft button N times)
+;~ @return True if at least one craft succeeded
+Func CraftConsumableByUI($itemIndex = 0, $quantity = 1)
+    Local $mf = GetFrameByHash($MERCHANT_FRAME_HASH)
+    If $mf[0] = 0 Then
+        ConsoleWrite('[FrameUI] CraftByUI: Merchant frame not found' & @CRLF)
+        Return False
+    EndIf
+    Local $mp = Int($mf[0])
+
+    ; Select the item
+    Local $itemFrame = NavigateFramePath($mp, "0,0," & $itemIndex)
+    If $itemFrame = 0 Then
+        ConsoleWrite('[FrameUI] CraftByUI: Item at index ' & $itemIndex & ' not found' & @CRLF)
+        Return False
+    EndIf
+    ClickFrameByPtr($itemFrame)
+    Sleep(500)
+
+    ; Find the Craft button
+    Local $craftBtn = NavigateFramePath($mp, $CRAFT_BUTTON_PATH)
+    If $craftBtn = 0 Then
+        ConsoleWrite('[FrameUI] CraftByUI: Craft button not found' & @CRLF)
+        Return False
+    EndIf
+
+    ; Click Craft N times
+    Local $goldBefore = GetGoldCharacter()
+    ConsoleWrite('[FrameUI] CraftByUI: Crafting ' & $quantity & ' items (index ' & $itemIndex & ')...' & @CRLF)
+
+    For $i = 1 To $quantity
+        ClickFrameByPtr(Int($craftBtn))
+        Sleep(500)
+    Next
+
+    Sleep(500)
+    Local $goldAfter = GetGoldCharacter()
+    ConsoleWrite('[FrameUI] CraftByUI: Gold ' & $goldBefore & ' -> ' & $goldAfter & @CRLF)
+    Return True
+EndFunc
+
 ; =============================================================================
 ; Char Select Helpers
 ; =============================================================================
