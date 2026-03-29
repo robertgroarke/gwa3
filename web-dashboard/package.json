@@ -1,0 +1,13 @@
+{
+  "name": "gwa-bot-dashboard",
+  "version": "1.0.0",
+  "description": "Web dashboard for monitoring and controlling GWA bot instances",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

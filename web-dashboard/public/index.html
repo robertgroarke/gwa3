@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GWA Bot Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="login-page" class="page">
+    <div class="login-box">
+      <h1>GWA Bot Dashboard</h1>
+      <input type="password" id="token-input" placeholder="Enter access token" autofocus>
+      <button onclick="login()">Login</button>
+      <p id="login-error" class="error"></p>
+    </div>
+  </div>
+
+  <div id="dashboard-page" class="page hidden">
+    <header>
+      <h1>GWA Bot Dashboard</h1>
+      <div class="header-controls">
+        <span id="health-badge">--</span>
+        <button onclick="showLaunchModal()">Launch Bot</button>
+        <button onclick="logout()">Logout</button>
+      </div>
+    </header>
+
+    <div id="bot-grid" class="bot-grid"></div>
+
+    <div id="aggregate" class="aggregate-panel">
+      <div><span class="label">Total Runs</span><span id="agg-runs">0</span></div>
+      <div><span class="label">Online</span><span id="agg-online">0/0</span></div>
+    </div>
+
+    <div id="log-panel" class="log-panel hidden">
+      <div class="log-header">
+        <span id="log-title">Log</span>
+        <button onclick="closeLog()">Close</button>
+      </div>
+      <pre id="log-content"></pre>
+    </div>
+
+    <!-- Launch modal -->
+    <div id="launch-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Launch Bot</h2>
+        <select id="launch-character"></select>
+        <button onclick="launchBot()">Launch</button>
+        <button onclick="closeLaunchModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
