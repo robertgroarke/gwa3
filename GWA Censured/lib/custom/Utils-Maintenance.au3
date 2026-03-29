@@ -314,8 +314,11 @@ Func BuyConsumableChunk($itemID, $amount, $unitCost, $materials = 0, $traderName
 
 
     If IsArray($materials) Then
-        Out("Crafting " & $amount & " items...")
-        CraftItemSafe($itemID, $amount, $unitCost, $materials)
+        ; Use UI frame-based crafting (CraftItemSafe packet approach is broken)
+        ; Map item IDs to their position in each trader's craft list
+        Local $craftIndex = _GetCraftItemIndex($itemID)
+        Out("Crafting " & $amount & " items via UI (index " & $craftIndex & ")...")
+        CraftConsumableByUI($craftIndex, $amount)
         Sleep(1000)
         Return
     EndIf
@@ -490,6 +493,30 @@ Func BuyMaterialSafe($id, $amount)
         ; Try one last time after refuel
         BuyMaterialIfMissing($id, $amount, 10)
     EndIf
+EndFunc
+
+; Map consumable item IDs to their position in the trader's craft list
+; Each trader has items in a specific order — index 0 is the first item shown
+Func _GetCraftItemIndex($itemID)
+    Switch $itemID
+        ; Eyja: Grail(0), Scroll(1), Star(2), PerfSalvKit(3), ArcticStone(4)
+        Case $ID_GRAIL_OF_MIGHT
+            Return 0
+        ; Kwat: Essence(0), ...
+        Case $ID_ESSENCE_OF_CELERITY
+            Return 0
+        ; Alcus Nailbiter: Armor(0), ...
+        Case $ID_ARMOR_OF_SALVATION
+            Return 0
+        ; Edwin: Powerstone(0), Scroll of Res(1), ...
+        Case $ID_POWERSTONE_OF_COURAGE
+            Return 0
+        Case $ID_SCROLL_OF_RESURRECTION
+            Return 1
+        Case Else
+            Out("Warning: Unknown craft item ID " & $itemID & ", defaulting to index 0")
+            Return 0
+    EndSwitch
 EndFunc
 
 Func IsMaintenanceKit($itemID)
