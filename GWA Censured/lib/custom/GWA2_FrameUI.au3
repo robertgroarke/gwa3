@@ -907,7 +907,11 @@ EndFunc
 
 ;~ Press Play at character select — uses mouse click (GW ignores synthetic input)
 Func PressPlayButton()
-    Return PressPlayButton_MOUSE()
+    If Not IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Then
+        ConsoleWrite('[FrameUI] Play button not visible' & @CRLF)
+        Return False
+    EndIf
+    Return ClickFrameButton($FRAME_HASH_PLAY_BUTTON)
 EndFunc
 
 Func PressPlayButton_MOUSE()
@@ -938,22 +942,11 @@ Func DismissReconnectDialog($choice = 'no')
         Return False
     EndIf
 
-    Local $hWnd = GetWindowHandle()
-    If $hWnd = 0 Then Return False
-
-    WinActivate($hWnd)
-    Sleep(300)
-    Local $pos = WinGetPos($hWnd)
-    If Not IsArray($pos) Then Return False
-
     If $choice = 'yes' Then
-        Local $btnX = $pos[0] + Int($pos[2] * 0.42)
+        ConsoleWrite('[FrameUI] Clicking reconnect YES' & @CRLF)
+        Return ClickFrameButton($FRAME_HASH_RECONNECT_YES)
     Else
-        Local $btnX = $pos[0] + Int($pos[2] * 0.58)
+        ConsoleWrite('[FrameUI] Clicking reconnect NO' & @CRLF)
+        Return ClickFrameButton($FRAME_HASH_RECONNECT_NO)
     EndIf
-    Local $btnY = $pos[1] + Int($pos[3] * 0.52)
-
-    ConsoleWrite('[FrameUI] Clicking reconnect ' & $choice & ' at ' & $btnX & ',' & $btnY & @CRLF)
-    MouseClick('left', $btnX, $btnY, 1, 3)
-    Return True
 EndFunc
