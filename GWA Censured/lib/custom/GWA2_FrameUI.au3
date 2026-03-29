@@ -812,8 +812,8 @@ Func ClickFrameButton($hash)
     ; We call <target> directly, so we must pre-apply the -0x24 adjustment.
     ; thisPtr = context + 0xA8 - 0x24 = context + 0x84
     ;
-    ; Shellcode (called via RenderingModProc's "call dword[RenderCmdPtr]"):
-    ;   mov ecx, <context + 0x84>   ; B9 <le32>     (5 bytes) __thiscall this
+    ; Shellcode (called via RenderingModProc's "call dword[SavedIndex]"):
+    ;   mov ecx, <context + 0xA8>   ; B9 <le32>     (5 bytes) __thiscall this
     ;   push 0                      ; 6A 00          (2 bytes) lParam
     ;   push <actionDataAddr>       ; 68 <le32>      (5 bytes) wParam
     ;   push <msgid>                ; 6A 31          (2 bytes) kMouseClick2
@@ -876,52 +876,14 @@ Func ClickFrameButton($hash)
         'handle', $processHandle, 'ptr', Ptr($g_FrameClick_ShellcodeAddr), _
         'ptr', DllStructGetPtr($sc), 'ulong_ptr', $p, 'ulong_ptr*', 0)
 
-    ; Click via ControlClick — sends a mouse click to the game window at
-    ; button-relative coordinates. No injection changes needed.
-    Local $hWnd = $game_clients[$game_clients[0][0]][2]
+    ; Queue for RenderingModProc to execute on the game thread.
+    ; The rendering hook processes queued commands at char select (MapIsLoaded=0).
+    Local $cmd = DllStructCreate('dword;dword')
+    DllStructSetData($cmd, 1, $g_FrameClick_ShellcodeAddr)
+    DllStructSetData($cmd, 2, 0)
+    Enqueue(DllStructGetPtr($cmd), DllStructGetSize($cmd))
 
-    ; Button coordinates relative to client area
-    ; Play button: ~78% x, ~96% y
-    ; Reconnect YES: ~42% x, ~52% y
-    ; Reconnect NO: ~58% x, ~52% y
-    Local $clientSize = WinGetClientSize($hWnd)
-    If Not IsArray($clientSize) Then
-        ConsoleWrite('[FrameUI] Could not get window size' & @CRLF)
-        Return False
-    EndIf
-
-    Local $clickX, $clickY
-    Switch $hash
-        Case $FRAME_HASH_PLAY_BUTTON
-            $clickX = Int($clientSize[0] * 0.78)
-            $clickY = Int($clientSize[1] * 0.96)
-        Case $FRAME_HASH_RECONNECT_YES
-            $clickX = Int($clientSize[0] * 0.42)
-            $clickY = Int($clientSize[1] * 0.52)
-        Case $FRAME_HASH_RECONNECT_NO
-            $clickX = Int($clientSize[0] * 0.58)
-            $clickY = Int($clientSize[1] * 0.52)
-        Case Else
-            ConsoleWrite('[FrameUI] Unknown button hash: ' & $hash & @CRLF)
-            Return False
-    EndSwitch
-
-    ; GW's DirectX renderer only processes real mouse input (not PostMessage/ControlClick).
-    ; Must use MouseClick which physically moves the cursor.
-    WinActivate($hWnd)
-    Sleep(300)
-    WinMove($hWnd, '', 0, 0)  ; Move window to top-left for predictable coordinates
-    Sleep(200)
-    Local $pos = WinGetPos($hWnd)
-    Local $cSize = WinGetClientSize($hWnd)
-    ; Client area offset from window pos (title bar + border)
-    Local $borderX = ($pos[2] - $cSize[0]) / 2
-    Local $titleY = $pos[3] - $cSize[1] - $borderX
-    Local $absX = $pos[0] + $borderX + $clickX
-    Local $absY = $pos[1] + $titleY + $clickY
-    MouseClick('left', $absX, $absY, 1, 5)
-
-    ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' at abs ' & $absX & ',' & $absY & ' (client ' & $clickX & ',' & $clickY & ')' & @CRLF)
+    ConsoleWrite('[FrameUI] Clicked hash=' & $hash & ' frame_id=' & $frameId & @CRLF)
 
     ; Wait for game to process
     Sleep(500)
