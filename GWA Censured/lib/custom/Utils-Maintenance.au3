@@ -64,8 +64,8 @@ EndFunc
 Func PerformMaintenance($force = False, $buyConsumables = Default)
     If Not $force And Not RunDiagnostics() Then Return
 
-    ; Default: buy consumables when GUI "Consets" checkbox is enabled
-    If $buyConsumables = Default Then $buyConsumables = GUI_IsConsetsChecked()
+    ; Default: buy consumables when GUI "Buy Consets" checkbox is enabled
+    If $buyConsumables = Default Then $buyConsumables = GUI_IsBuyConsetsChecked()
 
     Out("Starting Maintenance Run... (BuyConsumables=" & $buyConsumables & ")")
     

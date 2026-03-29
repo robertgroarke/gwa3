@@ -82,6 +82,7 @@ Global $GUI_GroupSettings_CheckStones			= 0
 Global $GUI_GroupSettings_CheckChests			= 0
 Global $GUI_GroupSettings_CheckPickupGolds		= 0
 Global $GUI_GroupSettings_CheckSalvage			= 0
+Global $GUI_GroupSettings_CheckBuyConsets		= 0
 Global $GUI_GroupSettings_ComboHeroConfig		= 0
 Global $GUI_Checkbox_UseConsumables				= 0
 Global $GUI_Checkbox_UseScrolls					= 0
@@ -216,7 +217,7 @@ Func GUI_Create()
 	$tempCtrlTop = $GUI_CHECKBOX_HEIGHT + $GUI_CONTROL_SPACE
 
 	$temp1 = GUI_GetCtrlInfo($GUI_idButtonStart)
-	$GUI_GroupSettings = GUICtrlCreateGroup("Settings", $GUI_BORDERSIZE		, $temp1[1] + $temp1[3] + $GUI_CONTROL_SPACE, $GUI_LABEL_WIDTH + $GUI_BORDERSIZE * 2,  20 + $tempCtrlTop * 9, -1, $WS_EX_TRANSPARENT)
+	$GUI_GroupSettings = GUICtrlCreateGroup("Settings", $GUI_BORDERSIZE		, $temp1[1] + $temp1[3] + $GUI_CONTROL_SPACE, $GUI_LABEL_WIDTH + $GUI_BORDERSIZE * 2,  20 + $tempCtrlTop * 10, -1, $WS_EX_TRANSPARENT)
 	$GUI_GroupSettings_CheckAddHeroes  	= GUICtrlCreateCheckbox("Add Heroes"	, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 0, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
 	$GUI_GroupSettings_ComboHeroConfig	= GUICtrlCreateCombo(""				, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 1, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
 	GUI_PopulateHeroConfigDropdown()  ; Populate with files from hero_configs/
@@ -228,7 +229,7 @@ Func GUI_Create()
 	$GUI_GroupSettings_CheckChests  	= GUICtrlCreateCheckbox("Open Chests"		, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 6, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
 	$GUI_GroupSettings_CheckPickUpGolds	= GUICtrlCreateCheckbox("Pick Up Golds"	, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 7, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
 	$GUI_GroupSettings_CheckSalvage    	= GUICtrlCreateCheckbox("Salvage"	  		, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 8, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
-	;$GUI_Checkbox_UseConsumables = GUICtrlCreateCheckbox("Use Consumables", $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 9, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
+	$GUI_GroupSettings_CheckBuyConsets	= GUICtrlCreateCheckbox("Buy Consets"		, $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 9, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
 	;$GUI_Checkbox_UseScrolls = GUICtrlCreateCheckbox("Use Scrolls", $GUI_BORDERSIZE * 2, $temp1[1] + $temp1[3] + 20 + $tempCtrlTop * 10, $GUI_CHECKBOX_WIDTH, $GUI_CHECKBOX_HEIGHT)
 	;GUICtrlSetTip(-1, "Use Speed/Power Scrolls")
 	GUICtrlCreateGroup("", -99, -99, 1, 1)	;Closes a Group
@@ -323,6 +324,7 @@ Func GUI_Create()
  	GUICtrlSetState($GUI_GroupSettings_CheckAddHeroes, (IniRead($INI_PATH, "Settings", "AddHeroes", True)) ? $GUI_CHECKED : 0)
 	GUICtrlSetState($GUI_GroupSettings_CheckPickUpGolds, (IniRead($INI_PATH, "Settings", "PickUpGolds", True)) ? $GUI_CHECKED : 0)
  	GUICtrlSetState($GUI_GroupSettings_CheckSalvage, (IniRead($INI_PATH, "Settings", "AutoSalvage", True)) ? $GUI_CHECKED : 0)
+	GUICtrlSetState($GUI_GroupSettings_CheckBuyConsets, (IniRead($INI_PATH, "Settings", "BuyConsets", False)) ? $GUI_CHECKED : 0)
 	#EndRegion INI
 
 	GUISetState(@SW_SHOW)
@@ -405,6 +407,10 @@ EndFunc
 
 Func GUI_IsSalvageChecked()
 	Return GUI_IsChecked($GUI_GroupSettings_CheckSalvage)
+EndFunc
+
+Func GUI_IsBuyConsetsChecked()
+	Return GUI_IsChecked($GUI_GroupSettings_CheckBuyConsets)
 EndFunc
 
 Func GUI_GetSelectedHeroConfig()
@@ -647,9 +653,10 @@ Func GUI_SetAvgRunTime($TimeStamp)
 
 ; #Region Ini
 Global Const $ValuesToBeSaved = [ _
-		[7, ""], _ ;Amount of elements in the array
+		[8, ""], _ ;Amount of elements in the array
 		["AddHeroes", True], _
 		["Consets", True], _
+		["BuyConsets", False], _
 		["Stones", True], _
 		["OpenChests", True], _
 		["PickUpGolds", True], _
