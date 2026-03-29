@@ -464,7 +464,9 @@ Func RefuelGold($townID)
 EndFunc
 
 Func BuyMaterialSafe($id, $amount)
-    Local $useRare = ($id = $ID_FEATHER Or $id = $ID_PILE_OF_GLITTERING_DUST Or $id = 2212)
+    ; All conset materials (iron, bone, dust, feather, granite, fiber) are at the basic trader.
+    ; Rare trader is for ecto, ruby, sapphire etc. Only use rare for actual rare materials.
+    Local $useRare = False
     If Not GoToMaterialTrader($ID_EMBARK_BEACH, $useRare) Then
         Out("Failed to reach material trader for ID " & $id)
         Return
