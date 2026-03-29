@@ -1028,8 +1028,8 @@ Func ClickFrameByPtr($framePtr)
     ; Clear result flag
     MemoryWrite($processHandle, $resultAddr, 0, 'dword')
 
-    ; Enqueue CommandFrameClick
-    Local $cmdAddr = Int(GetLabel('CommandFrameClick'))
+    ; Enqueue CommandFrameClick (use calibrated address for .5 offset bug)
+    Local $cmdAddr = _CalibrateFrameClickAddr(Int(GetLabel('CommandFrameClick')))
     Local $cmd = DllStructCreate('dword;dword')
     DllStructSetData($cmd, 1, $cmdAddr)
     DllStructSetData($cmd, 2, 0)
