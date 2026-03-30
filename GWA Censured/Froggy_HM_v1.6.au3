@@ -56,12 +56,15 @@ Global $g_Accounts = GWLauncher_LoadAccounts()
 ; Check for command-line arguments
 Local $cmdCharacter = ''
 Local $cmdAutoLaunch = ''
+Global $cmdNoConsets = False
 For $i = 1 To $CmdLine[0]
 	Switch $CmdLine[$i]
 		Case '-character'
 			If $i < $CmdLine[0] Then $cmdCharacter = $CmdLine[$i + 1]
 		Case '-autolaunch'
 			If $i < $CmdLine[0] Then $cmdAutoLaunch = $CmdLine[$i + 1]
+		Case '-noconsets'
+			$cmdNoConsets = True
 	EndSwitch
 Next
 
