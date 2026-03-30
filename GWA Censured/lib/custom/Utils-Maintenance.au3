@@ -341,11 +341,30 @@ Func GoToMaterialTrader($townID, $forceRare = False)
         Return False
     EndIf
 
-    GoToNPC($npc)
-    Sleep(500)
-    Dialog($npc)
-    Sleep(1000)
-    Return True
+    ; Try to interact and verify merchant dialog opened
+    For $try = 1 To 3
+        GoToNPC($npc)
+        Sleep(500)
+        Dialog($npc)
+        Sleep(1500)
+
+        ; Check if merchant dialog actually opened
+        Local $mf = GetFrameByHash(3613855137)
+        If $mf[0] <> 0 Then Return True
+
+        ; Stuck on wrong NPC or pathing blocked — jiggle and retry
+        Out("Material trader dialog didn't open (attempt " & $try & "), unsticking...")
+        Move(DllStructGetData(GetMyAgent(), 'X') + Random(-200, 200), _
+             DllStructGetData(GetMyAgent(), 'Y') + Random(-200, 200))
+        Sleep(1500)
+        MoveTo($coords[0], $coords[1])
+        Sleep(1500)
+        $npc = GetNearestNPCToCoords($coords[0], $coords[1])
+        If Not IsDllStruct($npc) Then ContinueLoop
+    Next
+
+    Out("Failed to open material trader dialog after 3 attempts")
+    Return False
 EndFunc
 
 Func GoToConsumableTrader($name)
