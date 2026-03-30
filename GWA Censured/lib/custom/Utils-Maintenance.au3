@@ -196,8 +196,6 @@ Func BuyConsumablesInEmbarkBeach()
         Local $grailMats[2][2] = [[$ID_IRON_INGOT, 50], [$ID_PILE_OF_GLITTERING_DUST, 50]]
         BuyConsumableChunk($ID_GRAIL_OF_MIGHT, $targetSets, 250, $grailMats)
     EndIf
-    GoToXunlaiChest($ID_EMBARK_BEACH)
-    StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
 
     ; Essence at Kwat (50 Feather + 50 Dust each, 250g fee)
     Out("Crafting " & $targetSets & " Essences at Kwat...")
@@ -205,8 +203,6 @@ Func BuyConsumablesInEmbarkBeach()
         Local $essenceMats[2][2] = [[$ID_FEATHER, 50], [$ID_PILE_OF_GLITTERING_DUST, 50]]
         BuyConsumableChunk($ID_ESSENCE_OF_CELERITY, $targetSets, 250, $essenceMats)
     EndIf
-    GoToXunlaiChest($ID_EMBARK_BEACH)
-    StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
 
     ; Armor at Alcus (50 Iron + 50 Bone each, 250g fee)
     Out("Crafting " & $targetSets & " Armors at Alcus...")
@@ -214,6 +210,8 @@ Func BuyConsumablesInEmbarkBeach()
         Local $armorMats[2][2] = [[$ID_IRON_INGOT, 50], [$ID_BONE, 50]]
         BuyConsumableChunk($ID_ARMOR_OF_SALVATION, $targetSets, 250, $armorMats)
     EndIf
+
+    ; Store all crafted consumables at once
     GoToXunlaiChest($ID_EMBARK_BEACH)
     StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
 
