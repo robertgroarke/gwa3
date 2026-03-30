@@ -74,33 +74,42 @@ Func PerformMaintenance($force = False, $buyConsumables = Default)
     If $buyConsumables = Default Then $buyConsumables = GUI_IsBuyConsetsChecked()
 
     Out("Starting Maintenance Run... (BuyConsumables=" & $buyConsumables & ")")
-    
+
     If GetMapID() <> $MAINTENANCE_TOWN Then
         TravelToOutpost($MAINTENANCE_TOWN)
-        Sleep(2000) ; Wait for load
+        Sleep(2000)
     EndIf
-    
+
     ClaimSpecificItem(27036) ; Amphibian Tongues
     SalvageAmphibianTongues()
     IdentifyUnidentifiedItemsForMaintenance()
-    
+
+    ; Deposit gold if character is carrying too much
     If GetGoldCharacter() > 80000 Then
         GoToXunlaiChest($MAINTENANCE_TOWN)
         DepositGold(GetGoldCharacter() - 10000)
         Sleep(1000)
     EndIf
-    
-    SellItemsToMerchant(ShouldSellItemForMaintenance, False, $MAINTENANCE_TOWN)
-    
+
+    ; Sell items only if we have something to sell
+    If HasItemsToSell(ShouldSellItemForMaintenance) Then
+        SellItemsToMerchant(ShouldSellItemForMaintenance, False, $MAINTENANCE_TOWN)
+    EndIf
+
     If HasOverallBasicMaterialsToSell() Then
         SellBasicMaterialsToMerchant(ShouldSellMaterialForMaintenance, $MAINTENANCE_TOWN)
     EndIf
-    
-    GoToXunlaiChest($MAINTENANCE_TOWN)
-    If GetGoldCharacter() > 5000 Then DepositGold(GetGoldCharacter() - 5000)
-    StoreItemsInXunlaiStorageSafe("ShouldStoreTome")
 
-    ; Buy Consumables (Consets) every N runs, or on first maintenance if bank gold is high
+    ; Store tomes only if we have any
+    Local $hasTomes = _HasItemsMatching("ShouldStoreTome")
+    Local $needDeposit = (GetGoldCharacter() > 5000)
+    If $hasTomes Or $needDeposit Then
+        GoToXunlaiChest($MAINTENANCE_TOWN)
+        If $needDeposit Then DepositGold(GetGoldCharacter() - 5000)
+        If $hasTomes Then StoreItemsInXunlaiStorageSafe("ShouldStoreTome")
+    EndIf
+
+    ; Buy Consumables (Consets) if conditions met
     If $buyConsumables Then
         Local $runsSinceBuy = $GUI_RunCounter - $g_LastConsetBuyRun
         Local $intervalReached = ($runsSinceBuy >= $CONSET_BUY_INTERVAL)
@@ -113,14 +122,15 @@ Func PerformMaintenance($force = False, $buyConsumables = Default)
         EndIf
     EndIf
 
-    ; Buy kits LAST — after conset buying, tongue salvaging, and all selling.
-    ; This ensures we leave maintenance with kits in inventory.
+    ; Buy kits LAST — only visit merchant if we actually need kits
     BuyKitsUntilTarget()
 
-    ; Final gold deposit — keep enough for kits + crafting overhead
-    If GetMapID() <> $MAINTENANCE_TOWN Then TravelToOutpost($MAINTENANCE_TOWN)
-    GoToXunlaiChest($MAINTENANCE_TOWN)
-    If GetGoldCharacter() > 10000 Then DepositGold(GetGoldCharacter() - 10000)
+    ; Final gold deposit only if carrying excess
+    If GetGoldCharacter() > 10000 Then
+        If GetMapID() <> $MAINTENANCE_TOWN Then TravelToOutpost($MAINTENANCE_TOWN)
+        GoToXunlaiChest($MAINTENANCE_TOWN)
+        DepositGold(GetGoldCharacter() - 10000)
+    EndIf
 
     Out("Maintenance Complete")
 EndFunc
@@ -534,6 +544,21 @@ EndFunc
 
 
 
+
+;~ Check if any inventory item matches a filter function (without walking anywhere)
+Func _HasItemsMatching($filterFunc)
+    For $bagIndex = 1 To 4
+        Local $bag = GetBag($bagIndex)
+        If Not IsDllStruct($bag) Or DllStructGetData($bag, 'ID') = 0 Then ContinueLoop
+        For $slot = 1 To DllStructGetData($bag, 'slots')
+            Local $item = GetItemBySlot($bagIndex, $slot)
+            If Not IsDllStruct($item) Then ContinueLoop
+            If DllStructGetData($item, 'ModelID') = 0 Then ContinueLoop
+            If Call($filterFunc, $item) Then Return True
+        Next
+    Next
+    Return False
+EndFunc
 
 Func GetItemCountInStorageAndInventory($modelID)
     Local $count = 0
