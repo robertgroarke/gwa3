@@ -858,27 +858,29 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
     ; Wait for GW window, handle reconnect, press Play, then connect
     ConsoleWrite('[GWLauncher] Waiting for client to log in (timeout: ' & $timeout & 's)...' & @CRLF)
 
-    ; Phase 1: Wait for the NEW GW window to appear (match by PID)
-    ConsoleWrite('[GWLauncher] Phase 1: Waiting for GW window (PID ' & $result[0] & ')...' & @CRLF)
+    ; Phase 1+2: Wait for the NEW GW client to appear in scan (match by PID)
     Local $launchedPID = $result[0]
+    ConsoleWrite('[GWLauncher] Phase 1: Waiting for GW client PID ' & $launchedPID & '...' & @CRLF)
+    Local $charSelectIdx = -1
     Local $windowWait = TimerInit()
     While TimerDiff($windowWait) < 30000
-        Local $hWnd = _FindWindowByPID($launchedPID)
-        If $hWnd <> 0 Then ExitLoop
-        Sleep(1000)
+        Sleep(2000)
+        ScanAndUpdateGameClients()
+        For $ci = 1 To $game_clients[0][0]
+            If $game_clients[$ci][0] = $launchedPID Then
+                $charSelectIdx = $ci
+                ExitLoop 2
+            EndIf
+        Next
+        ConsoleWrite('[GWLauncher] PID ' & $launchedPID & ' not in scan yet (' & Int(TimerDiff($windowWait)/1000) & 's)...' & @CRLF)
     WEnd
 
-    ; Phase 2: Connect to client and initialize framework
-    ConsoleWrite('[GWLauncher] Phase 2: Connecting to client...' & @CRLF)
-    ScanAndUpdateGameClients()
-    Local $charSelectIdx = -1
-    For $ci = 1 To $game_clients[0][0]
-        If $game_clients[$ci][0] = $launchedPID Then
-            $charSelectIdx = $ci
-            ExitLoop
-        EndIf
-    Next
-    If $charSelectIdx = -1 Then $charSelectIdx = $game_clients[0][0]
+    If $charSelectIdx = -1 Then
+        ConsoleWrite('[GWLauncher] ERROR: Could not find client PID ' & $launchedPID & ' in scan' & @CRLF)
+        Return False
+    EndIf
+
+    ConsoleWrite('[GWLauncher] Phase 2: Connecting to client ' & $charSelectIdx & '...' & @CRLF)
     SelectClient($charSelectIdx)
     InitializeGameClientForGWA2(False)
     ConsoleWrite('[GWLauncher] Initialized client ' & $charSelectIdx & @CRLF)
