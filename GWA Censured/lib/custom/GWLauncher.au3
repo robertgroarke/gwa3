@@ -808,6 +808,17 @@ Func GWLauncher_GetHeroConfig($characterName, $configFile = '')
     Return 'Standard'
 EndFunc
 
+;~ Find a window handle by process ID
+Func _FindWindowByPID($pid)
+    Local $list = WinList()
+    For $i = 1 To $list[0][0]
+        If $list[$i][0] = '' Then ContinueLoop
+        Local $winPID = WinGetProcess($list[$i][1])
+        If $winPID = $pid Then Return $list[$i][1]
+    Next
+    Return 0
+EndFunc
+
 ;~ Fully automated: launch account, wait for login, scan for client, connect
 Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeout = 120)
     ConsoleWrite('[GWLauncher] Auto-launch: ' & $characterName & @CRLF)
@@ -847,12 +858,13 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
     ; Wait for GW window, handle reconnect, press Play, then connect
     ConsoleWrite('[GWLauncher] Waiting for client to log in (timeout: ' & $timeout & 's)...' & @CRLF)
 
-    ; Phase 1: Wait for GW window to appear (poll every 1s, up to 30s)
-    ConsoleWrite('[GWLauncher] Phase 1: Waiting for GW window...' & @CRLF)
+    ; Phase 1: Wait for the NEW GW window to appear (match by PID)
+    ConsoleWrite('[GWLauncher] Phase 1: Waiting for GW window (PID ' & $result[0] & ')...' & @CRLF)
     Local $launchedPID = $result[0]
     Local $windowWait = TimerInit()
     While TimerDiff($windowWait) < 30000
-        If WinExists('[CLASS:ArenaNet_Dx_Window_Class]') Then ExitLoop
+        Local $hWnd = _FindWindowByPID($launchedPID)
+        If $hWnd <> 0 Then ExitLoop
         Sleep(1000)
     WEnd
 
