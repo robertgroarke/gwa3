@@ -847,14 +847,18 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
     ; Wait for GW window, handle reconnect, press Play, then connect
     ConsoleWrite('[GWLauncher] Waiting for client to log in (timeout: ' & $timeout & 's)...' & @CRLF)
 
-    ; Phase 1: Wait for GW window to appear (15s)
-    ConsoleWrite('[GWLauncher] Phase 1: Waiting 15s for GW window...' & @CRLF)
-    Sleep(15000)
+    ; Phase 1: Wait for GW window to appear (poll every 1s, up to 30s)
+    ConsoleWrite('[GWLauncher] Phase 1: Waiting for GW window...' & @CRLF)
+    Local $launchedPID = $result[0]
+    Local $windowWait = TimerInit()
+    While TimerDiff($windowWait) < 30000
+        If WinExists('[CLASS:ArenaNet_Dx_Window_Class]') Then ExitLoop
+        Sleep(1000)
+    WEnd
 
     ; Phase 2: Connect to client and initialize framework
     ConsoleWrite('[GWLauncher] Phase 2: Connecting to client...' & @CRLF)
     ScanAndUpdateGameClients()
-    Local $launchedPID = $result[0]
     Local $charSelectIdx = -1
     For $ci = 1 To $game_clients[0][0]
         If $game_clients[$ci][0] = $launchedPID Then
@@ -886,7 +890,7 @@ Func GWLauncher_AutoLaunchAndConnect($characterName, $accountsFile = '', $timeou
             ; clicking NO dismisses and stays at char select (then Play enters Gadd's)
             ; Wait for reconnect to process and either load into game or return to char select
             ConsoleWrite('[GWLauncher] Waiting for reconnect to process...' & @CRLF)
-            Sleep(5000)
+            Sleep(2000)
             ; If reconnect succeeded, we'll be in-game (not at char select)
             ; If reconnect failed (session expired), we'll still be at char select
         EndIf
