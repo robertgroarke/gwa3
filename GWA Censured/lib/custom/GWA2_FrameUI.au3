@@ -1230,9 +1230,9 @@ Func CraftConsumableByUI($itemIndex = 0, $quantity = 1)
     Local $mp = Int($mf[0])
     Local $ph = GetProcessHandle()
 
-    ; CRITICAL: Click the Craft tab [0,2] to ensure we're NOT on the Sell tab.
-    ; The Sell tab has the same button layout — clicking "craft" on Sell tab SELLS items.
-    Local $craftTab = NavigateFramePath($mp, "0,2")
+    ; CRITICAL: Click the Craft tab [0,3] to ensure we're NOT on the Sell tab.
+    ; [0,2] = Sell tab selector, [0,3] = Craft tab selector.
+    Local $craftTab = NavigateFramePath($mp, "0,3")
     If $craftTab <> 0 Then
         ClickFrameByPtr(Int($craftTab))
         Sleep(800)
