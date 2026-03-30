@@ -64,8 +64,9 @@ GWA3-003 ──► GWA3-005 ──► GWA3-020 ──► GWA3-021               
 
 ## Research Index
 
-> Maps every file in `research/GWCA_Disassembly_Research/` to the kanban ticket(s) it informs.
+> Maps all 139 files in `research/GWCA_Disassembly_Research/` to the kanban ticket(s) they inform.
 > Agents MUST read their assigned research files before starting implementation.
+> Last audit: 2026-03-30 (139 files total)
 
 ### Cluster 1: Hook System (9 files) → GWA3-006, GWA3-037
 
@@ -108,9 +109,23 @@ GWA3-003 ──► GWA3-005 ──► GWA3-020 ──► GWA3-021               
 | `GWCA_GameThread_HandlerExecutor_Addendum.md` | Callable record: 0x0C bytes (fn ptr, descriptor, metadata). Frame base recovery: `*this - 0x128`. | GWA3-020 |
 | `GWCA_GameThread_MessagePath_Addendum.md` | Coord message submission: validation → normalization → packet assembly → dispatcher fan-out | GWA3-020 |
 
-**Extended GameThread files (reference for deep dives, not required for initial implementation):**
+**Extended GameThread files (reference only, not required for implementation):**
 
-The remaining ~40 `GWCA_GameThread_*` files cover: frame ownership/layout, region/axis semantics, directional control state machine, interaction lifecycle, channel classification, metric/measurement systems, setup flow builders, text worker layer, and backend producer engine. These are useful for Phase 4+ (advanced frame UI, extended message types) but not blocking for the initial game thread hook.
+The remaining ~90 `GWCA_GameThread_*` files fall into sub-clusters. None are bot-facing or blocking for any ticket:
+
+| Sub-Cluster | Files | Domain | Bot Relevance |
+|-------------|-------|--------|---------------|
+| Frame ownership/layout | ~8 | Frame relations, ownership, region semantics | Reference for GWA3-020 edge cases |
+| Channel/protocol | ~8 | Channel classification, extended protocol, slot verbs | Reference for GWA3-039 |
+| Metrics/measurement | ~5 | Metric builders, aggregate grids, phase taxonomy | None — internal engine analytics |
+| Setup/construction | ~6 | Constructor skeletons, setup callbacks, default sources | None — GWCA bootstrap internals |
+| **Texture/Image/DXT** | **~19** | DXT decompression, ImgMem, atlas lifecycle, format crosswalk | **None — graphics pipeline** |
+| **Serialization/Transfer** | **~11** | Block serialization, offset streams, transfer banks, compressed block orchestration | **None — graphics codec internals** |
+| **Callback/Registry** | **~9** | Format callback dispatch, static registry installers, capability consumers | **None — graphics callback plumbing** |
+| **Format Mechanics** | **~3** | DXT stage-1 families, alpha prepass, parent branch gating | **None — algorithm analysis** |
+| Miscellaneous | ~10+ | Backend producer, text worker, interaction lifecycle, directional control FSM | Low — engine behavior docs |
+
+**The 47 newest files (texture/DXT/serialization/callback clusters) are entirely graphics engine internals with zero intersection to bot automation. No new kanban tickets needed.**
 
 ### Cluster 4: Toolbox Integration (15 files) → GWA3-039
 
