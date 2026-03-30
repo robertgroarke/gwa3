@@ -25,13 +25,14 @@ class IPCReader {
   readBot(botId) {
     const statusFile = path.join(this.ipcDir, botId, 'status.json');
     try {
+      const stat = fs.statSync(statusFile);
       const raw = fs.readFileSync(statusFile, 'utf8');
       const status = JSON.parse(raw);
       status._id = botId;
 
-      // Mark as offline if timestamp is older than 10 seconds
-      const now = Math.floor(Date.now() / 1000);
-      if (status.timestamp && (now - status.timestamp) > 10) {
+      // Mark as stale if FILE was last modified more than 15 seconds ago
+      const fileAgeSec = (Date.now() - stat.mtimeMs) / 1000;
+      if (fileAgeSec > 15) {
         status._stale = true;
         if (status.state !== 'offline') status.state = 'stale';
       }

@@ -47,14 +47,27 @@ Func WebIPC_Init($characterName)
     ReDim $g_WebIPC_Log[$g_WebIPC_LogMaxLines]
     $g_WebIPC_LogCount = 0
 
+    ; Register periodic timer so status updates even during long farming functions
+    AdlibRegister('_WebIPC_Tick', 3000)
+
     ConsoleWrite('[WebIPC] Initialized: ' & $g_WebIPC_Dir & @CRLF)
     WebIPC_WriteStatus()
+EndFunc
+
+;~ Timer callback — called every 3 seconds by AdlibRegister
+Func _WebIPC_Tick()
+    WebIPC_WriteStatus()
+    WebIPC_CheckCommand()
 EndFunc
 
 ;~ Append a log line to the ring buffer.
 ;~ Called from Out() to capture bot console output.
 Func WebIPC_AppendLog($text)
     If Not $g_WebIPC_Initialized Then Return
+
+    ; Strip leading CRLF/LF that Out() prepends between lines
+    $text = StringRegExpReplace($text, '^\s*[\r\n]+', '')
+    If $text = '' Then Return
 
     If $g_WebIPC_LogCount < $g_WebIPC_LogMaxLines Then
         $g_WebIPC_Log[$g_WebIPC_LogCount] = $text
@@ -274,11 +287,18 @@ Func _JsonBool($val)
     Return 'false'
 EndFunc
 
-;~ Get current Unix timestamp (seconds since epoch)
+;~ Get current Unix timestamp (seconds since epoch) using Windows API
 Func _GetUnixTimestamp()
-    Local $t = _DateDiff('s', '1970/01/01 00:00:00', _NowCalc())
-    ; Adjust for timezone (rough — UTC offset)
-    Return $t
+    Local $tSys = DllStructCreate('word;word;word;word;word;word;word;word')
+    DllCall('kernel32.dll', 'none', 'GetSystemTime', 'struct*', $tSys)
+    Local $tFile = DllStructCreate('dword;dword')
+    DllCall('kernel32.dll', 'bool', 'SystemTimeToFileTime', 'struct*', $tSys, 'struct*', $tFile)
+    ; FILETIME is 100-nanosecond intervals since 1601-01-01
+    ; Unix epoch offset: 116444736000000000
+    Local $lo = DllStructGetData($tFile, 1)
+    Local $hi = DllStructGetData($tFile, 2)
+    ; Convert to seconds: (hi * 2^32 + lo) / 10000000 - 11644473600
+    Return Int($hi * 4294967296 / 10000000 + $lo / 10000000 - 11644473600)
 EndFunc
 
 ;~ Format millisecond ticks to HH:MM:SS string

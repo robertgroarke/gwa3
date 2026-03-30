@@ -5,11 +5,12 @@ function authMiddleware(token) {
     if (req.path === '/api/auth/login' || req.path === '/api/health') return next();
     if (!req.path.startsWith('/api/')) return next();
 
+    // Accept token from Authorization header OR query param (for SSE)
     const auth = req.headers.authorization;
-    if (!auth || auth !== `Bearer ${token}`) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-    next();
+    const queryToken = req.query.token;
+    if (auth === `Bearer ${token}` || queryToken === token) return next();
+
+    return res.status(401).json({ error: 'Unauthorized' });
   };
 }
 
