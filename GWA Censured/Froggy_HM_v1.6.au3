@@ -324,7 +324,7 @@ EndFunc
 
 Func Setup($addHeroes = True)
 	Out("Entering Setup function...")
-    PerformMaintenance(True)
+    PerformMaintenance(True, False)
 	If GetMapID() <> 638 Then
 		Out("Incorrect map. Zoning to Gadds Encampment (638)...")
 		ZoneMap(638)

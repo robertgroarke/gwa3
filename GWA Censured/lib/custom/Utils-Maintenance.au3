@@ -10,6 +10,8 @@ Global Const $MAX_CHARACTER_GOLD = 95000        ; Max gold before depositing (10
 Global Const $TARGET_ID_KITS = 3                ; Target number of Superior ID kits
 Global Const $TARGET_SALVAGE_KITS = 8           ; Target number of Salvage kits
 Global Const $MAINTENANCE_TOWN = $ID_GADDS_CAMP
+Global Const $CONSET_BUY_INTERVAL = 10           ; Buy consets every N runs (0 = every maintenance)
+Global $g_LastConsetBuyRun = 0                    ; Run count at last conset purchase
 
 ; Materials to KEEP
 Global Const $KEEP_MATERIALS[] = [ _
@@ -101,8 +103,10 @@ Func PerformMaintenance($force = False, $buyConsumables = Default)
     ; Commented out because ecto logic broke when troubleshooting consumable buying
     ;BuyEctosWithExcessGold()
 
-    ; Buy Consumables (Consets) if we have materials
-    If $buyConsumables Then
+    ; Buy Consumables (Consets) every N runs
+    If $buyConsumables And ($GUI_RunCounter - $g_LastConsetBuyRun) >= $CONSET_BUY_INTERVAL Then
+        Out("Conset buy triggered (runs since last: " & ($GUI_RunCounter - $g_LastConsetBuyRun) & ")")
+        $g_LastConsetBuyRun = $GUI_RunCounter
         BuyConsumablesInEmbarkBeach()
     EndIf
     
