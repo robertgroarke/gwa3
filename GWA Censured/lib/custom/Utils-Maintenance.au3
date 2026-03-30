@@ -145,7 +145,7 @@ Func BuyConsumablesInEmbarkBeach()
     ; Powerstone (Edwin):100 Granite + 100 Dust  + 1000g
 
     ; How many consets to craft (1 conset = 1 Grail + 1 Essence + 1 Armor)
-    Local $targetSets = 5
+    Local $targetSets = 25
 
     ; Total materials needed for $targetSets consets:
     ;   Iron:    50*sets (Grail) + 50*sets (Armor) = 100*sets
