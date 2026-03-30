@@ -164,7 +164,15 @@ Func BuyConsumablesInEmbarkBeach()
 
     Out("Conset plan: " & $targetSets & " sets. Need Iron=" & $needIron & " Dust=" & $needDust & " Bone=" & $needBone & " Feather=" & $needFeather)
     Out("Have: Iron=" & $haveIron & " Dust=" & $haveDust & " Bone=" & $haveBone & " Feather=" & $haveFeather)
-    
+
+    ; Pull gold from bank so we can afford materials
+    If GetGoldCharacter() < 100000 Then
+        GoToXunlaiChest($ID_EMBARK_BEACH)
+        WithdrawGold(100000 - GetGoldCharacter())
+        Sleep(500)
+        Out("Withdrew gold, now have " & GetGoldCharacter())
+    EndIf
+
     ; 3. Buy ALL materials first, then craft at each trader
     ;    This avoids walking back and forth between traders and material trader
     Local $missingIron    = $needIron - GetMaterialCount($ID_IRON_INGOT)
