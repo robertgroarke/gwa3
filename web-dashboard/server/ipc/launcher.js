@@ -10,12 +10,19 @@ class BotLauncher {
   /** Launch a bot instance in headless mode */
   launch(characterName, script = 'Froggy_HM_v1.6.au3') {
     const scriptPath = path.join(this.autoitDir, script);
+    const fs = require('fs');
+    const logDir = path.join(this.autoitDir, 'ipc');
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+    const logFile = path.join(logDir, characterName.replace(/ /g, '').toLowerCase() + '.launch.log');
+    const logFd = fs.openSync(logFile, 'w');
+
     const proc = spawn(this.autoitExe, [scriptPath, '-autolaunch', characterName], {
       cwd: this.autoitDir,
       detached: true,
-      stdio: 'ignore',
+      stdio: ['ignore', logFd, logFd],
     });
     proc.unref();
+    fs.closeSync(logFd);
     return { pid: proc.pid, character: characterName, script };
   }
 
