@@ -1213,11 +1213,11 @@ EndFunc
 ; =============================================================================
 
 Global Const $MERCHANT_FRAME_HASH = 3613855137
-Global Const $CRAFT_BUTTON_HASH = 3461553848       ; Craft/Exchange button hash
-Global Const $CRAFT_TAB_PATH = "0,3"                ; Tab selector for Craft tab
+Global Const $CRAFT_BUTTON_PATH = "0,1,1"
 
 ;~ Craft an item at the currently open consumable trader dialog.
-;~ Assumes the trader dialog is already open (GoToConsumableTrader was called).
+;~ Uses the frame paths that were tested and confirmed working at Eyja/Kwat/Alcus.
+;~ The consumable trader dialog has: [0,0,N] = item list, [0,1,1] = Craft button.
 ;~ @param $itemIndex - index of the item in the trader's craft list (0=first item)
 ;~ @param $quantity - number of items to craft (clicks Craft button N times)
 ;~ @return True if at least one craft succeeded
@@ -1229,37 +1229,19 @@ Func CraftConsumableByUI($itemIndex = 0, $quantity = 1)
     EndIf
     Local $mp = Int($mf[0])
 
-    ; Click the Craft tab to ensure we're not on the Buy/Sell tab
-    Local $craftTab = NavigateFramePath($mp, $CRAFT_TAB_PATH)
-    If $craftTab <> 0 Then
-        ConsoleWrite('[FrameUI] CraftByUI: Clicking Craft tab' & @CRLF)
-        ClickFrameByPtr(Int($craftTab))
-        Sleep(800)
-    EndIf
-
-    ; After clicking Craft tab, the craft content is in [0,1]
-    ; Select the item from the craft item list [0,1,5,0,...] or similar
-    ; The item list is within the Craft tab content at [0,1]
-    ; Try selecting item from the craft list: [0,1,5,0,$itemIndex] based on deep dump
-    ; But the structure varies — try the simpler approach: items at [0,1,$itemIndex+5]
-    ; Actually: after clicking Craft tab, [0,1] is the active content.
-    ; Items are in a sub-container. Let's use the original approach but on tab 1:
-    Local $itemFrame = NavigateFramePath($mp, "0,1,5,0," & $itemIndex)
+    ; Select the item from the craft list
+    Local $itemFrame = NavigateFramePath($mp, "0,0," & $itemIndex)
     If $itemFrame = 0 Then
-        ; Fallback: try direct child indexing
-        $itemFrame = NavigateFramePath($mp, "0,1," & (5 + $itemIndex))
-        If $itemFrame = 0 Then
-            ConsoleWrite('[FrameUI] CraftByUI: Item at index ' & $itemIndex & ' not found in craft tab' & @CRLF)
-            Return False
-        EndIf
+        ConsoleWrite('[FrameUI] CraftByUI: Item at index ' & $itemIndex & ' not found' & @CRLF)
+        Return False
     EndIf
-    ClickFrameByPtr(Int($itemFrame))
+    ClickFrameByPtr($itemFrame)
     Sleep(500)
 
-    ; Find the Craft/Exchange button by hash (reliable across layouts)
-    Local $craftBtn = GetFrameByHash($CRAFT_BUTTON_HASH)
-    If $craftBtn[0] = 0 Then
-        ConsoleWrite('[FrameUI] CraftByUI: Craft button (hash ' & $CRAFT_BUTTON_HASH & ') not found' & @CRLF)
+    ; Find the Craft button
+    Local $craftBtn = NavigateFramePath($mp, $CRAFT_BUTTON_PATH)
+    If $craftBtn = 0 Then
+        ConsoleWrite('[FrameUI] CraftByUI: Craft button not found' & @CRLF)
         Return False
     EndIf
 
@@ -1268,8 +1250,8 @@ Func CraftConsumableByUI($itemIndex = 0, $quantity = 1)
     ConsoleWrite('[FrameUI] CraftByUI: Crafting ' & $quantity & ' items (index ' & $itemIndex & ')...' & @CRLF)
 
     For $i = 1 To $quantity
-        ClickFrameByPtr(Int($craftBtn[0]))
-        Sleep(500)
+        ClickFrameByPtr(Int($craftBtn))
+        Sleep(1000)
     Next
 
     Sleep(500)
