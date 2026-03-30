@@ -1213,14 +1213,14 @@ EndFunc
 ; =============================================================================
 
 Global Const $MERCHANT_FRAME_HASH = 3613855137
-Global Const $CRAFT_BUTTON_PATH = "0,1,1"
+; Craft/Exchange button hash — same button appears in both Craft and Sell tabs
+; Using hash lookup guarantees we find the right one regardless of tab layout
+Global Const $CRAFT_BUTTON_HASH = 3461553848
 
 ;~ Craft an item at the currently open consumable trader dialog.
-;~ Uses the frame paths that were tested and confirmed working at Eyja/Kwat/Alcus.
-;~ The consumable trader dialog has: [0,0,N] = item list, [0,1,1] = Craft button.
-;~ @param $itemIndex - index of the item in the trader's craft list (0=first item)
-;~ @param $quantity - number of items to craft (clicks Craft button N times)
-;~ @return True if at least one craft succeeded
+;~ IMPORTANT: The dialog has two tabs — Craft [0,0] and Sell [0,1].
+;~ We must click the Craft tab selector [0,2] first to ensure we're on the right tab.
+;~ Item selection: [0,0,N], Craft button: found by hash 3461553848.
 Func CraftConsumableByUI($itemIndex = 0, $quantity = 1)
     Local $mf = GetFrameByHash($MERCHANT_FRAME_HASH)
     If $mf[0] = 0 Then
@@ -1228,8 +1228,17 @@ Func CraftConsumableByUI($itemIndex = 0, $quantity = 1)
         Return False
     EndIf
     Local $mp = Int($mf[0])
+    Local $ph = GetProcessHandle()
 
-    ; Select the item from the craft list
+    ; CRITICAL: Click the Craft tab [0,2] to ensure we're NOT on the Sell tab.
+    ; The Sell tab has the same button layout — clicking "craft" on Sell tab SELLS items.
+    Local $craftTab = NavigateFramePath($mp, "0,2")
+    If $craftTab <> 0 Then
+        ClickFrameByPtr(Int($craftTab))
+        Sleep(800)
+    EndIf
+
+    ; Select the item from the craft list [0,0,N]
     Local $itemFrame = NavigateFramePath($mp, "0,0," & $itemIndex)
     If $itemFrame = 0 Then
         ConsoleWrite('[FrameUI] CraftByUI: Item at index ' & $itemIndex & ' not found' & @CRLF)
@@ -1238,12 +1247,13 @@ Func CraftConsumableByUI($itemIndex = 0, $quantity = 1)
     ClickFrameByPtr($itemFrame)
     Sleep(500)
 
-    ; Find the Craft button
-    Local $craftBtn = NavigateFramePath($mp, $CRAFT_BUTTON_PATH)
-    If $craftBtn = 0 Then
-        ConsoleWrite('[FrameUI] CraftByUI: Craft button not found' & @CRLF)
+    ; Find the Craft button by hash (appears in active tab)
+    Local $craftBtnResult = GetFrameByHash($CRAFT_BUTTON_HASH)
+    If $craftBtnResult[0] = 0 Then
+        ConsoleWrite('[FrameUI] CraftByUI: Craft button hash ' & $CRAFT_BUTTON_HASH & ' not found' & @CRLF)
         Return False
     EndIf
+    Local $craftBtn = Int($craftBtnResult[0])
 
     ; Click Craft N times, verifying each craft via gold decrease
     Local $goldBefore = GetGoldCharacter()
@@ -1253,34 +1263,29 @@ Func CraftConsumableByUI($itemIndex = 0, $quantity = 1)
     For $i = 1 To $quantity
         Local $goldPre = GetGoldCharacter()
 
-        ; Re-select item before each craft (dialog may deselect after crafting)
+        ; Re-select item before each craft (dialog deselects after crafting)
         ClickFrameByPtr($itemFrame)
         Sleep(500)
 
-        ClickFrameByPtr(Int($craftBtn))
+        ClickFrameByPtr($craftBtn)
         Sleep(1500)
 
         ; Verify gold decreased (craft costs gold)
         Local $goldPost = GetGoldCharacter()
         If $goldPost < $goldPre Then
             $crafted += 1
-            ConsoleWrite('[FrameUI] CraftByUI: Craft ' & $i & '/' & $quantity & ' OK (gold ' & $goldPre & '->' & $goldPost & ')' & @CRLF)
         Else
-            ConsoleWrite('[FrameUI] CraftByUI: Craft ' & $i & '/' & $quantity & ' FAILED (gold unchanged ' & $goldPost & ')' & @CRLF)
-            ; Re-select and retry once
+            ; Retry once
             ClickFrameByPtr($itemFrame)
             Sleep(500)
-            ClickFrameByPtr(Int($craftBtn))
+            ClickFrameByPtr($craftBtn)
             Sleep(1500)
-            If GetGoldCharacter() < $goldPre Then
-                $crafted += 1
-                ConsoleWrite('[FrameUI] CraftByUI: Retry succeeded' & @CRLF)
-            EndIf
+            If GetGoldCharacter() < $goldPre Then $crafted += 1
         EndIf
     Next
 
     Local $goldAfter = GetGoldCharacter()
-    ConsoleWrite('[FrameUI] CraftByUI: Done. Crafted ' & $crafted & '/' & $quantity & ' Gold ' & $goldBefore & ' -> ' & $goldAfter & @CRLF)
+    ConsoleWrite('[FrameUI] CraftByUI: Crafted ' & $crafted & '/' & $quantity & ' Gold ' & $goldBefore & ' -> ' & $goldAfter & @CRLF)
     Return ($crafted > 0)
 EndFunc
 
