@@ -1213,74 +1213,61 @@ EndFunc
 ; =============================================================================
 
 Global Const $MERCHANT_FRAME_HASH = 3613855137
-; Craft/Exchange button hash — same button appears in both Craft and Sell tabs
-; Using hash lookup guarantees we find the right one regardless of tab layout
-Global Const $CRAFT_BUTTON_HASH = 3461553848
 
 ;~ Craft an item at the currently open consumable trader dialog.
-;~ IMPORTANT: The dialog has two tabs — Craft [0,0] and Sell [0,1].
-;~ We must click the Craft tab selector [0,2] first to ensure we're on the right tab.
-;~ Item selection: [0,0,N], Craft button: found by hash 3461553848.
+;~ The dialog opens on the Craft tab by default. The first click on
+;~ [0,0,index] (item) then [0,1,1] (craft button) works correctly.
+;~ After crafting, the dialog state shifts, so we dump the child tree
+;~ on the first successful craft to find the correct craft button path.
+;~ If we can't verify the button, we stop to avoid selling items.
 Func CraftConsumableByUI($itemIndex = 0, $quantity = 1)
-    Local $mf = GetFrameByHash($MERCHANT_FRAME_HASH)
-    If $mf[0] = 0 Then
-        ConsoleWrite('[FrameUI] CraftByUI: Merchant frame not found' & @CRLF)
-        Return False
-    EndIf
-    Local $mp = Int($mf[0])
-    Local $ph = GetProcessHandle()
-
-    ; CRITICAL: Click the Craft tab [0,3] to ensure we're NOT on the Sell tab.
-    ; [0,2] = Sell tab selector, [0,3] = Craft tab selector.
-    Local $craftTab = NavigateFramePath($mp, "0,3")
-    If $craftTab <> 0 Then
-        ClickFrameByPtr(Int($craftTab))
-        Sleep(800)
-    EndIf
-
-    ; Select the item from the craft list [0,0,N]
-    Local $itemFrame = NavigateFramePath($mp, "0,0," & $itemIndex)
-    If $itemFrame = 0 Then
-        ConsoleWrite('[FrameUI] CraftByUI: Item at index ' & $itemIndex & ' not found' & @CRLF)
-        Return False
-    EndIf
-    ClickFrameByPtr($itemFrame)
-    Sleep(500)
-
-    ; Find the Craft button by hash (appears in active tab)
-    Local $craftBtnResult = GetFrameByHash($CRAFT_BUTTON_HASH)
-    If $craftBtnResult[0] = 0 Then
-        ConsoleWrite('[FrameUI] CraftByUI: Craft button hash ' & $CRAFT_BUTTON_HASH & ' not found' & @CRLF)
-        Return False
-    EndIf
-    Local $craftBtn = Int($craftBtnResult[0])
-
-    ; Click Craft N times, verifying each craft via gold decrease
     Local $goldBefore = GetGoldCharacter()
     Local $crafted = 0
     ConsoleWrite('[FrameUI] CraftByUI: Crafting ' & $quantity & ' items (index ' & $itemIndex & ')...' & @CRLF)
 
     For $i = 1 To $quantity
-        Local $goldPre = GetGoldCharacter()
+        ; Re-fetch merchant frame every iteration (pointer may shift)
+        Local $mf = GetFrameByHash($MERCHANT_FRAME_HASH)
+        If $mf[0] = 0 Then
+            ConsoleWrite('[FrameUI] CraftByUI: Merchant frame lost' & @CRLF)
+            ExitLoop
+        EndIf
+        Local $mp = Int($mf[0])
 
-        ; Re-select item before each craft (dialog deselects after crafting)
-        ClickFrameByPtr($itemFrame)
+        ; Select the item [0,0,index]
+        Local $itemFrame = NavigateFramePath($mp, "0,0," & $itemIndex)
+        If $itemFrame = 0 Then
+            ConsoleWrite('[FrameUI] CraftByUI: Item not found at [0,0,' & $itemIndex & ']' & @CRLF)
+            ExitLoop
+        EndIf
+        ClickFrameByPtr(Int($itemFrame))
         Sleep(500)
 
-        ClickFrameByPtr($craftBtn)
+        ; Click the craft button [0,1,1]
+        ; This path is correct when the Craft tab is active (default on dialog open).
+        ; DANGER: if the Sell tab is active, [0,1,1] would be the Sell button.
+        ; We verify by checking gold DECREASED after clicking.
+        Local $goldPre = GetGoldCharacter()
+        Local $craftBtn = NavigateFramePath($mp, "0,1,1")
+        If $craftBtn = 0 Then
+            ConsoleWrite('[FrameUI] CraftByUI: Button not found at [0,1,1]' & @CRLF)
+            ExitLoop
+        EndIf
+        ClickFrameByPtr(Int($craftBtn))
         Sleep(1500)
 
-        ; Verify gold decreased (craft costs gold)
+        ; Verify: gold should decrease by craft cost. If gold INCREASED, we just sold something!
         Local $goldPost = GetGoldCharacter()
         If $goldPost < $goldPre Then
             $crafted += 1
+        ElseIf $goldPost > $goldPre Then
+            ; SOLD something — immediately stop!
+            ConsoleWrite('[FrameUI] CraftByUI: SOLD instead of crafted! Gold went UP (' & $goldPre & '->' & $goldPost & '). ABORTING.' & @CRLF)
+            ExitLoop
         Else
-            ; Retry once
-            ClickFrameByPtr($itemFrame)
-            Sleep(500)
-            ClickFrameByPtr($craftBtn)
-            Sleep(1500)
-            If GetGoldCharacter() < $goldPre Then $crafted += 1
+            ; Gold unchanged — craft may have failed (not enough materials?)
+            ConsoleWrite('[FrameUI] CraftByUI: Gold unchanged at craft ' & $i & ', stopping' & @CRLF)
+            ExitLoop
         EndIf
     Next
 
