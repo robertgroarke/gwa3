@@ -187,39 +187,35 @@ Func BuyConsumablesInEmbarkBeach()
     If $missingBone > 0 Then BuyMaterialSafe($ID_BONE, $missingBone)
     If $missingFeather > 0 Then BuyMaterialSafe($ID_FEATHER, $missingFeather)
 
-    ; 4. Craft at each trader
-    If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
+    ; 4. Craft at each trader — go to trader, craft, store, next trader
+    ;    Gold was already withdrawn to 100k above, plenty for craft fees
 
-    ; Grails at Eyja (50 Iron + 50 Dust each)
+    ; Grails at Eyja (50 Iron + 50 Dust each, 250g fee)
     Out("Crafting " & $targetSets & " Grails at Eyja...")
     If GoToConsumableTrader("Eyja") Then
         Local $grailMats[2][2] = [[$ID_IRON_INGOT, 50], [$ID_PILE_OF_GLITTERING_DUST, 50]]
         BuyConsumableChunk($ID_GRAIL_OF_MIGHT, $targetSets, 250, $grailMats)
-        GoToXunlaiChest($ID_EMBARK_BEACH)
-        StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
     EndIf
+    GoToXunlaiChest($ID_EMBARK_BEACH)
+    StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
 
-    If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
-
-    ; Essence at Kwat (50 Feather + 50 Dust each)
+    ; Essence at Kwat (50 Feather + 50 Dust each, 250g fee)
     Out("Crafting " & $targetSets & " Essences at Kwat...")
     If GoToConsumableTrader("Kwat") Then
         Local $essenceMats[2][2] = [[$ID_FEATHER, 50], [$ID_PILE_OF_GLITTERING_DUST, 50]]
         BuyConsumableChunk($ID_ESSENCE_OF_CELERITY, $targetSets, 250, $essenceMats)
-        GoToXunlaiChest($ID_EMBARK_BEACH)
-        StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
     EndIf
+    GoToXunlaiChest($ID_EMBARK_BEACH)
+    StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
 
-    If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
-
-    ; Armor at Alcus (50 Iron + 50 Bone each)
+    ; Armor at Alcus (50 Iron + 50 Bone each, 250g fee)
     Out("Crafting " & $targetSets & " Armors at Alcus...")
     If GoToConsumableTrader("Alcus Nailbiter") Then
         Local $armorMats[2][2] = [[$ID_IRON_INGOT, 50], [$ID_BONE, 50]]
         BuyConsumableChunk($ID_ARMOR_OF_SALVATION, $targetSets, 250, $armorMats)
-        GoToXunlaiChest($ID_EMBARK_BEACH)
-        StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
     EndIf
+    GoToXunlaiChest($ID_EMBARK_BEACH)
+    StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
 
     ; Final Clean up
     GoToXunlaiChest($ID_EMBARK_BEACH)
