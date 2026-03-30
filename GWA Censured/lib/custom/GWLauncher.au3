@@ -808,11 +808,11 @@ Func GWLauncher_GetHeroConfig($characterName, $configFile = '')
     Return 'Standard'
 EndFunc
 
-;~ Find a window handle by process ID
+;~ Find a window handle by process ID (includes windows with empty titles)
 Func _FindWindowByPID($pid)
     Local $list = WinList()
     For $i = 1 To $list[0][0]
-        If $list[$i][0] = '' Then ContinueLoop
+        If $list[$i][1] = 0 Then ContinueLoop
         Local $winPID = WinGetProcess($list[$i][1])
         If $winPID = $pid Then Return $list[$i][1]
     Next
