@@ -134,152 +134,86 @@ Func BuyConsumablesInEmbarkBeach()
         Sleep(4000) ; Wait for load
     EndIf
 
-    ; Recipes
-    ; Grail (Eyja): 50 Iron + 50 Glit. Dust + 250g
-    ; Powerstone (Edwin): 100 Granite + 100 Glit. Dust + 1000g
-    ; Scroll (Edwin): 25 Fiber + 25 Bone + 250g
-    ; Essence (Kwat): 50 Feather + 50 Dust + 250g
-    ; Armor (Alcus): 50 Iron + 50 Bone + 250g
-    
-    ; Consumable IDs
+    ; Recipes (per unit):
+    ; Grail (Eyja):      50 Iron    + 50 Dust    + 250g
+    ; Essence (Kwat):    50 Feather + 50 Dust    + 250g
+    ; Armor (Alcus):     50 Iron    + 50 Bone    + 250g
+    ; Scroll (Edwin):    25 Fiber   + 25 Bone    + 250g
+    ; Powerstone (Edwin):100 Granite + 100 Dust  + 1000g
 
-    ; 1. Inventory Scan
-    Local $haveIron = GetMaterialCount($ID_IRON_INGOT)
-    Local $haveDust = GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
-    Local $haveBone = GetMaterialCount($ID_BONE)
+    ; How many consets to craft (1 conset = 1 Grail + 1 Essence + 1 Armor)
+    Local $targetSets = 5
+
+    ; Total materials needed for $targetSets consets:
+    ;   Iron:    50*sets (Grail) + 50*sets (Armor) = 100*sets
+    ;   Dust:    50*sets (Grail) + 50*sets (Essence) = 100*sets
+    ;   Bone:    50*sets (Armor) = 50*sets
+    ;   Feather: 50*sets (Essence) = 50*sets
+    Local $needIron    = $targetSets * 100
+    Local $needDust    = $targetSets * 100
+    Local $needBone    = $targetSets * 50
+    Local $needFeather = $targetSets * 50
+
+    Local $haveIron    = GetMaterialCount($ID_IRON_INGOT)
+    Local $haveDust    = GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
+    Local $haveBone    = GetMaterialCount($ID_BONE)
     Local $haveFeather = GetMaterialCount($ID_FEATHER)
-    Local $haveGranite = GetMaterialCount($ID_GRANITE_SLAB)
-    Local $haveFiber = GetMaterialCount($ID_PLANT_FIBER)
-    Local $haveGlitter = GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
-    
-    Out("Current Mats: Iron=" & $haveIron & " Glit=" & $haveGlitter & " Bone=" & $haveBone & " Granite=" & $haveGranite & " Fiber=" & $haveFiber)
 
-    ; 2. Calculate Targets
-    ; Goal 1: Deplete Granite and Fiber
-    Local $targetPowerstone = Floor($haveGranite / 100)
-    Local $targetScroll = Floor($haveFiber / 25)
+    Out("Conset plan: " & $targetSets & " sets. Need Iron=" & $needIron & " Dust=" & $needDust & " Bone=" & $needBone & " Feather=" & $needFeather)
+    Out("Have: Iron=" & $haveIron & " Dust=" & $haveDust & " Bone=" & $haveBone & " Feather=" & $haveFeather)
     
-    ; Goal 2: Equal Sets of Essence/Grail/Armor
-    Local $setsFromIron = $haveIron / 100
-    Local $setsFromGlit = ($haveGlitter - ($targetPowerstone * 100)) / 100
-    Local $setsFromBone = ($haveBone - ($targetScroll * 25)) / 50
-    Local $setsFromFeather = $haveFeather / 50
-    
-    ; Maximize sets to use up the most abundant resource
-    Local $targetSets = $setsFromIron
-    If $setsFromGlit > $targetSets Then $targetSets = $setsFromGlit
-    If $setsFromBone > $targetSets Then $targetSets = $setsFromBone
-    If $setsFromFeather > $targetSets Then $targetSets = $setsFromFeather
-    
-    $targetSets = Floor($targetSets)
-    If $targetSets < 5 Then $targetSets = 5 ; Minimum batch size
-    
-    Out("Plan: Powerstones=" & $targetPowerstone & ", Scrolls=" & $targetScroll & ", EqualSets=" & $targetSets)
-    
-    ; 3. Execute Cycles
-    
-    ; Cycle 1: Grails (Eyja)
-    If $targetSets > 0 Then
-        Out("Cycle 1: Grails")
-        Local $cycleIron = $targetSets * 50
-        Local $cycleDust = $targetSets * 50
-        
-        Local $missingIron = $cycleIron - GetMaterialCount($ID_IRON_INGOT)
-        Local $missingDust = $cycleDust - GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
-        
-        If $missingIron > 0 Then BuyMaterialSafe($ID_IRON_INGOT, $missingIron)
-        If $missingDust > 0 Then BuyMaterialSafe($ID_PILE_OF_GLITTERING_DUST, $missingDust)
-        
-        If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
-        
-        If GoToConsumableTrader("Eyja") Then 
-            Local $grailMats[2][2] = [[$ID_IRON_INGOT, 50], [$ID_PILE_OF_GLITTERING_DUST, 50]]
-            BuyConsumableChunk($ID_GRAIL_OF_MIGHT, $targetSets, 250, $grailMats)
-            GoToXunlaiChest($ID_EMBARK_BEACH)
-            StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
-        EndIf
+    ; 3. Buy ALL materials first, then craft at each trader
+    ;    This avoids walking back and forth between traders and material trader
+    Local $missingIron    = $needIron - GetMaterialCount($ID_IRON_INGOT)
+    Local $missingDust    = $needDust - GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
+    Local $missingBone    = $needBone - GetMaterialCount($ID_BONE)
+    Local $missingFeather = $needFeather - GetMaterialCount($ID_FEATHER)
+
+    Out("Buying: Iron=" & $missingIron & " Dust=" & $missingDust & " Bone=" & $missingBone & " Feather=" & $missingFeather)
+
+    If $missingIron > 0 Then BuyMaterialSafe($ID_IRON_INGOT, $missingIron)
+    If $missingDust > 0 Then BuyMaterialSafe($ID_PILE_OF_GLITTERING_DUST, $missingDust)
+    If $missingBone > 0 Then BuyMaterialSafe($ID_BONE, $missingBone)
+    If $missingFeather > 0 Then BuyMaterialSafe($ID_FEATHER, $missingFeather)
+
+    ; 4. Craft at each trader
+    If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
+
+    ; Grails at Eyja (50 Iron + 50 Dust each)
+    Out("Crafting " & $targetSets & " Grails at Eyja...")
+    If GoToConsumableTrader("Eyja") Then
+        Local $grailMats[2][2] = [[$ID_IRON_INGOT, 50], [$ID_PILE_OF_GLITTERING_DUST, 50]]
+        BuyConsumableChunk($ID_GRAIL_OF_MIGHT, $targetSets, 250, $grailMats)
+        GoToXunlaiChest($ID_EMBARK_BEACH)
+        StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
     EndIf
 
-    ; Cycle 2: Powerstone/Scroll (Edwin)
-    If $targetPowerstone > 0 Or $targetScroll > 0 Then
-        Out("Cycle 2: Powerstones/Scrolls")
-        Local $cycleGranite = $targetPowerstone * 100
-        Local $cycleDust = $targetPowerstone * 100
-        Local $cycleFiber = $targetScroll * 25
-        Local $cycleBone = $targetScroll * 25
-        
-        Local $missingGranite = $cycleGranite - GetMaterialCount($ID_GRANITE_SLAB)
-        Local $missingDust = $cycleDust - GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
-        Local $missingFiber = $cycleFiber - GetMaterialCount($ID_PLANT_FIBER)
-        Local $missingBone = $cycleBone - GetMaterialCount($ID_BONE)
-        
-        If $missingGranite > 0 Then BuyMaterialSafe($ID_GRANITE_SLAB, $missingGranite)
-        If $missingFiber > 0 Then BuyMaterialSafe($ID_PLANT_FIBER, $missingFiber)
-        If $missingBone > 0 Then BuyMaterialSafe($ID_BONE, $missingBone)
-        If $missingDust > 0 Then BuyMaterialSafe($ID_PILE_OF_GLITTERING_DUST, $missingDust)
-        
-        If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
-        
-        If GoToConsumableTrader("Edwin") Then
-            Local $powerstoneMats[2][2] = [[$ID_GRANITE_SLAB, 100], [$ID_PILE_OF_GLITTERING_DUST, 100]]
-            BuyConsumableChunk($ID_POWERSTONE_OF_COURAGE, $targetPowerstone, 1000, $powerstoneMats, "Edwin")
-            
-            Local $scrollMats[2][2] = [[$ID_PLANT_FIBER, 25], [$ID_BONE, 25]]
-            BuyConsumableChunk($ID_SCROLL_OF_RESURRECTION, $targetScroll, 250, $scrollMats)
-            
-            GoToXunlaiChest($ID_EMBARK_BEACH)
-            StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
-        EndIf
+    If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
+
+    ; Essence at Kwat (50 Feather + 50 Dust each)
+    Out("Crafting " & $targetSets & " Essences at Kwat...")
+    If GoToConsumableTrader("Kwat") Then
+        Local $essenceMats[2][2] = [[$ID_FEATHER, 50], [$ID_PILE_OF_GLITTERING_DUST, 50]]
+        BuyConsumableChunk($ID_ESSENCE_OF_CELERITY, $targetSets, 250, $essenceMats)
+        GoToXunlaiChest($ID_EMBARK_BEACH)
+        StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
     EndIf
 
-    ; Cycle 3: Essence (Kwat)
-    If $targetSets > 0 Then
-        Out("Cycle 3: Essence")
-        Local $cycleFeather = $targetSets * 50
-        Local $cycleDust = $targetSets * 50
-        
-        Local $missingFeather = $cycleFeather - GetMaterialCount($ID_FEATHER)
-        Local $missingDust = $cycleDust - GetMaterialCount($ID_PILE_OF_GLITTERING_DUST)
-        
-        If $missingFeather > 0 Then BuyMaterialSafe($ID_FEATHER, $missingFeather)
-        If $missingDust > 0 Then BuyMaterialSafe($ID_PILE_OF_GLITTERING_DUST, $missingDust)
-        
-        If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
-        
-        If GoToConsumableTrader("Kwat") Then 
-            Local $essenceMats[2][2] = [[$ID_FEATHER, 50], [$ID_PILE_OF_GLITTERING_DUST, 50]]
-            BuyConsumableChunk($ID_ESSENCE_OF_CELERITY, $targetSets, 250, $essenceMats)
-            GoToXunlaiChest($ID_EMBARK_BEACH)
-            StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
-        EndIf
-    EndIf
+    If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
 
-    ; Cycle 4: Armor (Alcus)
-    If $targetSets > 0 Then
-        Out("Cycle 4: Armor")
-        Local $cycleIron = $targetSets * 50
-        Local $cycleBone = $targetSets * 50
-        
-        Local $missingIron = $cycleIron - GetMaterialCount($ID_IRON_INGOT)
-        Local $missingBone = $cycleBone - GetMaterialCount($ID_BONE)
-        
-        If $missingIron > 0 Then BuyMaterialSafe($ID_IRON_INGOT, $missingIron)
-        If $missingBone > 0 Then BuyMaterialSafe($ID_BONE, $missingBone)
-        
-        If GetGoldCharacter() < 10000 Then RefuelGold($ID_EMBARK_BEACH)
-        
-        If GoToConsumableTrader("Alcus Nailbiter") Then 
-            Local $armorMats[2][2] = [[$ID_IRON_INGOT, 50], [$ID_BONE, 50]]
-            BuyConsumableChunk($ID_ARMOR_OF_SALVATION, $targetSets, 250, $armorMats)
-            GoToXunlaiChest($ID_EMBARK_BEACH)
-            StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
-        EndIf
+    ; Armor at Alcus (50 Iron + 50 Bone each)
+    Out("Crafting " & $targetSets & " Armors at Alcus...")
+    If GoToConsumableTrader("Alcus Nailbiter") Then
+        Local $armorMats[2][2] = [[$ID_IRON_INGOT, 50], [$ID_BONE, 50]]
+        BuyConsumableChunk($ID_ARMOR_OF_SALVATION, $targetSets, 250, $armorMats)
+        GoToXunlaiChest($ID_EMBARK_BEACH)
+        StoreItemsInXunlaiStorageSafe("ShouldStoreMaintenanceItems")
     EndIf
 
     ; Final Clean up
     GoToXunlaiChest($ID_EMBARK_BEACH)
-    DepositGold(GetGoldCharacter() - 5000)
-    
+    If GetGoldCharacter() > 5000 Then DepositGold(GetGoldCharacter() - 5000)
+
     TravelToOutpost($MAINTENANCE_TOWN)
 EndFunc
 
@@ -289,13 +223,11 @@ Func GoToRareMaterialTrader($townID)
 EndFunc
 
 
-Func BuyConsumableChunk($itemID, $amount, $unitCost, $materials = 0, $traderName = "Eyja")
+Func BuyConsumableChunk($itemID, $amount, $unitCost, $materials = 0)
     If $amount <= 0 Then Return
     Out("Debug: BuyConsumableChunk ID=" & $itemID & " Amount=" & $amount & " Cost=" & $unitCost)
-    
-    If Not GoToConsumableTrader($traderName) Then Return
-    
 
+    ; Caller must already be at the correct trader with dialog open
 
     If IsArray($materials) Then
         ; Use UI frame-based crafting (CraftItemSafe packet approach is broken)
