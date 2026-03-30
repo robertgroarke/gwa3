@@ -56,7 +56,11 @@ Func RunDiagnostics()
     ; Check gold
     Local $characterGold = GetGoldCharacter()
     If $characterGold >= $MAX_CHARACTER_GOLD Then $needsMaintenance = True
-    
+
+    ; Check bank gold — if over 800k, should buy consets
+    Local $storageGold = GetGoldStorage()
+    If $storageGold >= 800000 Then $needsMaintenance = True
+
     Return $needsMaintenance
 EndFunc
 
@@ -99,9 +103,8 @@ Func PerformMaintenance($force = False, $buyConsumables = Default)
     ; Buy Consumables (Consets) every N runs, or on first maintenance if bank gold is high
     If $buyConsumables Then
         Local $runsSinceBuy = $GUI_RunCounter - $g_LastConsetBuyRun
-        Local $neverBought = ($g_LastConsetBuyRun < 0)
         Local $intervalReached = ($runsSinceBuy >= $CONSET_BUY_INTERVAL)
-        Local $bankRich = $neverBought And (GetGoldStorage() >= 500000)
+        Local $bankRich = (GetGoldStorage() >= 800000)
 
         If $intervalReached Or $bankRich Then
             Out("Conset buy triggered (runs=" & $runsSinceBuy & " bank=" & GetGoldStorage() & ")")
