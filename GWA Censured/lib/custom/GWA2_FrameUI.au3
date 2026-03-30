@@ -1215,64 +1215,67 @@ EndFunc
 Global Const $MERCHANT_FRAME_HASH = 3613855137
 
 ;~ Craft an item at the currently open consumable trader dialog.
-;~ The dialog opens on the Craft tab by default. The first click on
-;~ [0,0,index] (item) then [0,1,1] (craft button) works correctly.
-;~ After crafting, the dialog state shifts, so we dump the child tree
-;~ on the first successful craft to find the correct craft button path.
-;~ If we can't verify the button, we stop to avoid selling items.
+;~ Select item once, find craft button once, then click craft repeatedly.
+;~ Aborts if gold goes UP (means we sold instead of crafted).
 Func CraftConsumableByUI($itemIndex = 0, $quantity = 1)
-    Local $goldBefore = GetGoldCharacter()
-    Local $crafted = 0
-    ConsoleWrite('[FrameUI] CraftByUI: Crafting ' & $quantity & ' items (index ' & $itemIndex & ')...' & @CRLF)
+    Local $mf = GetFrameByHash($MERCHANT_FRAME_HASH)
+    If $mf[0] = 0 Then
+        ConsoleWrite('[FrameUI] CraftByUI: Merchant frame not found' & @CRLF)
+        Return False
+    EndIf
+    Local $mp = Int($mf[0])
 
-    For $i = 1 To $quantity
-        ; Re-fetch merchant frame every iteration (pointer may shift)
-        Local $mf = GetFrameByHash($MERCHANT_FRAME_HASH)
-        If $mf[0] = 0 Then
-            ConsoleWrite('[FrameUI] CraftByUI: Merchant frame lost' & @CRLF)
-            ExitLoop
-        EndIf
-        Local $mp = Int($mf[0])
+    ; Select the item once
+    Local $itemFrame = NavigateFramePath($mp, "0,0," & $itemIndex)
+    If $itemFrame = 0 Then
+        ConsoleWrite('[FrameUI] CraftByUI: Item not found at [0,0,' & $itemIndex & ']' & @CRLF)
+        Return False
+    EndIf
+    ClickFrameByPtr(Int($itemFrame))
+    Sleep(500)
 
-        ; Select the item [0,0,index]
-        Local $itemFrame = NavigateFramePath($mp, "0,0," & $itemIndex)
-        If $itemFrame = 0 Then
-            ConsoleWrite('[FrameUI] CraftByUI: Item not found at [0,0,' & $itemIndex & ']' & @CRLF)
-            ExitLoop
-        EndIf
-        ClickFrameByPtr(Int($itemFrame))
-        Sleep(500)
+    ; Find the craft button once
+    Local $craftBtn = NavigateFramePath($mp, "0,1,1")
+    If $craftBtn = 0 Then
+        ConsoleWrite('[FrameUI] CraftByUI: Craft button not found at [0,1,1]' & @CRLF)
+        Return False
+    EndIf
 
-        ; Click the craft button [0,1,1]
-        ; This path is correct when the Craft tab is active (default on dialog open).
-        ; DANGER: if the Sell tab is active, [0,1,1] would be the Sell button.
-        ; We verify by checking gold DECREASED after clicking.
-        Local $goldPre = GetGoldCharacter()
-        Local $craftBtn = NavigateFramePath($mp, "0,1,1")
-        If $craftBtn = 0 Then
-            ConsoleWrite('[FrameUI] CraftByUI: Button not found at [0,1,1]' & @CRLF)
-            ExitLoop
-        EndIf
+    ; Verify first craft works before committing to the loop
+    Local $goldPre = GetGoldCharacter()
+    ClickFrameByPtr(Int($craftBtn))
+    Sleep(1500)
+    Local $goldPost = GetGoldCharacter()
+
+    If $goldPost > $goldPre Then
+        ConsoleWrite('[FrameUI] CraftByUI: SOLD instead of crafted! ABORTING.' & @CRLF)
+        Return False
+    ElseIf $goldPost >= $goldPre Then
+        ConsoleWrite('[FrameUI] CraftByUI: First craft failed (gold unchanged), aborting' & @CRLF)
+        Return False
+    EndIf
+
+    ; First craft succeeded — now just keep clicking the same button
+    Local $crafted = 1
+    ConsoleWrite('[FrameUI] CraftByUI: First craft OK, clicking ' & ($quantity - 1) & ' more...' & @CRLF)
+
+    For $i = 2 To $quantity
         ClickFrameByPtr(Int($craftBtn))
-        Sleep(1500)
+        Sleep(1000)
 
-        ; Verify: gold should decrease by craft cost. If gold INCREASED, we just sold something!
-        Local $goldPost = GetGoldCharacter()
-        If $goldPost < $goldPre Then
-            $crafted += 1
-        ElseIf $goldPost > $goldPre Then
-            ; SOLD something — immediately stop!
-            ConsoleWrite('[FrameUI] CraftByUI: SOLD instead of crafted! Gold went UP (' & $goldPre & '->' & $goldPost & '). ABORTING.' & @CRLF)
-            ExitLoop
-        Else
-            ; Gold unchanged — craft may have failed (not enough materials?)
-            ConsoleWrite('[FrameUI] CraftByUI: Gold unchanged at craft ' & $i & ', stopping' & @CRLF)
-            ExitLoop
+        ; Spot check every 5 crafts
+        If Mod($i, 5) = 0 Then
+            Local $g = GetGoldCharacter()
+            If $g > $goldPre Then
+                ConsoleWrite('[FrameUI] CraftByUI: Gold went UP at craft ' & $i & ', ABORTING.' & @CRLF)
+                ExitLoop
+            EndIf
         EndIf
+        $crafted += 1
     Next
 
     Local $goldAfter = GetGoldCharacter()
-    ConsoleWrite('[FrameUI] CraftByUI: Crafted ' & $crafted & '/' & $quantity & ' Gold ' & $goldBefore & ' -> ' & $goldAfter & @CRLF)
+    ConsoleWrite('[FrameUI] CraftByUI: Crafted ' & $crafted & '/' & $quantity & ' Gold ' & $goldPre & ' -> ' & $goldAfter & @CRLF)
     Return ($crafted > 0)
 EndFunc
 
