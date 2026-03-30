@@ -31,6 +31,15 @@ function botsRouter(reader, writer, launcher) {
     if (action === 'update_settings' && settings) extra.settings = settings;
 
     const cmd = writer.sendCommand(req.params.id, action, extra);
+
+    // For kill: also force-kill the process since the bot may not read command.json in time
+    if (action === 'kill') {
+      const status = reader.readBot(req.params.id);
+      if (status && status.pid) {
+        setTimeout(() => launcher.kill(status.pid), 2000); // Give IPC 2s, then force kill
+      }
+    }
+
     res.json({ ok: true, command: cmd });
   });
 
