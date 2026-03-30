@@ -92,16 +92,9 @@ Func PerformMaintenance($force = False, $buyConsumables = Default)
         SellBasicMaterialsToMerchant(ShouldSellMaterialForMaintenance, $MAINTENANCE_TOWN)
     EndIf
     
-    BuyKitsUntilTarget()
-    
     GoToXunlaiChest($MAINTENANCE_TOWN)
     If GetGoldCharacter() > 5000 Then DepositGold(GetGoldCharacter() - 5000)
     StoreItemsInXunlaiStorageSafe("ShouldStoreTome")
-    
-
-    ; Buy ectos if bank gold is getting too high (approaching 1M cap)
-    ; Commented out because ecto logic broke when troubleshooting consumable buying
-    ;BuyEctosWithExcessGold()
 
     ; Buy Consumables (Consets) every N runs, or on first maintenance if bank gold is high
     If $buyConsumables Then
@@ -116,7 +109,16 @@ Func PerformMaintenance($force = False, $buyConsumables = Default)
             BuyConsumablesInEmbarkBeach()
         EndIf
     EndIf
-    
+
+    ; Buy kits LAST — after conset buying, tongue salvaging, and all selling.
+    ; This ensures we leave maintenance with kits in inventory.
+    BuyKitsUntilTarget()
+
+    ; Final gold deposit — keep enough for kits + crafting overhead
+    If GetMapID() <> $MAINTENANCE_TOWN Then TravelToOutpost($MAINTENANCE_TOWN)
+    GoToXunlaiChest($MAINTENANCE_TOWN)
+    If GetGoldCharacter() > 10000 Then DepositGold(GetGoldCharacter() - 10000)
+
     Out("Maintenance Complete")
 EndFunc
 
