@@ -1245,19 +1245,43 @@ Func CraftConsumableByUI($itemIndex = 0, $quantity = 1)
         Return False
     EndIf
 
-    ; Click Craft N times
+    ; Click Craft N times, verifying each craft via gold decrease
     Local $goldBefore = GetGoldCharacter()
+    Local $crafted = 0
     ConsoleWrite('[FrameUI] CraftByUI: Crafting ' & $quantity & ' items (index ' & $itemIndex & ')...' & @CRLF)
 
     For $i = 1 To $quantity
+        Local $goldPre = GetGoldCharacter()
+
+        ; Re-select item before each craft (dialog may deselect after crafting)
+        ClickFrameByPtr($itemFrame)
+        Sleep(500)
+
         ClickFrameByPtr(Int($craftBtn))
-        Sleep(1000)
+        Sleep(1500)
+
+        ; Verify gold decreased (craft costs gold)
+        Local $goldPost = GetGoldCharacter()
+        If $goldPost < $goldPre Then
+            $crafted += 1
+            ConsoleWrite('[FrameUI] CraftByUI: Craft ' & $i & '/' & $quantity & ' OK (gold ' & $goldPre & '->' & $goldPost & ')' & @CRLF)
+        Else
+            ConsoleWrite('[FrameUI] CraftByUI: Craft ' & $i & '/' & $quantity & ' FAILED (gold unchanged ' & $goldPost & ')' & @CRLF)
+            ; Re-select and retry once
+            ClickFrameByPtr($itemFrame)
+            Sleep(500)
+            ClickFrameByPtr(Int($craftBtn))
+            Sleep(1500)
+            If GetGoldCharacter() < $goldPre Then
+                $crafted += 1
+                ConsoleWrite('[FrameUI] CraftByUI: Retry succeeded' & @CRLF)
+            EndIf
+        EndIf
     Next
 
-    Sleep(500)
     Local $goldAfter = GetGoldCharacter()
-    ConsoleWrite('[FrameUI] CraftByUI: Gold ' & $goldBefore & ' -> ' & $goldAfter & @CRLF)
-    Return True
+    ConsoleWrite('[FrameUI] CraftByUI: Done. Crafted ' & $crafted & '/' & $quantity & ' Gold ' & $goldBefore & ' -> ' & $goldAfter & @CRLF)
+    Return ($crafted > 0)
 EndFunc
 
 ; =============================================================================
