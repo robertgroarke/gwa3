@@ -27,11 +27,15 @@ add_library(gwa3_core OBJECT
     src/core/Log.cpp
     src/core/Scanner.cpp
     src/core/Offsets.cpp
+    src/core/GameThread.cpp
 )
 
 target_include_directories(gwa3_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+# gwa3_core needs MinHook headers (for GameThread.cpp)
+target_link_libraries(gwa3_core PUBLIC minhook)
 
 # --- gwa3.dll ---
 add_library(gwa3 SHARED
@@ -59,6 +63,8 @@ add_executable(gwa3_tests
 target_include_directories(gwa3_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+target_link_libraries(gwa3_tests PRIVATE minhook)
 
 set_target_properties(gwa3_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
