@@ -25,6 +25,7 @@ FetchContent_MakeAvailable(minhook)
 # --- gwa3_core (OBJECT library — shared between DLL and tests) ---
 add_library(gwa3_core OBJECT
     src/core/Log.cpp
+    src/core/Scanner.cpp
 )
 
 target_include_directories(gwa3_core PUBLIC
