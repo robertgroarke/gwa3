@@ -48,6 +48,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     bool botTest = CheckFlag("GWA3_TEST_BOT", "gwa3_test_bot.flag");
     bool cmdTest = CheckFlag("GWA3_TEST_COMMANDS", "gwa3_test_commands.flag");
     bool anyTest = smokeTest || botTest || cmdTest;
+    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d", smokeTest, botTest, cmdTest);
 
     // Step 1: Initialize scanner (parse GW.exe PE headers)
     HMODULE gwModule = GetModuleHandleA(nullptr);
