@@ -42,8 +42,9 @@ add_library(gwa3_core OBJECT
     src/managers/ChatMgr.cpp
     src/managers/TradeMgr.cpp
     src/managers/FriendListMgr.cpp
-    src/utils/StringEncoding.cpp
+    src/utils/EncStrCodec.cpp
     src/bot/BotFramework.cpp
+    src/bot/FroggyHM.cpp
 )
 
 target_include_directories(gwa3_core PUBLIC
@@ -56,6 +57,7 @@ target_link_libraries(gwa3_core PUBLIC minhook version)
 # --- gwa3.dll ---
 add_library(gwa3 SHARED
     src/dllmain.cpp
+    src/utils/StringEncoding.cpp
     $<TARGET_OBJECTS:gwa3_core>
 )
 
@@ -85,6 +87,7 @@ target_link_libraries(gwa3_tests PRIVATE minhook version)
 set_target_properties(gwa3_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
 
 # --- injector.exe ---
 add_executable(injector
