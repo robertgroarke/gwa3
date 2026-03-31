@@ -219,6 +219,8 @@ static const PatternDef s_patterns[] = {
 
 static constexpr int PATTERN_COUNT = sizeof(s_patterns) / sizeof(s_patterns[0]);
 
+static void PostProcessOffsets(); // forward decl
+
 static bool s_resolved = false;
 static int s_resolvedCount = 0;
 static int s_failedCount = 0;
@@ -267,8 +269,78 @@ bool ResolveAll() {
     Log::Info("Offsets: Resolved %d/%d patterns (%d failed)",
               s_resolvedCount, PATTERN_COUNT, s_failedCount);
 
+    // Post-process: dereference ptr-type offsets to get runtime data pointers.
+    // Mirrors MapScanResultsToLabels() in GWA2_Assembly.au3.
+    PostProcessOffsets();
+
     s_resolved = !criticalFail;
     return s_resolved;
+}
+
+// Helper: read a uint32 at address (in-process, so just dereference)
+static uintptr_t Deref(uintptr_t addr) {
+    if (addr < 0x10000) return 0;
+    return *reinterpret_cast<uintptr_t*>(addr);
+}
+
+static void PostProcessOffsets() {
+    Log::Info("Offsets: Post-processing (dereferencing ptr-type patterns)...");
+
+    // Core pointers: scan result contains address of code that references the data pointer
+    if (BasePointer)    BasePointer    = Deref(BasePointer);
+    if (Ping)           Ping           = Deref(Ping);
+    if (StatusCode)     StatusCode     = Deref(StatusCode);
+    if (PacketLocation) PacketLocation = Deref(PacketLocation);
+    if (ActionBase)     ActionBase     = Deref(ActionBase);
+
+    // PreGame: offset +0x35 from assertion site, then deref
+    if (PreGame)        PreGame        = Deref(PreGame + 0x35);
+    // FrameArray: offset -0x13 from assertion site, then deref
+    if (FrameArray)     FrameArray     = Deref(FrameArray - 0x13);
+    // SceneContext: offset +0x1B from scan, then deref
+    if (SceneContext) {
+        uintptr_t ctx = Deref(SceneContext + 0x1B);
+        SceneContext = ctx;
+    }
+
+    // Skills
+    if (SkillBase)      SkillBase      = Deref(SkillBase);
+    if (SkillTimer)     SkillTimer     = Deref(SkillTimer);
+
+    // Agents
+    if (AgentBase)      AgentBase      = Deref(AgentBase);
+    if (MyID)           MyID           = Deref(MyID);
+    if (CurrentTarget)  CurrentTarget  = Deref(CurrentTarget);
+
+    // Map
+    if (InstanceInfo)   InstanceInfo   = Deref(InstanceInfo);
+    if (WorldConst)     WorldConst     = Deref(WorldConst);
+    if (ClickCoords)    ClickCoords    = Deref(ClickCoords);
+    if (Region)         Region         = Deref(Region);
+    if (AreaInfo)       AreaInfo        = Deref(AreaInfo);
+
+    // Attributes
+    if (AttributeInfo)  AttributeInfo  = Deref(AttributeInfo);
+
+    // Trade
+    if (BuyItemBase)    BuyItemBase    = Deref(BuyItemBase);
+    if (SalvageGlobal)  SalvageGlobal  = Deref(SalvageGlobal - 0x4);
+
+    // UI: Dialog and OpenChest need E8 call resolution
+    if (Dialog)         Dialog         = Scanner::FunctionFromNearCall(Dialog);
+    if (OpenChest)      OpenChest      = Scanner::FunctionFromNearCall(OpenChest);
+    if (SetDifficulty)  SetDifficulty  = Scanner::FunctionFromNearCall(SetDifficulty);
+    if (EnterMission)   EnterMission   = Scanner::FunctionFromNearCall(EnterMission);
+
+    // ChangeTarget: AutoIt adds +1 to the scan result
+    if (ChangeTarget)   ChangeTarget   = ChangeTarget + 1;
+
+    // FriendList: complex post-processing (FindInRange + deref) — skip for now
+    // RemoveFriend: complex post-processing (FindInRange + ResolveBranch) — skip for now
+
+    Log::Info("Offsets: Post-processing complete");
+    Log::Info("Offsets: BasePointer=0x%08X MyID=0x%08X AgentBase=0x%08X InstanceInfo=0x%08X",
+              BasePointer, MyID, AgentBase, InstanceInfo);
 }
 
 bool IsResolved()       { return s_resolved; }
