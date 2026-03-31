@@ -1225,8 +1225,8 @@ Run Froggy_HM_v1.6.au3 on the GWA3 stack (gwa3.dll + GWA3_Compat.au3) for 10+ co
 
 | Field | Value |
 |-------|-------|
-| **Assignee** | |
-| **Status** | `backlog` |
+| **Assignee** | agent |
+| **Status** | `done` |
 | **Estimate** | M |
 | **Depends On** | GWA3-002 |
 | **Blocks** | — |
@@ -2046,7 +2046,7 @@ WAVE 7 (Endgame — needs all integration):
 | GWA3-032 | Integration: Merchant + Crafting | M | 026, **046** | `backlog` |
 | **Epic 7: Hardening** | | | | |
 | GWA3-033 | Full Froggy HM 10+ Runs | XL | 028-032 | `backlog` |
-| GWA3-034 | Multi-Client Injector | M | 002 | `backlog` |
+| GWA3-034 | Multi-Client Injector | M | 002 | `done` |
 | GWA3-035 | Pattern Health Check Tool | M | 005 | `backlog` |
 | GWA3-036 | Crash Protection + SEH | M | 033 | `backlog` |
 | **Epic 8: Research-Derived** | | | | |
