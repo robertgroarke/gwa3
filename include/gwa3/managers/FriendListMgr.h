@@ -1,4 +1,13 @@
 #pragma once
+
+#include <cstdint>
+
 namespace GWA3::FriendListMgr {
-    // TODO: Implement in GWA3-024
+
+    bool Initialize();
+
+    void AddFriend(const wchar_t* name);
+    void RemoveFriend(const wchar_t* name);
+    void SetPlayerStatus(uint32_t status);
+
 } // namespace GWA3::FriendListMgr
