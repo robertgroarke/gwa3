@@ -48,6 +48,16 @@ set_target_properties(gwa3_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
+# --- injector.exe ---
+add_executable(injector
+    tools/injector.cpp
+)
+
+set_target_properties(injector PROPERTIES
+    OUTPUT_NAME "injector"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
 # Run tests as post-build step
 add_custom_command(TARGET gwa3_tests POST_BUILD
     COMMAND $<TARGET_FILE:gwa3_tests>
