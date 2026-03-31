@@ -562,9 +562,15 @@ Define `game/Effect.h` — `Buff`, `Effect` structs, effect query functions.
 - [ ] `Buff` struct: skill_id, buff_id, target_id
 - [ ] `Effect` struct: skill_id, attribute_level, effect_id, agent_id, duration, timestamp
 - [ ] `GetBuffs(count)`, `GetEffects(count)`, `HasEffect(agent_id, skill_id)`, `GetEffectTimeRemaining(agent_id, skill_id)`
+- [ ] `DropBuff(buff_id)` — remove specific buff/enchantment
+- [ ] `GetAlcoholLevel()` — drunkard title tracking
+- [ ] `GetPlayerEffectBySkillId(skill_id)` — direct effect lookup by skill
+- [ ] `GetPlayerBuffBySkillId(skill_id)` — direct buff lookup by skill
+- [ ] `GetAgentEffects(agent_id)` / `GetAgentBuffs(agent_id)` — per-agent lookups
 - [ ] Validation: cast enchantment on self, confirm HasEffect returns true and duration is correct
 
-**Reference:** `GWA2_Assembly.au3` `$BUFF_STRUCT_TEMPLATE`, `$EFFECT_STRUCT_TEMPLATE`
+**GWCA Reference:** `toolbox/GWToolboxpp-master/Dependencies/GWCA/include/GWCA/Managers/EffectMgr.h`
+**AutoIt Reference:** `GWA2_Assembly.au3` `$BUFF_STRUCT_TEMPLATE`, `$EFFECT_STRUCT_TEMPLATE`
 
 ---
 
@@ -674,9 +680,15 @@ Implement `managers/ItemMgr.cpp` — item manipulation, salvage sessions, mercha
 - [ ] `DestroyItem(item_id)` — sends destroy packet
 - [ ] `BuyItem(item_id, quantity)`, `SellItem(item_id)`, `RequestQuote(item_id)` — merchant ops
 - [ ] `ChangeGold(char_amount, storage_amount)` — gold management
-- [ ] Test: move item between bags, use consumable, salvage an item
+- [ ] `PickUpItem(item_id, call_target)` — pick up ground item (CRITICAL for loot)
+- [ ] `OpenXunlaiWindow()` — open storage chest dialog
+- [ ] `CanAccessXunlaiChest()` — check storage availability
+- [ ] `DepositGold(amount)` / `WithdrawGold(amount)` — gold management
+- [ ] `GetEquipmentVisibility(type)` / `SetEquipmentVisibility(type, state)` — helm/cape/costume toggle
+- [ ] Test: move item between bags, use consumable, salvage an item, pick up ground item
 
-**Reference:** `GWA2.au3` item functions, `Utils.au3` salvage/merchant functions, `GWA2_Assembly.au3` CommandEquipItem/CommandSalvage
+**GWCA Reference:** `toolbox/GWToolboxpp-master/Dependencies/GWCA/include/GWCA/Managers/ItemMgr.h`
+**AutoIt Reference:** `GWA2.au3` item functions, `Utils.au3` salvage/merchant functions
 
 ---
 
@@ -702,9 +714,17 @@ Implement `managers/MapMgr.cpp` — map travel, instance management, difficulty.
 - [ ] `TravelGuildHall()`, `LeaveGuildHall()` — guild hall packets
 - [ ] Install MapLoad hook — fires callback when zone load completes
 - [ ] `WaitMapLoading(target_map, timeout)` — blocking wait helper
-- [ ] Test: travel from one outpost to another, set hard mode
+- [ ] `SkipCinematic()` — skip dungeon/mission cutscenes
+- [ ] `GetIsInCinematic()` — detect cinematic state
+- [ ] `EnterChallenge()` / `CancelEnterChallenge()` — enter mission/dungeon
+- [ ] `GetFoesKilled()` / `GetFoesToKill()` — vanquish progress tracking
+- [ ] `QueryAltitude(pos, radius)` — terrain height at position
+- [ ] `GetPathingMap()` — pathfinding geometry access
+- [ ] `GetInstanceTime()` — instance uptime in milliseconds
+- [ ] Test: travel from one outpost to another, set hard mode, skip cinematic
 
-**Reference:** `GWA2.au3` MoveMap/WaitMapLoading/EnterChallenge, `GWA2_Assembly.au3` LoadFinished hook
+**GWCA Reference:** `toolbox/GWToolboxpp-master/Dependencies/GWCA/include/GWCA/Managers/MapMgr.h`
+**AutoIt Reference:** `GWA2.au3` MoveMap/WaitMapLoading/EnterChallenge, `GWA2_Assembly.au3` LoadFinished hook
 
 ---
 
@@ -803,9 +823,17 @@ Implement `managers/PartyMgr.cpp` — hero/henchman management, flagging, behavi
 - [ ] `FlagHero(hero_index, x, y)`, `FlagAll(x, y)`
 - [ ] `LockHeroTarget(hero_index, target_id)`
 - [ ] `LeaveParty()`, `InvitePlayer(name)`, `KickPlayer(id)`
-- [ ] Test: add 3 heroes, flag them to a position, change behavior
+- [ ] `Tick(flag)` / `SetTickToggle(enable)` — party ready check
+- [ ] `UnflagHero(hero_index)` / `UnflagAll()` — cancel hero flags
+- [ ] `GetIsPartyDefeated()` — wipe detection
+- [ ] `GetIsPartyInHardMode()` / `GetIsHardModeUnlocked()` — hard mode state
+- [ ] `ReturnToOutpost()` — return after defeat
+- [ ] `SetPetBehavior(owner_agent_id, behavior)` — pet AI control
+- [ ] `RespondToPartyRequest(party_id, accept)` — accept/decline party invites
+- [ ] Test: add 3 heroes, flag them to a position, change behavior, detect wipe
 
-**Reference:** `GWA2.au3` hero/party functions, packets 0x15-0x1F, 0x9C-0xAF
+**GWCA Reference:** `toolbox/GWToolboxpp-master/Dependencies/GWCA/include/GWCA/Managers/PartyMgr.h`
+**AutoIt Reference:** `GWA2.au3` hero/party functions, packets 0x15-0x1F, 0x9C-0xAF
 
 ---
 
@@ -871,7 +899,7 @@ Implement remaining managers: chat send/receive hook, rendering toggle hook, pla
 | **Assignee** | |
 | **Status** | `backlog` |
 | **Estimate** | L |
-| **Depends On** | GWA3-006, GWA3-016, GWA3-017, GWA3-018, GWA3-019, GWA3-020, GWA3-021, GWA3-022, GWA3-023, GWA3-024. Optional: GWA3-038, GWA3-040 (add exports if completed) |
+| **Depends On** | GWA3-006, GWA3-016..024, GWA3-049..051. Optional: GWA3-038, GWA3-040, GWA3-052..054 (add exports if completed) |
 | **Blocks** | GWA3-026, GWA3-041 |
 | **Parallel Group** | — |
 
@@ -1326,6 +1354,175 @@ Implement keyboard input dispatch (keydown/keyup/keypress) and game preference m
 
 ---
 
+#### GWA3-049 — PlayerMgr (Titles + Profession + Player Data)
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-005, GWA3-006, GWA3-010 |
+| **Blocks** | GWA3-025 |
+| **Parallel Group** | PG-MANAGERS |
+
+**Description:**
+Implement `managers/PlayerMgr.cpp` — title tracking, player data, secondary profession change. Title functions are called ~300 times in Froggy HM (GetVanguardTitle, GetNornTitle, GetAsuraTitle, GetDeldrimorTitle).
+
+**Acceptance Criteria:**
+- [ ] `SetActiveTitle(TitleID)` — display title for reputation gain
+- [ ] `RemoveActiveTitle()` — hide title
+- [ ] `GetTitleTrack(TitleID)` — get title progress data
+- [ ] `GetTitleData(TitleID)` — get title client data (current/max points)
+- [ ] `GetActiveTitleId()` — which title is displayed
+- [ ] `GetPlayerName(player_id)` — resolve player name
+- [ ] `GetPlayerByID(player_id)` — get player struct
+- [ ] `GetPlayerArray()` — all players in instance
+- [ ] `GetAmountOfPlayersInInstance()` — player count
+- [ ] `ChangeSecondProfession(profession, hero_index)` — change secondary prof for player or hero
+- [ ] Test: read title progress, confirm matches in-game display
+
+**GWCA Reference:** `toolbox/GWToolboxpp-master/Dependencies/GWCA/include/GWCA/Managers/PlayerMgr.h`
+
+---
+
+#### GWA3-050 — MemoryMgr (Version + Timers + Window Handle)
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-005 |
+| **Blocks** | GWA3-025, GWA3-035 |
+| **Parallel Group** | PG-MANAGERS |
+
+**Description:**
+Implement `managers/MemoryMgr.cpp` — GW client version, skill timer, window handle, in-process memory allocation.
+
+**Acceptance Criteria:**
+- [ ] `GetGWVersion()` — client build number (critical for pattern validation)
+- [ ] `GetSkillTimer()` — global skill timer (used for recharge calculations)
+- [ ] `GetGWWindowHandle()` — HWND of game window
+- [ ] `GetPersonalDir(buf, size)` — GW user data directory
+- [ ] `MemAlloc(size)` / `MemFree(ptr)` — game heap allocation (for in-process data)
+- [ ] Test: GetGWVersion returns plausible build number
+
+**GWCA Reference:** `toolbox/GWToolboxpp-master/Dependencies/GWCA/include/GWCA/Managers/MemoryMgr.h`
+
+---
+
+#### GWA3-051 — String Encoding/Decoding (AsyncDecodeStr)
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-005, GWA3-006 |
+| **Blocks** | GWA3-025 |
+| **Parallel Group** | PG-MANAGERS |
+
+**Description:**
+Implement string encoding/decoding for game text (quest objectives, item names, NPC names, skill descriptions). The game uses encoded `wchar_t*` strings that must be decoded asynchronously via a game function.
+
+The existing AutoIt code uses `ValidateAsyncDecodeStr` (scanned via assertion pattern) for this.
+
+**Acceptance Criteria:**
+- [ ] `AsyncDecodeStr(enc_str, buffer, size)` — decode encoded string to readable text (blocking wrapper)
+- [ ] `AsyncDecodeStr(enc_str, callback, param, language)` — async version with callback
+- [ ] `IsValidEncStr(enc_str)` — validate encoded string format
+- [ ] `UInt32ToEncStr(value, buffer, count)` — encode integer to game string format
+- [ ] `EncStrToUInt32(enc_str)` — decode game string to integer
+- [ ] Test: decode a known quest name, verify readable output
+
+**GWCA Reference:** `toolbox/GWToolboxpp-master/Dependencies/GWCA/include/GWCA/Managers/UIMgr.h` (string functions section)
+**AutoIt Reference:** `GWA Censured/lib/botshub/GWA2_Assembly.au3` `ValidateAsyncDecodeStr` pattern
+
+---
+
+#### GWA3-052 — CameraMgr
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-005, GWA3-006 |
+| **Blocks** | — |
+| **Parallel Group** | PG-MANAGERS |
+
+**Description:**
+Implement `managers/CameraMgr.cpp` — camera control, field of view, unlock, fog toggle. Nice-to-have for debugging and observation, not required for core Froggy HM loop.
+
+**Acceptance Criteria:**
+- [ ] `GetCamera()` — get Camera struct pointer
+- [ ] `SetMaxDist(dist)` — set max camera zoom distance
+- [ ] `SetFieldOfView(fov)` — adjust FOV
+- [ ] `UnlockCam(flag)` — free camera movement
+- [ ] `GetCameraUnlock()` — check if camera is unlocked
+- [ ] `SetFog(flag)` — toggle fog rendering
+- [ ] `GetYaw()` — current camera rotation
+- [ ] `ComputeCamPos(dist)` — compute camera position at distance
+- [ ] Test: unlock camera, set max distance to 2000, verify zoom works
+
+**GWCA Reference:** `toolbox/GWToolboxpp-master/Dependencies/GWCA/include/GWCA/Managers/CameraMgr.h`
+
+---
+
+#### GWA3-053 — StoCMgr (Server-to-Client Packet Callbacks)
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-005, GWA3-006 |
+| **Blocks** | — |
+| **Parallel Group** | PG-MANAGERS |
+
+**Description:**
+Implement `managers/StoCMgr.cpp` — register callbacks for incoming server-to-client packets. Enables reactive event monitoring (damage events, loot drops, NPC spawns) without polling game state.
+
+Nice-to-have — the bot currently works by polling memory state. StoC callbacks would improve responsiveness but aren't blocking.
+
+**Acceptance Criteria:**
+- [ ] `RegisterPacketCallback(entry, header, callback, altitude)` — register handler for incoming packet type
+- [ ] `RegisterPostPacketCallback(entry, header, callback)` — post-processing callback
+- [ ] `RemoveCallback(header, entry)` — remove specific callback
+- [ ] `RemoveCallbacks(entry)` — remove all callbacks for an entry
+- [ ] `EmulatePacket(packet)` — inject fake packet for testing
+- [ ] Test: register callback for agent spawn packet, verify it fires when NPC appears
+
+**GWCA Reference:** `toolbox/GWToolboxpp-master/Dependencies/GWCA/include/GWCA/Managers/StoCMgr.h`
+
+---
+
+#### GWA3-054 — GuildMgr
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-005, GWA3-006 |
+| **Blocks** | — |
+| **Parallel Group** | PG-MANAGERS |
+
+**Description:**
+Implement `managers/GuildMgr.cpp` — guild data reading, guild hall travel. Low priority — TravelGH/LeaveGH already handled via packet headers.
+
+**Acceptance Criteria:**
+- [ ] `GetPlayerGuild()` — get player's guild info
+- [ ] `GetGuildArray()` — all guilds in context
+- [ ] `TravelGH()` / `TravelGH(GHKey)` — travel to guild hall
+- [ ] `LeaveGH()` — leave guild hall
+- [ ] `GetPlayerGuildAnnouncement()` — guild announcement text
+- [ ] Test: read guild name, travel to guild hall
+
+**GWCA Reference:** `toolbox/GWToolboxpp-master/Dependencies/GWCA/include/GWCA/Managers/GuildMgr.h`
+
+---
+
 #### GWA3-041 — Research Digest: Py4GW API Surface Audit
 
 | Field | Value |
@@ -1733,8 +1930,15 @@ WAVE 7 (Endgame — needs all integration):
 | GWA3-046 | Behavioral: Commands + Game Thread | L | 006, 010, 045 | `backlog` |
 | GWA3-047 | Behavioral: Frame UI + ButtonClick | M | 020, 021, 046 | `backlog` |
 | GWA3-048 | AutoIt Smoke Test Script | S | 026 | `backlog` |
+| **Epic 10: GWCA Header Parity** | | | | |
+| GWA3-049 | PlayerMgr (Titles + Profession) | M | 005, 006, 010 | `backlog` |
+| GWA3-050 | MemoryMgr (Version + Timer + Window) | S | 005 | `backlog` |
+| GWA3-051 | String Encoding/Decoding | M | 005, 006 | `backlog` |
+| GWA3-052 | CameraMgr | S | 005, 006 | `backlog` |
+| GWA3-053 | StoCMgr (Packet Callbacks) | L | 005, 006 | `backlog` |
+| GWA3-054 | GuildMgr | S | 005, 006 | `backlog` |
 
-**Total: 48 tickets across 9 epics.**
+**Total: 54 tickets across 10 epics.**
 
 ---
 
