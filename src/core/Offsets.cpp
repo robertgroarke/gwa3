@@ -269,9 +269,9 @@ bool ResolveAll() {
     Log::Info("Offsets: Resolved %d/%d patterns (%d failed)",
               s_resolvedCount, PATTERN_COUNT, s_failedCount);
 
-    // Post-process: dereference ptr-type offsets to get runtime data pointers.
-    // Mirrors MapScanResultsToLabels() in GWA2_Assembly.au3.
-    PostProcessOffsets();
+    // TODO: Post-process offset dereferences require per-pattern calibration.
+    // Disabled until offsets are validated against the live binary.
+    // PostProcessOffsets();
 
     s_resolved = !criticalFail;
     return s_resolved;
