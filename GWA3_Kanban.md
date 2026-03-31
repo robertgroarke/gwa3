@@ -1125,6 +1125,13 @@ Run Froggy_HM_v1.6.au3 on the GWA3 stack (gwa3.dll + GWA3_Compat.au3) for 10+ co
 - [ ] Rendering toggle works (disable during dungeon, enable in town)
 - [ ] Chat hook fires correctly for whisper/trade messages
 - [ ] Run time per loop comparable to old AutoIt+gwca stack
+- [ ] Title tracking works — Vanguard/Norn/Asura/Deldrimor points update between runs
+- [ ] Cinematic skip works — dungeon cutscenes are bypassed
+- [ ] Wipe detection works — `GetIsPartyDefeated()` triggers retry logic
+- [ ] Hard mode state reads correctly — `GetIsPartyInHardMode()` matches toggle
+- [ ] String decoding works — quest objectives display correctly in logs
+- [ ] Ground loot pickup works — `PickUpItem()` collects dropped items
+- [ ] Instance time tracked — run timing uses `GetInstanceTime()` not system clock
 
 ---
 
@@ -1591,7 +1598,7 @@ Create the offline test infrastructure: a `tests/` directory, CMake test target 
 | **Assignee** | |
 | **Status** | `backlog` |
 | **Estimate** | M |
-| **Depends On** | GWA3-042, GWA3-007, GWA3-008, GWA3-009, GWA3-011, GWA3-012, GWA3-013, GWA3-014, GWA3-015, GWA3-020 |
+| **Depends On** | GWA3-042, GWA3-007..015, GWA3-020, GWA3-049..050 |
 | **Blocks** | GWA3-045 |
 | **Parallel Group** | — (built incrementally as each struct ticket completes) |
 
@@ -1609,9 +1616,12 @@ Create the offline test infrastructure: a `tests/` directory, CMake test target 
   - `Bag`
   - `Buff`, `Effect`
   - `Frame` (0x1C8 bytes: callbacks, child_offset_id, frame_id, relation, hash_id, state)
+  - `Title`, `TitleTier`, `TitleClientData` (from GWA3-049)
+  - `Camera` (position, yaw, pitch, FOV, zoom — from GWA3-052 if implemented)
+  - `Player` (from GWA3-049)
 - [ ] `sizeof()` checks for every struct
 - [ ] All assertions pass at compile time (build fails if any offset is wrong)
-- [ ] Cross-referenced against `GWA2_Assembly.au3` struct templates
+- [ ] Cross-referenced against BOTH `GWA2_Assembly.au3` struct templates AND GWCA headers at `toolbox/GWToolboxpp-master/Dependencies/GWCA/include/GWCA/GameEntities/`
 
 **Reference:** [GWA3_Testing_Strategy.md](GWA3_Testing_Strategy.md) "Struct layout validation"
 
@@ -1663,7 +1673,7 @@ This is the **go/no-go gate** for Phase 2. If this passes, the foundation is sol
 **Acceptance Criteria:**
 - [ ] `src/core/SmokeTest.h/cpp` — runs automatically during `InitThread` if `GWA3_SMOKE_TEST` env var or flag is set
 - [ ] Validates all P0/P1 scan patterns resolve (non-null, non-negative-one)
-- [ ] Reads and logs:
+- [ ] Reads and logs (core — from original plan):
   - Player agent ID (from `Offsets::MyID`)
   - Map ID (from `Offsets::InstanceInfo`)
   - Player position X, Y (from agent struct)
@@ -1671,6 +1681,21 @@ This is the **go/no-go gate** for Phase 2. If this passes, the foundation is sol
   - Skillbar slot IDs (from skillbar struct)
   - Backpack slot count (from bag struct)
   - Ping value
+- [ ] Reads and logs (from gap analysis — new managers):
+  - GW client version via `MemoryMgr::GetGWVersion()` — plausible build number
+  - Skill timer via `MemoryMgr::GetSkillTimer()` — non-zero, increasing
+  - GW window handle via `MemoryMgr::GetGWWindowHandle()` — valid HWND
+  - Active title ID via `PlayerMgr::GetActiveTitleId()` — valid enum value
+  - Title progress via `PlayerMgr::GetTitleTrack(Vanguard)` — returns non-null struct
+  - Player name via `PlayerMgr::GetPlayerName()` — non-null, non-empty wchar_t*
+  - Instance time via `MapMgr::GetInstanceTime()` — non-zero, increasing
+  - Party defeated state via `PartyMgr::GetIsPartyDefeated()` — returns false (in outpost)
+  - Hard mode state via `PartyMgr::GetIsPartyInHardMode()` — boolean plausible
+  - Foes killed/to kill via `MapMgr::GetFoesKilled()`/`GetFoesToKill()` — 0 in outpost
+  - Alcohol level via `EffectMgr::GetAlcoholLevel()` — returns value 0-5
+- [ ] Reads and logs (string decoding — critical utility):
+  - `AsyncDecodeStr` on a known encoded string — decodes without crash
+  - `IsValidEncStr` on valid/invalid inputs — correct true/false
 - [ ] At character select: validates `FrameArray` resolves, `GetFrameByHash(PlayButton)` finds frame
 - [ ] Writes report to `gwa3_smoke_report.txt` with timestamp, pattern count, pass/fail per check
 - [ ] Exits with summary: `X/Y checks passed`
@@ -1689,8 +1714,8 @@ This is the **go/no-go gate** for Phase 2. If this passes, the foundation is sol
 |-------|-------|
 | **Assignee** | |
 | **Status** | `backlog` |
-| **Estimate** | L |
-| **Depends On** | GWA3-006, GWA3-010, GWA3-045 |
+| **Estimate** | XL |
+| **Depends On** | GWA3-006, GWA3-010, GWA3-045, GWA3-049, GWA3-050, GWA3-051 |
 | **Blocks** | GWA3-047 |
 | **Parallel Group** | — |
 
@@ -1717,6 +1742,31 @@ First behavioral test. Sends commands through the game thread hook and verifies 
 - [ ] **Packet send validation:**
   - Send a benign packet (e.g., ping reply header)
   - Pass if no crash after 5s
+- [ ] **Title management test:**
+  - `PlayerMgr::SetActiveTitle(Vanguard)` — set displayed title
+  - Wait 500ms
+  - `PlayerMgr::GetActiveTitleId()` — verify matches Vanguard
+  - `PlayerMgr::RemoveActiveTitle()` — clear it
+- [ ] **Profession change test (hero):**
+  - Read hero's current secondary profession
+  - `PlayerMgr::ChangeSecondProfession(Mesmer, hero_index)` — change hero secondary
+  - Wait 500ms
+  - Read hero's new secondary — verify it changed
+  - Restore original profession
+- [ ] **Buff/effect test:**
+  - If character has any active effects: `EffectMgr::GetPlayerEffects()` returns non-empty array
+  - `EffectMgr::GetPlayerEffectBySkillId(known_skill)` — returns non-null if buff active
+  - If possible: `EffectMgr::DropBuff(buff_id)` — removes buff, verify removed
+- [ ] **Cinematic test (if in explorable with cinematic):**
+  - `MapMgr::GetIsInCinematic()` — detect state
+  - `MapMgr::SkipCinematic()` — skip if active, verify state changes
+- [ ] **Instance info test:**
+  - `MapMgr::GetInstanceTime()` — read twice with 1s delay, verify second > first
+  - `MapMgr::GetFoesKilled()` / `GetFoesToKill()` — valid counts in explorable, 0 in outpost
+- [ ] **String decode test:**
+  - Get any agent's encoded name via `AgentMgr::GetAgentEncName()`
+  - `AsyncDecodeStr(enc_name, buffer, size)` — decode without crash
+  - Verify decoded buffer is non-empty and contains readable characters
 - [ ] All tests log pass/fail to `gwa3_command_report.txt`
 - [ ] Game remains stable for 5 minutes after tests complete
 
@@ -1790,6 +1840,13 @@ Frame UI behavioral test. Validates frame hash lookup and ButtonClick at charact
 - [ ] `GWA3_GetPing()` returns plausible value (0-1000)
 - [ ] `GWA3_GetPartySize()` returns > 0
 - [ ] `GWA3_GetBagSize(1)` returns > 0 (backpack exists)
+- [ ] `GWA3_GetGWVersion()` returns plausible build number (> 36000)
+- [ ] `GWA3_GetSkillTimer()` returns non-zero value
+- [ ] `GWA3_GetInstanceTime()` returns > 0
+- [ ] `GWA3_GetPlayerName(0)` returns non-empty string
+- [ ] `GWA3_GetTitleProgress(vanguard_id)` returns value >= 0
+- [ ] `GWA3_GetIsPartyDefeated()` returns 0 (in outpost)
+- [ ] `GWA3_GetFoesKilled()` returns 0 (in outpost)
 - [ ] Script exits 0 on all pass, 1 on any fail
 - [ ] ConsoleWrite output for each check: function name, returned value, PASS/FAIL
 
@@ -1927,7 +1984,7 @@ WAVE 7 (Endgame — needs all integration):
 | GWA3-043 | Offline: Struct Offset Validation | M | 042, 007-015, 020 | `backlog` |
 | GWA3-044 | Offline: Headers + Pattern Parsing | S | 042, 003, 004 | `backlog` |
 | GWA3-045 | Injection Smoke: Patterns + State Read | L | 002, 005, 043 | `backlog` |
-| GWA3-046 | Behavioral: Commands + Game Thread | L | 006, 010, 045 | `backlog` |
+| GWA3-046 | Behavioral: Commands + Game Thread | XL | 006, 010, 045, 049-051 | `backlog` |
 | GWA3-047 | Behavioral: Frame UI + ButtonClick | M | 020, 021, 046 | `backlog` |
 | GWA3-048 | AutoIt Smoke Test Script | S | 026 | `backlog` |
 | **Epic 10: GWCA Header Parity** | | | | |
