@@ -22,10 +22,19 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(minhook)
 
+# --- gwa3_core (OBJECT library — shared between DLL and tests) ---
+add_library(gwa3_core OBJECT
+    src/core/Log.cpp
+)
+
+target_include_directories(gwa3_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 # --- gwa3.dll ---
 add_library(gwa3 SHARED
     src/dllmain.cpp
-    src/core/Log.cpp
+    $<TARGET_OBJECTS:gwa3_core>
 )
 
 target_include_directories(gwa3 PUBLIC
@@ -42,6 +51,11 @@ set_target_properties(gwa3 PROPERTIES
 # --- gwa3_tests.exe ---
 add_executable(gwa3_tests
     tests/main.cpp
+    $<TARGET_OBJECTS:gwa3_core>
+)
+
+target_include_directories(gwa3_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 set_target_properties(gwa3_tests PROPERTIES
