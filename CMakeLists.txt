@@ -28,6 +28,7 @@ add_library(gwa3_core OBJECT
     src/core/Scanner.cpp
     src/core/Offsets.cpp
     src/core/GameThread.cpp
+    src/core/Memory.cpp
     src/packets/CtoS.cpp
     src/managers/AgentMgr.cpp
     src/managers/SkillMgr.cpp
