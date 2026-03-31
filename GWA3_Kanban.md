@@ -1482,8 +1482,8 @@ Implement `managers/PlayerMgr.cpp` — title tracking, player data, secondary pr
 
 | Field | Value |
 |-------|-------|
-| **Assignee** | |
-| **Status** | `backlog` |
+| **Assignee** | agent |
+| **Status** | `done` |
 | **Estimate** | S |
 | **Depends On** | GWA3-005 |
 | **Blocks** | GWA3-025, GWA3-035 |
@@ -1537,8 +1537,8 @@ The existing AutoIt code uses `ValidateAsyncDecodeStr` (scanned via assertion pa
 
 | Field | Value |
 |-------|-------|
-| **Assignee** | |
-| **Status** | `backlog` |
+| **Assignee** | agent |
+| **Status** | `done` |
 | **Estimate** | S |
 | **Depends On** | GWA3-005, GWA3-006 |
 | **Blocks** | — |
@@ -1594,8 +1594,8 @@ Nice-to-have — the bot currently works by polling memory state. StoC callbacks
 
 | Field | Value |
 |-------|-------|
-| **Assignee** | |
-| **Status** | `backlog` |
+| **Assignee** | agent |
+| **Status** | `done` |
 | **Estimate** | S |
 | **Depends On** | GWA3-005, GWA3-006 |
 | **Blocks** | — |
@@ -2065,11 +2065,11 @@ WAVE 7 (Endgame — needs all integration):
 | GWA3-048 | Bot Framework Smoke Test | M | 025 | `backlog` |
 | **Epic 10: GWCA Header Parity** | | | | |
 | GWA3-049 | PlayerMgr (Titles + Profession) | M | 005, 006, 010 | `backlog` |
-| GWA3-050 | MemoryMgr (Version + Timer + Window) | S | 005 | `backlog` |
+| GWA3-050 | MemoryMgr (Version + Timer + Window) | S | 005 | `done` |
 | GWA3-051 | String Encoding/Decoding | M | 005, 006 | `backlog` |
-| GWA3-052 | CameraMgr | S | 005, 006 | `backlog` |
+| GWA3-052 | CameraMgr | S | 005, 006 | `done` |
 | GWA3-053 | StoCMgr (Packet Callbacks) | L | 005, 006 | `backlog` |
-| GWA3-054 | GuildMgr | S | 005, 006 | `backlog` |
+| GWA3-054 | GuildMgr | S | 005, 006 | `done` |
 
 **Total: 54 tickets across 10 epics.**
 
