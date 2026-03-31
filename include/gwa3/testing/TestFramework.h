@@ -67,7 +67,7 @@ inline int RunAll() {
 } // namespace GWA3::Testing
 
 // Register a runtime test. Aborts on first failure via GWA3_ASSERT.
-#define GWA3_TEST(test_name, body)                                            \
+#define GWA3_TEST(test_name, ...)                                             \
     static void gwa3_test_func_##test_name();                                 \
     static GWA3::Testing::TestCase gwa3_test_case_##test_name = {             \
         #test_name, gwa3_test_func_##test_name, nullptr                       \
@@ -75,7 +75,7 @@ inline int RunAll() {
     static GWA3::Testing::TestRegistrar gwa3_test_reg_##test_name(            \
         &gwa3_test_case_##test_name                                           \
     );                                                                        \
-    static void gwa3_test_func_##test_name() { body }
+    static void gwa3_test_func_##test_name() { __VA_ARGS__ }
 
 // Runtime assertion — logs and aborts on failure.
 #ifdef _MSC_VER

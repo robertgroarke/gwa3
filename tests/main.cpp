@@ -12,10 +12,11 @@ GWA3_TEST(assert_eq_self_test, {
     GWA3_ASSERT_EQ(42, 42);
 })
 
-// Future test files will be added here as tickets complete:
-// #include "test_headers.cpp"        — GWA3-044
-// #include "test_struct_offsets.cpp"  — GWA3-043
-// #include "test_scanner_logic.cpp"  — GWA3-044
+// GWA3-044: Packet header constant validation
+#include "test_headers.cpp"
+
+// GWA3-044: Scanner pattern logic tests
+#include "test_scanner_logic.cpp"
 
 int main() {
     return GWA3::Testing::RunAll();
