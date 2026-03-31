@@ -20,9 +20,34 @@
 
 static HMODULE g_hModule = nullptr;
 
+static bool CheckFlag(const char* envVar, const char* flagFile) {
+    char envBuf[16] = {};
+    if (GetEnvironmentVariableA(envVar, envBuf, sizeof(envBuf)) > 0) return true;
+    char path[MAX_PATH];
+    HMODULE hSelf = nullptr;
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCSTR>(&CheckFlag), &hSelf);
+    GetModuleFileNameA(hSelf, path, MAX_PATH);
+    char* slash = strrchr(path, '\\');
+    if (slash) *(slash + 1) = '\0';
+    strcat_s(path, flagFile);
+    DWORD attr = GetFileAttributesA(path);
+    if (attr != INVALID_FILE_ATTRIBUTES) {
+        DeleteFileA(path);
+        return true;
+    }
+    return false;
+}
+
 DWORD WINAPI InitThread(LPVOID hModule) {
     GWA3::Log::Initialize();
     GWA3::Log::Info("gwa3.dll loaded at 0x%08X", (uintptr_t)hModule);
+
+    // Detect test mode early (before potentially-failing steps)
+    bool smokeTest = CheckFlag("GWA3_SMOKE_TEST", "gwa3_smoke_test.flag");
+    bool botTest = CheckFlag("GWA3_TEST_BOT", "gwa3_test_bot.flag");
+    bool cmdTest = CheckFlag("GWA3_TEST_COMMANDS", "gwa3_test_commands.flag");
+    bool anyTest = smokeTest || botTest || cmdTest;
 
     // Step 1: Initialize scanner (parse GW.exe PE headers)
     HMODULE gwModule = GetModuleHandleA(nullptr);
@@ -36,18 +61,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::Log::Warn("Some offsets failed to resolve — continuing with partial coverage");
     }
 
-    // Step 3: Install game thread hook
-    if (!GWA3::GameThread::Initialize()) {
-        GWA3::Log::Error("GameThread initialization failed — aborting");
-        return 1;
-    }
-
-    // Verify game thread hook by enqueuing a test message
-    GWA3::GameThread::Enqueue([]() {
-        GWA3::Log::Info("Hello from game thread! Hook is working.");
-    });
-
-    // Step 4: Initialize managers
+    // Step 3: Initialize managers (these just cache offset pointers — safe even without GameThread)
     GWA3::CtoS::Initialize();
     GWA3::AgentMgr::Initialize();
     GWA3::SkillMgr::Initialize();
@@ -60,42 +74,44 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     GWA3::FriendListMgr::Initialize();
     GWA3::UIMgr::Initialize();
 
-    // Step 5: Check for test mode flags (env vars or flag files next to DLL)
-    auto CheckFlag = [](const char* envVar, const char* flagFile) -> bool {
-        char envBuf[16] = {};
-        if (GetEnvironmentVariableA(envVar, envBuf, sizeof(envBuf)) > 0) return true;
-        // Check flag file next to DLL
-        char path[MAX_PATH];
-        HMODULE hSelf = nullptr;
-        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           reinterpret_cast<LPCSTR>(&GWA3::Log::Initialize), &hSelf);
-        GetModuleFileNameA(hSelf, path, MAX_PATH);
-        char* slash = strrchr(path, '\\');
-        if (slash) *(slash + 1) = '\0';
-        strcat_s(path, flagFile);
-        DWORD attr = GetFileAttributesA(path);
-        if (attr != INVALID_FILE_ATTRIBUTES) {
-            DeleteFileA(path); // consume flag
-            return true;
-        }
-        return false;
-    };
-
-    if (CheckFlag("GWA3_SMOKE_TEST", "gwa3_smoke_test.flag")) {
+    // Step 4: Run tests if in test mode (before GameThread — tests may only need read access)
+    if (smokeTest) {
         GWA3::Log::Info("=== SMOKE TEST MODE ===");
         int failures = GWA3::SmokeTest::RunSmokeTest();
         GWA3::Log::Info("Smoke test complete: %d failures", failures);
         return static_cast<DWORD>(failures);
     }
 
-    if (CheckFlag("GWA3_TEST_BOT", "gwa3_test_bot.flag")) {
+    if (botTest) {
         GWA3::Log::Info("=== BOT FRAMEWORK TEST MODE ===");
         int failures = GWA3::SmokeTest::RunBotFrameworkTest();
         GWA3::Log::Info("Bot framework test complete: %d failures", failures);
         return static_cast<DWORD>(failures);
     }
 
-    // Step 6: Normal mode — register and start Froggy HM bot
+    // Step 5: Install game thread hook (needed for commands and bot)
+    bool gameThreadOk = GWA3::GameThread::Initialize();
+    if (!gameThreadOk) {
+        GWA3::Log::Warn("GameThread initialization failed");
+        if (!anyTest) {
+            GWA3::Log::Error("GameThread required for bot mode — aborting");
+            return 1;
+        }
+    } else {
+        GWA3::GameThread::Enqueue([]() {
+            GWA3::Log::Info("Hello from game thread! Hook is working.");
+        });
+    }
+
+    // Step 6: Behavioral command test (needs GameThread for some tests but can partially run without)
+    if (cmdTest) {
+        GWA3::Log::Info("=== BEHAVIORAL COMMAND TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunBehavioralTest();
+        GWA3::Log::Info("Behavioral test complete: %d failures", failures);
+        return static_cast<DWORD>(failures);
+    }
+
+    // Step 7: Normal mode — register and start Froggy HM bot
     GWA3::Bot::Froggy::Register();
     GWA3::Bot::Start();
 
@@ -110,6 +126,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
         DisableThreadLibraryCalls(hModule);
         CreateThread(nullptr, 0, &InitThread, hModule, 0, nullptr);
     } else if (reason == DLL_PROCESS_DETACH) {
+        GWA3::Bot::Stop();
         GWA3::GameThread::Shutdown();
         GWA3::Log::Shutdown();
     }
