@@ -10,6 +10,8 @@
 #include <gwa3/game/Item.h>
 #include <gwa3/game/Quest.h>
 #include <gwa3/game/Map.h>
+#include <gwa3/game/Camera.h>
+#include <gwa3/game/Guild.h>
 #include <gwa3/game/Party.h>
 #include <gwa3/game/Player.h>
 #include <gwa3/testing/TestFramework.h>
@@ -394,6 +396,85 @@ GWA3_CHECK_OFFSET(Player, active_title_tier,           0x30);
 GWA3_CHECK_OFFSET(Player, player_number,               0x38);
 GWA3_CHECK_OFFSET(Player, party_size,                  0x3C);
 GWA3_CHECK_OFFSET(Player, h0040,                       0x40);
+
+// ===== Camera — 0x120 / 288 bytes =====
+GWA3_CHECK_SIZE(Camera, 0x120);
+GWA3_CHECK_OFFSET(Camera, look_at_agent_id, 0x00);
+GWA3_CHECK_OFFSET(Camera, max_distance,     0x10);
+GWA3_CHECK_OFFSET(Camera, yaw,              0x18);
+GWA3_CHECK_OFFSET(Camera, pitch,            0x1C);
+GWA3_CHECK_OFFSET(Camera, distance,         0x20);
+GWA3_CHECK_OFFSET(Camera, yaw_right_click,  0x34);
+GWA3_CHECK_OFFSET(Camera, distance2,        0x40);
+GWA3_CHECK_OFFSET(Camera, time_in_the_map,  0x58);
+GWA3_CHECK_OFFSET(Camera, yaw_to_go,        0x60);
+GWA3_CHECK_OFFSET(Camera, pitch_to_go,      0x64);
+GWA3_CHECK_OFFSET(Camera, dist_to_go,       0x68);
+GWA3_CHECK_OFFSET(Camera, max_distance2,    0x6C);
+GWA3_CHECK_OFFSET(Camera, position,         0x78);
+GWA3_CHECK_OFFSET(Camera, camera_pos_to_go, 0x84);
+GWA3_CHECK_OFFSET(Camera, cam_pos_inverted, 0x90);
+GWA3_CHECK_OFFSET(Camera, look_at_target,   0xA8);
+GWA3_CHECK_OFFSET(Camera, look_at_to_go,    0xB4);
+GWA3_CHECK_OFFSET(Camera, field_of_view,    0xC0);
+GWA3_CHECK_OFFSET(Camera, field_of_view2,   0xC4);
+GWA3_CHECK_OFFSET(Camera, camera_mode,      0x11C);
+
+// ===== GHKey — 0x10 / 16 bytes =====
+GWA3_CHECK_SIZE(GHKey, 16);
+
+// ===== CapeDesign — 0x1C / 28 bytes =====
+GWA3_CHECK_SIZE(CapeDesign, 0x1C);
+GWA3_CHECK_OFFSET(CapeDesign, cape_bg_color,     0x00);
+GWA3_CHECK_OFFSET(CapeDesign, cape_detail_color, 0x04);
+GWA3_CHECK_OFFSET(CapeDesign, cape_emblem_color, 0x08);
+GWA3_CHECK_OFFSET(CapeDesign, cape_shape,        0x0C);
+GWA3_CHECK_OFFSET(CapeDesign, cape_detail,       0x10);
+GWA3_CHECK_OFFSET(CapeDesign, cape_emblem,       0x14);
+GWA3_CHECK_OFFSET(CapeDesign, cape_trim,         0x18);
+
+// ===== Guild — 0xAC / 172 bytes =====
+GWA3_CHECK_SIZE(Guild, 172);
+GWA3_CHECK_OFFSET(Guild, key,              0x00);
+GWA3_CHECK_OFFSET(Guild, index,            0x24);
+GWA3_CHECK_OFFSET(Guild, rank,             0x28);
+GWA3_CHECK_OFFSET(Guild, features,         0x2C);
+GWA3_CHECK_OFFSET(Guild, name,             0x30);
+GWA3_CHECK_OFFSET(Guild, rating,           0x70);
+GWA3_CHECK_OFFSET(Guild, faction,          0x74);
+GWA3_CHECK_OFFSET(Guild, faction_point,    0x78);
+GWA3_CHECK_OFFSET(Guild, qualifier_point,  0x7C);
+GWA3_CHECK_OFFSET(Guild, tag,              0x80);
+GWA3_CHECK_OFFSET(Guild, cape,             0x90);
+
+// ===== GuildPlayer — 0x174 / 372 bytes =====
+GWA3_CHECK_SIZE(GuildPlayer, 372);
+GWA3_CHECK_OFFSET(GuildPlayer, vtable,        0x00);
+GWA3_CHECK_OFFSET(GuildPlayer, name_ptr,      0x04);
+GWA3_CHECK_OFFSET(GuildPlayer, invited_name,  0x08);
+GWA3_CHECK_OFFSET(GuildPlayer, current_name,  0x30);
+GWA3_CHECK_OFFSET(GuildPlayer, inviter_name,  0x58);
+GWA3_CHECK_OFFSET(GuildPlayer, invite_time,   0x80);
+GWA3_CHECK_OFFSET(GuildPlayer, promoter_name, 0x84);
+GWA3_CHECK_OFFSET(GuildPlayer, offline,       0xDC);
+GWA3_CHECK_OFFSET(GuildPlayer, member_type,   0xE0);
+GWA3_CHECK_OFFSET(GuildPlayer, status,        0xE4);
+
+// ===== GuildHistoryEvent — 0x208 / 520 bytes =====
+GWA3_CHECK_SIZE(GuildHistoryEvent, 520);
+GWA3_CHECK_OFFSET(GuildHistoryEvent, time1, 0x00);
+GWA3_CHECK_OFFSET(GuildHistoryEvent, time2, 0x04);
+GWA3_CHECK_OFFSET(GuildHistoryEvent, name,  0x08);
+
+// ===== TownAlliance — 0x78 / 120 bytes =====
+GWA3_CHECK_SIZE(TownAlliance, 0x78);
+GWA3_CHECK_OFFSET(TownAlliance, rank,       0x00);
+GWA3_CHECK_OFFSET(TownAlliance, allegiance, 0x04);
+GWA3_CHECK_OFFSET(TownAlliance, faction,    0x08);
+GWA3_CHECK_OFFSET(TownAlliance, name,       0x0C);
+GWA3_CHECK_OFFSET(TownAlliance, tag,        0x4C);
+GWA3_CHECK_OFFSET(TownAlliance, cape,       0x58);
+GWA3_CHECK_OFFSET(TownAlliance, map_id,     0x74);
 
 #ifdef _MSC_VER
 #pragma warning(pop)

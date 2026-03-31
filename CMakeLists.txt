@@ -35,14 +35,17 @@ add_library(gwa3_core OBJECT
     src/managers/MapMgr.cpp
     src/managers/PartyMgr.cpp
     src/managers/QuestMgr.cpp
+    src/managers/MemoryMgr.cpp
+    src/managers/CameraMgr.cpp
+    src/managers/GuildMgr.cpp
 )
 
 target_include_directories(gwa3_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# gwa3_core needs MinHook headers (for GameThread.cpp)
-target_link_libraries(gwa3_core PUBLIC minhook)
+# gwa3_core needs MinHook headers (for GameThread.cpp) and version.lib (for MemoryMgr)
+target_link_libraries(gwa3_core PUBLIC minhook version)
 
 # --- gwa3.dll ---
 add_library(gwa3 SHARED
@@ -54,7 +57,7 @@ target_include_directories(gwa3 PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(gwa3 PRIVATE minhook)
+target_link_libraries(gwa3 PRIVATE minhook version)
 
 set_target_properties(gwa3 PROPERTIES
     OUTPUT_NAME "gwa3"
@@ -71,7 +74,7 @@ target_include_directories(gwa3_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(gwa3_tests PRIVATE minhook)
+target_link_libraries(gwa3_tests PRIVATE minhook version)
 
 set_target_properties(gwa3_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
