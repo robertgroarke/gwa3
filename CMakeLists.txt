@@ -38,6 +38,7 @@ add_library(gwa3_core OBJECT
     src/managers/MemoryMgr.cpp
     src/managers/CameraMgr.cpp
     src/managers/GuildMgr.cpp
+    src/managers/UIMgr.cpp
 )
 
 target_include_directories(gwa3_core PUBLIC
