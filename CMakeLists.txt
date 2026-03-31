@@ -26,6 +26,7 @@ FetchContent_MakeAvailable(minhook)
 add_library(gwa3_core OBJECT
     src/core/Log.cpp
     src/core/Scanner.cpp
+    src/core/Offsets.cpp
 )
 
 target_include_directories(gwa3_core PUBLIC
