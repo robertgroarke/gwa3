@@ -1,0 +1,278 @@
+#include <gwa3/core/Offsets.h>
+#include <gwa3/core/Scanner.h>
+#include <gwa3/core/Log.h>
+
+#include <cstring>
+
+namespace GWA3::Offsets {
+
+// ===== Storage =====
+uintptr_t BasePointer = 0;
+uintptr_t Ping = 0;
+uintptr_t StatusCode = 0;
+uintptr_t PacketSend = 0;
+uintptr_t PacketLocation = 0;
+uintptr_t Action = 0;
+uintptr_t ActionBase = 0;
+uintptr_t Environment = 0;
+uintptr_t PreGame = 0;
+uintptr_t FrameArray = 0;
+uintptr_t SceneContext = 0;
+
+uintptr_t SkillBase = 0;
+uintptr_t SkillTimer = 0;
+uintptr_t UseSkill = 0;
+uintptr_t UseHeroSkill = 0;
+
+uintptr_t FriendList = 0;
+uintptr_t PlayerStatus = 0;
+uintptr_t AddFriend = 0;
+uintptr_t RemoveFriend = 0;
+
+uintptr_t AttributeInfo = 0;
+uintptr_t IncreaseAttribute = 0;
+uintptr_t DecreaseAttribute = 0;
+
+uintptr_t Transaction = 0;
+uintptr_t BuyItemBase = 0;
+uintptr_t RequestQuote = 0;
+uintptr_t Salvage = 0;
+uintptr_t SalvageGlobal = 0;
+
+uintptr_t AgentBase = 0;
+uintptr_t ChangeTarget = 0;
+uintptr_t CurrentTarget = 0;
+uintptr_t MyID = 0;
+
+uintptr_t Move = 0;
+uintptr_t ClickCoords = 0;
+uintptr_t InstanceInfo = 0;
+uintptr_t WorldConst = 0;
+uintptr_t Region = 0;
+uintptr_t AreaInfo = 0;
+
+uintptr_t TradeCancel = 0;
+
+uintptr_t UIMessage = 0;
+uintptr_t CompassFlag = 0;
+uintptr_t PartySearchButtonCallback = 0;
+uintptr_t PartyWindowButtonCallback = 0;
+uintptr_t EnterMission = 0;
+uintptr_t SetDifficulty = 0;
+uintptr_t OpenChest = 0;
+uintptr_t Dialog = 0;
+uintptr_t AiMode = 0;
+uintptr_t HeroCommand = 0;
+uintptr_t HeroSkills = 0;
+
+uintptr_t PlayerAdd = 0;
+uintptr_t PlayerKick = 0;
+uintptr_t PartyInvitations = 0;
+
+uintptr_t ActiveQuest = 0;
+
+uintptr_t Engine = 0;
+uintptr_t Render = 0;
+uintptr_t LoadFinished = 0;
+uintptr_t Trader = 0;
+uintptr_t TradePartner = 0;
+
+uintptr_t ValidateAsyncDecodeStr = 0;
+
+uintptr_t PostMessage = 0;
+uintptr_t ChatLog = 0;
+
+uintptr_t SendFrameUIMsg = 0;
+
+// ===== Pattern table =====
+
+struct PatternDef {
+    const char* name;
+    uintptr_t*  target;       // pointer to the storage variable
+    const char*  bytes;        // hex pattern (nullptr for assertion-based)
+    const char*  mask;         // mask string ('x' = match, '?' = wildcard)
+    int          offset;       // offset added to scan result
+    Priority     priority;
+    PatternType  type;
+    // For assertion-based patterns:
+    const char*  assertFile;   // source file path (nullptr if hex-pattern)
+    const char*  assertMsg;    // assertion message (nullptr if hex-pattern)
+};
+
+// Helper to define a hex-pattern entry
+#define PAT(name_, target_, bytes_, mask_, off_, pri_, typ_) \
+    { name_, &target_, bytes_, mask_, off_, pri_, typ_, nullptr, nullptr }
+
+// Helper to define an assertion-pattern entry
+#define ASSERT_PAT(name_, target_, off_, pri_, typ_, file_, msg_) \
+    { name_, &target_, nullptr, nullptr, off_, pri_, typ_, file_, msg_ }
+
+static const PatternDef s_patterns[] = {
+    // ===== Core (P0) =====
+    PAT("BasePointer",    BasePointer,    "\x50\x6A\x0F\x6A\x00\xFF\x35",       "xxxxxxx",  0x8,    Priority::P0, PatternType::Ptr),
+    PAT("PacketSend",     PacketSend,     "\xC7\x47\x54\x00\x00\x00\x00\x81\xE6", "xxxxxxxxx", -0x4F, Priority::P0, PatternType::Func),
+    PAT("PacketLocation", PacketLocation, "\x83\xC4\x04\x33\xC0\x8B\xE5\x5D\xC3\xA1", "xxxxxxxxxx", 0xB, Priority::P0, PatternType::Ptr),
+    PAT("AgentBase",      AgentBase,      "\x8B\x0C\x90\x85\xC9\x74\x19",       "xxxxxxx",  -0x3,   Priority::P0, PatternType::Ptr),
+    PAT("MyID",           MyID,           "\x83\xEC\x08\x56\x8B\xF1\x3B\x15",   "xxxxxxxx", -0x3,   Priority::P0, PatternType::Ptr),
+
+    // ===== Core (P1) =====
+    PAT("Ping",           Ping,           "\x56\x8B\x75\x08\x89\x16\x5E",       "xxxxxxx",  -0x3,   Priority::P1, PatternType::Ptr),
+    PAT("StatusCode",     StatusCode,     "\x89\x45\x08\x8D\x45\x08\x6A\x04",   "xxxxxxxx", -0x10,  Priority::P1, PatternType::Ptr),
+    PAT("Action",         Action,         "\x8B\x75\x08\x57\x8B\xF9\x83\xFE\x09\x75\x0C\x68\x77", "xxxxxxxxxxxxx", -0x3, Priority::P1, PatternType::Func),
+    PAT("ActionBase",     ActionBase,     "\x8D\x1C\x87\x89\x9D\xF4",           "xxxxxx",   -0x3,   Priority::P1, PatternType::Ptr),
+    PAT("Environment",    Environment,    "\x6B\xC6\x7C\x5E\x05",               "xxxxx",    0x6,    Priority::P1, PatternType::Ptr),
+    PAT("SceneContext",   SceneContext,   "\xD9\xE0\xD9\x5D\xFC\x8B\x01",       "xxxxxxx",  0,      Priority::P1, PatternType::Ptr),
+    ASSERT_PAT("PreGame",    PreGame,    0,  Priority::P1, PatternType::Ptr,  "P:\\Code\\Gw\\Ui\\UiPregame.cpp",          "!s_scene"),
+    ASSERT_PAT("FrameArray", FrameArray, 0,  Priority::P0, PatternType::Ptr,  "P:\\Code\\Engine\\Frame\\FrMsg.cpp",       "frame"),
+
+    // ===== Skills (P0) =====
+    PAT("SkillBase",      SkillBase,      "\x69\xC6\xA4\x00\x00\x00\x5E",       "xxxxxxx",  0x9,    Priority::P0, PatternType::Ptr),
+    PAT("SkillTimer",     SkillTimer,     "\xFF\xD6\x8B\x4D\xF0\x8B\xD8\x8B\x47\x08", "xxxxxxxxxx", -0x3, Priority::P0, PatternType::Ptr),
+    PAT("UseSkill",       UseSkill,       "\x85\xF6\x74\x5B\x83\xFE\x11\x74",   "xxxxxxxx", -0x127, Priority::P0, PatternType::Func),
+    PAT("UseHeroSkill",   UseHeroSkill,   "\xBA\x02\x00\x00\x00\xB9\x54\x08\x00\x00", "xxxxxxxxxx", -0x59, Priority::P0, PatternType::Func),
+
+    // ===== Friends (P2) =====
+    ASSERT_PAT("FriendList",  FriendList,  0, Priority::P2, PatternType::Ptr, "P:\\Code\\Gw\\Friend\\FriendApi.cpp", "friendName && *friendName"),
+    PAT("PlayerStatus",   PlayerStatus,   "\x83\xFE\x03\x77\x40\xFF\x24\xB5\x00\x00\x00\x00\x33\xC0", "xxxxxxxxxxxxxx", -0x25, Priority::P2, PatternType::Func),
+    PAT("AddFriend",      AddFriend,      "\x8B\x75\x10\x83\xFE\x03\x74\x65",   "xxxxxxxx", -0x47,  Priority::P2, PatternType::Func),
+    PAT("RemoveFriend",   RemoveFriend,   "\x83\xF8\x03\x74\x1D\x83\xF8\x04\x74\x18", "xxxxxxxxxx", 0x0, Priority::P2, PatternType::Func),
+
+    // ===== Attributes (P1) =====
+    PAT("AttributeInfo",     AttributeInfo,     "\xBA\x33\x00\x00\x00\x89\x08\x8D\x40\x04", "xxxxxxxxxx", -0x3, Priority::P1, PatternType::Ptr),
+    PAT("IncreaseAttribute", IncreaseAttribute, "\x8B\x7D\x08\x8B\x70\x2C\x8B\x1F\x3B\x9E\x00\x05\x00\x00", "xxxxxxxxxxxxxx", -0x5A, Priority::P1, PatternType::Func),
+    PAT("DecreaseAttribute", DecreaseAttribute, "\x8B\x8A\xA8\x00\x00\x00\x89\x48\x0C\x5D\xC3\xCC", "xxxxxxxxxxxx", 0x19, Priority::P1, PatternType::Func),
+
+    // ===== Trade (P1) =====
+    PAT("Transaction",    Transaction,    "\x85\xFF\x74\x1D\x8B\x4D\x14\xEB\x08", "xxxxxxxxx", -0x7E, Priority::P1, PatternType::Func),
+    PAT("BuyItemBase",    BuyItemBase,    "\xD9\xEE\xD9\x58\x0C\xC7\x40\x04",   "xxxxxxxx", 0xF,    Priority::P1, PatternType::Ptr),
+    PAT("RequestQuote",   RequestQuote,   "\x8B\x75\x20\x83\xFE\x10\x76\x14",   "xxxxxxxx", -0x34,  Priority::P1, PatternType::Func),
+    PAT("Salvage",        Salvage,
+        "\x33\xC5\x89\x45\xFC\x8B\x45\x08\x89\x45\xF0\x8B\x45\x0C\x89\x45\xF4\x8B\x45\x10\x89\x45\xF8\x8D\x45\xEC\x50\x6A\x10\xC7\x45\xEC\x77",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", -0xA, Priority::P1, PatternType::Func),
+    PAT("SalvageGlobal",  SalvageGlobal,  "\x8B\x4A\x04\x53\x89\x45\xF4\x8B\x42\x08", "xxxxxxxxxx", 0x1, Priority::P1, PatternType::Ptr),
+
+    // ===== Agents (P0) =====
+    PAT("ChangeTarget",   ChangeTarget,   "\x3B\xDF\x0F\x95",                   "xxxx",     -0x89,  Priority::P0, PatternType::Func),
+    PAT("CurrentTarget",  CurrentTarget,
+        "\x83\xC4\x08\x5F\x8B\xE5\x5D\xC3\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\x55",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxx", -0xE, Priority::P0, PatternType::Ptr),
+
+    // ===== Map (P0) =====
+    PAT("Move",           Move,           "\x55\x8B\xEC\x83\xEC\x20\x8D\x45\xF0", "xxxxxxxxx", 0x1, Priority::P0, PatternType::Func),
+    PAT("ClickCoords",    ClickCoords,    "\x8B\x45\x1C\x85\xC0\x74\x1C\xD9\x45\xF8", "xxxxxxxxxx", 0xD, Priority::P1, PatternType::Ptr),
+    PAT("InstanceInfo",   InstanceInfo,   "\x6A\x2C\x50\xE8\x00\x00\x00\x00\x83\xC4\x08\xC7", "xxxx????xxxx", 0xE, Priority::P0, PatternType::Ptr),
+    PAT("WorldConst",     WorldConst,     "\x8D\x04\x76\xC1\xE0\x04\x05",       "xxxxxxx",  0x8,    Priority::P1, PatternType::Ptr),
+    PAT("Region",         Region,         "\x6A\x54\x8D\x46\x24\x89\x08",       "xxxxxxx",  -0x3,   Priority::P1, PatternType::Ptr),
+    PAT("AreaInfo",       AreaInfo,       "\x6B\xC6\x7C\x5E\x05",               "xxxxx",    0x6,    Priority::P1, PatternType::Ptr),
+
+    // ===== Trade UI (P1) =====
+    PAT("TradeCancel",    TradeCancel,    "\xC7\x45\xFC\x01\x00\x00\x00\x50\x6A\x04", "xxxxxxxxxx", -0x6, Priority::P1, PatternType::Func),
+
+    // ===== UI (P0/P1) =====
+    PAT("UIMessage",      UIMessage,
+        "\xB9\x00\x00\x00\x00\xE8\x00\x00\x00\x00\x5D\xC3\x89\x45\x08",
+        "x????x????xxxxx", -0x14, Priority::P0, PatternType::Func),
+    PAT("Dialog",         Dialog,         "\x89\x4B\x24\x8B\x4B\x28\x83\xE9\x00", "xxxxxxxxx", 0x16, Priority::P0, PatternType::Func),
+    PAT("CompassFlag",    CompassFlag,    "\x8D\x45\x10\x50\x56\x6A\x5D\x57",   "xxxxxxxx", 0x1,    Priority::P1, PatternType::Func),
+    PAT("PartySearchButtonCallback", PartySearchButtonCallback,
+        "\x8B\x45\x08\x83\xEC\x08\x56\x8B\xF1\x8B\x48\x04\x83\xF9\x0E",
+        "xxxxxxxxxxxxxxx", -0x2, Priority::P1, PatternType::Func),
+    PAT("PartyWindowButtonCallback", PartyWindowButtonCallback,
+        "\x83\x7D\x08\x00\x57\x8B\xF9\x74\x11",
+        "xxxxxxxxx", -0x2, Priority::P1, PatternType::Func),
+    PAT("EnterMission",   EnterMission,   "\x83\xC9\x02\x89\x0A\x5D",           "xxxxxx",   0x24,   Priority::P1, PatternType::Func),
+    PAT("SetDifficulty",  SetDifficulty,  "\x83\xC4\x1C\x68\x2A\x01\x00\x10",   "xxxxxxxx", 0x8C,   Priority::P1, PatternType::Func),
+    PAT("OpenChest",      OpenChest,      "\x83\xC9\x01\x89\x4B\x24",           "xxxxxx",   0x29,   Priority::P1, PatternType::Func),
+    PAT("AiMode",         AiMode,         "\x68\x3A\x00\x00\x10\xFF\x36",       "xxxxxxx",  0x1,    Priority::P1, PatternType::Ptr),
+    PAT("HeroCommand",    HeroCommand,    "\x33\xD2\x68\xE0\x01\x00\x00",       "xxxxxxx",  0x1,    Priority::P1, PatternType::Ptr),
+    PAT("HeroSkills",     HeroSkills,     "\x8B\x4E\x04\x50\x51\x85\xFF",       "xxxxxxx",  0x1,    Priority::P1, PatternType::Ptr),
+
+    // ===== Party (P1) =====
+    ASSERT_PAT("PlayerAdd",  PlayerAdd,  0, Priority::P1, PatternType::Ptr, "P:\\Code\\Gw\\Ui\\Game\\Party\\PtInvite.cpp", "m_invitePlayerId"),
+    ASSERT_PAT("PlayerKick", PlayerKick, 0, Priority::P1, PatternType::Ptr, "P:\\Code\\Gw\\Ui\\Game\\Party\\PtUtil.cpp",   "playerId == MissionCliGetPlayerId()"),
+    PAT("PartyInvitations", PartyInvitations, "\x8B\x7D\x0C\x8B\xF0\x83\xC4\x04\x8B\x47\x04", "xxxxxxxxxxx", 0x1, Priority::P1, PatternType::Ptr),
+
+    // ===== Quest (P1) =====
+    PAT("ActiveQuest",    ActiveQuest,    "\x8B\x45\x08\x3B\x46\x04\x0F\x84\x2D\x01\x00\x00", "xxxxxxxxxxxx", 0x1, Priority::P1, PatternType::Ptr),
+
+    // ===== Hooks (P1) =====
+    PAT("Engine",         Engine,         "\x56\x8B\x30\x85\xF6\x74\x78\xEB\x03\x8D\x49\x00\xD9\x46\x0C", "xxxxxxxxxxxxxxx", -0x22, Priority::P1, PatternType::Hook),
+    PAT("Render",         Render,         "\xF6\xC4\x01\x74\x1C\x68",           "xxxxxx",   -0x68,  Priority::P1, PatternType::Hook),
+    PAT("LoadFinished",   LoadFinished,   "\x2B\xD9\xC1\xE3\x03",               "xxxxx",    0xA0,   Priority::P1, PatternType::Hook),
+    PAT("Trader",         Trader,         "\x8D\x4D\xFC\x51\x57\x6A\x56\x50",   "xxxxxxxx", -0x3C,  Priority::P1, PatternType::Hook),
+    PAT("TradePartner",   TradePartner,   "\x6A\x00\x8D\x45\xF8\xC7\x45\xF8\x01\x00\x00\x00", "xxxxxxxxxxxx", -0xC, Priority::P1, PatternType::Hook),
+
+    // ===== Text (P1) =====
+    ASSERT_PAT("ValidateAsyncDecodeStr", ValidateAsyncDecodeStr, 0, Priority::P1, PatternType::Func, "P:\\Code\\Engine\\Text\\TextApi.cpp", "codedString"),
+
+    // ===== Chat (P2) =====
+    PAT("PostMessage",    PostMessage,    "\x6A\xFF\x6A\x00\x68\x01\x80",       "xxxxxxx",  0x19,   Priority::P2, PatternType::Ptr),
+    PAT("ChatLog",        ChatLog,        "\x8B\x45\x08\x83\x7D\x0C\x07",       "xxxxxxx",  -0x20,  Priority::P2, PatternType::Hook),
+
+    // ===== Frame UI (P0 — new for GWA3) =====
+    // Pattern: 83 C1 DC E8 (ADD ECX, -0x24 / CALL rel32), resolve the CALL target
+    PAT("SendFrameUIMsg", SendFrameUIMsg, "\x83\xC1\xDC\xE8",                   "xxxx",     0x3,    Priority::P0, PatternType::Func),
+};
+
+#undef PAT
+#undef ASSERT_PAT
+
+static constexpr int PATTERN_COUNT = sizeof(s_patterns) / sizeof(s_patterns[0]);
+
+static bool s_resolved = false;
+static int s_resolvedCount = 0;
+static int s_failedCount = 0;
+
+bool ResolveAll() {
+    if (!Scanner::IsInitialized()) {
+        Log::Error("Offsets: Scanner not initialized");
+        return false;
+    }
+
+    s_resolvedCount = 0;
+    s_failedCount = 0;
+    bool criticalFail = false;
+
+    for (int i = 0; i < PATTERN_COUNT; i++) {
+        const auto& p = s_patterns[i];
+        uintptr_t result = 0;
+
+        if (p.assertFile && p.assertMsg) {
+            // Assertion-based scan
+            result = Scanner::FindAssertion(p.assertFile, p.assertMsg, p.offset);
+        } else if (p.bytes && p.mask) {
+            result = Scanner::Find(p.bytes, p.mask, p.offset);
+        }
+
+        // Special post-processing for SendFrameUIMsg: resolve the E8 CALL
+        if (result && strcmp(p.name, "SendFrameUIMsg") == 0) {
+            result = Scanner::FunctionFromNearCall(result);
+        }
+
+        if (result) {
+            *p.target = result;
+            s_resolvedCount++;
+            Log::Info("Offsets: [OK] %-30s = 0x%08X", p.name, result);
+        } else {
+            s_failedCount++;
+            const char* priStr = (p.priority == Priority::P0) ? "P0" :
+                                 (p.priority == Priority::P1) ? "P1" : "P2";
+            Log::Warn("Offsets: [FAIL] %-28s (%s)", p.name, priStr);
+            if (p.priority == Priority::P0 || p.priority == Priority::P1) {
+                criticalFail = true;
+            }
+        }
+    }
+
+    Log::Info("Offsets: Resolved %d/%d patterns (%d failed)",
+              s_resolvedCount, PATTERN_COUNT, s_failedCount);
+
+    s_resolved = !criticalFail;
+    return s_resolved;
+}
+
+bool IsResolved()       { return s_resolved; }
+int GetResolvedCount()  { return s_resolvedCount; }
+int GetFailedCount()    { return s_failedCount; }
+
+} // namespace GWA3::Offsets
