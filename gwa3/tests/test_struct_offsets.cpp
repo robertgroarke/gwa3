@@ -14,6 +14,7 @@
 #include <gwa3/game/Guild.h>
 #include <gwa3/game/Party.h>
 #include <gwa3/game/Player.h>
+#include <gwa3/game/Title.h>
 #include <gwa3/testing/TestFramework.h>
 
 #include <cstddef>
@@ -475,6 +476,31 @@ GWA3_CHECK_OFFSET(TownAlliance, name,       0x0C);
 GWA3_CHECK_OFFSET(TownAlliance, tag,        0x4C);
 GWA3_CHECK_OFFSET(TownAlliance, cape,       0x58);
 GWA3_CHECK_OFFSET(TownAlliance, map_id,     0x74);
+
+// ===== Title — 0x2C / 44 bytes =====
+GWA3_CHECK_SIZE(Title, 0x2C);
+GWA3_CHECK_OFFSET(Title, props,                      0x00);
+GWA3_CHECK_OFFSET(Title, current_points,             0x04);
+GWA3_CHECK_OFFSET(Title, current_title_tier_index,   0x08);
+GWA3_CHECK_OFFSET(Title, points_needed_current_rank, 0x0C);
+GWA3_CHECK_OFFSET(Title, next_title_tier_index,      0x14);
+GWA3_CHECK_OFFSET(Title, points_needed_next_rank,    0x18);
+GWA3_CHECK_OFFSET(Title, max_title_rank,             0x1C);
+GWA3_CHECK_OFFSET(Title, max_title_tier_index,       0x20);
+GWA3_CHECK_OFFSET(Title, points_desc,                0x24);
+GWA3_CHECK_OFFSET(Title, h0028,                      0x28);
+
+// ===== TitleTier — 0x0C / 12 bytes =====
+GWA3_CHECK_SIZE(TitleTier, 0x0C);
+GWA3_CHECK_OFFSET(TitleTier, props,         0x00);
+GWA3_CHECK_OFFSET(TitleTier, tier_number,   0x04);
+GWA3_CHECK_OFFSET(TitleTier, tier_name_enc, 0x08);
+
+// ===== TitleClientData — 0x0C / 12 bytes =====
+GWA3_CHECK_SIZE(TitleClientData, 0x0C);
+GWA3_CHECK_OFFSET(TitleClientData, title_flags, 0x00);
+GWA3_CHECK_OFFSET(TitleClientData, title_id,    0x04);
+GWA3_CHECK_OFFSET(TitleClientData, name_id,     0x08);
 
 #ifdef _MSC_VER
 #pragma warning(pop)

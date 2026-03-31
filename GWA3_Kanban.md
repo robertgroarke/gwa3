@@ -1451,8 +1451,8 @@ Implement keyboard input dispatch (keydown/keyup/keypress) and game preference m
 
 | Field | Value |
 |-------|-------|
-| **Assignee** | |
-| **Status** | `backlog` |
+| **Assignee** | agent |
+| **Status** | `done` |
 | **Estimate** | M |
 | **Depends On** | GWA3-005, GWA3-006, GWA3-010 |
 | **Blocks** | GWA3-025 |
@@ -2064,7 +2064,7 @@ WAVE 7 (Endgame — needs all integration):
 | GWA3-047 | Behavioral: Frame UI + ButtonClick | M | 020, 021, 046 | `backlog` |
 | GWA3-048 | Bot Framework Smoke Test | M | 025 | `backlog` |
 | **Epic 10: GWCA Header Parity** | | | | |
-| GWA3-049 | PlayerMgr (Titles + Profession) | M | 005, 006, 010 | `backlog` |
+| GWA3-049 | PlayerMgr (Titles + Profession) | M | 005, 006, 010 | `done` |
 | GWA3-050 | MemoryMgr (Version + Timer + Window) | S | 005 | `done` |
 | GWA3-051 | String Encoding/Decoding | M | 005, 006 | `done` |
 | GWA3-052 | CameraMgr | S | 005, 006 | `done` |
