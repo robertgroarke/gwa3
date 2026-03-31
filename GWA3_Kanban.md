@@ -1717,8 +1717,8 @@ Create the offline test infrastructure: a `tests/` directory, CMake test target 
 
 | Field | Value |
 |-------|-------|
-| **Assignee** | |
-| **Status** | `backlog` |
+| **Assignee** | agent |
+| **Status** | `done` |
 | **Estimate** | S |
 | **Depends On** | GWA3-042, GWA3-003, GWA3-004 |
 | **Blocks** | — |
@@ -2058,7 +2058,7 @@ WAVE 7 (Endgame — needs all integration):
 | **Epic 9: Testing** | | | | |
 | GWA3-042 | Test Harness + CMake Target | M | 001 | `done` |
 | GWA3-043 | Offline: Struct Offset Validation | M | 042, 007-015, 020 | `backlog` |
-| GWA3-044 | Offline: Headers + Pattern Parsing | S | 042, 003, 004 | `backlog` |
+| GWA3-044 | Offline: Headers + Pattern Parsing | S | 042, 003, 004 | `done` |
 | GWA3-045 | Injection Smoke: Patterns + State Read | L | 002, 005, 043 | `backlog` |
 | GWA3-046 | Behavioral: Commands + Game Thread | XL | 006, 010, 045, 049-051 | `backlog` |
 | GWA3-047 | Behavioral: Frame UI + ButtonClick | M | 020, 021, 046 | `backlog` |
