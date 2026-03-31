@@ -16,6 +16,7 @@
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/bot/BotFramework.h>
 #include <gwa3/bot/FroggyHM.h>
+#include <gwa3/core/SmokeTest.h>
 
 static HMODULE g_hModule = nullptr;
 
@@ -59,7 +60,42 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     GWA3::FriendListMgr::Initialize();
     GWA3::UIMgr::Initialize();
 
-    // Step 5: Register and start Froggy HM bot
+    // Step 5: Check for test mode flags (env vars or flag files next to DLL)
+    auto CheckFlag = [](const char* envVar, const char* flagFile) -> bool {
+        char envBuf[16] = {};
+        if (GetEnvironmentVariableA(envVar, envBuf, sizeof(envBuf)) > 0) return true;
+        // Check flag file next to DLL
+        char path[MAX_PATH];
+        HMODULE hSelf = nullptr;
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCSTR>(&GWA3::Log::Initialize), &hSelf);
+        GetModuleFileNameA(hSelf, path, MAX_PATH);
+        char* slash = strrchr(path, '\\');
+        if (slash) *(slash + 1) = '\0';
+        strcat_s(path, flagFile);
+        DWORD attr = GetFileAttributesA(path);
+        if (attr != INVALID_FILE_ATTRIBUTES) {
+            DeleteFileA(path); // consume flag
+            return true;
+        }
+        return false;
+    };
+
+    if (CheckFlag("GWA3_SMOKE_TEST", "gwa3_smoke_test.flag")) {
+        GWA3::Log::Info("=== SMOKE TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunSmokeTest();
+        GWA3::Log::Info("Smoke test complete: %d failures", failures);
+        return static_cast<DWORD>(failures);
+    }
+
+    if (CheckFlag("GWA3_TEST_BOT", "gwa3_test_bot.flag")) {
+        GWA3::Log::Info("=== BOT FRAMEWORK TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunBotFrameworkTest();
+        GWA3::Log::Info("Bot framework test complete: %d failures", failures);
+        return static_cast<DWORD>(failures);
+    }
+
+    // Step 6: Normal mode — register and start Froggy HM bot
     GWA3::Bot::Froggy::Register();
     GWA3::Bot::Start();
 

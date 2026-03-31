@@ -96,6 +96,78 @@ static HMODULE GetRemoteModuleHandle(HANDLE hProcess, const char* moduleName) {
     return nullptr;
 }
 
+// ===== Remote Environment Variable =====
+
+static bool SetRemoteEnvVar(DWORD pid, const char* name, const char* value) {
+    // Write "NAME=VALUE\0" to remote process, then call SetEnvironmentVariableA
+    // We use a shellcode approach: write name and value separately, call the API
+    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    if (!hProcess) return false;
+
+    size_t nameLen = strlen(name) + 1;
+    size_t valLen = strlen(value) + 1;
+
+    // Allocate remote buffers
+    LPVOID remoteName = VirtualAllocEx(hProcess, nullptr, nameLen, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    LPVOID remoteVal = VirtualAllocEx(hProcess, nullptr, valLen, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!remoteName || !remoteVal) {
+        if (remoteName) VirtualFreeEx(hProcess, remoteName, 0, MEM_RELEASE);
+        if (remoteVal) VirtualFreeEx(hProcess, remoteVal, 0, MEM_RELEASE);
+        CloseHandle(hProcess);
+        return false;
+    }
+
+    WriteProcessMemory(hProcess, remoteName, name, nameLen, nullptr);
+    WriteProcessMemory(hProcess, remoteVal, value, valLen, nullptr);
+
+    // We can't directly call SetEnvironmentVariableA with 2 args via CreateRemoteThread
+    // (it only passes one LPVOID). Instead, write a tiny shellcode stub.
+    // Simpler alternative: just set the env var in OUR process before injecting,
+    // since child DLL inherits the env... but GW is already running.
+    //
+    // Actually, simplest: write the flag to a well-known file that the DLL checks.
+    // OR: use a named shared memory section.
+    //
+    // For now, use a flag file approach — write a marker file next to the DLL.
+
+    VirtualFreeEx(hProcess, remoteName, 0, MEM_RELEASE);
+    VirtualFreeEx(hProcess, remoteVal, 0, MEM_RELEASE);
+    CloseHandle(hProcess);
+    return false; // fallback to file-based approach
+}
+
+static bool SetTestModeFlag(const char* flagName) {
+    // Write a flag file next to the injector that the DLL will check
+    char path[MAX_PATH];
+    GetModuleFileNameA(nullptr, path, MAX_PATH);
+    char* slash = strrchr(path, '\\');
+    if (slash) *(slash + 1) = '\0';
+    strcat_s(path, flagName);
+
+    FILE* f = nullptr;
+    fopen_s(&f, path, "w");
+    if (f) {
+        fprintf(f, "1\n");
+        fclose(f);
+        printf("[*] Test mode flag set: %s\n", path);
+        return true;
+    }
+    return false;
+}
+
+static void ClearTestModeFlags() {
+    char dir[MAX_PATH];
+    GetModuleFileNameA(nullptr, dir, MAX_PATH);
+    char* slash = strrchr(dir, '\\');
+    if (slash) *(slash + 1) = '\0';
+
+    char path[MAX_PATH];
+    snprintf(path, sizeof(path), "%sgwa3_smoke_test.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_bot.flag", dir);
+    DeleteFileA(path);
+}
+
 // ===== Injection =====
 
 static bool InjectDll(DWORD pid, const char* dllPath) {
@@ -226,6 +298,8 @@ static void PrintUsage(const char* argv0) {
     printf("  --all           Inject into ALL running GW instances\n");
     printf("  --eject         Eject gwa3.dll from all injected instances\n");
     printf("  --eject --pid N Eject from specific PID\n");
+    printf("  --smoke         Inject in smoke test mode (GWA3_SMOKE_TEST=1)\n");
+    printf("  --test-bot      Inject in bot framework test mode (GWA3_TEST_BOT=1)\n");
     printf("\nOptions:\n");
     printf("  --pid <N>       Target specific process ID\n");
     printf("  -h, --help      Show this help\n");
@@ -238,6 +312,8 @@ int main(int argc, char* argv[]) {
     bool doList = false;
     bool doAll = false;
     bool doEject = false;
+    bool doSmoke = false;
+    bool doTestBot = false;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--pid") == 0 && i + 1 < argc) {
@@ -248,6 +324,10 @@ int main(int argc, char* argv[]) {
             doAll = true;
         } else if (strcmp(argv[i], "--eject") == 0) {
             doEject = true;
+        } else if (strcmp(argv[i], "--smoke") == 0) {
+            doSmoke = true;
+        } else if (strcmp(argv[i], "--test-bot") == 0) {
+            doTestBot = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             PrintUsage(argv[0]);
             return 0;
@@ -309,6 +389,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     printf("[*] DLL: %s\n", dllPath.c_str());
+
+    // === Test mode flags ===
+    ClearTestModeFlags();
+    if (doSmoke) SetTestModeFlag("gwa3_smoke_test.flag");
+    if (doTestBot) SetTestModeFlag("gwa3_test_bot.flag");
 
     // === --pid (single target) ===
     if (targetPid != 0) {
