@@ -29,6 +29,12 @@ add_library(gwa3_core OBJECT
     src/core/Offsets.cpp
     src/core/GameThread.cpp
     src/packets/CtoS.cpp
+    src/managers/AgentMgr.cpp
+    src/managers/SkillMgr.cpp
+    src/managers/ItemMgr.cpp
+    src/managers/MapMgr.cpp
+    src/managers/PartyMgr.cpp
+    src/managers/QuestMgr.cpp
 )
 
 target_include_directories(gwa3_core PUBLIC
