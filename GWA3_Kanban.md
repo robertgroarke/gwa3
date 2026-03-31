@@ -1566,8 +1566,8 @@ Implement `managers/CameraMgr.cpp` — camera control, field of view, unlock, fo
 
 | Field | Value |
 |-------|-------|
-| **Assignee** | |
-| **Status** | `backlog` |
+| **Assignee** | agent |
+| **Status** | `done` |
 | **Estimate** | L |
 | **Depends On** | GWA3-005, GWA3-006 |
 | **Blocks** | — |
@@ -2005,16 +2005,16 @@ WAVE 7 (Endgame — needs all integration):
 | ID | Title | Est | Depends On | Status |
 |----|-------|-----|-----------|--------|
 | **Epic 1: Foundation** | | | | |
-| GWA3-001 | CMake Project + DLL Skeleton | M | — | `ready` |
-| GWA3-002 | Standalone DLL Injector | M | 001 | `ready` |
-| GWA3-003 | Pattern Scanner Engine | L | 001 | `ready` |
-| GWA3-004 | Packet Header Constants | S | 001 | `ready` |
-| GWA3-005 | Offset Registry + Pattern Defs | L | 001, 003 | `backlog` |
+| GWA3-001 | CMake Project + DLL Skeleton | M | — | `done` |
+| GWA3-002 | Standalone DLL Injector | M | 001 | `done` |
+| GWA3-003 | Pattern Scanner Engine | L | 001 | `done` |
+| GWA3-004 | Packet Header Constants | S | 001 | `done` |
+| GWA3-005 | Offset Registry + Pattern Defs | L | 001, 003 | `done` |
 
 > **Note on GWA3-005:** Must include the GameThread scan target `FindAssertion("FrApi.cpp", "renderElapsed >= 0")` documented in `GWCA_GameThreadTarget_Addendum.md` and `GWCA_GameThreadModuleSlots_Addendum.md`. Also reference `GWCA_BuildConsistency_And_ExportSeam_Addendum.md` for RVA validation methodology.
 | **Epic 2: Commands** | | | | |
-| GWA3-006 | Game Thread Hook + Queue | L | 002, 003, 005 | `backlog` |
-| GWA3-010 | Packet Sending (CtoS) | M | 004, 005, 006 | `backlog` |
+| GWA3-006 | Game Thread Hook + Queue | L | 002, 003, 005 | `done` |
+| GWA3-010 | Packet Sending (CtoS) | M | 004, 005, 006 | `done` |
 | **Epic 3: Structs** | | | | |
 | GWA3-007 | Agent Struct | L | 001, 003, 005 | `backlog` |
 | GWA3-008 | Skill Struct | M | 001, 003, 005 | `backlog` |
@@ -2025,18 +2025,18 @@ WAVE 7 (Endgame — needs all integration):
 | GWA3-014 | Effect & Buff Struct | M | 001, 003, 005 | `backlog` |
 | GWA3-015 | Chat Struct + Constants | S | 001, 003, 005 | `backlog` |
 | **Epic 4: Managers** | | | | |
-| GWA3-016 | AgentMgr | L | 006, 007, 010, 014 | `backlog` |
-| GWA3-017 | SkillMgr | M | 006, 008, 010 | `backlog` |
-| GWA3-018 | ItemMgr | L | 006, 009, 010 | `backlog` |
-| GWA3-019 | MapMgr | M | 006, 010, 011 | `backlog` |
-| GWA3-020 | UIMgr: Frame System | L | 003, 005, 006 | `backlog` |
-| GWA3-021 | UIMgr: ButtonClick | M | 020 | `backlog` |
-| GWA3-022 | PartyMgr | M | 006, 010, 012 | `backlog` |
-| GWA3-023 | QuestMgr + DialogMgr | S | 006, 010, 013 | `backlog` |
-| GWA3-024 | ChatMgr + RenderMgr + TradeMgr | L | 005, 006, 010, 015 | `backlog` |
+| GWA3-016 | AgentMgr | L | 006, 007, 010, 014 | `done` |
+| GWA3-017 | SkillMgr | M | 006, 008, 010 | `done` |
+| GWA3-018 | ItemMgr | L | 006, 009, 010 | `done` |
+| GWA3-019 | MapMgr | M | 006, 010, 011 | `done` |
+| GWA3-020 | UIMgr: Frame System | L | 003, 005, 006 | `done` |
+| GWA3-021 | UIMgr: ButtonClick | M | 020 | `done` |
+| GWA3-022 | PartyMgr | M | 006, 010, 012 | `done` |
+| GWA3-023 | QuestMgr + DialogMgr | S | 006, 010, 013 | `done` |
+| GWA3-024 | ChatMgr + RenderMgr + TradeMgr | L | 005, 006, 010, 015 | `done` |
 | **Epic 5: C++ Bot Module** | | | | |
-| GWA3-025 | Bot Framework + State Machine | L | 006, 016-024, 049, 051 | `backlog` |
-| GWA3-026 | Froggy HM Bot Module (C++ Port) | XL | 025 | `backlog` |
+| GWA3-025 | Bot Framework + State Machine | L | 006, 016-024, 049, 051 | `done` |
+| GWA3-026 | Froggy HM Bot Module (C++ Port) | XL | 025 | `done` |
 | GWA3-027 | IPC Server (Optional) | L | 025 | `backlog` |
 | **Epic 6: Integration** | | | | |
 | GWA3-028 | Integration: Char Select + Login | M | 021, 026, **047** | `backlog` |
@@ -2047,11 +2047,11 @@ WAVE 7 (Endgame — needs all integration):
 | **Epic 7: Hardening** | | | | |
 | GWA3-033 | Full Froggy HM 10+ Runs | XL | 028-032 | `backlog` |
 | GWA3-034 | Multi-Client Injector | M | 002 | `done` |
-| GWA3-035 | Pattern Health Check Tool | M | 005 | `backlog` |
+| GWA3-035 | Pattern Health Check Tool | M | 005 | `done` |
 | GWA3-036 | Crash Protection + SEH | M | 033 | `backlog` |
 | **Epic 8: Research-Derived** | | | | |
 | GWA3-037 | Hook Engine (Optional Custom) | XL | 006 | `backlog` |
-| GWA3-038 | Memory Patcher Module | M | 005, 006 | `backlog` |
+| GWA3-038 | Memory Patcher Module | M | 005, 006 | `done` |
 | GWA3-039 | Callback Registry + Module Ownership | L | 006, 020 | `backlog` |
 | GWA3-040 | Key Input + Preference System | M | 006, 020, 039 | `backlog` |
 | GWA3-041 | Py4GW API Surface Audit | S | 025 | `backlog` |
@@ -2059,16 +2059,16 @@ WAVE 7 (Endgame — needs all integration):
 | GWA3-042 | Test Harness + CMake Target | M | 001 | `done` |
 | GWA3-043 | Offline: Struct Offset Validation | M | 042, 007-015, 020 | `done` |
 | GWA3-044 | Offline: Headers + Pattern Parsing | S | 042, 003, 004 | `done` |
-| GWA3-045 | Injection Smoke: Patterns + State Read | L | 002, 005, 043 | `backlog` |
-| GWA3-046 | Behavioral: Commands + Game Thread | XL | 006, 010, 045, 049-051 | `backlog` |
+| GWA3-045 | Injection Smoke: Patterns + State Read | L | 002, 005, 043 | `done` |
+| GWA3-046 | Behavioral: Commands + Game Thread | XL | 006, 010, 045, 049-051 | `done` |
 | GWA3-047 | Behavioral: Frame UI + ButtonClick | M | 020, 021, 046 | `backlog` |
-| GWA3-048 | Bot Framework Smoke Test | M | 025 | `backlog` |
+| GWA3-048 | Bot Framework Smoke Test | M | 025 | `done` |
 | **Epic 10: GWCA Header Parity** | | | | |
 | GWA3-049 | PlayerMgr (Titles + Profession) | M | 005, 006, 010 | `done` |
 | GWA3-050 | MemoryMgr (Version + Timer + Window) | S | 005 | `done` |
 | GWA3-051 | String Encoding/Decoding | M | 005, 006 | `done` |
 | GWA3-052 | CameraMgr | S | 005, 006 | `done` |
-| GWA3-053 | StoCMgr (Packet Callbacks) | L | 005, 006 | `backlog` |
+| GWA3-053 | StoCMgr (Packet Callbacks) | L | 005, 006 | `done` |
 | GWA3-054 | GuildMgr | S | 005, 006 | `done` |
 
 **Total: 54 tickets across 10 epics.**
