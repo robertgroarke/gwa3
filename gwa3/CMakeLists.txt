@@ -39,6 +39,10 @@ add_library(gwa3_core OBJECT
     src/managers/CameraMgr.cpp
     src/managers/GuildMgr.cpp
     src/managers/UIMgr.cpp
+    src/managers/ChatMgr.cpp
+    src/managers/TradeMgr.cpp
+    src/managers/FriendListMgr.cpp
+    src/utils/StringEncoding.cpp
 )
 
 target_include_directories(gwa3_core PUBLIC
