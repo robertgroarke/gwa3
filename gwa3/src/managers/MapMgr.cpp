@@ -71,8 +71,15 @@ void SkipCinematic() {
 }
 
 uint32_t GetMapId() {
-    if (!Offsets::InstanceInfo) return 0;
-    return *reinterpret_cast<uint32_t*>(Offsets::InstanceInfo);
+    // MapID via BasePointer chain: *BasePointer -> +0x18 -> +0x44 -> +0x198
+    if (!Offsets::BasePointer) return 0;
+    uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+    if (ctx < 0x10000) return 0;
+    uintptr_t p1 = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
+    if (p1 < 0x10000) return 0;
+    uintptr_t p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x44);
+    if (p2 < 0x10000) return 0;
+    return *reinterpret_cast<uint32_t*>(p2 + 0x198);
 }
 
 uint32_t GetRegion() {
