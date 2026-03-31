@@ -100,6 +100,16 @@ set_target_properties(injector PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
+# --- pattern_test.exe ---
+add_executable(pattern_test
+    tools/pattern_test.cpp
+)
+
+set_target_properties(pattern_test PROPERTIES
+    OUTPUT_NAME "pattern_test"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
 # Run tests as post-build step
 add_custom_command(TARGET gwa3_tests POST_BUILD
     COMMAND $<TARGET_FILE:gwa3_tests>
