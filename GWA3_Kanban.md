@@ -41,15 +41,11 @@ GWA3-003 ┼─── GWA3-008 (Skill struct)    ── all structs feed into �
                                                                           │        │
                                                                           ▼        │
 GWA3-003 ──► GWA3-005 ──► GWA3-020 ──► GWA3-021                   GWA3-025       │
-  (Scanner)   (Offsets)     (FrameUI)    (ButtonClick)              (Bridge.h)     │
+  (Scanner)   (Offsets)     (FrameUI)    (ButtonClick)              (Bot Framework)│
                                                                        │           │
                                                                        ▼           │
                                                                     GWA3-026      │
-                                                                    (GWA3.au3)    │
-                                                                       │           │
-                                                                       ▼           │
-                                                                    GWA3-027      │
-                                                                    (Compat shim) │
+                                                                    (Froggy C++)  │
                                                                        │           │
                                                                        ▼           │
                                                                     GWA3-028..032 │
@@ -890,95 +886,185 @@ Implement remaining managers: chat send/receive hook, rendering toggle hook, pla
 
 ---
 
-### Epic 5: AutoIt Bridge
+### Epic 5: C++ Bot Module
 
-#### GWA3-025 — AutoIt Bridge DLL Exports
+> **Architecture decision:** Bot logic lives inside gwa3.dll, not in AutoIt.
+> The DLL is both the game API AND the bot. One injection, zero IPC.
+> See [GWA3_Testing_Strategy.md](GWA3_Testing_Strategy.md) for testing approach.
+>
+> **Future option:** Add a named pipe/TCP IPC server later (GWA3-026) to allow
+> external scripting in Python/AutoIt/Lua without recompilation.
+
+#### GWA3-025 — Bot Framework + State Machine Core
 
 | Field | Value |
 |-------|-------|
 | **Assignee** | |
 | **Status** | `backlog` |
 | **Estimate** | L |
-| **Depends On** | GWA3-006, GWA3-016..024, GWA3-049..051. Optional: GWA3-038, GWA3-040, GWA3-052..054 (add exports if completed) |
-| **Blocks** | GWA3-026, GWA3-041 |
+| **Depends On** | GWA3-006, GWA3-016..024, GWA3-049, GWA3-051 |
+| **Blocks** | GWA3-026, GWA3-028..032 |
 | **Parallel Group** | — |
 
 **Description:**
-Implement `exports/AutoItBridge.h` + `exports/AutoItBridge.cpp` — flat `extern "C" __declspec(dllexport)` functions for every manager API.
+Implement the bot framework inside gwa3.dll: a bot thread, state machine infrastructure, configuration loading, and logging.
 
-~120 exports covering agents, movement, skills, items, map, party, quests, trading, frame UI, chat, rendering.
+The bot thread spawns during `InitThread` (after scanner + hooks are ready) and runs a main loop that dispatches to the active bot module's state machine. All game commands go through `GameThread::Enqueue()`.
+
+**Architecture:**
+
+```cpp
+// src/bot/BotFramework.h
+namespace GWA3::Bot {
+    enum class BotState { Idle, CharSelect, InTown, Traveling, InDungeon, Looting, Merchant, Error };
+
+    struct BotConfig {
+        bool use_consets;
+        bool use_stones;
+        bool hard_mode;
+        bool disable_rendering;
+        uint32_t hero_config[7];     // hero IDs
+        uint32_t skill_template[8];  // skill bar
+        // ... loaded from .ini or hardcoded
+    };
+
+    void Start();                     // Spawn bot thread
+    void Stop();                      // Signal bot thread to exit
+    bool IsRunning();
+    BotState GetState();
+
+    // Bot modules register themselves
+    using StateHandler = std::function<BotState(BotConfig&)>;
+    void RegisterStateHandler(BotState state, StateHandler handler);
+}
+```
 
 **Acceptance Criteria:**
-- [ ] All exports use `__cdecl` calling convention (AutoIt default)
-- [ ] No C++ types in signatures — only `int`, `float`, `unsigned int`, `const wchar_t*`, `void`
-- [ ] Every export wraps a manager call, handling game-thread enqueue internally
-- [ ] `GWA3_Initialize()` — runs scanner + hooks, returns 0 on success
-- [ ] `GWA3_Shutdown()` — cleans up all hooks
-- [ ] `GWA3_GetScanStatus()` — returns count of failed patterns
-- [ ] `.def` file or `__declspec(dllexport)` decorates all exports
-- [ ] Verify with `dumpbin /exports gwa3.dll` — all ~120 functions listed
-- [ ] Test from external process: `LoadLibrary("gwa3.dll")` + `GetProcAddress("GWA3_GetMyID")` returns valid pointer
-
-**Reference:** `GWCA_CPP_Replacement_Plan.md` Phase 5 export list
+- [ ] `Bot::Start()` / `Bot::Stop()` — spawn/kill bot thread
+- [ ] State machine loop: reads current state → calls handler → transitions to returned state
+- [ ] `BotConfig` struct loaded from INI file or defaults
+- [ ] Logging to `gwa3_bot.log` with timestamps and state transitions
+- [ ] Clean shutdown: bot thread exits, game hooks remain active
+- [ ] Console output via `AllocConsole()` for real-time monitoring
+- [ ] Error state: catches exceptions in handlers, logs, transitions to Error
+- [ ] Test: start bot, verify it enters Idle state, stop bot cleanly
 
 ---
 
-#### GWA3-026 — GWA3.au3 Wrapper UDF
-
-| Field | Value |
-|-------|-------|
-| **Assignee** | |
-| **Status** | `backlog` |
-| **Estimate** | M |
-| **Depends On** | GWA3-025 |
-| **Blocks** | GWA3-027 |
-| **Parallel Group** | — |
-
-**Description:**
-Create `GWA3.au3` — thin AutoIt UDF that wraps every DLL export in a native AutoIt function via `DllCall`.
-
-**Acceptance Criteria:**
-- [ ] `GWA3_Init()` / `GWA3_Shutdown()` — open/close DLL handle
-- [ ] One wrapper function per DLL export (~120 functions)
-- [ ] Consistent error handling — check `@error` after each `DllCall`
-- [ ] Return types match AutoIt conventions (numbers, not pointers)
-- [ ] Test from standalone `.au3` script: init, get agent ID, move, shutdown
-
-**Reference:** `GWCA_CPP_Replacement_Plan.md` Phase 5B AutoIt wrapper example
-
----
-
-#### GWA3-027 — GWA3_Compat.au3 Drop-in Shim
+#### GWA3-026 — Froggy HM Bot Module (C++ Port)
 
 | Field | Value |
 |-------|-------|
 | **Assignee** | |
 | **Status** | `backlog` |
 | **Estimate** | XL |
-| **Depends On** | GWA3-026 |
-| **Blocks** | GWA3-028, GWA3-029, GWA3-030, GWA3-031, GWA3-032 |
+| **Depends On** | GWA3-025 |
+| **Blocks** | GWA3-028..032 |
 | **Parallel Group** | — |
 
 **Description:**
-Create `GWA3_Compat.au3` that maps every old GWA2 function name to the new GWA3 wrapper. This allows `GWA_Logic_Censured_NEW.au3` and `Froggy_HM_v1.6.au3` to work by just changing the `#include` line.
+Port Froggy HM bot logic from `Froggy_HM_v1.6.au3` to C++ as a bot module inside gwa3.dll.
+
+**What gets ported:**
+- Character select → Play button click
+- Town setup: hero roster, skillbar loading, consumables, hard mode toggle, title activation
+- Travel to Bogroot Growths
+- Floor 1 + Floor 2 waypoint routes with combat
+- Loot collection, identification, salvage
+- Merchant sell/craft cycle
+- Loop back to character select or retry on wipe
+- Run statistics (time, loot, deaths)
+
+**What does NOT get ported (stays as API calls):**
+- All game interaction goes through the manager APIs (AgentMgr, SkillMgr, ItemMgr, etc.)
+- No raw memory reads — everything through typed C++ structs
+- No packet header constants in bot logic — use manager wrappers
+
+```cpp
+// src/bot/FroggyHM.h
+namespace GWA3::Bot::Froggy {
+    void Register();  // Register state handlers with framework
+
+    // State handlers (each returns next state)
+    BotState HandleCharSelect(BotConfig& cfg);
+    BotState HandleTownSetup(BotConfig& cfg);
+    BotState HandleTravel(BotConfig& cfg);
+    BotState HandleFloor1(BotConfig& cfg);
+    BotState HandleFloor2(BotConfig& cfg);
+    BotState HandleLoot(BotConfig& cfg);
+    BotState HandleMerchant(BotConfig& cfg);
+    BotState HandleWipe(BotConfig& cfg);
+}
+```
+
+**Source material:**
+- `GWA Censured/Froggy_HM_v1.6.au3` — main script (~2K lines)
+- `GWA Censured/GWA_Logic_Censured_NEW.au3` — farm route logic, waypoints
+- `GWA Censured/lib/custom/BotCore-Waypoints.au3` — waypoint movement
+- `GWA Censured/lib/custom/BotCore-Combat.au3` — combat AI
+- `GWA Censured/lib/custom/BotCore-Loot.au3` — loot pickup rules
+- `GWA Censured/hero_configs/` — hero build definitions
 
 **Acceptance Criteria:**
-- [ ] Maps all ~200 GWA2/Utils functions used by Froggy_HM and GWA_Logic to GWA3 equivalents
-- [ ] Handles signature differences (e.g., old functions that take struct returns vs new flat returns)
-- [ ] `GetMyAgent()` returns a compat struct or table that old code can index into
-- [ ] `GetData()` / `SetData()` compatibility layer for struct field access
-- [ ] `MemoryRead()` / `MemoryWrite()` fallback for any raw memory ops not covered by exports
-- [ ] `Enqueue()` / `SendPacket()` compatibility (maps to `GWA3_SendPacket`)
-- [ ] Compiles without errors when included in place of GWA2.au3
+- [ ] All Froggy HM states implemented as C++ handler functions
+- [ ] Waypoint arrays ported (Floor 1 + Floor 2 coordinates)
+- [ ] Combat AI: target selection, skill priority, hero skill usage
+- [ ] Loot rules: pickup filter by rarity/model ID, salvage rules, sell rules
+- [ ] Hero setup: add heroes, load skillbars, set behaviors
+- [ ] Consumable usage: consets, stones, scrolls
+- [ ] Merchant interaction: sell junk, craft consumables via frame clicks
+- [ ] Wipe recovery: detect party defeated → return to outpost → retry
+- [ ] Run counter and timing statistics logged
+- [ ] Title progress logged between runs
+- [ ] Compiles and links into gwa3.dll
 
-**Reference:** Full API surface analysis from agent research, `GWA Censured/lib/custom/GWA2_Compat.au3` (existing compat patterns)
+---
+
+#### GWA3-026 — IPC Server (Optional: External Scripting Support)
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-025 |
+| **Blocks** | — |
+| **Parallel Group** | — |
+
+**Description:**
+**OPTIONAL.** Add a named pipe or TCP server to gwa3.dll that exposes the game API to external processes. Enables bot scripting in Python, AutoIt, Lua, or any language with socket/pipe support.
+
+Only build this if we want to iterate on bot logic without recompilation, or want to support multiple scripting languages.
+
+**Protocol:** JSON-RPC over named pipe (`\\.\pipe\gwa3`) or TCP (`localhost:9999`).
+
+```json
+// Request
+{"method": "GetMyID", "id": 1}
+// Response
+{"result": 12345, "id": 1}
+
+// Request
+{"method": "Move", "params": {"x": -5765.0, "y": -5468.0}, "id": 2}
+// Response
+{"result": true, "id": 2}
+```
+
+**Acceptance Criteria:**
+- [ ] Named pipe server starts in background thread on DLL init
+- [ ] JSON-RPC protocol with method dispatch to manager functions
+- [ ] Supports ~50 most-used API calls (movement, skills, items, map, party, UI)
+- [ ] Thread-safe: pipe handler enqueues commands via `GameThread::Enqueue()`
+- [ ] Python client library: `gwa3.py` with `connect()`, `get_my_id()`, `move()`, etc.
+- [ ] Handles multiple concurrent connections
+- [ ] Test: Python script connects, reads agent ID, moves character
 
 ---
 
 ### Epic 6: Integration Testing
 
 > Each integration ticket tests a specific bot flow segment.
-> **GWA3-028..032 can run in parallel** once GWA3-027 is done.
+> **GWA3-028..032 can run in parallel** once GWA3-026 is done.
 
 #### GWA3-028 — Integration: Character Select + Login
 
@@ -987,7 +1073,7 @@ Create `GWA3_Compat.au3` that maps every old GWA2 function name to the new GWA3 
 | **Assignee** | |
 | **Status** | `backlog` |
 | **Estimate** | M |
-| **Depends On** | GWA3-021, GWA3-027 |
+| **Depends On** | GWA3-021, GWA3-026 |
 | **Blocks** | GWA3-033 |
 | **Parallel Group** | PG-INTEGRATION (with GWA3-029..032) |
 
@@ -1010,7 +1096,7 @@ End-to-end test: GW at character select → click Play → enter game → verify
 | **Assignee** | |
 | **Status** | `backlog` |
 | **Estimate** | M |
-| **Depends On** | GWA3-027 |
+| **Depends On** | GWA3-026 |
 | **Blocks** | GWA3-033 |
 | **Parallel Group** | PG-INTEGRATION |
 
@@ -1034,7 +1120,7 @@ Test hero team formation and consumable usage in town.
 | **Assignee** | |
 | **Status** | `backlog` |
 | **Estimate** | L |
-| **Depends On** | GWA3-027 |
+| **Depends On** | GWA3-026 |
 | **Blocks** | GWA3-033 |
 | **Parallel Group** | PG-INTEGRATION |
 
@@ -1059,7 +1145,7 @@ Test map travel → movement waypoints → combat loop.
 | **Assignee** | |
 | **Status** | `backlog` |
 | **Estimate** | M |
-| **Depends On** | GWA3-027 |
+| **Depends On** | GWA3-026 |
 | **Blocks** | GWA3-033 |
 | **Parallel Group** | PG-INTEGRATION |
 
@@ -1084,7 +1170,7 @@ Test item pickup, identification, salvage, and inventory management.
 | **Assignee** | |
 | **Status** | `backlog` |
 | **Estimate** | M |
-| **Depends On** | GWA3-027 |
+| **Depends On** | GWA3-026 |
 | **Blocks** | GWA3-033 |
 | **Parallel Group** | PG-INTEGRATION |
 
@@ -1547,7 +1633,7 @@ Audit Py4GW's API surface (documented in research) against our GWA3 export list.
 Py4GW provides: PyPlayer, PyParty, PyInventory, PyQuest, PyMerchant, PySkillbar, PyUIManager, PyScanner, PyCallback. Their transport layer uses UIMessages, native calls, chat commands, and frame clicks — same as us.
 
 **Acceptance Criteria:**
-- [ ] Cross-reference Py4GW's visible APIs against GWA3-025 export list
+- [ ] Cross-reference Py4GW's visible APIs against GWA3 manager API surface
 - [ ] Document gaps (if any) as new export tickets
 - [ ] Particularly check: `DepositFaction_Func`, `SetActiveTitle_Func`, `RawSendUIMessage` — do we expose equivalents?
 - [ ] Report: which Py4GW features map 1:1 to our exports, which need new work
@@ -1816,41 +1902,36 @@ Frame UI behavioral test. Validates frame hash lookup and ButtonClick at charact
 
 ---
 
-#### GWA3-048 — AutoIt Smoke Test Script
+#### GWA3-048 — Bot Framework Smoke Test
 
 | Field | Value |
 |-------|-------|
 | **Assignee** | |
 | **Status** | `backlog` |
-| **Estimate** | S |
-| **Depends On** | GWA3-026 |
+| **Estimate** | M |
+| **Depends On** | GWA3-025 |
 | **Blocks** | GWA3-028, GWA3-029, GWA3-030, GWA3-031, GWA3-032 |
 | **Parallel Group** | — |
 
 **Description:**
-`test_gwa3_smoke.au3` — an AutoIt script that loads `gwa3.dll` via `DllCall` and validates the bridge layer works end-to-end. Mirrors the C++ smoke test but runs from the AutoIt side.
+Validates that the bot framework (GWA3-025) works correctly: thread lifecycle, state machine transitions, config loading, and logging. Runs inside gwa3.dll triggered by `GWA3_TEST_BOT` flag.
 
 **Acceptance Criteria:**
-- [ ] `GWA3_Init()` succeeds (DLL loads, scanner runs)
-- [ ] `GWA3_GetScanStatus()` returns 0 (no failures)
-- [ ] `GWA3_GetMyID()` returns valid agent ID (> 0)
-- [ ] `GWA3_GetMapID()` returns valid map ID (> 0)
-- [ ] `GWA3_GetAgentHP(myId)` returns value in [0.0, 1.0]
-- [ ] `GWA3_GetMyX()` and `GWA3_GetMyY()` return non-zero floats
-- [ ] `GWA3_GetPing()` returns plausible value (0-1000)
-- [ ] `GWA3_GetPartySize()` returns > 0
-- [ ] `GWA3_GetBagSize(1)` returns > 0 (backpack exists)
-- [ ] `GWA3_GetGWVersion()` returns plausible build number (> 36000)
-- [ ] `GWA3_GetSkillTimer()` returns non-zero value
-- [ ] `GWA3_GetInstanceTime()` returns > 0
-- [ ] `GWA3_GetPlayerName(0)` returns non-empty string
-- [ ] `GWA3_GetTitleProgress(vanguard_id)` returns value >= 0
-- [ ] `GWA3_GetIsPartyDefeated()` returns 0 (in outpost)
-- [ ] `GWA3_GetFoesKilled()` returns 0 (in outpost)
-- [ ] Script exits 0 on all pass, 1 on any fail
-- [ ] ConsoleWrite output for each check: function name, returned value, PASS/FAIL
+- [ ] `Bot::Start()` spawns bot thread — verify thread is alive
+- [ ] `Bot::GetState()` returns `Idle` initially
+- [ ] Register a test state handler that transitions Idle → CharSelect → InTown → Idle
+- [ ] Verify all transitions fire in correct order (logged)
+- [ ] `BotConfig` loads from INI file — verify hero IDs, skill template, flags parsed
+- [ ] `BotConfig` falls back to defaults when INI missing
+- [ ] Error handler catches thrown exception → transitions to Error state → logged
+- [ ] `Bot::Stop()` signals thread exit — verify thread terminates within 5s
+- [ ] Console output shows real-time state transitions
+- [ ] Log file `gwa3_bot.log` created with timestamps
+- [ ] Bot framework does NOT send any game commands (pure state machine test)
+- [ ] Game stable for 5 minutes with bot thread running idle
+- [ ] All manager APIs accessible from bot thread via `GameThread::Enqueue()`
 
-**Reference:** [GWA3_Testing_Strategy.md](GWA3_Testing_Strategy.md) "Trigger Tests from AutoIt"
+**Reference:** [GWA3_Testing_Strategy.md](GWA3_Testing_Strategy.md)
 
 ---
 
@@ -1891,23 +1972,18 @@ WAVE 4 (Managers + Packets — all parallel, need GameThread + structs):
   Also: GWA3-021 (ButtonClick — needs 020)
         GWA3-024 (Chat/Render/Trade Mgr)
 
-WAVE 5 (Bridge — needs all managers):
+WAVE 5 (Bot Module — needs all managers):
   ┌─────────────┐
   │ GWA3-025    │
-  │ DLL Exports │
+  │ Bot Framewk │
   └──────┬──────┘
          │
   ┌──────┴──────┐
   │ GWA3-026    │
-  │ GWA3.au3    │
-  └──────┬──────┘
-         │
-  ┌──────┴──────┐
-  │ GWA3-027    │
-  │ Compat Shim │
+  │ Froggy C++  │
   └──────┬──────┘
 
-WAVE 6 (Integration — all parallel, need compat shim):
+WAVE 6 (Integration — all parallel, need Froggy module):
   ┌────────┬────────┬────────┬────────┬────────┐
   │ 028    │ 029    │ 030    │ 031    │ 032    │
   │ Login  │ Heroes │ Combat │ Loot   │ Merch  │
@@ -1958,16 +2034,16 @@ WAVE 7 (Endgame — needs all integration):
 | GWA3-022 | PartyMgr | M | 006, 010, 012 | `backlog` |
 | GWA3-023 | QuestMgr + DialogMgr | S | 006, 010, 013 | `backlog` |
 | GWA3-024 | ChatMgr + RenderMgr + TradeMgr | L | 005, 006, 010, 015 | `backlog` |
-| **Epic 5: Bridge** | | | | |
-| GWA3-025 | AutoIt Bridge DLL Exports | L | 006, 016-024 | `backlog` |
-| GWA3-026 | GWA3.au3 Wrapper UDF | M | 025 | `backlog` |
-| GWA3-027 | GWA3_Compat.au3 Drop-in Shim | XL | 026 | `backlog` |
+| **Epic 5: C++ Bot Module** | | | | |
+| GWA3-025 | Bot Framework + State Machine | L | 006, 016-024, 049, 051 | `backlog` |
+| GWA3-026 | Froggy HM Bot Module (C++ Port) | XL | 025 | `backlog` |
+| GWA3-027 | IPC Server (Optional) | L | 025 | `backlog` |
 | **Epic 6: Integration** | | | | |
-| GWA3-028 | Integration: Char Select + Login | M | 021, 027, **047** | `backlog` |
-| GWA3-029 | Integration: Hero Setup + Consumables | M | 027, **048** | `backlog` |
-| GWA3-030 | Integration: Travel + Movement + Combat | L | 027, **048** | `backlog` |
-| GWA3-031 | Integration: Loot + Inventory + Salvage | M | 027, **048** | `backlog` |
-| GWA3-032 | Integration: Merchant + Crafting | M | 027, **048** | `backlog` |
+| GWA3-028 | Integration: Char Select + Login | M | 021, 026, **047** | `backlog` |
+| GWA3-029 | Integration: Hero Setup + Consumables | M | 026, **046** | `backlog` |
+| GWA3-030 | Integration: Travel + Movement + Combat | L | 026, **046** | `backlog` |
+| GWA3-031 | Integration: Loot + Inventory + Salvage | M | 026, **046** | `backlog` |
+| GWA3-032 | Integration: Merchant + Crafting | M | 026, **046** | `backlog` |
 | **Epic 7: Hardening** | | | | |
 | GWA3-033 | Full Froggy HM 10+ Runs | XL | 028-032 | `backlog` |
 | GWA3-034 | Multi-Client Injector | M | 002 | `backlog` |
@@ -1986,7 +2062,7 @@ WAVE 7 (Endgame — needs all integration):
 | GWA3-045 | Injection Smoke: Patterns + State Read | L | 002, 005, 043 | `backlog` |
 | GWA3-046 | Behavioral: Commands + Game Thread | XL | 006, 010, 045, 049-051 | `backlog` |
 | GWA3-047 | Behavioral: Frame UI + ButtonClick | M | 020, 021, 046 | `backlog` |
-| GWA3-048 | AutoIt Smoke Test Script | S | 026 | `backlog` |
+| GWA3-048 | Bot Framework Smoke Test | M | 025 | `backlog` |
 | **Epic 10: GWCA Header Parity** | | | | |
 | GWA3-049 | PlayerMgr (Titles + Profession) | M | 005, 006, 010 | `backlog` |
 | GWA3-050 | MemoryMgr (Version + Timer + Window) | S | 005 | `backlog` |
@@ -2008,9 +2084,8 @@ WAVE 7 (Endgame — needs all integration):
 | 3 | GWA3-005, **GWA3-044** (offline: headers + patterns) | 2 |
 | 4 | GWA3-006, GWA3-007..015, GWA3-020, **GWA3-043** (offline: struct offsets — built incrementally) | **10+** |
 | 5 | GWA3-010, 016..019, 021..024, **GWA3-045** (injection smoke) | **10+** |
-| 6 | GWA3-025, **GWA3-046** (behavioral: commands) | 2 |
-| 7 | GWA3-026, **GWA3-047** (behavioral: frames) | 2 |
-| 8 | GWA3-027, **GWA3-048** (AutoIt smoke) | 2 |
+| 6 | GWA3-025 (bot framework), **GWA3-046** (behavioral: commands), **GWA3-048** (bot smoke) | 3 |
+| 7 | GWA3-026 (Froggy C++), **GWA3-047** (behavioral: frames) | 2 |
 | 9 | GWA3-028..032 (integration) | **5** |
 | 10 | GWA3-033 (full Froggy) | 1 |
 | 11 | GWA3-034..041 (hardening + research-derived) | **8** |

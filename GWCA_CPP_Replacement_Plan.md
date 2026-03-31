@@ -15,12 +15,11 @@
 | Maintenance | Hex pattern strings, manual struct offsets | Proper C++ structs, IDE autocomplete, type safety |
 | Stability | Fragile — one bad `WriteProcessMemory` corrupts game | In-process with proper error handling |
 | Frame UI | Shellcode injected per click, standalone threads | Direct function calls on game thread |
-| Bot logic | Must stay in AutoIt (orchestration layer) | Expose DLL exports that AutoIt calls via `DllCall` — or migrate bot logic to C++ entirely |
+| Bot logic | Must stay in AutoIt (orchestration layer) | Bot logic compiles into the DLL — single binary, zero IPC |
 
-**The vision:** A single `gwa3.dll` injected into the GW process that provides the complete game API. Bot scripts can either:
-1. **Stay in AutoIt** — call `gwa3.dll` exports via `DllCall()` (incremental migration)
-2. **Move to C++** — bot logic compiled into the DLL itself (full migration)
-3. **Move to Python** — use `ctypes` or a Python wrapper around the DLL (future option)
+**The vision:** A single `gwa3.dll` injected into the GW process that contains BOTH the game API AND the bot logic. No external process. No IPC. No AutoIt.
+
+**Future option:** An IPC server (named pipe / TCP) can be added later to support external scripting in Python, Lua, or AutoIt without recompilation.
 
 ---
 
@@ -39,16 +38,27 @@ CURRENT ARCHITECTURE:
 └─────────────────────┘                             └──────────────┘
 
 TARGET ARCHITECTURE:
-┌─────────────────────┐       DllCall()             ┌──────────────┐
-│  AutoIt Process      │ ─────────────────────────► │  GW.exe       │
-│                      │                             │              │
-│  Froggy_HM.au3      │  (or bot logic moves       │  gwa3.dll    │
-│  (thin orchestration)│   into the DLL entirely)   │  (our DLL)   │
-│                      │                             │              │
-└─────────────────────┘                             └──────────────┘
+
+                                                    ┌──────────────┐
+                                                    │  GW.exe       │
+  No external process needed.                       │              │
+  Bot logic runs inside the DLL.                    │  gwa3.dll    │
+  inject → bot runs → eject.                        │  ├─ API layer│
+                                                    │  ├─ managers │
+                                                    │  └─ Froggy   │
+                                                    │     bot logic│
+                                                    └──────────────┘
+
+  Optional future:
+  ┌──────────────────┐    named pipe    ┌──────────────┐
+  │  Python / Lua /  │◄──────────────►│  gwa3.dll     │
+  │  AutoIt script   │  or TCP         │  IPC server   │
+  └──────────────────┘                 └──────────────┘
 ```
 
-The target is dramatically simpler. One injection point. One DLL. No cross-process memory manipulation for every command.
+The target is maximally simple. One injection point. One DLL. Bot logic is C++ compiled into the same binary. No cross-process memory manipulation. No serialization. No IPC.
+
+**Iteration cycle:** Edit C++ → build (2s incremental) → eject old DLL → inject new DLL → test. Comparable speed to editing an AutoIt script.
 
 ---
 
@@ -140,8 +150,8 @@ gwa3/
 │   │   └── packets/
 │   │       ├── CtoS.h                # Client-to-server packet sending
 │   │       └── Headers.h             # All 100+ packet header constants
-│   └── exports/
-│       └── AutoItBridge.h            # DllCall-friendly C exports
+│   └── bot/
+│       └── BotFramework.h            # State machine + config types
 ├── src/
 │   ├── dllmain.cpp                   # DLL entry point + initialization
 │   ├── core/
@@ -162,8 +172,13 @@ gwa3/
 │   │   └── UIMgr.cpp                 # Frame system + ButtonClick
 │   ├── packets/
 │   │   └── CtoS.cpp                  # SendPacket implementation
-│   └── exports/
-│       └── AutoItBridge.cpp          # Flat C functions for DllCall
+│   └── bot/
+│       ├── BotFramework.cpp          # State machine, thread, config
+│       └── FroggyHM.cpp              # Froggy HM bot logic (state handlers)
+├── tests/
+│   ├── test_struct_offsets.cpp        # static_assert offset validation
+│   ├── test_headers.cpp              # Packet header constant validation
+│   └── test_scanner_logic.cpp        # Pattern parsing unit tests
 └── tools/
     ├── injector.cpp                  # Standalone DLL injector
     └── pattern_test.cpp              # Pattern validation tool
@@ -860,236 +875,173 @@ void InstallRenderHook() {
 
 ---
 
-### Phase 5: AutoIt Bridge (DLL Exports)
+### Phase 5: C++ Bot Module
 
-**Goal:** Expose the entire C++ API as flat C functions callable from AutoIt's `DllCall()`.
+**Goal:** Port Froggy HM bot logic into gwa3.dll as a C++ module. No external process. No AutoIt. One DLL does everything.
 
-#### 5A: Export Design
+#### 5A: Bot Framework
 
-AutoIt's `DllCall` can only call C-style exports (no C++ name mangling, no objects). Design flat wrappers:
+The bot framework provides the runtime for bot modules: a dedicated thread, state machine dispatcher, config loading, and logging.
 
 ```cpp
-// exports/AutoItBridge.h
-extern "C" {
+// src/bot/BotFramework.h
+namespace GWA3::Bot {
+    enum class BotState {
+        Idle, CharSelect, InTown, Traveling,
+        Floor1, Floor2, Looting, Merchant, Wipe, Error
+    };
 
-// ===== Initialization =====
-__declspec(dllexport) int  __cdecl GWA3_Initialize();
-__declspec(dllexport) void __cdecl GWA3_Shutdown();
-__declspec(dllexport) int  __cdecl GWA3_GetScanStatus();  // Returns count of failed patterns
+    struct BotConfig {
+        bool use_consets;
+        bool use_stones;
+        bool hard_mode;
+        bool disable_rendering;
+        uint32_t hero_ids[7];
+        char skill_template[64];
+    };
 
-// ===== Agent System =====
-__declspec(dllexport) int   __cdecl GWA3_GetMyID();
-__declspec(dllexport) float __cdecl GWA3_GetMyX();
-__declspec(dllexport) float __cdecl GWA3_GetMyY();
-__declspec(dllexport) float __cdecl GWA3_GetAgentHP(int agent_id);
-__declspec(dllexport) float __cdecl GWA3_GetAgentEnergy(int agent_id);
-__declspec(dllexport) int   __cdecl GWA3_GetAgentProfession(int agent_id);
-__declspec(dllexport) int   __cdecl GWA3_GetAgentModelID(int agent_id);
-__declspec(dllexport) float __cdecl GWA3_GetAgentX(int agent_id);
-__declspec(dllexport) float __cdecl GWA3_GetAgentY(int agent_id);
-__declspec(dllexport) int   __cdecl GWA3_IsAgentDead(int agent_id);
-__declspec(dllexport) float __cdecl GWA3_GetDistance(int agent_id_1, int agent_id_2);
-__declspec(dllexport) int   __cdecl GWA3_GetMaxAgents();
-__declspec(dllexport) int   __cdecl GWA3_GetCurrentTarget();
+    void Start();   // Spawn bot thread
+    void Stop();    // Signal exit
+    bool IsRunning();
+    BotState GetState();
 
-// ===== Movement =====
-__declspec(dllexport) void __cdecl GWA3_Move(float x, float y);
-__declspec(dllexport) void __cdecl GWA3_Attack(int target_id);
-__declspec(dllexport) void __cdecl GWA3_ChangeTarget(int target_id);
-__declspec(dllexport) void __cdecl GWA3_InteractNPC(int agent_id);
-__declspec(dllexport) void __cdecl GWA3_CancelAction();
-
-// ===== Skills =====
-__declspec(dllexport) void __cdecl GWA3_UseSkill(int slot, int target_id);
-__declspec(dllexport) void __cdecl GWA3_UseHeroSkill(int hero_index, int slot, int target_id);
-__declspec(dllexport) int  __cdecl GWA3_IsRecharged(int slot, int hero_index);
-__declspec(dllexport) int  __cdecl GWA3_GetSkillRecharge(int slot, int hero_index);
-__declspec(dllexport) void __cdecl GWA3_LoadSkillbar(int s1, int s2, int s3, int s4,
-                                                      int s5, int s6, int s7, int s8,
-                                                      int hero_index);
-
-// ===== Items =====
-__declspec(dllexport) void __cdecl GWA3_UseItem(int item_id);
-__declspec(dllexport) void __cdecl GWA3_MoveItem(int item_id, int bag_id, int slot);
-__declspec(dllexport) void __cdecl GWA3_DropItem(int item_id);
-__declspec(dllexport) void __cdecl GWA3_EquipItem(int item_id);
-__declspec(dllexport) void __cdecl GWA3_IdentifyItem(int item_id);
-__declspec(dllexport) void __cdecl GWA3_SalvageStart(int item_id, int kit_id);
-__declspec(dllexport) void __cdecl GWA3_SalvageDone();
-__declspec(dllexport) int  __cdecl GWA3_GetItemModelID(int bag_id, int slot);
-__declspec(dllexport) int  __cdecl GWA3_GetItemQuantity(int bag_id, int slot);
-__declspec(dllexport) int  __cdecl GWA3_GetItemRarity(int bag_id, int slot);
-__declspec(dllexport) int  __cdecl GWA3_GetBagSize(int bag_id);
-__declspec(dllexport) int  __cdecl GWA3_GetGoldCharacter();
-__declspec(dllexport) int  __cdecl GWA3_GetGoldStorage();
-
-// ===== Map =====
-__declspec(dllexport) int  __cdecl GWA3_GetMapID();
-__declspec(dllexport) int  __cdecl GWA3_GetMapType();
-__declspec(dllexport) int  __cdecl GWA3_IsMapLoading();
-__declspec(dllexport) void __cdecl GWA3_Travel(int map_id, int district);
-__declspec(dllexport) void __cdecl GWA3_ReturnToOutpost();
-__declspec(dllexport) void __cdecl GWA3_EnterMission();
-__declspec(dllexport) void __cdecl GWA3_SetHardMode(int hard);
-
-// ===== Party & Heroes =====
-__declspec(dllexport) int  __cdecl GWA3_GetPartySize();
-__declspec(dllexport) int  __cdecl GWA3_GetHeroCount();
-__declspec(dllexport) int  __cdecl GWA3_GetHeroAgentID(int hero_index);
-__declspec(dllexport) void __cdecl GWA3_AddHero(int hero_id);
-__declspec(dllexport) void __cdecl GWA3_KickHero(int hero_id);
-__declspec(dllexport) void __cdecl GWA3_KickAllHeroes();
-__declspec(dllexport) void __cdecl GWA3_SetHeroBehavior(int hero_index, int behavior);
-__declspec(dllexport) void __cdecl GWA3_FlagHero(int hero_index, float x, float y);
-__declspec(dllexport) void __cdecl GWA3_LockHeroTarget(int hero_index, int target_id);
-
-// ===== Dialog & Quests =====
-__declspec(dllexport) void __cdecl GWA3_Dialog(int dialog_id);
-__declspec(dllexport) void __cdecl GWA3_SetActiveQuest(int quest_id);
-__declspec(dllexport) void __cdecl GWA3_AbandonQuest(int quest_id);
-__declspec(dllexport) int  __cdecl GWA3_GetActiveQuestID();
-
-// ===== Trading =====
-__declspec(dllexport) void __cdecl GWA3_BuyItem(int item_id, int quantity);
-__declspec(dllexport) void __cdecl GWA3_SellItem(int item_id);
-__declspec(dllexport) void __cdecl GWA3_RequestQuote(int item_id);
-__declspec(dllexport) int  __cdecl GWA3_GetTraderCostValue();
-
-// ===== Frame UI =====
-__declspec(dllexport) int  __cdecl GWA3_ButtonClickByHash(unsigned int hash);
-__declspec(dllexport) int  __cdecl GWA3_IsFrameVisible(unsigned int hash);
-__declspec(dllexport) int  __cdecl GWA3_IsReconnectDialogShowing();
-
-// ===== Rendering =====
-__declspec(dllexport) void __cdecl GWA3_SetRendering(int enabled);
-__declspec(dllexport) int  __cdecl GWA3_GetPing();
-
-// ===== Chat =====
-__declspec(dllexport) void __cdecl GWA3_SendChat(const wchar_t* message, int channel);
-
-// ===== Raw Packet (escape hatch) =====
-__declspec(dllexport) void __cdecl GWA3_SendPacket(int size, int header,
-                                                    int p1, int p2, int p3, int p4,
-                                                    int p5, int p6, int p7, int p8);
-
-// ===== Effects =====
-__declspec(dllexport) int   __cdecl GWA3_HasEffect(int agent_id, int skill_id);
-__declspec(dllexport) float __cdecl GWA3_GetEffectTimeRemaining(int agent_id, int skill_id);
-
-// ===== Titles =====
-__declspec(dllexport) int __cdecl GWA3_GetTitleProgress(int title_id);
-
+    using StateHandler = std::function<BotState(BotConfig&)>;
+    void RegisterStateHandler(BotState state, StateHandler handler);
 }
 ```
 
-#### 5B: AutoIt Wrapper UDF
-
-Create a thin AutoIt UDF that wraps `DllCall`:
-
-```autoit
-; GWA3.au3 — AutoIt wrapper for gwa3.dll
-#include-once
-
-Global $g_hGWA3 = -1
-
-Func GWA3_Init()
-    $g_hGWA3 = DllOpen("gwa3.dll")
-    If $g_hGWA3 = -1 Then Return False
-    DllCall($g_hGWA3, "int:cdecl", "GWA3_Initialize")
-    Return True
-EndFunc
-
-Func GWA3_GetMyID()
-    Local $ret = DllCall($g_hGWA3, "int:cdecl", "GWA3_GetMyID")
-    Return $ret[0]
-EndFunc
-
-Func GWA3_Move($x, $y)
-    DllCall($g_hGWA3, "none:cdecl", "GWA3_Move", "float", $x, "float", $y)
-EndFunc
-
-Func GWA3_UseSkill($slot, $target = 0)
-    DllCall($g_hGWA3, "none:cdecl", "GWA3_UseSkill", "int", $slot, "int", $target)
-EndFunc
-
-; ... one wrapper per export
+The bot thread runs a simple loop:
+```cpp
+while (g_running) {
+    auto handler = g_handlers[g_state];
+    g_state = handler(g_config);  // Each handler returns next state
+    Sleep(100);
+}
 ```
 
-This lets Froggy_HM.au3 migrate incrementally — replace `Move($x, $y)` calls with `GWA3_Move($x, $y)` one function at a time.
+All game interaction goes through `GameThread::Enqueue()` — the bot thread never calls game functions directly.
+
+#### 5B: Froggy HM Port
+
+Port the bot logic from `Froggy_HM_v1.6.au3` into state handlers:
+
+```cpp
+// src/bot/FroggyHM.cpp
+namespace GWA3::Bot::Froggy {
+
+BotState HandleCharSelect(BotConfig& cfg) {
+    GameThread::Enqueue([]() {
+        UIMgr::ButtonClickByHash(Hashes::PlayButton);
+    });
+    // Wait for map loading
+    while (MapMgr::IsMapLoading()) Sleep(500);
+    return BotState::InTown;
+}
+
+BotState HandleInTown(BotConfig& cfg) {
+    // Kick all heroes, add configured heroes
+    GameThread::Enqueue([&]() {
+        PartyMgr::KickAllHeroes();
+        for (auto id : cfg.hero_ids)
+            if (id) PartyMgr::AddHero(id);
+    });
+    Sleep(2000);
+
+    // Load skillbars, set behaviors, use consumables
+    // ...
+
+    GameThread::Enqueue([]() {
+        MapMgr::Travel(Constants::MapID::BograckGrowths);
+    });
+    return BotState::Traveling;
+}
+
+BotState HandleFloor1(BotConfig& cfg) {
+    static const GamePos waypoints[] = {
+        {-5765, -5468}, {-5200, -5100}, /* ... */
+    };
+    for (auto& wp : waypoints) {
+        GameThread::Enqueue([=]() { AgentMgr::Move(wp.x, wp.y); });
+        WaitArrival(wp, 3000);
+        FightNearbyEnemies();
+    }
+    return BotState::Floor2;
+}
+
+// ... HandleFloor2, HandleLooting, HandleMerchant, HandleWipe
+
+} // namespace
+```
+
+**What gets ported (~1000 lines of C++):**
+- Character select: Play button click, reconnect popup handling
+- Town setup: hero roster, skillbar loading, consumables, hard mode, title activation
+- Travel: outpost → dungeon
+- Waypoint routes: Floor 1 + Floor 2 coordinate arrays
+- Combat AI: target selection, skill priority, hero skill usage
+- Loot: pickup filter (rarity/model ID), identification, salvage rules
+- Merchant: sell junk, craft consumables via frame clicks
+- Wipe recovery: detect defeat → return to outpost → retry
+- Statistics: run counter, timing, title progress logging
+
+**What does NOT get ported (stays as API calls):**
+- No raw memory reads — everything via typed C++ manager APIs
+- No packet header constants in bot logic — wrapped by managers
+- No DllStruct manipulation — proper C++ structs
+
+#### 5C: Optional IPC Server (Future)
+
+If we later want to script bots in Python/Lua without recompilation, add a named pipe or TCP server to the DLL:
+
+```
+Python/Lua/AutoIt  ◄── JSON-RPC over named pipe ──►  gwa3.dll IPC server
+```
+
+This is NOT needed for the initial release. Build it only if the recompile-eject-inject cycle becomes a bottleneck.
 
 #### Deliverables
-- [ ] All DLL exports compiling and linkable
-- [ ] `GWA3.au3` wrapper UDF with all functions
-- [ ] Test from AutoIt: `GWA3_Init()` → `GWA3_GetMyID()` returns correct ID
-- [ ] Test from AutoIt: `GWA3_Move()` moves character
-- [ ] Test from AutoIt: `GWA3_ButtonClickByHash()` clicks Play button
+- [ ] Bot framework: thread lifecycle, state machine, config, logging
+- [ ] All Froggy HM states ported to C++ handlers
+- [ ] Waypoints, combat AI, loot rules, merchant flow
+- [ ] Run statistics and title progress tracking
+- [ ] Console output for real-time monitoring
+- [ ] Compiles into gwa3.dll as a single binary
 
 ---
 
-### Phase 6: Integration & Migration (Froggy HM)
+### Phase 6: Integration Testing
 
-**Goal:** Run Froggy HM using `gwa3.dll` instead of GWA2_Assembly.au3.
+**Goal:** Validate each Froggy HM subsystem works end-to-end, then run 10+ consecutive loops.
 
-#### 6A: Create Compatibility Shim
+#### 6A: Per-Subsystem Tests
 
-Write `GWA3_Compat.au3` that maps old GWA2 function names to GWA3 calls:
+| Step | What to Test | How to Validate |
+|------|-------------|----------------|
+| 1 | Character select | Play button click → map loading starts |
+| 2 | Map loading | MapLoad hook fires → `GetMapID()` matches target |
+| 3 | Hero setup | Add 7 heroes → `GetHeroCount() == 7` → skillbars loaded |
+| 4 | Consumables | UseItem → effect appears in `GetPlayerEffects()` |
+| 5 | Travel | Travel to Bogroot → `GetMapID() == BOGROOT` |
+| 6 | Movement | Follow waypoints → position within threshold of each target |
+| 7 | Combat | Target enemy → UseSkill → enemy HP decreases → dies |
+| 8 | Loot | Ground items detected → PickUpItem → item in backpack |
+| 9 | Merchant | Frame clicks → items sold → gold increases |
+| 10 | Full loop | Character select → dungeon → loot → merchant → repeat |
 
-```autoit
-; GWA3_Compat.au3 — Drop-in replacement for GWA2.au3 + GWA2_Assembly.au3
-; Maps old API to new gwa3.dll exports
+#### 6B: Full Loop Validation
 
-Func GetMyID()
-    Return GWA3_GetMyID()
-EndFunc
+- [ ] 10 consecutive successful runs without crash
+- [ ] Title progress (Vanguard/Norn/Asura/Deldrimor) increments between runs
+- [ ] Cinematic skip works in every dungeon entry
+- [ ] Wipe recovery: force a wipe, verify return-to-outpost and retry
+- [ ] No memory leaks (GW process memory stable over 2+ hours)
+- [ ] Run time per loop comparable to old AutoIt stack
 
-Func GetMapID()
-    Return GWA3_GetMapID()
-EndFunc
+#### 6C: Cleanup
 
-Func GetMapLoading()
-    Return GWA3_IsMapLoading()
-EndFunc
-
-Func Move($x, $y, $random = 0)
-    GWA3_Move($x + Random(-$random, $random), $y + Random(-$random, $random))
-EndFunc
-
-; ... map all ~200 functions
-```
-
-This allows the 32K-line main logic file to work without changes — just swap the include from `GWA2.au3` to `GWA3_Compat.au3`.
-
-#### 6B: Incremental Testing
-
-Test each subsystem in the Froggy HM flow:
-
-| Step | What to Test | Functions Involved |
-|------|-------------|-------------------|
-| 1 | Character select | `ButtonClickByHash`, `IsFrameVisible` |
-| 2 | Map loading | `GetMapID`, `IsMapLoading`, map load hook |
-| 3 | Hero setup | `AddHero`, `KickAllHeroes`, `LoadSkillbar`, `SetHeroBehavior` |
-| 4 | Town consumables | `UseItem`, `GetItemBySlot`, inventory reads |
-| 5 | Map travel | `Travel`, `WaitMapLoading` |
-| 6 | Movement | `Move`, `MoveTo` (with stuck detection) |
-| 7 | Combat | `UseSkill`, `Attack`, `ChangeTarget`, agent reads |
-| 8 | Loot | `PickUpItem`, item reads, `IdentifyItem`, `SalvageStart` |
-| 9 | Merchant | `ButtonClickByHash` for merchant UI, `BuyItem`, `SellItem` |
-| 10 | Full loop | 10+ consecutive runs without crash |
-
-#### 6C: Remove Old Injection Layer
-
-Once Froggy HM runs stable on gwa3.dll:
-
-- Remove `#include "GWA2_Assembly.au3"` — no more ASM injection
-- Remove `#include "GWA2.au3"` — replaced by `GWA3_Compat.au3`
-- The AutoIt process no longer needs `PROCESS_ALL_ACCESS` — it just calls DLL functions
-- GW process runs with only `gwa3.dll` injected (no separate ASM blob, no gwca.dll)
-
-#### Deliverables
-- [ ] `GWA3_Compat.au3` mapping all used GWA2 functions
-- [ ] Froggy HM completing character select → enter game
-- [ ] Froggy HM completing a full dungeon run
-- [ ] 10+ consecutive runs without crash
+- [ ] Old AutoIt injection layer no longer needed — gwca.dll eliminated
+- [ ] Only `injector.exe` + `gwa3.dll` required to run the bot
+- [ ] Single command to start: `injector.exe --pid <GW_PID>` → bot auto-starts
 - [ ] Old GWA2_Assembly.au3 injection removed from boot sequence
 
 ---
@@ -1230,9 +1182,12 @@ This eliminates the AutoIt process entirely. The bot runs as a single DLL inside
 | Phase 3: Data Structures | 2-3 | All game state readable (agents, items, skills, map) |
 | Phase 4: Frame UI | 2-3 | ButtonClick, frame lookup, hooks |
 | Phase 5: AutoIt Bridge | 1-2 | DllCall exports, AutoIt wrapper UDF |
-| Phase 6: Integration | 2-3 | Froggy HM running on gwa3.dll |
+| Phase 5: C++ Bot Module | 3-4 | Bot framework + Froggy HM port |
+| Phase 6: Integration | 2-3 | Per-subsystem tests + 10 consecutive runs |
 | Phase 7: Hardening | Ongoing | Stability, multi-client, crash protection |
 
-**Minimum viable: ~12-15 sessions** to have Froggy HM running on the new C++ DLL.
+**Minimum viable: ~14-18 sessions** to have Froggy HM running as a pure C++ DLL.
 
-**Critical path:** Phase 1 → Phase 2 → Phase 3 → Phase 5 → Phase 6. Phase 4 (Frame UI) can be deferred if character select is handled manually during testing.
+**Critical path:** Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6.
+
+**No AutoIt anywhere in the final stack.** The deliverable is `injector.exe` + `gwa3.dll`. Run `injector.exe --pid <GW_PID>` and the bot starts automatically.
