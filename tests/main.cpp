@@ -18,6 +18,9 @@ GWA3_TEST(assert_eq_self_test, {
 // GWA3-044: Scanner pattern logic tests
 #include "test_scanner_logic.cpp"
 
+// GWA3-043: Struct offset validation
+#include "test_struct_offsets.cpp"
+
 int main() {
     return GWA3::Testing::RunAll();
 }
