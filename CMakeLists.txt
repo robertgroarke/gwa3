@@ -42,6 +42,7 @@ add_library(gwa3_core OBJECT
     src/managers/ChatMgr.cpp
     src/managers/TradeMgr.cpp
     src/managers/FriendListMgr.cpp
+    src/managers/PlayerMgr.cpp
     src/utils/EncStrCodec.cpp
     src/bot/BotFramework.cpp
     src/bot/FroggyHM.cpp
