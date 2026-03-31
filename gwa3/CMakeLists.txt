@@ -47,6 +47,8 @@ add_library(gwa3_core OBJECT
     src/utils/EncStrCodec.cpp
     src/bot/BotFramework.cpp
     src/bot/FroggyHM.cpp
+    src/tests/SmokeTest.cpp
+    src/tests/BotFrameworkTest.cpp
 )
 
 target_include_directories(gwa3_core PUBLIC
