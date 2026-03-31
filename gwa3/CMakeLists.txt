@@ -43,6 +43,7 @@ add_library(gwa3_core OBJECT
     src/managers/TradeMgr.cpp
     src/managers/FriendListMgr.cpp
     src/utils/StringEncoding.cpp
+    src/bot/BotFramework.cpp
 )
 
 target_include_directories(gwa3_core PUBLIC
