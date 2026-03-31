@@ -28,6 +28,7 @@ add_library(gwa3_core OBJECT
     src/core/Scanner.cpp
     src/core/Offsets.cpp
     src/core/GameThread.cpp
+    src/packets/CtoS.cpp
 )
 
 target_include_directories(gwa3_core PUBLIC
