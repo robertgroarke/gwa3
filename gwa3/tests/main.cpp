@@ -21,6 +21,9 @@ GWA3_TEST(assert_eq_self_test, {
 // GWA3-043: Struct offset validation
 #include "test_struct_offsets.cpp"
 
+// GWA3-051: String encoding/decoding tests
+#include "test_string_encoding.cpp"
+
 int main() {
     return GWA3::Testing::RunAll();
 }

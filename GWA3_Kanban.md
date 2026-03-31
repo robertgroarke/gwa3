@@ -1508,8 +1508,8 @@ Implement `managers/MemoryMgr.cpp` — GW client version, skill timer, window ha
 
 | Field | Value |
 |-------|-------|
-| **Assignee** | |
-| **Status** | `backlog` |
+| **Assignee** | agent |
+| **Status** | `done` |
 | **Estimate** | M |
 | **Depends On** | GWA3-005, GWA3-006 |
 | **Blocks** | GWA3-025 |
@@ -2066,7 +2066,7 @@ WAVE 7 (Endgame — needs all integration):
 | **Epic 10: GWCA Header Parity** | | | | |
 | GWA3-049 | PlayerMgr (Titles + Profession) | M | 005, 006, 010 | `backlog` |
 | GWA3-050 | MemoryMgr (Version + Timer + Window) | S | 005 | `done` |
-| GWA3-051 | String Encoding/Decoding | M | 005, 006 | `backlog` |
+| GWA3-051 | String Encoding/Decoding | M | 005, 006 | `done` |
 | GWA3-052 | CameraMgr | S | 005, 006 | `done` |
 | GWA3-053 | StoCMgr (Packet Callbacks) | L | 005, 006 | `backlog` |
 | GWA3-054 | GuildMgr | S | 005, 006 | `done` |
