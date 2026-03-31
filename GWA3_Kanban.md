@@ -1353,6 +1353,253 @@ Py4GW provides: PyPlayer, PyParty, PyInventory, PyQuest, PyMerchant, PySkillbar,
 
 ---
 
+### Epic 9: Testing Infrastructure
+
+> Testing happens in 3 layers: offline unit tests (no game), injection smoke tests (read-only),
+> and behavioral tests (send commands). See [GWA3_Testing_Strategy.md](GWA3_Testing_Strategy.md) for full rationale.
+>
+> Test tickets are designed to run **in parallel with their corresponding implementation tickets**.
+> An agent building GWA3-007 (Agent Struct) should also write GWA3-043 (struct offset tests) as part of the same work.
+
+#### GWA3-042 — Test Harness + CMake Test Target
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-001 |
+| **Blocks** | GWA3-043, GWA3-044, GWA3-045, GWA3-046, GWA3-047 |
+| **Parallel Group** | PG-FOUNDATION (with GWA3-002, GWA3-003, GWA3-004) |
+
+**Description:**
+Create the offline test infrastructure: a `tests/` directory, CMake test target (`gwa3_tests.exe`), and a test runner macro. This runs without a game client — pure compile-time and logic tests.
+
+**Acceptance Criteria:**
+- [ ] `tests/` directory with `CMakeLists.txt` or integrated into root CMakeLists
+- [ ] `gwa3_tests.exe` target compiles as x86, links against `gwa3_core` (static lib or object lib — NOT the DLL itself)
+- [ ] Test runner macro: `GWA3_TEST(name, body)` that logs pass/fail and aborts on first failure
+- [ ] `static_assert` helper: `GWA3_CHECK_OFFSET(StructType, field, expected_offset)`
+- [ ] Post-build step: `add_custom_command(POST_BUILD COMMAND gwa3_tests)` — tests run on every build
+- [ ] Passes with zero tests (empty harness compiles and exits 0)
+
+**Reference:** [GWA3_Testing_Strategy.md](GWA3_Testing_Strategy.md) Layer 1
+
+---
+
+#### GWA3-043 — Offline Tests: Struct Offset Validation
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-042, GWA3-007, GWA3-008, GWA3-009, GWA3-011, GWA3-012, GWA3-013, GWA3-014, GWA3-015, GWA3-020 |
+| **Blocks** | GWA3-045 |
+| **Parallel Group** | — (built incrementally as each struct ticket completes) |
+
+**Description:**
+`static_assert` tests for every game struct's field offsets and total size. These catch the #1 bug class (wrong field position → garbage data) at **compile time**.
+
+**Implementation note:** This ticket is worked on incrementally. Each agent completing a struct ticket (GWA3-007..015, GWA3-020) should add its offset assertions before marking the struct ticket done. This ticket tracks the aggregate.
+
+**Acceptance Criteria:**
+- [ ] `tests/test_struct_offsets.cpp` with `static_assert` for every field in:
+  - `Agent` (446 bytes, ~30 fields: id, x, y, z, hp, energy, model_id, profession, level, team, etc.)
+  - `Skill` (~128 bytes, ~15 key fields: id, activation_time, recharge, energy_cost, etc.)
+  - `SkillbarSlot` and `Skillbar`
+  - `Item` (88 bytes, ~12 fields: id, model_id, type, value, quantity, equipped, etc.)
+  - `Bag`
+  - `Buff`, `Effect`
+  - `Frame` (0x1C8 bytes: callbacks, child_offset_id, frame_id, relation, hash_id, state)
+- [ ] `sizeof()` checks for every struct
+- [ ] All assertions pass at compile time (build fails if any offset is wrong)
+- [ ] Cross-referenced against `GWA2_Assembly.au3` struct templates
+
+**Reference:** [GWA3_Testing_Strategy.md](GWA3_Testing_Strategy.md) "Struct layout validation"
+
+---
+
+#### GWA3-044 — Offline Tests: Header Constants + Pattern Parsing
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-042, GWA3-003, GWA3-004 |
+| **Blocks** | — |
+| **Parallel Group** | PG-OFFLINE-TESTS (with GWA3-043) |
+
+**Description:**
+Offline tests for packet header constants (values match GWA2_Headers.au3) and scanner pattern parsing logic (hex string → byte array, near-call resolution, wildcard masks).
+
+**Acceptance Criteria:**
+- [ ] `tests/test_headers.cpp` — `static_assert` for all 100+ packet header constants against GWA2_Headers.au3 values
+- [ ] `tests/test_scanner_logic.cpp`:
+  - Pattern string parsing: `"55 8B EC ?? 6A 00"` → correct bytes + mask
+  - Wildcard handling: `??` positions marked in mask
+  - Near-call resolution: `E8 <rel32>` at known address → correct target
+  - Edge cases: empty pattern, all-wildcards, pattern longer than section
+- [ ] All tests pass as part of `gwa3_tests.exe`
+
+**Reference:** [GWA3_Testing_Strategy.md](GWA3_Testing_Strategy.md) "Pattern parsing" and "Packet header constants"
+
+---
+
+#### GWA3-045 — Injection Smoke Test: Pattern Scan + State Read
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-002, GWA3-005, GWA3-043 |
+| **Blocks** | GWA3-046 |
+| **Parallel Group** | — |
+
+**Description:**
+First live injection test. The DLL injects into GW.exe, resolves all scan patterns, reads game state, and writes a pass/fail report. **Read-only** — no hooks, no commands, no game state changes.
+
+This is the **go/no-go gate** for Phase 2. If this passes, the foundation is solid.
+
+**Acceptance Criteria:**
+- [ ] `src/core/SmokeTest.h/cpp` — runs automatically during `InitThread` if `GWA3_SMOKE_TEST` env var or flag is set
+- [ ] Validates all P0/P1 scan patterns resolve (non-null, non-negative-one)
+- [ ] Reads and logs:
+  - Player agent ID (from `Offsets::MyID`)
+  - Map ID (from `Offsets::InstanceInfo`)
+  - Player position X, Y (from agent struct)
+  - Player HP % (from agent struct)
+  - Skillbar slot IDs (from skillbar struct)
+  - Backpack slot count (from bag struct)
+  - Ping value
+- [ ] At character select: validates `FrameArray` resolves, `GetFrameByHash(PlayButton)` finds frame
+- [ ] Writes report to `gwa3_smoke_report.txt` with timestamp, pattern count, pass/fail per check
+- [ ] Exits with summary: `X/Y checks passed`
+- [ ] Game does not crash during or after smoke test (10+ minutes idle)
+- [ ] Works on both character select screen AND logged-in-to-map states
+
+**How to run:** Launch GW → `injector.exe --smoke` → check `gwa3_smoke_report.txt`
+
+**Reference:** [GWA3_Testing_Strategy.md](GWA3_Testing_Strategy.md) Layer 2, also mirrors `GWA Censured/debug_scripts/test_no_gwca.au3` pattern
+
+---
+
+#### GWA3-046 — Behavioral Test: Commands + Game Thread
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-006, GWA3-010, GWA3-045 |
+| **Blocks** | GWA3-047 |
+| **Parallel Group** | — |
+
+**Description:**
+First behavioral test. Sends commands through the game thread hook and verifies outcomes by reading game state before/after. Requires a logged-in character in an outpost.
+
+**Acceptance Criteria:**
+- [ ] `src/core/BehavioralTest.h/cpp` — triggered by `GWA3_TEST_COMMANDS` flag
+- [ ] **Movement test:**
+  - Record start position
+  - `CtoS::MoveToCoord(start_x + 200, start_y)`
+  - Wait 3s
+  - Read end position
+  - Pass if moved > 50 units
+- [ ] **Target test:**
+  - Find nearest non-self alive agent
+  - `CtoS::ChangeTarget(agent_id)`
+  - Wait 500ms
+  - Pass if `GetCurrentTargetID() == agent_id`
+- [ ] **Game thread validation:**
+  - Enqueue lambda that sets a flag
+  - Wait 1s
+  - Pass if flag is set (proves game thread is processing queue)
+- [ ] **Packet send validation:**
+  - Send a benign packet (e.g., ping reply header)
+  - Pass if no crash after 5s
+- [ ] All tests log pass/fail to `gwa3_command_report.txt`
+- [ ] Game remains stable for 5 minutes after tests complete
+
+**How to run:** Log in to a character in any outpost → `injector.exe --test-commands` → check report
+
+**Reference:** [GWA3_Testing_Strategy.md](GWA3_Testing_Strategy.md) Layer 3
+
+---
+
+#### GWA3-047 — Behavioral Test: Frame UI + ButtonClick
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-020, GWA3-021, GWA3-046 |
+| **Blocks** | GWA3-028 |
+| **Parallel Group** | — |
+
+**Description:**
+Frame UI behavioral test. Validates frame hash lookup and ButtonClick at character select screen. This is the last gate before integration testing.
+
+**Acceptance Criteria:**
+- [ ] **Frame lookup tests (read-only, always safe):**
+  - `GetFrameByHash(PlayButton)` returns non-null
+  - `GetFrameByHash(PlayGreyed)` returns non-null (may or may not be visible)
+  - `GetFrameByHash(ReconnectYes)` — test visibility check
+  - `GetFrameByHash(CharacterFrame)` returns non-null
+  - All returned frames have valid `frame_id` and `frame_hash_id` fields
+  - Frame state bits are plausible (created bit set, etc.)
+- [ ] **Parent traversal test:**
+  - Get Play button frame
+  - Call `GetParent()` — returns non-null
+  - Parent address is sane (within game memory range)
+  - `parent + 0xA8` (callback array) is readable
+- [ ] **ButtonClick test (DESTRUCTIVE — enters game!):**
+  - Must be at character select with a character highlighted
+  - `ButtonClickByHash(PlayButton)` — returns true
+  - Wait for map loading to start (`IsMapLoading()` becomes true within 10s)
+  - Pass if game begins loading a map
+- [ ] Results logged to `gwa3_frame_report.txt`
+
+**How to run:** Launch GW, reach character select → `injector.exe --test-frames` → check report
+
+**Reference:** [GWA3_Testing_Strategy.md](GWA3_Testing_Strategy.md) "Frame UI Tests", `research/GWCA_Disassembly_Research/CharSelect_ButtonClick_Research.md`
+
+---
+
+#### GWA3-048 — AutoIt Smoke Test Script
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-026 |
+| **Blocks** | GWA3-028, GWA3-029, GWA3-030, GWA3-031, GWA3-032 |
+| **Parallel Group** | — |
+
+**Description:**
+`test_gwa3_smoke.au3` — an AutoIt script that loads `gwa3.dll` via `DllCall` and validates the bridge layer works end-to-end. Mirrors the C++ smoke test but runs from the AutoIt side.
+
+**Acceptance Criteria:**
+- [ ] `GWA3_Init()` succeeds (DLL loads, scanner runs)
+- [ ] `GWA3_GetScanStatus()` returns 0 (no failures)
+- [ ] `GWA3_GetMyID()` returns valid agent ID (> 0)
+- [ ] `GWA3_GetMapID()` returns valid map ID (> 0)
+- [ ] `GWA3_GetAgentHP(myId)` returns value in [0.0, 1.0]
+- [ ] `GWA3_GetMyX()` and `GWA3_GetMyY()` return non-zero floats
+- [ ] `GWA3_GetPing()` returns plausible value (0-1000)
+- [ ] `GWA3_GetPartySize()` returns > 0
+- [ ] `GWA3_GetBagSize(1)` returns > 0 (backpack exists)
+- [ ] Script exits 0 on all pass, 1 on any fail
+- [ ] ConsoleWrite output for each check: function name, returned value, PASS/FAIL
+
+**Reference:** [GWA3_Testing_Strategy.md](GWA3_Testing_Strategy.md) "Trigger Tests from AutoIt"
+
+---
+
 ## Parallel Execution Summary
 
 ```
@@ -1462,11 +1709,11 @@ WAVE 7 (Endgame — needs all integration):
 | GWA3-026 | GWA3.au3 Wrapper UDF | M | 025 | `backlog` |
 | GWA3-027 | GWA3_Compat.au3 Drop-in Shim | XL | 026 | `backlog` |
 | **Epic 6: Integration** | | | | |
-| GWA3-028 | Integration: Char Select + Login | M | 021, 027 | `backlog` |
-| GWA3-029 | Integration: Hero Setup + Consumables | M | 027 | `backlog` |
-| GWA3-030 | Integration: Travel + Movement + Combat | L | 027 | `backlog` |
-| GWA3-031 | Integration: Loot + Inventory + Salvage | M | 027 | `backlog` |
-| GWA3-032 | Integration: Merchant + Crafting | M | 027 | `backlog` |
+| GWA3-028 | Integration: Char Select + Login | M | 021, 027, **047** | `backlog` |
+| GWA3-029 | Integration: Hero Setup + Consumables | M | 027, **048** | `backlog` |
+| GWA3-030 | Integration: Travel + Movement + Combat | L | 027, **048** | `backlog` |
+| GWA3-031 | Integration: Loot + Inventory + Salvage | M | 027, **048** | `backlog` |
+| GWA3-032 | Integration: Merchant + Crafting | M | 027, **048** | `backlog` |
 | **Epic 7: Hardening** | | | | |
 | GWA3-033 | Full Froggy HM 10+ Runs | XL | 028-032 | `backlog` |
 | GWA3-034 | Multi-Client Injector | M | 002 | `backlog` |
@@ -1478,8 +1725,16 @@ WAVE 7 (Endgame — needs all integration):
 | GWA3-039 | Callback Registry + Module Ownership | L | 006, 020 | `backlog` |
 | GWA3-040 | Key Input + Preference System | M | 006, 020, 039 | `backlog` |
 | GWA3-041 | Py4GW API Surface Audit | S | 025 | `backlog` |
+| **Epic 9: Testing** | | | | |
+| GWA3-042 | Test Harness + CMake Target | M | 001 | `backlog` |
+| GWA3-043 | Offline: Struct Offset Validation | M | 042, 007-015, 020 | `backlog` |
+| GWA3-044 | Offline: Headers + Pattern Parsing | S | 042, 003, 004 | `backlog` |
+| GWA3-045 | Injection Smoke: Patterns + State Read | L | 002, 005, 043 | `backlog` |
+| GWA3-046 | Behavioral: Commands + Game Thread | L | 006, 010, 045 | `backlog` |
+| GWA3-047 | Behavioral: Frame UI + ButtonClick | M | 020, 021, 046 | `backlog` |
+| GWA3-048 | AutoIt Smoke Test Script | S | 026 | `backlog` |
 
-**Total: 41 tickets across 8 epics.**
+**Total: 48 tickets across 9 epics.**
 
 ---
 
@@ -1488,18 +1743,16 @@ WAVE 7 (Endgame — needs all integration):
 | Wave | Tickets Running | Agent Slots Needed |
 |------|----------------|-------------------|
 | 1 | GWA3-001 | 1 |
-| 2 | GWA3-002, GWA3-003, GWA3-004 | 3 |
-| 3 | GWA3-005 (needs 003), GWA3-006 (needs 002+003+005) | 1-2 |
-| 4 | GWA3-007, 008, 009, 011, 012, 013, 014, 015, 020 | **9** (max parallelism) |
-| 5 | GWA3-010, 016, 017, 018, 019, 021, 022, 023, 024 | **9** (max parallelism) |
-| 6 | GWA3-025 | 1 |
-| 7 | GWA3-026 | 1 |
-| 8 | GWA3-027 | 1 |
-| 9 | GWA3-028, 029, 030, 031, 032 | **5** |
-| 10 | GWA3-033 | 1 |
-| 11 | GWA3-034, 035, 036 | 3 |
+| 2 | GWA3-002, GWA3-003, GWA3-004, **GWA3-042** (test harness) | 4 |
+| 3 | GWA3-005, **GWA3-044** (offline: headers + patterns) | 2 |
+| 4 | GWA3-006, GWA3-007..015, GWA3-020, **GWA3-043** (offline: struct offsets — built incrementally) | **10+** |
+| 5 | GWA3-010, 016..019, 021..024, **GWA3-045** (injection smoke) | **10+** |
+| 6 | GWA3-025, **GWA3-046** (behavioral: commands) | 2 |
+| 7 | GWA3-026, **GWA3-047** (behavioral: frames) | 2 |
+| 8 | GWA3-027, **GWA3-048** (AutoIt smoke) | 2 |
+| 9 | GWA3-028..032 (integration) | **5** |
+| 10 | GWA3-033 (full Froggy) | 1 |
+| 11 | GWA3-034..041 (hardening + research-derived) | **8** |
 
-| 11 | GWA3-034, 035, 036, 037, 038, 039, 040, 041 | **8** (research-derived) |
-
-**Peak parallelism: 9 agents** (Waves 4-5, struct definitions and manager implementations).
-**Research-derived tickets (Epic 8) can run in parallel with hardening (Wave 11).**
+**Peak parallelism: 10+ agents** (Waves 4-5, struct definitions + managers + test writing).
+**Test tickets run alongside implementation tickets — not after. Each struct/manager agent writes its tests as part of the implementation.**
