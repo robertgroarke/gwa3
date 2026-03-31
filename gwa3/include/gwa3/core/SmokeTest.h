@@ -12,4 +12,9 @@ namespace GWA3::SmokeTest {
     // Returns number of failed checks.
     int RunBotFrameworkTest();
 
+    // Run behavioral command tests. Sends movement, targeting, packets.
+    // Requires logged-in character in an outpost.
+    // Returns number of failed checks.
+    int RunBehavioralTest();
+
 } // namespace GWA3::SmokeTest
