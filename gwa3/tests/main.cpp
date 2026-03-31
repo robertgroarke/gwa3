@@ -1,9 +1,22 @@
-#include <cstdio>
-// Future: #include struct offset tests, header tests, scanner logic tests
+#include <gwa3/testing/TestFramework.h>
+
+// Verify the test framework itself works
+GWA3_TEST(framework_self_test, {
+    GWA3_ASSERT(true);
+    GWA3_ASSERT(1 + 1 == 2);
+})
+
+// Verify GWA3_ASSERT_EQ works
+GWA3_TEST(assert_eq_self_test, {
+    GWA3_ASSERT_EQ(0x3Eu, 0x3Eu);
+    GWA3_ASSERT_EQ(42, 42);
+})
+
+// Future test files will be added here as tickets complete:
+// #include "test_headers.cpp"        — GWA3-044
+// #include "test_struct_offsets.cpp"  — GWA3-043
+// #include "test_scanner_logic.cpp"  — GWA3-044
 
 int main() {
-    printf("=== GWA3 Offline Tests ===\n");
-    printf("No tests registered yet. Skeleton pass.\n");
-    printf("=== ALL TESTS PASSED ===\n");
-    return 0;
+    return GWA3::Testing::RunAll();
 }

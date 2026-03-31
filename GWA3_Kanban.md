@@ -1655,8 +1655,8 @@ Py4GW provides: PyPlayer, PyParty, PyInventory, PyQuest, PyMerchant, PySkillbar,
 
 | Field | Value |
 |-------|-------|
-| **Assignee** | |
-| **Status** | `backlog` |
+| **Assignee** | agent |
+| **Status** | `done` |
 | **Estimate** | M |
 | **Depends On** | GWA3-001 |
 | **Blocks** | GWA3-043, GWA3-044, GWA3-045, GWA3-046, GWA3-047 |
@@ -2056,7 +2056,7 @@ WAVE 7 (Endgame — needs all integration):
 | GWA3-040 | Key Input + Preference System | M | 006, 020, 039 | `backlog` |
 | GWA3-041 | Py4GW API Surface Audit | S | 025 | `backlog` |
 | **Epic 9: Testing** | | | | |
-| GWA3-042 | Test Harness + CMake Target | M | 001 | `backlog` |
+| GWA3-042 | Test Harness + CMake Target | M | 001 | `done` |
 | GWA3-043 | Offline: Struct Offset Validation | M | 042, 007-015, 020 | `backlog` |
 | GWA3-044 | Offline: Headers + Pattern Parsing | S | 042, 003, 004 | `backlog` |
 | GWA3-045 | Injection Smoke: Patterns + State Read | L | 002, 005, 043 | `backlog` |
