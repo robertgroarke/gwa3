@@ -76,14 +76,13 @@ void LogBot(const char* fmt, ...) {
     OutputDebugStringA(line);
 }
 
-// SEH wrapper — must be in a function without C++ objects that need unwinding
+// Exception-safe handler invocation using C++ try/catch
 static BotState InvokeHandlerSEH(StateHandler* handler, BotConfig* config, BotState current) {
     BotState next = BotState::Error;
-    __try {
+    try {
         next = (*handler)(*config);
-    } __except(EXCEPTION_EXECUTE_HANDLER) {
-        LogBot("EXCEPTION in state %s handler (code 0x%08X)",
-               StateToString(current), GetExceptionCode());
+    } catch (...) {
+        LogBot("EXCEPTION in state %s handler", StateToString(current));
         next = BotState::Error;
     }
     return next;
