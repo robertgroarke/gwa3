@@ -3,20 +3,58 @@
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
+#include <gwa3/core/RenderHook.h>
 #include <gwa3/core/Log.h>
 
+#include <Windows.h>
 #include <cmath>
 #include <cstring>
 
 namespace GWA3::AgentMgr {
 
-// Game function signatures from scanned offsets
-using MoveFn = void(__cdecl*)(float, float);
-using ChangeTargetFn = void(__cdecl*)(uint32_t);
+using MoveFn = void(__cdecl*)(const void*);
+using ChangeTargetFn = void(__cdecl*)(uint32_t, uint32_t);
+
+struct MoveData {
+    float x;
+    float y;
+    uint32_t plane;
+};
+
+static uintptr_t s_moveShellcode = 0;
+static uintptr_t s_moveDataAddr = 0;
+static uintptr_t s_targetShellcode = 0;
 
 static MoveFn s_moveFn = nullptr;
 static ChangeTargetFn s_changeTargetFn = nullptr;
 static bool s_initialized = false;
+
+static bool EnsureMoveShellcode() {
+    if (s_moveShellcode && s_moveDataAddr) return true;
+
+    void* mem = VirtualAlloc(nullptr, 64, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if (!mem) {
+        Log::Error("AgentMgr: VirtualAlloc failed for move shellcode");
+        return false;
+    }
+
+    s_moveShellcode = reinterpret_cast<uintptr_t>(mem);
+    s_moveDataAddr = s_moveShellcode + 32;
+    return true;
+}
+
+static bool EnsureTargetShellcode() {
+    if (s_targetShellcode) return true;
+
+    void* mem = VirtualAlloc(nullptr, 32, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if (!mem) {
+        Log::Error("AgentMgr: VirtualAlloc failed for target shellcode");
+        return false;
+    }
+
+    s_targetShellcode = reinterpret_cast<uintptr_t>(mem);
+    return true;
+}
 
 bool Initialize() {
     if (s_initialized) return true;
@@ -31,19 +69,61 @@ bool Initialize() {
 }
 
 void Move(float x, float y) {
-    if (s_moveFn) {
-        GameThread::Enqueue([x, y]() { s_moveFn(x, y); });
-    } else {
+    if (!s_moveFn) {
         CtoS::MoveToCoord(x, y);
+        return;
     }
+    if (!RenderHook::IsInitialized() || !EnsureMoveShellcode()) {
+        Log::Warn("AgentMgr: Move falling back to packet path");
+        CtoS::MoveToCoord(x, y);
+        return;
+    }
+
+    MoveData move{x, y, 0};
+    memcpy(reinterpret_cast<void*>(s_moveDataAddr), &move, sizeof(move));
+
+    auto* sc = reinterpret_cast<uint8_t*>(s_moveShellcode);
+    sc[0] = 0xB8; // mov eax, imm32
+    memcpy(sc + 1, &s_moveDataAddr, sizeof(uint32_t));
+    sc[5] = 0x50; // push eax
+    sc[6] = 0xE8; // call rel32
+    int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(s_moveFn) - (s_moveShellcode + 11));
+    memcpy(sc + 7, &rel, sizeof(rel));
+    sc[11] = 0x58; // pop eax
+    sc[12] = 0xC3; // ret
+    FlushInstructionCache(GetCurrentProcess(), sc, 13);
+
+    RenderHook::EnqueueCommand(s_moveShellcode);
 }
 
 void ChangeTarget(uint32_t agentId) {
-    if (s_changeTargetFn) {
-        GameThread::Enqueue([agentId]() { s_changeTargetFn(agentId); });
-    } else {
+    if (!s_changeTargetFn) {
         CtoS::ChangeTarget(agentId);
+        return;
     }
+    if (!RenderHook::IsInitialized() || !EnsureTargetShellcode()) {
+        Log::Warn("AgentMgr: ChangeTarget falling back to packet path");
+        CtoS::ChangeTarget(agentId);
+        return;
+    }
+
+    auto* sc = reinterpret_cast<uint8_t*>(s_targetShellcode);
+    sc[0] = 0x33; // xor edx, edx
+    sc[1] = 0xD2;
+    sc[2] = 0x52; // push edx
+    sc[3] = 0xB8; // mov eax, imm32
+    memcpy(sc + 4, &agentId, sizeof(agentId));
+    sc[8] = 0x50; // push eax
+    sc[9] = 0xE8; // call rel32
+    int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(s_changeTargetFn) - (s_targetShellcode + 14));
+    memcpy(sc + 10, &rel, sizeof(rel));
+    sc[14] = 0x83; // add esp, 8
+    sc[15] = 0xC4;
+    sc[16] = 0x08;
+    sc[17] = 0xC3; // ret
+    FlushInstructionCache(GetCurrentProcess(), sc, 18);
+
+    RenderHook::EnqueueCommand(s_targetShellcode);
 }
 
 uint32_t GetTargetId() {

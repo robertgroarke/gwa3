@@ -44,7 +44,10 @@ bool Initialize() {
 // Core send: builds a packet buffer and calls the game's PacketSend.
 // size = number of dwords (header + params). Must be called on game thread.
 void SendPacket(uint32_t size, uint32_t header, ...) {
-    if (!s_initialized) return;
+    if (!s_initialized && !Initialize()) {
+        Log::Warn("CtoS: SendPacket dropped (header=0x%X) because transport is not initialized", header);
+        return;
+    }
 
     uint32_t data[12];
     data[0] = header;
@@ -56,11 +59,9 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
     }
     va_end(args);
 
-    // If on game thread, send directly. Otherwise enqueue.
     if (GameThread::IsOnGameThread()) {
         s_packetSendFn(reinterpret_cast<void*>(s_packetLocation), size * 4, data);
     } else {
-        // Capture packet data by value in lambda
         uint32_t capturedSize = size;
         uint32_t capturedData[12];
         memcpy(capturedData, data, size * sizeof(uint32_t));
@@ -68,7 +69,6 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
         PacketSendFn fn = s_packetSendFn;
 
         GameThread::Enqueue([fn, loc, capturedSize, capturedData]() {
-            // Need a mutable copy since the game function takes non-const pointer
             uint32_t mutableData[12];
             memcpy(mutableData, capturedData, capturedSize * sizeof(uint32_t));
             fn(reinterpret_cast<void*>(loc), capturedSize * 4, mutableData);

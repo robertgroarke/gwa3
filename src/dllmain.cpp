@@ -40,30 +40,96 @@ static bool CheckFlag(const char* envVar, const char* flagFile) {
     return false;
 }
 
+static uint32_t ReadMyIdRaw() {
+    if (GWA3::Offsets::MyID < 0x10000) return 0;
+    return *reinterpret_cast<uint32_t*>(GWA3::Offsets::MyID);
+}
+
+static bool IsInGame() {
+    return GWA3::MapMgr::GetMapId() > 0 && ReadMyIdRaw() > 0;
+}
+
+static bool RunCharSelectBootstrap(DWORD timeoutMs) {
+    if (IsInGame()) {
+        GWA3::Log::Info("Bootstrap: Already in game (MapID=%u MyID=%u)",
+                        GWA3::MapMgr::GetMapId(), ReadMyIdRaw());
+        return true;
+    }
+
+    const DWORD start = GetTickCount();
+    DWORD lastLog = 0;
+    DWORD lastPlayAttempt = 0;
+
+    GWA3::Log::Info("Bootstrap: Entering pre-game phase");
+
+    while (GetTickCount() - start < timeoutMs) {
+        const uint32_t mapId = GWA3::MapMgr::GetMapId();
+        const uint32_t myId = ReadMyIdRaw();
+        if (mapId > 0 && myId > 0) {
+            GWA3::Log::Info("Bootstrap: Map loaded (MapID=%u MyID=%u)", mapId, myId);
+            return true;
+        }
+
+        const DWORD now = GetTickCount();
+        if (now - lastLog >= 3000) {
+            const uintptr_t playFrame = GWA3::UIMgr::GetFrameByHash(GWA3::UIMgr::Hashes::PlayButton);
+            const uint32_t playState = playFrame ? GWA3::UIMgr::GetFrameState(playFrame) : 0;
+            GWA3::Log::Info("Bootstrap: waiting (MapID=%u MyID=%u PlayFrame=0x%08X state=0x%X)",
+                            mapId, myId, playFrame, playState);
+            lastLog = now;
+        }
+
+        if (GWA3::UIMgr::IsFrameVisible(GWA3::UIMgr::Hashes::ReconnectYes)) {
+            GWA3::Log::Info("Bootstrap: reconnect dialog visible, clicking YES");
+            GWA3::UIMgr::ButtonClickByHash(GWA3::UIMgr::Hashes::ReconnectYes);
+            Sleep(1000);
+            continue;
+        }
+
+        if (now - lastPlayAttempt >= 2500) {
+            const uintptr_t playFrame = GWA3::UIMgr::GetFrameByHash(GWA3::UIMgr::Hashes::PlayButton);
+            if (playFrame) {
+                const uint32_t state = GWA3::UIMgr::GetFrameState(playFrame);
+                const bool created = (state & GWA3::UIMgr::FRAME_CREATED) != 0;
+                const bool hidden = (state & GWA3::UIMgr::FRAME_HIDDEN) != 0;
+                const bool disabled = (state & GWA3::UIMgr::FRAME_DISABLED) != 0;
+                if (created && !hidden && !disabled) {
+                    GWA3::Log::Info("Bootstrap: clicking Play (state=0x%X)", state);
+                    GWA3::UIMgr::ButtonClickByHash(GWA3::UIMgr::Hashes::PlayButton);
+                    lastPlayAttempt = now;
+                }
+            }
+        }
+
+        Sleep(250);
+    }
+
+    GWA3::Log::Error("Bootstrap: timed out waiting for map load");
+    return false;
+}
+
 DWORD WINAPI InitThread(LPVOID hModule) {
     GWA3::Log::Initialize();
-    GWA3::Log::Info("gwa3.dll loaded at 0x%08X", (uintptr_t)hModule);
+    GWA3::Log::Info("gwa3.dll loaded at 0x%08X", static_cast<uintptr_t>(reinterpret_cast<uintptr_t>(hModule)));
 
-    // Detect test mode early (before potentially-failing steps)
     bool smokeTest = CheckFlag("GWA3_SMOKE_TEST", "gwa3_smoke_test.flag");
     bool botTest = CheckFlag("GWA3_TEST_BOT", "gwa3_test_bot.flag");
     bool cmdTest = CheckFlag("GWA3_TEST_COMMANDS", "gwa3_test_commands.flag");
-    bool anyTest = smokeTest || botTest || cmdTest;
-    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d", smokeTest, botTest, cmdTest);
+    bool integrationTest = CheckFlag("GWA3_TEST_INTEGRATION", "gwa3_test_integration.flag");
+    bool anyTest = smokeTest || botTest || cmdTest || integrationTest;
+    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d",
+                    smokeTest, botTest, cmdTest, integrationTest);
 
-    // Step 1: Initialize scanner (parse GW.exe PE headers)
     HMODULE gwModule = GetModuleHandleA(nullptr);
     if (!GWA3::Scanner::Initialize(gwModule)) {
-        GWA3::Log::Error("Scanner initialization failed — aborting");
+        GWA3::Log::Error("Scanner initialization failed - aborting");
         return 1;
     }
 
-    // Step 2: Resolve all scan patterns
     if (!GWA3::Offsets::ResolveAll()) {
-        GWA3::Log::Warn("Some offsets failed to resolve — continuing with partial coverage");
+        GWA3::Log::Warn("Some offsets failed to resolve - continuing with partial coverage");
     }
 
-    // Step 3: Initialize managers (these just cache offset pointers — safe even without GameThread)
     GWA3::CtoS::Initialize();
     GWA3::AgentMgr::Initialize();
     GWA3::SkillMgr::Initialize();
@@ -76,7 +142,6 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     GWA3::FriendListMgr::Initialize();
     GWA3::UIMgr::Initialize();
 
-    // Step 4: Run tests if in test mode (before GameThread — tests may only need read access)
     if (smokeTest) {
         GWA3::Log::Info("=== SMOKE TEST MODE ===");
         int failures = GWA3::SmokeTest::RunSmokeTest();
@@ -91,12 +156,24 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
-    // Step 5: Install game thread hook (needed for commands and bot)
+    if (integrationTest || !anyTest) {
+        if (!GWA3::RenderHook::Initialize()) {
+            GWA3::Log::Error("RenderHook initialization failed - aborting startup");
+            return 1;
+        }
+        if (!RunCharSelectBootstrap(90000)) {
+            GWA3::Log::Error("Bootstrap failed - aborting startup");
+            return 1;
+        }
+        GWA3::RenderHook::SetMapLoaded(true);
+        GWA3::CtoS::Initialize();
+    }
+
     bool gameThreadOk = GWA3::GameThread::Initialize();
     if (!gameThreadOk) {
         GWA3::Log::Warn("GameThread initialization failed");
         if (!anyTest) {
-            GWA3::Log::Error("GameThread required for bot mode — aborting");
+            GWA3::Log::Error("GameThread required for bot mode - aborting");
             return 1;
         }
     } else {
@@ -105,12 +182,6 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         });
     }
 
-    // Step 5b: Install render hook (mid-function JMP detour for UI commands)
-    if (!GWA3::RenderHook::Initialize()) {
-        GWA3::Log::Warn("RenderHook initialization failed — UI clicks won't work");
-    }
-
-    // Step 6: Test modes that need GameThread
     if (cmdTest) {
         GWA3::Log::Info("=== BEHAVIORAL COMMAND TEST MODE ===");
         int failures = GWA3::SmokeTest::RunBehavioralTest();
@@ -118,18 +189,17 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
-    if (CheckFlag("GWA3_TEST_INTEGRATION", "gwa3_test_integration.flag")) {
+    if (integrationTest) {
         GWA3::Log::Info("=== INTEGRATION TEST MODE ===");
         int failures = GWA3::SmokeTest::RunIntegrationTest();
         GWA3::Log::Info("Integration test complete: %d failures", failures);
         return static_cast<DWORD>(failures);
     }
 
-    // Step 7: Normal mode — register and start Froggy HM bot
     GWA3::Bot::Froggy::Register();
     GWA3::Bot::Start();
 
-    GWA3::Log::Info("gwa3.dll initialization complete — bot started");
+    GWA3::Log::Info("gwa3.dll initialization complete - bot started");
     return 0;
 }
 
