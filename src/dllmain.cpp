@@ -3,6 +3,7 @@
 #include <gwa3/core/Scanner.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
+#include <gwa3/core/RenderHook.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/SkillMgr.h>
 #include <gwa3/managers/ItemMgr.h>
@@ -104,6 +105,11 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         });
     }
 
+    // Step 5b: Install render hook (needed for UI frame clicks)
+    if (!GWA3::RenderHook::Initialize()) {
+        GWA3::Log::Warn("RenderHook initialization failed — UI clicks won't work");
+    }
+
     // Step 6: Test modes that need GameThread
     if (cmdTest) {
         GWA3::Log::Info("=== BEHAVIORAL COMMAND TEST MODE ===");
@@ -135,6 +141,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
         CreateThread(nullptr, 0, &InitThread, hModule, 0, nullptr);
     } else if (reason == DLL_PROCESS_DETACH) {
         GWA3::Bot::Stop();
+        GWA3::RenderHook::Shutdown();
         GWA3::GameThread::Shutdown();
         GWA3::Log::Shutdown();
     }
