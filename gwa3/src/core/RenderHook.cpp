@@ -3,40 +3,53 @@
 #include <gwa3/core/Log.h>
 
 #include <Windows.h>
-#include <vector>
-#include <mutex>
 
 namespace GWA3::RenderHook {
 
-static CRITICAL_SECTION s_cs;
-static std::vector<std::function<void()>> s_queue;
+static constexpr uint32_t kQueueSize = 256;
+static constexpr uint32_t kPatchSize = 5;
+
+static volatile LONG s_queueCounter = 0;
+static volatile LONG s_savedCommand = 0;
+static volatile LONG s_mapLoaded = 0;
+static volatile LONG s_disableRendering = 0;
+static uintptr_t s_queue[kQueueSize] = {};
 static bool s_initialized = false;
 static uintptr_t s_returnAddr = 0;
-static uint8_t s_savedBytes[10] = {};
-
-// C++ function to drain the render queue — called from naked detour
-static void __cdecl DrainRenderQueue() {
-    EnterCriticalSection(&s_cs);
-    std::vector<std::function<void()>> local;
-    if (!s_queue.empty()) {
-        local.swap(s_queue);
-    }
-    LeaveCriticalSection(&s_cs);
-
-    for (auto& task : local) {
-        task();
-    }
-}
+static uint8_t s_savedBytes[kPatchSize] = {};
 
 // Naked detour — called via JMP from mid-function patch.
-// Preserves all registers, drains queue, then jumps back.
+// Mirrors the AutoIt RenderingModProc path:
+// process one queued command during pre-game, then replay the original
+// overwritten instructions before jumping back to Render+0xA.
 static __declspec(naked) void RenderDetourNaked() {
     __asm {
         pushad
         pushfd
-        call DrainRenderQueue
+
+        mov eax, dword ptr [s_queueCounter]
+        mov ecx, eax
+        mov ebx, dword ptr [s_queue + eax * 4]
+        test ebx, ebx
+        jz skip_queue
+
+        mov dword ptr [s_queue + eax * 4], 0
+        mov dword ptr [s_savedCommand], ebx
+
+        mov eax, ecx
+        inc eax
+        cmp eax, kQueueSize
+        jnz no_reset
+        xor eax, eax
+no_reset:
+        mov dword ptr [s_queueCounter], eax
+        call dword ptr [s_savedCommand]
+
+skip_queue:
         popfd
         popad
+        add esp, 4
+        cmp dword ptr [s_disableRendering], 1
         jmp [s_returnAddr]
     }
 }
@@ -48,31 +61,34 @@ bool Initialize() {
         return false;
     }
 
-    InitializeCriticalSection(&s_cs);
-
     uintptr_t hookAddr = Offsets::Render;
     s_returnAddr = hookAddr + 0xA; // AutoIt uses RenderingModReturn = Render + 0xA
+    s_queueCounter = 0;
+    s_savedCommand = 0;
+    s_mapLoaded = 0;
+    s_disableRendering = 0;
+    ZeroMemory(s_queue, sizeof(s_queue));
 
-    // Save original 10 bytes
-    memcpy(s_savedBytes, reinterpret_cast<void*>(hookAddr), 10);
+    // AutoIt's WriteDetour writes a 5-byte JMP at the hook site and returns
+    // to Render+0xA from the detour body. Keep bytes +5..+9 intact.
+    memcpy(s_savedBytes, reinterpret_cast<void*>(hookAddr), kPatchSize);
 
-    // Write JMP to our detour (5-byte JMP + 5 NOPs to fill 10 bytes)
+    // Write only the 5-byte JMP detour, matching AutoIt's behavior.
     DWORD oldProtect;
-    VirtualProtect(reinterpret_cast<void*>(hookAddr), 10, PAGE_EXECUTE_READWRITE, &oldProtect);
+    VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, PAGE_EXECUTE_READWRITE, &oldProtect);
 
-    uint8_t patch[10];
+    uint8_t patch[kPatchSize];
     patch[0] = 0xE9; // JMP rel32
     int32_t rel = reinterpret_cast<uintptr_t>(&RenderDetourNaked) - (hookAddr + 5);
     memcpy(patch + 1, &rel, 4);
-    for (int i = 5; i < 10; i++) patch[i] = 0x90; // NOP
 
-    memcpy(reinterpret_cast<void*>(hookAddr), patch, 10);
-    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hookAddr), 10);
+    memcpy(reinterpret_cast<void*>(hookAddr), patch, kPatchSize);
+    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hookAddr), kPatchSize);
 
-    VirtualProtect(reinterpret_cast<void*>(hookAddr), 10, oldProtect, &oldProtect);
+    VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, oldProtect, &oldProtect);
 
     s_initialized = true;
-    Log::Info("RenderHook: Mid-function JMP installed at 0x%08X -> return at 0x%08X",
+    Log::Info("RenderHook: Installed at 0x%08X -> return at 0x%08X",
               hookAddr, s_returnAddr);
     return true;
 }
@@ -83,26 +99,40 @@ void Shutdown() {
     // Restore original bytes
     uintptr_t hookAddr = Offsets::Render;
     DWORD oldProtect;
-    VirtualProtect(reinterpret_cast<void*>(hookAddr), 10, PAGE_EXECUTE_READWRITE, &oldProtect);
-    memcpy(reinterpret_cast<void*>(hookAddr), s_savedBytes, 10);
-    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hookAddr), 10);
-    VirtualProtect(reinterpret_cast<void*>(hookAddr), 10, oldProtect, &oldProtect);
+    VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, PAGE_EXECUTE_READWRITE, &oldProtect);
+    memcpy(reinterpret_cast<void*>(hookAddr), s_savedBytes, kPatchSize);
+    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hookAddr), kPatchSize);
+    VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, oldProtect, &oldProtect);
 
-    EnterCriticalSection(&s_cs);
-    s_queue.clear();
-    LeaveCriticalSection(&s_cs);
-    DeleteCriticalSection(&s_cs);
+    ZeroMemory(s_queue, sizeof(s_queue));
+    s_queueCounter = 0;
+    s_savedCommand = 0;
+    s_mapLoaded = 0;
     s_initialized = false;
     Log::Info("RenderHook: Shutdown");
 }
 
-void Enqueue(std::function<void()> task) {
-    if (!s_initialized) return;
-    EnterCriticalSection(&s_cs);
-    s_queue.push_back(std::move(task));
-    LeaveCriticalSection(&s_cs);
+bool EnqueueCommand(uintptr_t command) {
+    if (!s_initialized || command < 0x10000) return false;
+
+    for (uint32_t attempt = 0; attempt < kQueueSize; ++attempt) {
+        uint32_t index = (static_cast<uint32_t>(s_queueCounter) + attempt) % kQueueSize;
+        if (s_queue[index] != 0) continue;
+        s_queue[index] = command;
+        return true;
+    }
+
+    Log::Warn("RenderHook: queue full, dropping command 0x%08X", command);
+    return false;
 }
 
-bool IsInitialized() { return s_initialized; }
+void SetMapLoaded(bool loaded) {
+    s_mapLoaded = loaded ? 1 : 0;
+    Log::Info("RenderHook: MapLoaded=%d", loaded ? 1 : 0);
+}
+
+bool IsInitialized() {
+    return s_initialized;
+}
 
 } // namespace GWA3::RenderHook

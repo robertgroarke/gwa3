@@ -1,16 +1,21 @@
 #pragma once
 
-#include <functional>
+#include <cstdint>
 
 namespace GWA3::RenderHook {
 
-    // Install a MinHook detour on the rendering callback.
-    // Queued functions execute each frame from the render context.
+    // Install the pre-game render detour at the same mid-function seam
+    // used by AutoIt's RenderingModProc.
     bool Initialize();
     void Shutdown();
 
-    // Enqueue a function to run on the render thread (next frame).
-    void Enqueue(std::function<void()> task);
+    // Queue an executable command stub. The stub is called from the render
+    // detour during pre-game / character select.
+    bool EnqueueCommand(uintptr_t command);
+
+    // Once the client is on a map, stop draining the pre-game queue while
+    // still replaying the overwritten original render instructions.
+    void SetMapLoaded(bool loaded);
 
     bool IsInitialized();
 

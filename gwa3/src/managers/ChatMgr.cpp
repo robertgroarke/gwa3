@@ -52,7 +52,8 @@ void WriteToChat(const wchar_t* message, uint32_t channel) {
 
 uint32_t GetPing() {
     if (!Offsets::Ping) return 0;
-    return *reinterpret_cast<uint32_t*>(Offsets::Ping);
+    uint32_t ping = *reinterpret_cast<uint32_t*>(Offsets::Ping);
+    return ping < 10 ? 10 : ping;
 }
 
 void SetRenderingEnabled(bool enabled) {
