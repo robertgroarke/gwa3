@@ -1377,8 +1377,8 @@ Implement a memory patcher separate from the detour hook system. GWCA uses this 
 
 | Field | Value |
 |-------|-------|
-| **Assignee** | |
-| **Status** | `backlog` |
+| **Assignee** | agent |
+| **Status** | `done` |
 | **Estimate** | L |
 | **Depends On** | GWA3-006, GWA3-020 |
 | **Blocks** | GWA3-040 |
@@ -2052,7 +2052,7 @@ WAVE 7 (Endgame — needs all integration):
 | **Epic 8: Research-Derived** | | | | |
 | GWA3-037 | Hook Engine (Optional Custom) | XL | 006 | `backlog` |
 | GWA3-038 | Memory Patcher Module | M | 005, 006 | `done` |
-| GWA3-039 | Callback Registry + Module Ownership | L | 006, 020 | `backlog` |
+| GWA3-039 | Callback Registry + Module Ownership | L | 006, 020 | `done` |
 | GWA3-040 | Key Input + Preference System | M | 006, 020, 039 | `backlog` |
 | GWA3-041 | Py4GW API Surface Audit | S | 025 | `backlog` |
 | **Epic 9: Testing** | | | | |
