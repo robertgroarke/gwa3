@@ -104,11 +104,18 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         });
     }
 
-    // Step 6: Behavioral command test (needs GameThread for some tests but can partially run without)
+    // Step 6: Test modes that need GameThread
     if (cmdTest) {
         GWA3::Log::Info("=== BEHAVIORAL COMMAND TEST MODE ===");
         int failures = GWA3::SmokeTest::RunBehavioralTest();
         GWA3::Log::Info("Behavioral test complete: %d failures", failures);
+        return static_cast<DWORD>(failures);
+    }
+
+    if (CheckFlag("GWA3_TEST_INTEGRATION", "gwa3_test_integration.flag")) {
+        GWA3::Log::Info("=== INTEGRATION TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunIntegrationTest();
+        GWA3::Log::Info("Integration test complete: %d failures", failures);
         return static_cast<DWORD>(failures);
     }
 
