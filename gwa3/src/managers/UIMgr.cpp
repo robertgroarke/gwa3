@@ -1,6 +1,7 @@
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
+#include <gwa3/core/RenderHook.h>
 #include <gwa3/core/Log.h>
 
 #include <cstring>
@@ -198,19 +199,13 @@ bool ButtonClick(uintptr_t frame) {
 
     void* ecx = reinterpret_cast<void*>(context + 0xA8);
 
-    // Must execute on game thread
-    if (GameThread::IsOnGameThread()) {
-        Log::Info("UIMgr: Calling SendFrameUI(ecx=0x%08X, msg=0x%X)...",
-                  (uintptr_t)ecx, MSG_MOUSE_CLICK2);
-        CallSendFrameUI(ecx, MSG_MOUSE_CLICK2, &action, nullptr);
-        Log::Info("UIMgr: SendFrameUI returned OK");
-    } else {
-        // Capture by value — action is small, ecx is a pointer
-        uintptr_t capturedEcx = reinterpret_cast<uintptr_t>(ecx);
-        GameThread::Enqueue([capturedEcx, action]() mutable {
-            CallSendFrameUI(reinterpret_cast<void*>(capturedEcx), MSG_MOUSE_CLICK2, &action, nullptr);
-        });
-    }
+    // Must execute from render callback context (NOT game thread tick)
+    uintptr_t capturedEcx = reinterpret_cast<uintptr_t>(ecx);
+    Log::Info("UIMgr: Queuing SendFrameUI(ecx=0x%08X, msg=0x%X) via RenderHook",
+              capturedEcx, MSG_MOUSE_CLICK2);
+    RenderHook::Enqueue([capturedEcx, action]() mutable {
+        CallSendFrameUI(reinterpret_cast<void*>(capturedEcx), MSG_MOUSE_CLICK2, &action, nullptr);
+    });
 
     return true;
 }

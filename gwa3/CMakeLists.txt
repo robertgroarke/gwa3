@@ -29,6 +29,7 @@ add_library(gwa3_core OBJECT
     src/core/Offsets.cpp
     src/core/GameThread.cpp
     src/core/Memory.cpp
+    src/core/RenderHook.cpp
     src/core/CallbackRegistry.cpp
     src/packets/CtoS.cpp
     src/managers/AgentMgr.cpp
