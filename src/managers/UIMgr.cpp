@@ -7,20 +7,32 @@
 
 namespace GWA3::UIMgr {
 
-// SendFrameUIMsg: __thiscall (ECX = frame+0xA8, msgid, wParam, lParam)
-using SendFrameUIFn = void(__thiscall*)(void* ecx, uint32_t msgid, void* wParam, void* lParam);
+// SendFrameUIMsg game function address (called via inline asm to set ECX properly)
+static uintptr_t s_sendFrameUIAddr = 0;
 // SendUIMessage: global dispatcher
 using SendUIMessageFn = void(__cdecl*)(uint32_t msgid, void* wParam, void* lParam);
 
-static SendFrameUIFn s_sendFrameUIFn = nullptr;
 static SendUIMessageFn s_sendUIMessageFn = nullptr;
 static bool s_initialized = false;
+
+// Call SendFrameUIMsg with proper __thiscall convention via inline asm.
+// ECX = thisPtr, stack args = (msgid, wParam, lParam)
+static void CallSendFrameUI(void* thisPtr, uint32_t msgid, void* wParam, void* lParam) {
+    uintptr_t fn = s_sendFrameUIAddr;
+    __asm {
+        push lParam
+        push wParam
+        push msgid
+        mov ecx, thisPtr
+        call fn
+    }
+}
 
 bool Initialize() {
     if (s_initialized) return true;
 
     if (Offsets::SendFrameUIMsg) {
-        s_sendFrameUIFn = reinterpret_cast<SendFrameUIFn>(Offsets::SendFrameUIMsg);
+        s_sendFrameUIAddr = Offsets::SendFrameUIMsg;
     }
     if (Offsets::UIMessage) {
         s_sendUIMessageFn = reinterpret_cast<SendUIMessageFn>(Offsets::UIMessage);
@@ -128,13 +140,13 @@ uintptr_t GetFrameContext(uintptr_t frame) {
 // --- Message Sending ---
 
 void SendFrameUIMessage(uintptr_t frame, uint32_t msgId, void* wParam, void* lParam) {
-    if (!s_sendFrameUIFn || frame < 0x10000) return;
+    if (!s_sendFrameUIAddr || frame < 0x10000) return;
 
     uintptr_t context = GetFrameContext(frame);
     if (context < 0x10000) return;
 
-    void* ecx = reinterpret_cast<void*>(context + 0xA8);
-    s_sendFrameUIFn(ecx, msgId, wParam, lParam);
+    void* thisPtr = reinterpret_cast<void*>(context + 0xA8);
+    CallSendFrameUI(thisPtr, msgId, wParam, lParam);
 }
 
 void SendUIMessage(uint32_t msgId, void* wParam, void* lParam) {
@@ -154,9 +166,9 @@ struct MouseAction {
 };
 
 bool ButtonClick(uintptr_t frame) {
-    Log::Info("UIMgr: ButtonClick(0x%08X) — sendFn=0x%08X", frame, (uintptr_t)s_sendFrameUIFn);
-    if (!s_sendFrameUIFn || frame < 0x10000) {
-        Log::Warn("UIMgr: ButtonClick — no sendFn or invalid frame");
+    Log::Info("UIMgr: ButtonClick(0x%08X) — sendAddr=0x%08X", frame, s_sendFrameUIAddr);
+    if (!s_sendFrameUIAddr || frame < 0x10000) {
+        Log::Warn("UIMgr: ButtonClick — no sendAddr or invalid frame");
         return false;
     }
 
@@ -187,13 +199,15 @@ bool ButtonClick(uintptr_t frame) {
 
     // Must execute on game thread
     if (GameThread::IsOnGameThread()) {
-        s_sendFrameUIFn(ecx, MSG_MOUSE_CLICK2, &action, nullptr);
+        Log::Info("UIMgr: Calling SendFrameUI(ecx=0x%08X, msg=0x%X)...",
+                  (uintptr_t)ecx, MSG_MOUSE_CLICK2);
+        CallSendFrameUI(ecx, MSG_MOUSE_CLICK2, &action, nullptr);
+        Log::Info("UIMgr: SendFrameUI returned OK");
     } else {
         // Capture by value — action is small, ecx is a pointer
         uintptr_t capturedEcx = reinterpret_cast<uintptr_t>(ecx);
-        SendFrameUIFn fn = s_sendFrameUIFn;
-        GameThread::Enqueue([fn, capturedEcx, action]() mutable {
-            fn(reinterpret_cast<void*>(capturedEcx), MSG_MOUSE_CLICK2, &action, nullptr);
+        GameThread::Enqueue([capturedEcx, action]() mutable {
+            CallSendFrameUI(reinterpret_cast<void*>(capturedEcx), MSG_MOUSE_CLICK2, &action, nullptr);
         });
     }
 
