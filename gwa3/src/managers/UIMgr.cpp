@@ -46,7 +46,20 @@ static FrameArrayData* GetFrameArray() {
 
 uintptr_t GetFrameByHash(uint32_t hash) {
     auto* arr = GetFrameArray();
-    if (!arr || !arr->buffer || arr->size == 0 || arr->size > 5000) return 0;
+    if (!arr) {
+        Log::Warn("UIMgr: GetFrameByHash — FrameArray is null");
+        return 0;
+    }
+
+    // Log the array state for debugging
+    static bool s_logged = false;
+    if (!s_logged) {
+        Log::Info("UIMgr: FrameArray at 0x%08X: buffer=0x%08X size=%u",
+                  (uintptr_t)arr, (uintptr_t)arr->buffer, arr->size);
+        s_logged = true;
+    }
+
+    if (!arr->buffer || arr->size == 0 || arr->size > 5000) return 0;
 
     for (uint32_t i = 0; i < arr->size; i++) {
         uintptr_t fp = arr->buffer[i];

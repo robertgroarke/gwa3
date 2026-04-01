@@ -121,8 +121,32 @@ static bool TestCharSelectLogin() {
     uint32_t myIdBefore = ReadMyId();
     IntReport("  Before login: MapID=%u, MyID=%u", mapBefore, myIdBefore);
 
-    // Try clicking Play button
-    IntReport("  Attempting ButtonClickByHash(PlayButton)...");
+    // Dump all frame hashes to find Play button
+    IntReport("  Dumping frame hashes to find Play button...");
+    GameThread::Enqueue([]() {
+        if (Offsets::FrameArray < 0x10000) return;
+        struct FA { uintptr_t* buffer; uint32_t size; };
+        auto* arr = reinterpret_cast<FA*>(Offsets::FrameArray);
+        if (!arr->buffer || arr->size == 0 || arr->size > 5000) return;
+        Log::Info("[INTG] Scanning %u frames for hashes...", arr->size);
+        for (uint32_t i = 0; i < arr->size; i++) {
+            uintptr_t fp = arr->buffer[i];
+            if (fp < 0x10000) continue;
+            uint32_t hash = *reinterpret_cast<uint32_t*>(fp + 0x134);
+            uint32_t fid = *reinterpret_cast<uint32_t*>(fp + 0xBC);
+            uint32_t state = *reinterpret_cast<uint32_t*>(fp + 0x18C);
+            // Only log frames that are created and have non-zero hash
+            if (hash != 0 && (state & 0x4)) {
+                Log::Info("[INTG] Frame[%u] hash=%u fid=%u state=0x%X ptr=0x%08X",
+                         i, hash, fid, state, fp);
+            }
+        }
+    });
+    Sleep(3000);
+
+    // Try clicking Play button with known hash
+    IntReport("  Attempting ButtonClickByHash(PlayButton=%u)...",
+              UIMgr::Hashes::PlayButton);
     bool clickResult = false;
     GameThread::Enqueue([&clickResult]() {
         clickResult = UIMgr::ButtonClickByHash(UIMgr::Hashes::PlayButton);
