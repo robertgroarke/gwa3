@@ -52,6 +52,7 @@ add_library(gwa3_core OBJECT
     src/tests/SmokeTest.cpp
     src/tests/BotFrameworkTest.cpp
     src/tests/BehavioralTest.cpp
+    src/tests/IntegrationTest.cpp
 )
 
 target_include_directories(gwa3_core PUBLIC

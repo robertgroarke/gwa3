@@ -298,8 +298,30 @@ static void PostProcessOffsets() {
 
     // PreGame: offset +0x35 from assertion site, then deref
     if (PreGame)        PreGame        = Deref(PreGame + 0x35);
-    // FrameArray: TODO — assertion offset needs calibration for this build
-    // if (FrameArray)     FrameArray     = Deref(FrameArray - 0x13);
+    // FrameArray: try several offsets to find the embedded data address
+    if (FrameArray) {
+        bool found = false;
+        for (int off = 0x10; off <= 0x20 && !found; off++) {
+            uintptr_t derefAddr = FrameArray - off;
+            if (derefAddr > 0x10000) {
+                uintptr_t val = Deref(derefAddr);
+                // Valid frame array should be in .data section (0x008xxxxx range typically)
+                if (val > 0x10000 && val < 0x80000000) {
+                    // Double check: deref again should give a buffer pointer
+                    uintptr_t innerVal = Deref(val);
+                    Log::Info("Offsets: FrameArray try -%d: deref 0x%08X -> 0x%08X -> 0x%08X",
+                              off, derefAddr, val, innerVal);
+                    if (innerVal > 0x10000 || innerVal == 0) {
+                        FrameArray = val;
+                        found = true;
+                    }
+                }
+            }
+        }
+        if (!found) {
+            Log::Warn("Offsets: FrameArray deref failed at all offsets, keeping raw 0x%08X", FrameArray);
+        }
+    }
     // SceneContext: offset +0x1B from scan, then deref
     if (SceneContext) {
         uintptr_t ctx = Deref(SceneContext + 0x1B);

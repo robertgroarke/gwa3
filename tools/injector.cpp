@@ -168,6 +168,8 @@ static void ClearTestModeFlags() {
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_commands.flag", dir);
     DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_integration.flag", dir);
+    DeleteFileA(path);
 }
 
 // ===== Injection =====
@@ -303,6 +305,7 @@ static void PrintUsage(const char* argv0) {
     printf("  --smoke         Inject in smoke test mode (GWA3_SMOKE_TEST=1)\n");
     printf("  --test-bot      Inject in bot framework test mode (GWA3_TEST_BOT=1)\n");
     printf("  --test-commands Inject in behavioral command test mode (GWA3_TEST_COMMANDS=1)\n");
+    printf("  --test-integ    Inject in integration test mode (char select -> game)\n");
     printf("\nOptions:\n");
     printf("  --pid <N>       Target specific process ID\n");
     printf("  -h, --help      Show this help\n");
@@ -318,6 +321,7 @@ int main(int argc, char* argv[]) {
     bool doSmoke = false;
     bool doTestBot = false;
     bool doTestCommands = false;
+    bool doTestInteg = false;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--pid") == 0 && i + 1 < argc) {
@@ -334,6 +338,8 @@ int main(int argc, char* argv[]) {
             doTestBot = true;
         } else if (strcmp(argv[i], "--test-commands") == 0) {
             doTestCommands = true;
+        } else if (strcmp(argv[i], "--test-integ") == 0) {
+            doTestInteg = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             PrintUsage(argv[0]);
             return 0;
@@ -401,6 +407,7 @@ int main(int argc, char* argv[]) {
     if (doSmoke) SetTestModeFlag("gwa3_smoke_test.flag");
     if (doTestBot) SetTestModeFlag("gwa3_test_bot.flag");
     if (doTestCommands) SetTestModeFlag("gwa3_test_commands.flag");
+    if (doTestInteg) SetTestModeFlag("gwa3_test_integration.flag");
 
     // === --pid (single target) ===
     if (targetPid != 0) {

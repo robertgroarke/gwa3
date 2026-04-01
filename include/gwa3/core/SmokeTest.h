@@ -17,4 +17,8 @@ namespace GWA3::SmokeTest {
     // Returns number of failed checks.
     int RunBehavioralTest();
 
+    // Run integration tests. Chains: char select -> login -> hero setup ->
+    // movement -> targeting. Single injection session.
+    int RunIntegrationTest();
+
 } // namespace GWA3::SmokeTest
