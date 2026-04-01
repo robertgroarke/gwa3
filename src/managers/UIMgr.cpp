@@ -25,6 +25,7 @@ static void CallSendFrameUI(void* thisPtr, uint32_t msgid, void* wParam, void* l
         push msgid
         mov ecx, thisPtr
         call fn
+        // __thiscall: callee cleans stack. No add esp needed.
     }
 }
 
