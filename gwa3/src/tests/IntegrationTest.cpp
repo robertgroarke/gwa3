@@ -116,10 +116,17 @@ static bool TestCharSelectLogin() {
     Sleep(2000);
     IntCheck("GameThread enqueue fires", gtFlag.load());
 
-    // Check if at char select (MapID should be 0, MyID should be 0)
+    // Check current state — might already be in-game if AutoIt clicked Play
     uint32_t mapBefore = ReadMapId();
     uint32_t myIdBefore = ReadMyId();
-    IntReport("  Before login: MapID=%u, MyID=%u", mapBefore, myIdBefore);
+    IntReport("  Current state: MapID=%u, MyID=%u", mapBefore, myIdBefore);
+
+    // If already in game, skip login
+    if (mapBefore > 0 && myIdBefore > 0) {
+        IntReport("  Already in game! Skipping Play click.");
+        IntCheck("Already logged in", true);
+        return true;
+    }
 
     // Dump all frame hashes to find Play button
     IntReport("  Dumping frame hashes to find Play button...");
