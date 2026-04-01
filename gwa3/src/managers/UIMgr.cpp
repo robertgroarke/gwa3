@@ -199,13 +199,24 @@ bool ButtonClick(uintptr_t frame) {
 
     void* ecx = reinterpret_cast<void*>(context + 0xA8);
 
-    // Must execute from render callback context (NOT game thread tick)
+    // Call SendFrameUIMsg — must NOT be from GameThread detour (deadlocks).
+    // Spawn a brief worker thread to make the call outside any hook context.
     uintptr_t capturedEcx = reinterpret_cast<uintptr_t>(ecx);
-    Log::Info("UIMgr: Queuing SendFrameUI(ecx=0x%08X, msg=0x%X) via RenderHook",
+    Log::Info("UIMgr: Spawning thread for SendFrameUI(ecx=0x%08X, msg=0x%X)",
               capturedEcx, MSG_MOUSE_CLICK2);
-    RenderHook::Enqueue([capturedEcx, action]() mutable {
-        CallSendFrameUI(reinterpret_cast<void*>(capturedEcx), MSG_MOUSE_CLICK2, &action, nullptr);
-    });
+
+    struct ClickData {
+        uintptr_t ecx;
+        MouseAction action;
+    };
+    auto* data = new ClickData{capturedEcx, action};
+    CreateThread(nullptr, 0, [](LPVOID param) -> DWORD {
+        auto* d = reinterpret_cast<ClickData*>(param);
+        CallSendFrameUI(reinterpret_cast<void*>(d->ecx), MSG_MOUSE_CLICK2, &d->action, nullptr);
+        Log::Info("UIMgr: SendFrameUI returned from worker thread");
+        delete d;
+        return 0;
+    }, data, 0, nullptr);
 
     return true;
 }
