@@ -105,10 +105,10 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         });
     }
 
-    // Step 5b: RenderHook disabled — ButtonClick uses worker thread instead
-    // if (!GWA3::RenderHook::Initialize()) {
-    //     GWA3::Log::Warn("RenderHook initialization failed");
-    // }
+    // Step 5b: Install render hook (mid-function JMP detour for UI commands)
+    if (!GWA3::RenderHook::Initialize()) {
+        GWA3::Log::Warn("RenderHook initialization failed — UI clicks won't work");
+    }
 
     // Step 6: Test modes that need GameThread
     if (cmdTest) {

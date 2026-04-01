@@ -199,30 +199,22 @@ bool ButtonClick(uintptr_t frame) {
 
     void* ecx = reinterpret_cast<void*>(context + 0xA8);
 
-    // Call SendFrameUIMsg — must NOT be from GameThread detour (deadlocks).
-    // Spawn a brief worker thread to make the call outside any hook context.
+    // Queue for render callback context (mid-function detour at Render hook point).
+    // SendFrameUIMsg requires render-pipeline context — it hangs from GameThread or worker threads.
     uintptr_t capturedEcx = reinterpret_cast<uintptr_t>(ecx);
-    Log::Info("UIMgr: Spawning thread for SendFrameUI(ecx=0x%08X, msg=0x%X)",
+    Log::Info("UIMgr: Queuing SendFrameUI(ecx=0x%08X, msg=0x%X) via RenderHook",
               capturedEcx, MSG_MOUSE_CLICK2);
-
-    struct ClickData {
-        uintptr_t ecx;
-        MouseAction action;
-    };
-    auto* data = new ClickData{capturedEcx, action};
-    CreateThread(nullptr, 0, [](LPVOID param) -> DWORD {
-        auto* d = reinterpret_cast<ClickData*>(param);
-        CallSendFrameUI(reinterpret_cast<void*>(d->ecx), MSG_MOUSE_CLICK2, &d->action, nullptr);
-        Log::Info("UIMgr: SendFrameUI returned from worker thread");
-        delete d;
-        return 0;
-    }, data, 0, nullptr);
+    RenderHook::Enqueue([capturedEcx, action]() mutable {
+        CallSendFrameUI(reinterpret_cast<void*>(capturedEcx), MSG_MOUSE_CLICK2, &action, nullptr);
+    });
 
     return true;
 }
 
 bool ButtonClickByHash(uint32_t hash) {
+    Log::Info("UIMgr: ButtonClickByHash(%u) called", hash);
     uintptr_t frame = GetFrameByHash(hash);
+    Log::Info("UIMgr: GetFrameByHash returned 0x%08X", frame);
     if (!frame) {
         Log::Warn("UIMgr: ButtonClickByHash — hash %u not found", hash);
         return false;
