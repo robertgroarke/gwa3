@@ -154,16 +154,22 @@ struct MouseAction {
 };
 
 bool ButtonClick(uintptr_t frame) {
-    if (!s_sendFrameUIFn || frame < 0x10000) return false;
+    Log::Info("UIMgr: ButtonClick(0x%08X) — sendFn=0x%08X", frame, (uintptr_t)s_sendFrameUIFn);
+    if (!s_sendFrameUIFn || frame < 0x10000) {
+        Log::Warn("UIMgr: ButtonClick — no sendFn or invalid frame");
+        return false;
+    }
 
     // Validate frame is created
     uint32_t state = GetFrameState(frame);
+    Log::Info("UIMgr: ButtonClick — state=0x%X", state);
     if (!(state & FRAME_CREATED)) {
         Log::Warn("UIMgr: ButtonClick — frame 0x%08X not created (state=0x%X)", frame, state);
         return false;
     }
 
     uintptr_t context = GetFrameContext(frame);
+    Log::Info("UIMgr: ButtonClick — context=0x%08X", context);
     if (context < 0x10000) {
         Log::Warn("UIMgr: ButtonClick — invalid context for frame 0x%08X", frame);
         return false;
