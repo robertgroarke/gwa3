@@ -460,6 +460,26 @@ int RunSmokeTest() {
             Report("  Total renderElapsed xrefs in .text: %d", xrefCount);
         }
 
+        // Enumerate ALL 83 C1 DC E8 matches to find real SendFrameUIMsg
+        Report("  Enumerating ALL '83 C1 DC E8' (ADD ECX,-24 / CALL) sites in .text...");
+        {
+            const uint8_t* tp = reinterpret_cast<const uint8_t*>(text.start);
+            int matchCount = 0;
+            for (size_t i = 0; i + 8 < text.size && matchCount < 20; i++) {
+                if (tp[i] == 0x83 && tp[i+1] == 0xC1 && tp[i+2] == 0xDC && tp[i+3] == 0xE8) {
+                    uintptr_t callAddr = text.start + i + 3; // E8 instruction
+                    int32_t rel;
+                    memcpy(&rel, tp + i + 4, 4);
+                    uintptr_t target = callAddr + 5 + rel;
+                    Report("    Match[%d] at 0x%08X -> CALL target 0x%08X (RVA 0x%X)",
+                           matchCount, (unsigned)(text.start + i), (unsigned)target,
+                           (unsigned)(target - (text.start - 0x1000)));
+                    matchCount++;
+                }
+            }
+            Report("  Total '83 C1 DC E8' matches: %d", matchCount);
+        }
+
         // Also search for the P:\Code path prefix
         int pCodeCount = 0;
         for (size_t i = 0; i + 10 < rdataSize && pCodeCount < 5; i++) {
