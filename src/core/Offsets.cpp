@@ -298,8 +298,8 @@ static void PostProcessOffsets() {
 
     // PreGame: offset +0x35 from assertion site, then deref
     if (PreGame)        PreGame        = Deref(PreGame + 0x35);
-    // FrameArray: offset -0x13 from assertion site, then deref
-    if (FrameArray)     FrameArray     = Deref(FrameArray - 0x13);
+    // FrameArray: TODO — assertion offset needs calibration for this build
+    // if (FrameArray)     FrameArray     = Deref(FrameArray - 0x13);
     // SceneContext: offset +0x1B from scan, then deref
     if (SceneContext) {
         uintptr_t ctx = Deref(SceneContext + 0x1B);

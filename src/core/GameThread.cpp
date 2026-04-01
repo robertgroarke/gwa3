@@ -99,9 +99,15 @@ bool Initialize() {
     InitializeCriticalSection(&s_cs);
 
     // Find the assertion site for the render callback
-    uintptr_t assertSite = Scanner::FindAssertion("FrApi.cpp", "renderElapsed >= 0", 0);
+    // Try full path first (GW Reforged uses full paths), then short name
+    uintptr_t assertSite = Scanner::FindAssertion(
+        "P:\\Code\\Engine\\Frame\\FrApi.cpp", "renderElapsed >= 0", 0);
     if (!assertSite) {
-        Log::Error("GameThread: FindAssertion(\"FrApi.cpp\", \"renderElapsed >= 0\") failed");
+        // Fallback: try short filename (original GWCA convention)
+        assertSite = Scanner::FindAssertion("FrApi.cpp", "renderElapsed >= 0", 0);
+    }
+    if (!assertSite) {
+        Log::Error("GameThread: FindAssertion for FrApi.cpp / renderElapsed failed");
         DeleteCriticalSection(&s_cs);
         return false;
     }
