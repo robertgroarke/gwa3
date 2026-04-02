@@ -95,8 +95,12 @@ uintptr_t GwEndScene = 0;
 
 uintptr_t ItemClick = 0;
 
+uintptr_t CameraUpdateBypass = 0;
 uintptr_t LevelDataBypass = 0;
 uintptr_t MapPortBypass = 0;
+
+uintptr_t OfferTradeItem = 0;
+uintptr_t UpdateTradeCart = 0;
 
 uintptr_t SendChatFunc = 0;
 uintptr_t AddToChatLog = 0;
@@ -250,6 +254,10 @@ static const PatternDef s_patterns[] = {
     // ===== Items (P1) =====
     PAT("ItemClick",     ItemClick,     "\x8B\x48\x08\x83\xEA\x00\x0F\x84",             "xxxxxxxx",   -0x1C, Priority::P1, PatternType::Func),
 
+    // ===== Trade GWCA (P2) =====
+    PAT("OfferTradeItem",  OfferTradeItem,  "\x68\x49\x04\x00\x00\x89\x5D\xE4\xE8",       "xxxxxxxxx",  -0x6B, Priority::P2, PatternType::Func),
+    PAT("UpdateTradeCart",  UpdateTradeCart, "\x57\x8B\x7D\x0C\x3D\xEF\x00\x00\x10",       "xxxxxxxxx",  -0x24, Priority::P2, PatternType::Func),
+
     // ===== Chat GWCA (P2) =====
     PAT("SendChatFunc",  SendChatFunc,  "\x8D\x85\xE0\xFE\xFF\xFF\x50\x68\x1C\x01",     "xxxxxxxxx",  -0x3E, Priority::P2, PatternType::Func),
     PAT("AddToChatLog",  AddToChatLog,  "\x40\x25\xFF\x01\x00\x00",                      "xxxxxx",     -0x97, Priority::P2, PatternType::Func),
@@ -258,6 +266,8 @@ static const PatternDef s_patterns[] = {
     PAT("SkipCinematicFunc", SkipCinematicFunc, "\x8B\x40\x30\x83\x78\x04\x00",          "xxxxxxx",    -0x5,  Priority::P2, PatternType::Func),
 
     // ===== Memory Patches (P2) =====
+    // Camera update bypass: MOV [ESI],ECX / FSTP ST(1) / MOV [ESI+4],EDX — patch to JMP +0xC
+    PAT("CameraUpdateBypass", CameraUpdateBypass, "\x89\x0E\xDD\xD9\x89\x56\x04\xDD",    "xxxxxxxx",   0x0, Priority::P2, PatternType::Ptr),
     // Level-data bypass: TEST AH,1 / JZ 0x1D / PUSH 0x1A9 — patch JZ to JMP
     PAT("LevelDataBypass", LevelDataBypass, "\xF6\xC4\x01\x74\x1D\x68\xA9\x01\x00\x00", "xxxxxxxxxx", 0x3, Priority::P2, PatternType::Ptr),
     // Map/port bypass: ADD ESP,0xC / TEST EAX,EAX / JNZ 0xC / PUSH 1 — patch JNZ to NOP NOP

@@ -192,6 +192,11 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     }
 
     // Stage memory patches using resolved offsets
+    if (GWA3::Offsets::CameraUpdateBypass > 0x10000) {
+        const uint8_t patch[2] = {0xEB, 0x0C}; // JMP +12 (skip float copy-back)
+        GWA3::Memory::GetCameraUnlockPatch().SetPatch(GWA3::Offsets::CameraUpdateBypass, patch, 2);
+        GWA3::Log::Info("CameraUpdateBypass patch staged at 0x%08X", GWA3::Offsets::CameraUpdateBypass);
+    }
     if (GWA3::Offsets::LevelDataBypass > 0x10000) {
         const uint8_t patch = 0xEB; // JMP (unconditional)
         GWA3::Memory::GetLevelDataBypassPatch().SetPatch(GWA3::Offsets::LevelDataBypass, &patch, 1);
