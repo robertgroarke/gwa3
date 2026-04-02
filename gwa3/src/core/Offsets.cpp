@@ -84,6 +84,7 @@ uintptr_t PostMessage = 0;
 uintptr_t ChatLog = 0;
 
 uintptr_t CameraClass = 0;
+uintptr_t FogPatch = 0;
 
 uintptr_t SendFrameUIMsg = 0;
 
@@ -220,6 +221,7 @@ static const PatternDef s_patterns[] = {
 
     // ===== Camera (P2) =====
     PAT("CameraClass",    CameraClass,    "\xD9\xEE\xB9\x00\x00\x00\x00\xD9\x55\xFC", "xxx????xxx", 0x3, Priority::P2, PatternType::Ptr),
+    PAT("FogPatch",       FogPatch,       "\x83\xE0\x01\x8B\x09\x50\x6A\x1C",         "xxxxxxxx",   0x2, Priority::P2, PatternType::Ptr),
 
     // ===== Frame UI (P0 — new for GWA3, NOT from AutoIt ASM scanner) =====
     PAT("SendFrameUIMsg", SendFrameUIMsg, "\x83\xC1\xDC\xE8",                   "xxxx",     0x3,    Priority::P0, PatternType::Func),

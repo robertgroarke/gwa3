@@ -113,6 +113,7 @@ namespace GWA3::Offsets {
 
     // ===== Camera =====
     extern uintptr_t CameraClass;        // ptr — Camera struct global
+    extern uintptr_t FogPatch;           // ptr — fog render instruction to patch
 
     // ===== Frame UI (GWA3-new) =====
     extern uintptr_t SendFrameUIMsg;     // func — scanned via pattern 83 C1 DC E8
