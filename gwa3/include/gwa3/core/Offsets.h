@@ -128,6 +128,10 @@ namespace GWA3::Offsets {
     // ===== Items =====
     extern uintptr_t ItemClick;          // func — item interaction dispatch
 
+    // ===== Memory Patches =====
+    extern uintptr_t LevelDataBypass;    // ptr — JZ instruction for level-data validation
+    extern uintptr_t MapPortBypass;      // ptr — JNZ instruction for map/port validation
+
     // ===== Chat (GWCA) =====
     extern uintptr_t SendChatFunc;       // func — native chat send
     extern uintptr_t AddToChatLog;       // func — native chat log write

@@ -6,6 +6,7 @@
 #include <gwa3/core/RenderHook.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/TargetLogHook.h>
+#include <gwa3/core/Memory.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/SkillMgr.h>
 #include <gwa3/managers/ItemMgr.h>
@@ -188,6 +189,18 @@ DWORD WINAPI InitThread(LPVOID hModule) {
 
     if (!GWA3::Offsets::ResolveAll()) {
         GWA3::Log::Warn("Some offsets failed to resolve - continuing with partial coverage");
+    }
+
+    // Stage memory patches using resolved offsets
+    if (GWA3::Offsets::LevelDataBypass > 0x10000) {
+        const uint8_t patch = 0xEB; // JMP (unconditional)
+        GWA3::Memory::GetLevelDataBypassPatch().SetPatch(GWA3::Offsets::LevelDataBypass, &patch, 1);
+        GWA3::Log::Info("LevelDataBypass patch staged at 0x%08X", GWA3::Offsets::LevelDataBypass);
+    }
+    if (GWA3::Offsets::MapPortBypass > 0x10000) {
+        const uint8_t patch[2] = {0x90, 0x90}; // NOP NOP
+        GWA3::Memory::GetMapPortBypassPatch().SetPatch(GWA3::Offsets::MapPortBypass, patch, 2);
+        GWA3::Log::Info("MapPortBypass patch staged at 0x%08X", GWA3::Offsets::MapPortBypass);
     }
 
     GWA3::CtoS::Initialize();
