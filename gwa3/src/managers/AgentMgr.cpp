@@ -89,8 +89,14 @@ bool Initialize() {
     return true;
 }
 
+static bool s_loggedMoveOnce = false;
+
 void Move(float x, float y) {
     if (!s_moveFn) {
+        if (!s_loggedMoveOnce) {
+            Log::Info("AgentMgr: Move via CtoS (no scanned fn)");
+            s_loggedMoveOnce = true;
+        }
         CtoS::MoveToCoord(x, y);
         return;
     }
@@ -119,7 +125,11 @@ void Move(float x, float y) {
     sc[12] = 0xC3; // ret
     FlushInstructionCache(GetCurrentProcess(), sc, 13);
 
-    RenderHook::EnqueueCommand(slot);
+    bool queued = RenderHook::EnqueueCommand(slot);
+    if (!queued) {
+        Log::Warn("AgentMgr: Move enqueue FAILED (queue full?) falling back to CtoS");
+        CtoS::MoveToCoord(x, y);
+    }
 }
 
 void ChangeTarget(uint32_t agentId) {
@@ -258,9 +268,16 @@ AgentLiving* GetTargetAsLiving() {
     return static_cast<AgentLiving*>(agent);
 }
 
+uint32_t GetMaxAgents() {
+    if (!Offsets::AgentBase) return 0;
+    __try {
+        return *reinterpret_cast<uint32_t*>(Offsets::AgentBase + 0x8);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
 GWArray<Agent*>* GetAgentArray() {
     // Legacy API — returns null because agent array is not a GWArray
-    // Use GetAgentByID directly instead
+    // Use GetAgentByID + GetMaxAgents instead
     return nullptr;
 }
 
