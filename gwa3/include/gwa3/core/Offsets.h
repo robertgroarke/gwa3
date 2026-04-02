@@ -111,6 +111,9 @@ namespace GWA3::Offsets {
     extern uintptr_t PostMessage;
     extern uintptr_t ChatLog;            // hook
 
+    // ===== Camera =====
+    extern uintptr_t CameraClass;        // ptr — Camera struct global
+
     // ===== Frame UI (GWA3-new) =====
     extern uintptr_t SendFrameUIMsg;     // func — scanned via pattern 83 C1 DC E8
 
