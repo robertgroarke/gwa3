@@ -2003,6 +2003,23 @@ static bool TestExplorableEntry() {
         return false;
     }
 
+    // Log current position and re-travel to Gadd's if position seems off
+    {
+        float cx = 0, cy = 0;
+        TryReadAgentPosition(ReadMyId(), cx, cy);
+        IntReport("  Current position before exit: (%.0f, %.0f) MapID=%u", cx, cy, ReadMapId());
+
+        // If we're far from Gadd's exit area, re-travel
+        if (ReadMapId() != MAP_GADDS_ENCAMPMENT) {
+            IntReport("  Not at Gadd's — traveling back...");
+            MapMgr::Travel(MAP_GADDS_ENCAMPMENT);
+            WaitFor("MapID back to Gadd's", 60000, [MAP_GADDS_ENCAMPMENT]() {
+                return ReadMapId() == MAP_GADDS_ENCAMPMENT;
+            });
+            Sleep(3000);
+        }
+    }
+
     IntReport("  Leaving outpost via Gadd's exit path toward Sparkfly Swamp...");
 
     const struct PortalStep {
