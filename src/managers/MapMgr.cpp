@@ -5,6 +5,8 @@
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
 
+#include <Windows.h>
+
 namespace GWA3::MapMgr {
 
 using EnterMissionFn = void(__cdecl*)();
@@ -121,14 +123,51 @@ bool GetIsMapLoaded() {
     return status != 0;
 }
 
+// GameContext: *BasePointer → +0x18 → deref
+// CharContext at GameContext+0x44, Cinematic at GameContext+0x30
+static uintptr_t ResolveGameContext() {
+    if (Offsets::BasePointer <= 0x10000) return 0;
+    __try {
+        uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+        if (ctx <= 0x10000) return 0;
+        uintptr_t gc = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
+        if (gc <= 0x10000) return 0;
+        return gc;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 bool GetIsObserving() {
-    // TODO: implement when observation state offset is known
-    return false;
+    // CharContext at GameContext+0x44
+    // observe_map_id at CharContext+0x228, current_map_id at +0x22C
+    uintptr_t gc = ResolveGameContext();
+    if (!gc) return false;
+
+    __try {
+        uintptr_t charCtx = *reinterpret_cast<uintptr_t*>(gc + 0x44);
+        if (charCtx <= 0x10000) return false;
+        uint32_t observeMap = *reinterpret_cast<uint32_t*>(charCtx + 0x228);
+        uint32_t currentMap = *reinterpret_cast<uint32_t*>(charCtx + 0x22C);
+        return observeMap != currentMap;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 bool GetIsInCinematic() {
-    // TODO: implement when cinematic state offset is known
-    return false;
+    // Cinematic* at GameContext+0x30, check h0004 != 0
+    uintptr_t gc = ResolveGameContext();
+    if (!gc) return false;
+
+    __try {
+        uintptr_t cinematic = *reinterpret_cast<uintptr_t*>(gc + 0x30);
+        if (cinematic <= 0x10000) return false;
+        uint32_t data = *reinterpret_cast<uint32_t*>(cinematic + 0x04);
+        return data != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 const AreaInfo* GetAreaInfo(uint32_t mapId) {

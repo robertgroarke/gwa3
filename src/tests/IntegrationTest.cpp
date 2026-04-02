@@ -23,6 +23,7 @@
 #include <gwa3/managers/CameraMgr.h>
 #include <gwa3/managers/MemoryMgr.h>
 #include <gwa3/managers/GuildMgr.h>
+#include <gwa3/managers/FriendListMgr.h>
 #include <gwa3/packets/CtoS.h>
 
 #include <Windows.h>
@@ -2881,6 +2882,258 @@ static bool TestTargetLogHook() {
     return true;
 }
 
+// ===== GWA3-050: Guild Data Introspection =====
+
+static bool TestGuildData() {
+    IntReport("=== GWA3-050: Guild Data Introspection ===");
+
+    if (ReadMyId() == 0) {
+        IntSkip("Guild data", "Not in game");
+        IntReport("");
+        return false;
+    }
+
+    // Guild array
+    GWArray<Guild*>* guildArray = GuildMgr::GetGuildArray();
+    IntReport("  GuildArray: %p (size=%u)", guildArray, guildArray ? guildArray->size : 0);
+
+    if (!guildArray || guildArray->size == 0) {
+        // Player may not be in a guild — that's valid
+        IntSkip("Guild array contents", "No guilds in context (player may not be in a guild)");
+        IntCheck("GuildMgr queries ran without crash", true);
+        IntReport("");
+        return true;
+    }
+
+    IntCheck("GuildArray has entries", guildArray->size > 0);
+
+    // Player guild index
+    const uint32_t playerGuildIdx = GuildMgr::GetPlayerGuildIndex();
+    IntReport("  PlayerGuildIndex: %u", playerGuildIdx);
+
+    // Dump first guild entry
+    if (guildArray->buffer && guildArray->size > 0) {
+        Guild* first = guildArray->buffer[0];
+        if (first) {
+            char nameBuf[64] = {};
+            for (int i = 0; i < 31 && first->name[i]; ++i) {
+                nameBuf[i] = (first->name[i] < 128) ? static_cast<char>(first->name[i]) : '?';
+            }
+            char tagBuf[16] = {};
+            for (int i = 0; i < 7 && first->tag[i]; ++i) {
+                tagBuf[i] = (first->tag[i] < 128) ? static_cast<char>(first->tag[i]) : '?';
+            }
+            IntReport("  First guild: index=%u rank=%u name='%s' tag='[%s]' rating=%u faction=%u",
+                      first->index, first->rank, nameBuf, tagBuf, first->rating, first->faction);
+            IntCheck("First guild has valid index", first->index > 0);
+        }
+    }
+
+    // Player's own guild
+    Guild* playerGuild = GuildMgr::GetPlayerGuild();
+    IntReport("  GetPlayerGuild: %p", playerGuild);
+    if (playerGuild) {
+        char nameBuf[64] = {};
+        for (int i = 0; i < 31 && playerGuild->name[i]; ++i) {
+            nameBuf[i] = (playerGuild->name[i] < 128) ? static_cast<char>(playerGuild->name[i]) : '?';
+        }
+        IntReport("  Player guild: '%s' index=%u", nameBuf, playerGuild->index);
+        IntCheck("Player guild index matches GetPlayerGuildIndex", playerGuild->index == playerGuildIdx);
+    } else if (playerGuildIdx == 0) {
+        IntSkip("Player guild details", "Player not in a guild");
+    } else {
+        IntCheck("GetPlayerGuild returned non-null for non-zero index", false);
+    }
+
+    // Guild announcement
+    wchar_t* announcement = GuildMgr::GetPlayerGuildAnnouncement();
+    if (announcement) {
+        char annBuf[64] = {};
+        for (int i = 0; i < 63 && announcement[i]; ++i) {
+            annBuf[i] = (announcement[i] < 128) ? static_cast<char>(announcement[i]) : '?';
+        }
+        IntReport("  Guild announcement: '%s'", annBuf);
+    } else {
+        IntReport("  Guild announcement: (none)");
+    }
+    IntCheck("Guild announcement query ran without crash", true);
+
+    IntReport("");
+    return true;
+}
+
+// ===== GWA3-051: Map State Queries =====
+
+static bool TestMapStateQueries() {
+    IntReport("=== GWA3-051: Map State Queries ===");
+
+    if (ReadMyId() == 0) {
+        IntSkip("Map state queries", "Not in game");
+        IntReport("");
+        return false;
+    }
+
+    const bool observing = MapMgr::GetIsObserving();
+    IntReport("  IsObserving: %d", observing);
+    IntCheck("Not in observer mode (expected for bot account)", !observing);
+
+    const bool cinematic = MapMgr::GetIsInCinematic();
+    IntReport("  IsInCinematic: %d", cinematic);
+    IntCheck("Not in cinematic (expected during test)", !cinematic);
+
+    const bool mapLoaded = MapMgr::GetIsMapLoaded();
+    IntReport("  IsMapLoaded: %d", mapLoaded);
+    IntCheck("Map is loaded", mapLoaded);
+
+    const uint32_t instanceTime = MapMgr::GetInstanceTime();
+    IntReport("  InstanceTime: %u ms", instanceTime);
+    // Instance time should be positive if we've been in the map
+    IntCheck("Instance time > 0", instanceTime > 0);
+
+    IntReport("");
+    return true;
+}
+
+// ===== GWA3-052: Ping Stability =====
+
+static bool TestPingStability() {
+    IntReport("=== GWA3-052: Ping Stability ===");
+
+    if (ReadMyId() == 0) {
+        IntSkip("Ping stability", "Not in game");
+        IntReport("");
+        return false;
+    }
+
+    // Sample ping 5 times over 1 second
+    uint32_t samples[5] = {};
+    for (int i = 0; i < 5; ++i) {
+        samples[i] = ChatMgr::GetPing();
+        if (i < 4) Sleep(250);
+    }
+
+    IntReport("  Ping samples: %u %u %u %u %u",
+              samples[0], samples[1], samples[2], samples[3], samples[4]);
+
+    uint32_t minPing = samples[0];
+    uint32_t maxPing = samples[0];
+    for (int i = 1; i < 5; ++i) {
+        if (samples[i] < minPing) minPing = samples[i];
+        if (samples[i] > maxPing) maxPing = samples[i];
+    }
+
+    IntReport("  Ping range: %u - %u ms (spread=%u)", minPing, maxPing, maxPing - minPing);
+    IntCheck("All pings > 0", minPing > 0);
+    IntCheck("All pings < 5000ms", maxPing < 5000);
+    IntCheck("Ping spread < 2000ms (not wildly unstable)", (maxPing - minPing) < 2000);
+
+    IntReport("");
+    return true;
+}
+
+// ===== GWA3-053: Weapon Set Validation =====
+
+static bool TestWeaponSetValidation() {
+    IntReport("=== GWA3-053: Weapon Set Validation ===");
+
+    if (ReadMyId() == 0) {
+        IntSkip("Weapon set validation", "Not in game");
+        IntReport("");
+        return false;
+    }
+
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) {
+        IntSkip("Weapon set validation", "Inventory unavailable");
+        IntReport("");
+        return false;
+    }
+
+    IntReport("  Active weapon set: %u", inv->active_weapon_set);
+    IntCheck("Active weapon set in range (0-3)", inv->active_weapon_set < 4);
+
+    uint32_t setsWithWeapons = 0;
+    for (uint32_t i = 0; i < 4; ++i) {
+        const WeaponSet& ws = inv->weapon_sets[i];
+        bool hasWeapon = (ws.weapon != nullptr);
+        bool hasOffhand = (ws.offhand != nullptr);
+        if (hasWeapon || hasOffhand) {
+            setsWithWeapons++;
+            if (hasWeapon) {
+                IntReport("  Set %u: weapon item_id=%u model_id=%u", i, ws.weapon->item_id, ws.weapon->model_id);
+            }
+            if (hasOffhand) {
+                IntReport("  Set %u: offhand item_id=%u model_id=%u", i, ws.offhand->item_id, ws.offhand->model_id);
+            }
+        }
+    }
+
+    IntReport("  Weapon sets with items: %u / 4", setsWithWeapons);
+    IntCheck("At least 1 weapon set has items", setsWithWeapons >= 1);
+
+    IntReport("");
+    return true;
+}
+
+// ===== GWA3-054: Agent Distance Cross-Check =====
+
+static bool TestAgentDistanceCrossCheck() {
+    IntReport("=== GWA3-054: Agent Distance Cross-Check ===");
+
+    const uint32_t myId = ReadMyId();
+    if (myId == 0) {
+        IntSkip("Agent distance", "Not in game");
+        IntReport("");
+        return false;
+    }
+
+    float myX = 0.0f;
+    float myY = 0.0f;
+    if (!TryReadAgentPosition(myId, myX, myY)) {
+        IntSkip("Agent distance", "Cannot read player position");
+        IntReport("");
+        return false;
+    }
+
+    // Find a nearby agent and verify distance math
+    uint32_t nearbyId = FindNearbyNpcLikeAgent(5000.0f);
+    if (!nearbyId) {
+        IntSkip("Agent distance cross-check", "No nearby agent found");
+        IntReport("");
+        return true;
+    }
+
+    float npcX = 0.0f;
+    float npcY = 0.0f;
+    if (!TryReadAgentPosition(nearbyId, npcX, npcY)) {
+        IntSkip("Agent distance cross-check", "Cannot read NPC position");
+        IntReport("");
+        return true;
+    }
+
+    // Manual distance calc
+    const float dx = myX - npcX;
+    const float dy = myY - npcY;
+    const float manualDist = sqrtf(dx * dx + dy * dy);
+
+    // AgentMgr distance calc
+    const float mgrDist = AgentMgr::GetDistance(myX, myY, npcX, npcY);
+
+    IntReport("  Player pos: (%.0f, %.0f)", myX, myY);
+    IntReport("  NPC %u pos: (%.0f, %.0f)", nearbyId, npcX, npcY);
+    IntReport("  Manual distance: %.1f", manualDist);
+    IntReport("  AgentMgr distance: %.1f", mgrDist);
+
+    // They should match within floating-point tolerance
+    const float diff = (manualDist > mgrDist) ? (manualDist - mgrDist) : (mgrDist - manualDist);
+    IntCheck("Distance calculations agree (within 1.0)", diff < 1.0f);
+    IntCheck("Distance > 0 (different agents)", manualDist > 0.0f);
+    IntCheck("Distance < 5000 (within search range)", manualDist < 5000.0f);
+
+    IntReport("");
+    return true;
+}
+
 // ===== Advanced Integration Runner =====
 
 int RunAdvancedTest() {
@@ -2916,6 +3169,11 @@ int RunAdvancedTest() {
         TestSkillbarDataValidation();
         TestPartyState();
         TestTargetLogHook();
+        TestGuildData();
+        TestMapStateQueries();
+        TestPingStability();
+        TestWeaponSetValidation();
+        TestAgentDistanceCrossCheck();
 
         // Chat write (local only, safe anywhere)
         TestChatWriteLocal();
@@ -3010,6 +3268,11 @@ int RunIntegrationTest() {
                 TestSkillbarDataValidation();
                 TestPartyState();
                 TestTargetLogHook();
+                TestGuildData();
+                TestMapStateQueries();
+                TestPingStability();
+                TestWeaponSetValidation();
+                TestAgentDistanceCrossCheck();
                 TestChatWriteLocal();
 
                 // Return to outpost from explorable
@@ -3039,6 +3302,11 @@ int RunIntegrationTest() {
             TestSkillbarDataValidation();
             TestPartyState();
             TestTargetLogHook();
+            TestGuildData();
+            TestMapStateQueries();
+            TestPingStability();
+            TestWeaponSetValidation();
+            TestAgentDistanceCrossCheck();
             TestChatWriteLocal();
             TestHeroFlagging();
             TestHardModeToggle();
