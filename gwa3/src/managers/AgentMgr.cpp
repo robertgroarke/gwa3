@@ -4,6 +4,7 @@
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/RenderHook.h>
+#include <gwa3/core/TargetLogHook.h>
 #include <gwa3/core/Log.h>
 
 #include <Windows.h>
@@ -21,39 +22,59 @@ struct MoveData {
     uint32_t plane;
 };
 
-static uintptr_t s_moveShellcode = 0;
-static uintptr_t s_moveDataAddr = 0;
-static uintptr_t s_targetShellcode = 0;
+// Ring buffers to prevent shellcode overwrite during rapid commands
+static constexpr int kShellcodeSlots = 16;
+static constexpr int kMoveSlotSize = 64; // shellcode + data in one slot
+static constexpr int kTargetSlotSize = 32;
+static uintptr_t s_moveShellcodeBase = 0;
+static uintptr_t s_targetShellcodeBase = 0;
+static volatile LONG s_moveSlotIndex = 0;
+static volatile LONG s_targetSlotIndex = 0;
 
 static MoveFn s_moveFn = nullptr;
 static ChangeTargetFn s_changeTargetFn = nullptr;
 static bool s_initialized = false;
+static bool s_loggedCurrentTargetRead = false;
+static bool s_loggedCurrentTargetFault = false;
+static bool s_loggedTargetLogRead = false;
+static bool s_loggedTargetLogStats = false;
 
 static bool EnsureMoveShellcode() {
-    if (s_moveShellcode && s_moveDataAddr) return true;
+    if (s_moveShellcodeBase) return true;
 
-    void* mem = VirtualAlloc(nullptr, 64, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    void* mem = VirtualAlloc(nullptr, kShellcodeSlots * kMoveSlotSize,
+                             MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
     if (!mem) {
-        Log::Error("AgentMgr: VirtualAlloc failed for move shellcode");
+        Log::Error("AgentMgr: VirtualAlloc failed for move shellcode pool");
         return false;
     }
 
-    s_moveShellcode = reinterpret_cast<uintptr_t>(mem);
-    s_moveDataAddr = s_moveShellcode + 32;
+    s_moveShellcodeBase = reinterpret_cast<uintptr_t>(mem);
     return true;
 }
 
 static bool EnsureTargetShellcode() {
-    if (s_targetShellcode) return true;
+    if (s_targetShellcodeBase) return true;
 
-    void* mem = VirtualAlloc(nullptr, 32, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    void* mem = VirtualAlloc(nullptr, kShellcodeSlots * kTargetSlotSize,
+                             MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
     if (!mem) {
-        Log::Error("AgentMgr: VirtualAlloc failed for target shellcode");
+        Log::Error("AgentMgr: VirtualAlloc failed for target shellcode pool");
         return false;
     }
 
-    s_targetShellcode = reinterpret_cast<uintptr_t>(mem);
+    s_targetShellcodeBase = reinterpret_cast<uintptr_t>(mem);
     return true;
+}
+
+static uintptr_t NextMoveSlot() {
+    LONG idx = InterlockedIncrement(&s_moveSlotIndex) % kShellcodeSlots;
+    return s_moveShellcodeBase + idx * kMoveSlotSize;
+}
+
+static uintptr_t NextTargetSlot() {
+    LONG idx = InterlockedIncrement(&s_targetSlotIndex) % kShellcodeSlots;
+    return s_targetShellcodeBase + idx * kTargetSlotSize;
 }
 
 bool Initialize() {
@@ -79,21 +100,26 @@ void Move(float x, float y) {
         return;
     }
 
-    MoveData move{x, y, 0};
-    memcpy(reinterpret_cast<void*>(s_moveDataAddr), &move, sizeof(move));
+    uintptr_t slot = NextMoveSlot();
+    // Layout: [0..15] shellcode, [32..43] MoveData
+    uintptr_t dataAddr = slot + 32;
 
-    auto* sc = reinterpret_cast<uint8_t*>(s_moveShellcode);
+    MoveData move{x, y, 0};
+    memcpy(reinterpret_cast<void*>(dataAddr), &move, sizeof(move));
+
+    auto* sc = reinterpret_cast<uint8_t*>(slot);
     sc[0] = 0xB8; // mov eax, imm32
-    memcpy(sc + 1, &s_moveDataAddr, sizeof(uint32_t));
+    uint32_t dataAddr32 = static_cast<uint32_t>(dataAddr);
+    memcpy(sc + 1, &dataAddr32, sizeof(uint32_t));
     sc[5] = 0x50; // push eax
     sc[6] = 0xE8; // call rel32
-    int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(s_moveFn) - (s_moveShellcode + 11));
+    int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(s_moveFn) - (slot + 11));
     memcpy(sc + 7, &rel, sizeof(rel));
     sc[11] = 0x58; // pop eax
     sc[12] = 0xC3; // ret
     FlushInstructionCache(GetCurrentProcess(), sc, 13);
 
-    RenderHook::EnqueueCommand(s_moveShellcode);
+    RenderHook::EnqueueCommand(slot);
 }
 
 void ChangeTarget(uint32_t agentId) {
@@ -107,7 +133,8 @@ void ChangeTarget(uint32_t agentId) {
         return;
     }
 
-    auto* sc = reinterpret_cast<uint8_t*>(s_targetShellcode);
+    uintptr_t slot = NextTargetSlot();
+    auto* sc = reinterpret_cast<uint8_t*>(slot);
     sc[0] = 0x33; // xor edx, edx
     sc[1] = 0xD2;
     sc[2] = 0x52; // push edx
@@ -115,7 +142,7 @@ void ChangeTarget(uint32_t agentId) {
     memcpy(sc + 4, &agentId, sizeof(agentId));
     sc[8] = 0x50; // push eax
     sc[9] = 0xE8; // call rel32
-    int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(s_changeTargetFn) - (s_targetShellcode + 14));
+    int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(s_changeTargetFn) - (slot + 14));
     memcpy(sc + 10, &rel, sizeof(rel));
     sc[14] = 0x83; // add esp, 8
     sc[15] = 0xC4;
@@ -123,12 +150,48 @@ void ChangeTarget(uint32_t agentId) {
     sc[17] = 0xC3; // ret
     FlushInstructionCache(GetCurrentProcess(), sc, 18);
 
-    RenderHook::EnqueueCommand(s_targetShellcode);
+    RenderHook::EnqueueCommand(slot);
 }
 
 uint32_t GetTargetId() {
-    if (!Offsets::CurrentTarget) return 0;
-    return *reinterpret_cast<uint32_t*>(Offsets::CurrentTarget);
+    if (Offsets::CurrentTarget) {
+        __try {
+            const uint32_t value = *reinterpret_cast<uint32_t*>(Offsets::CurrentTarget);
+            if (!s_loggedCurrentTargetRead) {
+                Log::Info("AgentMgr: CurrentTarget ptr=0x%08X value=%u",
+                          static_cast<unsigned>(Offsets::CurrentTarget), value);
+                s_loggedCurrentTargetRead = true;
+            }
+            if (value != 0) return value;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            if (!s_loggedCurrentTargetFault) {
+                Log::Warn("AgentMgr: CurrentTarget read fault at 0x%08X",
+                          static_cast<unsigned>(Offsets::CurrentTarget));
+                s_loggedCurrentTargetFault = true;
+            }
+        }
+    }
+
+    return GetTargetIdFromLog();
+}
+
+uint32_t GetTargetIdFromLog() {
+    const uint32_t myId = GetMyId();
+    if (!myId) return 0;
+
+    if (!s_loggedTargetLogStats) {
+        Log::Info("AgentMgr: TargetLog stats calls=%u stores=%u",
+                  TargetLogHook::GetCallCount(),
+                  TargetLogHook::GetStoreCount());
+        s_loggedTargetLogStats = true;
+    }
+
+    const uint32_t value = TargetLogHook::GetTarget(myId);
+    if (value && !s_loggedTargetLogRead) {
+        Log::Info("AgentMgr: TargetLog[MyID=%u] = %u", myId, value);
+        s_loggedTargetLogRead = true;
+    }
+    return value;
 }
 
 uint32_t GetMyId() {
