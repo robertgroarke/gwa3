@@ -99,28 +99,34 @@ uint32_t GetMapId() {
 }
 
 uint32_t GetRegion() {
-    if (!Offsets::Region) return 0;
-    return *reinterpret_cast<uint32_t*>(Offsets::Region);
+    if (!Offsets::Region || Offsets::Region < 0x10000) return 0;
+    __try {
+        return *reinterpret_cast<uint32_t*>(Offsets::Region);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 
 uint32_t GetDistrict() {
-    if (!Offsets::Region) return 0;
-    // District is typically at Region + 4
-    return *reinterpret_cast<uint32_t*>(Offsets::Region + 4);
+    if (!Offsets::Region || Offsets::Region < 0x10000) return 0;
+    __try {
+        return *reinterpret_cast<uint32_t*>(Offsets::Region + 4);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 
 uint32_t GetInstanceTime() {
-    if (!Offsets::SceneContext) return 0;
-    // TimeOnMap is at SceneContext + 0xC
-    uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::SceneContext);
-    if (!ctx) return 0;
-    return *reinterpret_cast<uint32_t*>(ctx + 0xC);
+    if (!Offsets::SceneContext || Offsets::SceneContext < 0x10000) return 0;
+    __try {
+        uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::SceneContext);
+        if (!ctx || ctx < 0x10000) return 0;
+        return *reinterpret_cast<uint32_t*>(ctx + 0xC);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 
 bool GetIsMapLoaded() {
-    if (!Offsets::StatusCode) return false;
-    uint32_t status = *reinterpret_cast<uint32_t*>(Offsets::StatusCode);
-    return status != 0;
+    if (!Offsets::StatusCode || Offsets::StatusCode < 0x10000) return false;
+    __try {
+        uint32_t status = *reinterpret_cast<uint32_t*>(Offsets::StatusCode);
+        return status != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
 // GameContext: *BasePointer → +0x18 → deref
