@@ -111,6 +111,9 @@ namespace GWA3::Offsets {
     extern uintptr_t PostMessage;
     extern uintptr_t ChatLog;            // hook
 
+    // ===== Titles =====
+    extern uintptr_t TitleClientDataBase; // ptr — static TitleClientData[] in .rdata
+
     // ===== Camera =====
     extern uintptr_t CameraClass;        // ptr — Camera struct global
     extern uintptr_t FogPatch;           // ptr — fog render instruction to patch
