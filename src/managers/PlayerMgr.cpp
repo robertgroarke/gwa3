@@ -69,10 +69,17 @@ Title* GetTitleTrack(uint32_t titleId) {
 }
 
 TitleClientData* GetTitleData(uint32_t titleId) {
-    // TODO: TitleClientData is in a separate array from Title.
-    // Needs its own offset pattern.
-    (void)titleId;
-    return nullptr;
+    // TitleClientData is a flat static array in .rdata, indexed by titleId.
+    // Each entry is 12 bytes (sizeof(TitleClientData)).
+    if (Offsets::TitleClientDataBase <= 0x10000) return nullptr;
+    if (titleId > 200) return nullptr; // sanity bound
+
+    __try {
+        auto* base = reinterpret_cast<TitleClientData*>(Offsets::TitleClientDataBase);
+        return &base[titleId];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
 }
 
 uint32_t GetActiveTitleId() {

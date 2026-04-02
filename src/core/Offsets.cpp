@@ -83,6 +83,8 @@ uintptr_t ValidateAsyncDecodeStr = 0;
 uintptr_t PostMessage = 0;
 uintptr_t ChatLog = 0;
 
+uintptr_t TitleClientDataBase = 0;
+
 uintptr_t CameraClass = 0;
 uintptr_t FogPatch = 0;
 
@@ -358,6 +360,23 @@ static void PostProcessOffsets() {
 
     // Camera: scan+3 points at embedded pointer to Camera struct
     if (CameraClass)    CameraClass    = Deref(CameraClass);
+
+    // TitleClientData: scan .rdata for the first entry pattern (00 00 00 00 23 40 00 00)
+    // Result - 4 bytes = array base (from GWCA gwca.dll binary analysis)
+    {
+        auto rdata = Scanner::GetRdataSection();
+        if (rdata.start && rdata.size) {
+            uintptr_t found = Scanner::FindInRange(
+                "\x00\x00\x00\x00\x23\x40\x00\x00",
+                "xxxxxxxx", -4, rdata.start, rdata.size);
+            if (found > 0x10000) {
+                TitleClientDataBase = found;
+                Log::Info("Offsets: TitleClientDataBase = 0x%08X (rdata scan)", found);
+            } else {
+                Log::Warn("Offsets: TitleClientData rdata scan failed");
+            }
+        }
+    }
 
     // FriendList: complex post-processing (FindInRange + deref) — skip for now
     // RemoveFriend: complex post-processing (FindInRange + ResolveBranch) — skip for now
