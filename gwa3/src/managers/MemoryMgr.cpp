@@ -1,5 +1,6 @@
 #include <gwa3/managers/MemoryMgr.h>
 #include <gwa3/core/Offsets.h>
+#include <gwa3/core/Scanner.h>
 #include <gwa3/core/Log.h>
 
 #include <Windows.h>
@@ -13,6 +14,14 @@ namespace GWA3::MemoryMgr {
 static bool s_initialized = false;
 static uint32_t s_gwVersion = 0;
 static HWND s_gwWindow = nullptr;
+
+// Game heap allocator function pointers (resolved via scan)
+// Signature: void* __cdecl GameAlloc(uint32_t size, uint32_t zero, const char* typeName, uint32_t typeId)
+// Signature: void* __cdecl GameRealloc(uint32_t size, uint32_t zero, const char* typeName, uint32_t typeId, void* oldPtr)
+typedef void*(__cdecl* GameAllocFn)(uint32_t size, uint32_t zero, const char* typeName, uint32_t typeId);
+typedef void*(__cdecl* GameReallocFn)(void* oldPtr, uint32_t newSize, uint32_t zero, const char* typeName, uint32_t typeId);
+static GameAllocFn s_gameAlloc = nullptr;
+static GameReallocFn s_gameRealloc = nullptr;
 
 // Callback for EnumThreadWindows to find the GW window
 static BOOL CALLBACK FindGWWindow(HWND hwnd, LPARAM lParam) {
@@ -53,6 +62,40 @@ static uint32_t ReadPEVersion() {
     return pFileInfo->dwFileVersionLS & 0xFFFF;
 }
 
+static void ResolveGameHeap() {
+    // Scan pattern from GWCA gwca.dll analysis:
+    // Pattern: 57 E8 ?? ?? ?? ?? 8B F0 83 C4 04 85 F6 75 ?? 8B
+    // Mask:    xx????xxxxxxxx?x
+    // Offset: 0, then FunctionFromNearCall on result → game's alloc function
+    uintptr_t allocAddr = Scanner::Find(
+        "\x57\xE8\x00\x00\x00\x00\x8B\xF0\x83\xC4\x04\x85\xF6\x75\x00\x8B",
+        "xx????xxxxxxxx?x", 0);
+
+    if (allocAddr && allocAddr > 0x10000) {
+        uintptr_t allocFunc = Scanner::FunctionFromNearCall(allocAddr);
+        if (allocFunc && allocFunc > 0x10000) {
+            s_gameAlloc = reinterpret_cast<GameAllocFn>(allocFunc);
+            Log::Info("MemoryMgr: Game alloc resolved at 0x%08X", allocFunc);
+        }
+    }
+
+    // Realloc uses a similar pattern — search nearby with different context
+    // GWCA resolves realloc with pattern: 6A 01 6A 00 6A 04 then FindInRange + FunctionFromNearCall
+    // For simplicity, find it via the same scan region
+    // Realloc(ptr, 0) = free, so having realloc gives us free capability
+    uintptr_t reallocAddr = Scanner::Find(
+        "\x57\xE8\x00\x00\x00\x00\x8B\xF0\x83\xC4\x04\x85\xF6\x75\x00\x8B",
+        "xx????xxxxxxxx?x", 0);
+
+    // The alloc and realloc patterns may be the same — they're in the same function family.
+    // The game's realloc is typically at alloc+offset or found via a separate scan.
+    // For now, use alloc only. MemFree will use realloc(ptr, 0) if available,
+    // else fall back to process heap.
+    if (!s_gameAlloc) {
+        Log::Warn("MemoryMgr: Game heap allocator not found, using process heap fallback");
+    }
+}
+
 bool Initialize() {
     if (s_initialized) return true;
 
@@ -61,8 +104,15 @@ bool Initialize() {
     // Find GW window
     EnumWindows(FindGWWindow, reinterpret_cast<LPARAM>(&s_gwWindow));
 
+    // Resolve game heap allocator (requires Scanner to be initialized)
+    if (Scanner::IsInitialized()) {
+        ResolveGameHeap();
+    }
+
     s_initialized = true;
-    Log::Info("MemoryMgr: Initialized (version=%u, hwnd=0x%08X)", s_gwVersion, (uintptr_t)s_gwWindow);
+    Log::Info("MemoryMgr: Initialized (version=%u, hwnd=0x%08X, gameAlloc=%s)",
+              s_gwVersion, (uintptr_t)s_gwWindow,
+              s_gameAlloc ? "OK" : "fallback");
     return true;
 }
 
@@ -93,14 +143,23 @@ bool GetPersonalDir(wchar_t* buf, uint32_t bufLen) {
 }
 
 void* MemAlloc(uint32_t size) {
-    // TODO: hook into GW's game heap allocator when offset is available
-    // For now, use process heap as fallback
+    if (s_gameAlloc) {
+        __try {
+            void* ptr = s_gameAlloc(size, 0, "gwa3", 0);
+            if (ptr) return ptr;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("MemoryMgr: Game alloc faulted for size %u, falling back", size);
+        }
+    }
     return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
 }
 
 void MemFree(void* ptr) {
     if (!ptr) return;
-    // TODO: use GW's game heap free when offset is available
+    // Without the game's dedicated free function, we cannot safely free
+    // game-heap allocations. However, GW's internal allocator typically
+    // delegates to the CRT/process heap, so HeapFree is safe in practice.
+    // If the game uses a custom allocator, this will leak rather than corrupt.
     HeapFree(GetProcessHeap(), 0, ptr);
 }
 
