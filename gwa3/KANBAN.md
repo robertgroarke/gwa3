@@ -3,12 +3,20 @@
 ## Done
 
 ### GWA3-058: EffectMgr — Buff/Effect Array Resolution
-- Effect/Buff/AgentEffects structs added to Skill.h
-- EffectMgr resolves party effects via WorldContext+0x508
-- HasEffect/HasBuff/GetEffectTimeRemaining implemented
-- FroggyHM HandleMaintenance logs blessing/conset status
-- Integration test GWA3-060 validates effect array access
+- Effect/Buff/AgentEffects structs, EffectMgr via WorldContext+0x508
 - **Commit**: `6090dde`
+
+### GWA3-059: PostProcessEffect — Visual Effect Hook
+- Pattern `D9 5D 0C...` at -0x1C, plus DropBuff via FunctionFromNearCall
+- **Commit**: `c162c11`
+
+### GWA3-061: GwEndScene — Render Function Pattern
+- Pattern `89 45 FC 57 8B 7D 08 8B 8F` at -0xD, render hook prefers over Render fallback
+- **Commit**: `c162c11`
+
+### GWA3-064: ItemClick — Item Interaction Dispatch
+- Pattern `8B 48 08 83 EA 00 0F 84` at -0x1C, ItemMgr::ClickItem implemented
+- **Commit**: `c162c11`
 
 ---
 
@@ -26,34 +34,7 @@
 
 ## Backlog
 
-### GWA3-059: PostProcessEffect — Visual Effect Hook
-**Priority**: Low — only needed for visual effect manipulation
-**Source**: GWCA EffectMgr.cpp pattern `D95D0CD9450C8D45F8` offset -0x1C
-
-**Problem**: No ability to hook or modify post-processing visual effects (bloom, blur, etc.)
-
-**Acceptance criteria**:
-- [ ] Add PostProcessEffect scan pattern to Offsets
-- [ ] Resolve function pointer via pattern
-- [ ] Expose as optional hook target
-
-**GWCA reference**: `Source/EffectMgr.cpp` line ~20
-
----
-
-### GWA3-061: GwEndScene Scan Pattern
-**Priority**: Medium — provides proper render function address for hooking
-**Source**: GWCA RenderMgr.cpp pattern `8945FC578B7D088B8F` offset -0xD
-
-**Problem**: `ChatMgr::SetRenderingEnabled` currently hooks via the `Render` offset (hook-type pattern from AutoIt). GWCA uses a separate, more precise `GwEndScene` pattern. If the Render offset ever fails, having the GWCA pattern as fallback improves reliability.
-
-**Acceptance criteria**:
-- [ ] Add GwEndScene pattern to Offsets table (P2 priority)
-- [ ] Post-process: result is function address directly (no deref needed)
-- [ ] Update `ChatMgr::SetRenderingEnabled` to prefer GwEndScene over Render offset
-- [ ] Integration test: verify pattern resolves and address is callable
-
-**GWCA reference**: `Source/RenderMgr.cpp` line ~55
+### GWA3-062: SendChat Function Resolution
 
 ---
 
@@ -85,22 +66,6 @@
 - [ ] Integration test: write colored chat message with sender name
 
 **GWCA reference**: `Source/ChatMgr.cpp` lines ~100-150
-
----
-
-### GWA3-064: ItemClick Function Resolution
-**Priority**: Medium — needed for chest opening and item interaction
-**Source**: GWCA ItemMgr.cpp patterns `C7000F0000008948` offset -0x28 (base), `8B480883EA000F84` offset -0x1C (function)
-
-**Problem**: Item interaction (opening chests, clicking items in inventory) currently uses raw packet sends or NPC interact. The native `ItemClick` function handles the full interaction protocol including distance checks and animation.
-
-**Acceptance criteria**:
-- [ ] Add ItemClick_Base and ItemClick patterns to Offsets (P1)
-- [ ] Implement `ItemMgr::ClickItem(itemId)` via resolved function
-- [ ] Implement `ItemMgr::OpenChest()` using ItemClick on nearest chest agent
-- [ ] Integration test: click an item in inventory (verify no crash, item state changes)
-
-**GWCA reference**: `Source/ItemMgr.cpp`
 
 ---
 
