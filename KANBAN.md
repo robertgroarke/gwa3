@@ -2,9 +2,13 @@
 
 ## Done
 
-### GWA3-058: EffectMgr — Buff/Effect Tracking
-- **Blocked by**: GWA3-059 (needs EffectArray offset)
-- **Moved to**: Backlog (see below)
+### GWA3-058: EffectMgr — Buff/Effect Array Resolution
+- Effect/Buff/AgentEffects structs added to Skill.h
+- EffectMgr resolves party effects via WorldContext+0x508
+- HasEffect/HasBuff/GetEffectTimeRemaining implemented
+- FroggyHM HandleMaintenance logs blessing/conset status
+- Integration test GWA3-060 validates effect array access
+- **Commit**: `6090dde`
 
 ---
 
@@ -21,25 +25,6 @@
 ---
 
 ## Backlog
-
-### GWA3-058: EffectMgr — Buff/Effect Array Resolution
-**Priority**: High — enables morale/buff tracking for Maintenance handler
-**Source**: GWCA EffectMgr.cpp pattern `D95D0CD9450C8D45F8` offset -0x1C, and `f6400401741001` offset 0x9
-
-**Problem**: The bot's `HandleMaintenance` cannot detect active buffs (blessings, consets, morale boost) because there is no EffectMgr. The `GetMorale()` helper in FroggyHM.cpp is hardcoded to return 0.
-
-**Acceptance criteria**:
-- [ ] Find the effect/buff array via BasePointer context chain (likely WorldContext or AgentContext)
-- [ ] Implement `EffectMgr::GetEffects(agentId)` returning the buff array for an agent
-- [ ] Implement `EffectMgr::HasEffect(agentId, skillId)` for checking specific buffs
-- [ ] Implement `EffectMgr::GetEffectTimeRemaining(agentId, skillId)`
-- [ ] Update `FroggyHM::GetMorale()` to read actual morale from effect array
-- [ ] Integration test GWA3-060: verify effect array readable, check for at least 0 effects
-
-**GWCA reference**: `Source/EffectMgr.cpp`, `GameEntities/Skill.h` (Effect struct)
-**AutoIt reference**: `GWA2.au3` `GetEffect()`, `GetEffects()` — offset chain `[0, 0x18, 0x2C, ...]`
-
----
 
 ### GWA3-059: PostProcessEffect — Visual Effect Hook
 **Priority**: Low — only needed for visual effect manipulation
