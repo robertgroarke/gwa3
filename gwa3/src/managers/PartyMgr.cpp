@@ -5,6 +5,7 @@
 #include <gwa3/core/Log.h>
 
 #include <cmath>
+#include <Windows.h>
 
 namespace GWA3::PartyMgr {
 
@@ -73,9 +74,26 @@ void Tick(bool ready) {
     CtoS::SendPacket(2, Packets::PARTY_READY_STATUS, ready ? 1u : 0u);
 }
 
+// PartyContext flags: *BasePointer → +0x18 → +0x4C → +0x14
+// Bit 0x10 = Hard Mode, 0x20 = Defeated, 0x80 = Party Leader
+static uint32_t ReadPartyFlags() {
+    if (Offsets::BasePointer <= 0x10000) return 0;
+
+    __try {
+        uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+        if (ctx <= 0x10000) return 0;
+        uintptr_t p1 = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
+        if (p1 <= 0x10000) return 0;
+        uintptr_t party = *reinterpret_cast<uintptr_t*>(p1 + 0x4C);
+        if (party <= 0x10000) return 0;
+        return *reinterpret_cast<uint32_t*>(party + 0x14);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 bool GetIsPartyDefeated() {
-    // TODO: implement via memory read when defeat state offset is known
-    return false;
+    return (ReadPartyFlags() & 0x20) != 0;
 }
 
 } // namespace GWA3::PartyMgr
