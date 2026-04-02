@@ -11,6 +11,7 @@
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/TargetLogHook.h>
 #include <gwa3/core/RenderHook.h>
+#include <gwa3/core/Memory.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/SkillMgr.h>
@@ -3351,6 +3352,64 @@ static bool TestItemClickOffset() {
     return true;
 }
 
+// ===== GWA3-067: Level-Data Bypass Patch =====
+
+static bool TestLevelDataBypassPatch() {
+    IntReport("=== GWA3-067: Level-Data Bypass Patch ===");
+
+    IntReport("  LevelDataBypass: 0x%08X", static_cast<unsigned>(Offsets::LevelDataBypass));
+
+    if (Offsets::LevelDataBypass > 0x10000) {
+        IntCheck("LevelDataBypass offset resolved", true);
+
+        auto& patch = Memory::GetLevelDataBypassPatch();
+        IntReport("  Patch staged: %s", patch.staged ? "yes" : "no");
+        IntCheck("Patch is staged", patch.staged);
+
+        if (patch.staged) {
+            patch.Enable();
+            IntCheck("LevelDataBypass Enable (no crash)", true);
+
+            patch.Disable();
+            IntCheck("LevelDataBypass Disable (no crash)", true);
+        }
+    } else {
+        IntSkip("LevelDataBypass", "Pattern did not resolve");
+    }
+
+    IntReport("");
+    return true;
+}
+
+// ===== GWA3-068: Map/Port Bypass Patch =====
+
+static bool TestMapPortBypassPatch() {
+    IntReport("=== GWA3-068: Map/Port Bypass Patch ===");
+
+    IntReport("  MapPortBypass: 0x%08X", static_cast<unsigned>(Offsets::MapPortBypass));
+
+    if (Offsets::MapPortBypass > 0x10000) {
+        IntCheck("MapPortBypass offset resolved", true);
+
+        auto& patch = Memory::GetMapPortBypassPatch();
+        IntReport("  Patch staged: %s", patch.staged ? "yes" : "no");
+        IntCheck("Patch is staged", patch.staged);
+
+        if (patch.staged) {
+            patch.Enable();
+            IntCheck("MapPortBypass Enable (no crash)", true);
+
+            patch.Disable();
+            IntCheck("MapPortBypass Disable (no crash)", true);
+        }
+    } else {
+        IntSkip("MapPortBypass", "Pattern did not resolve");
+    }
+
+    IntReport("");
+    return true;
+}
+
 // ===== GWA3-062: SendChat Offset =====
 
 static bool TestSendChatOffset() {
@@ -3604,6 +3663,8 @@ int RunAdvancedTest() {
         TestSendChatOffset();
         TestAddToChatLogOffset();
         TestSkipCinematicOffset();
+        TestLevelDataBypassPatch();
+        TestMapPortBypassPatch();
         TestEffectArray();
         TestStoCHook();
         TestRenderingToggle();

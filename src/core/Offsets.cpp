@@ -95,6 +95,9 @@ uintptr_t GwEndScene = 0;
 
 uintptr_t ItemClick = 0;
 
+uintptr_t LevelDataBypass = 0;
+uintptr_t MapPortBypass = 0;
+
 uintptr_t SendChatFunc = 0;
 uintptr_t AddToChatLog = 0;
 
@@ -253,6 +256,12 @@ static const PatternDef s_patterns[] = {
 
     // ===== Map GWCA (P2) =====
     PAT("SkipCinematicFunc", SkipCinematicFunc, "\x8B\x40\x30\x83\x78\x04\x00",          "xxxxxxx",    -0x5,  Priority::P2, PatternType::Func),
+
+    // ===== Memory Patches (P2) =====
+    // Level-data bypass: TEST AH,1 / JZ 0x1D / PUSH 0x1A9 — patch JZ to JMP
+    PAT("LevelDataBypass", LevelDataBypass, "\xF6\xC4\x01\x74\x1D\x68\xA9\x01\x00\x00", "xxxxxxxxxx", 0x3, Priority::P2, PatternType::Ptr),
+    // Map/port bypass: ADD ESP,0xC / TEST EAX,EAX / JNZ 0xC / PUSH 1 — patch JNZ to NOP NOP
+    PAT("MapPortBypass",   MapPortBypass,   "\x83\xC4\x0C\x85\xC0\x75\x0C\x6A\x01",      "xxxxxxxxx",  0x5, Priority::P2, PatternType::Ptr),
 
     // ===== Frame UI (P0 — new for GWA3, NOT from AutoIt ASM scanner) =====
     PAT("SendFrameUIMsg", SendFrameUIMsg, "\x83\xC1\xDC\xE8",                   "xxxx",     0x3,    Priority::P0, PatternType::Func),
