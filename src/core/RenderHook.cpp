@@ -135,4 +135,16 @@ bool IsInitialized() {
     return s_initialized;
 }
 
+uint32_t GetQueueCounter() {
+    return static_cast<uint32_t>(s_queueCounter);
+}
+
+uint32_t GetPendingCount() {
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < kQueueSize; i++) {
+        if (s_queue[i] != 0) count++;
+    }
+    return count;
+}
+
 } // namespace GWA3::RenderHook
