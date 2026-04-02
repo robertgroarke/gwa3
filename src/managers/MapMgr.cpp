@@ -1,4 +1,5 @@
 #include <gwa3/managers/MapMgr.h>
+#include <gwa3/managers/AgentMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
@@ -106,27 +107,34 @@ uint32_t GetRegion() {
 }
 
 uint32_t GetDistrict() {
-    if (!Offsets::Region || Offsets::Region < 0x10000) return 0;
+    // AutoIt: BasePointer → +0x18 → +0x44 → +0x220
+    if (!Offsets::BasePointer) return 0;
     __try {
-        return *reinterpret_cast<uint32_t*>(Offsets::Region + 4);
+        uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+        if (ctx < 0x10000) return 0;
+        uintptr_t p1 = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
+        if (p1 < 0x10000) return 0;
+        uintptr_t p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x44);
+        if (p2 < 0x10000) return 0;
+        return *reinterpret_cast<uint32_t*>(p2 + 0x220);
     } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 
 uint32_t GetInstanceTime() {
+    // AutoIt: time_on_map_ptr = scene_context_ptr + 0xC
+    // Offsets::SceneContext is already post-processed (one deref done at scan+0x1B)
+    // So time = *(SceneContext + 0xC) — direct read, no extra deref
     if (!Offsets::SceneContext || Offsets::SceneContext < 0x10000) return 0;
     __try {
-        uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::SceneContext);
-        if (!ctx || ctx < 0x10000) return 0;
-        return *reinterpret_cast<uint32_t*>(ctx + 0xC);
+        return *reinterpret_cast<uint32_t*>(Offsets::SceneContext + 0xC);
     } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 
 bool GetIsMapLoaded() {
-    if (!Offsets::StatusCode || Offsets::StatusCode < 0x10000) return false;
-    __try {
-        uint32_t status = *reinterpret_cast<uint32_t*>(Offsets::StatusCode);
-        return status != 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    // AutoIt: GetMapIsLoaded() = GetAgentExists(GetMyID())
+    // StatusCode offset is unreliable in GW Reforged
+    return GetMapId() > 0 && AgentMgr::GetMyId() > 0 &&
+           AgentMgr::GetAgentByID(AgentMgr::GetMyId()) != nullptr;
 }
 
 // GameContext: *BasePointer → +0x18 → deref
