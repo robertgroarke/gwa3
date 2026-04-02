@@ -64,6 +64,13 @@ float GetYaw() {
 }
 
 bool UnlockCam(bool flag) {
+    // Prefer the memory patch (skips camera interpolation copy-back)
+    auto& patch = Memory::GetCameraUnlockPatch();
+    if (patch.staged) {
+        if (flag) patch.Enable(); else patch.Disable();
+        return true;
+    }
+    // Fallback: direct struct write
     Camera* cam = GetCamera();
     if (!cam) return false;
     cam->camera_mode = flag ? 3u : 0u;
@@ -71,6 +78,8 @@ bool UnlockCam(bool flag) {
 }
 
 bool GetCameraUnlock() {
+    auto& patch = Memory::GetCameraUnlockPatch();
+    if (patch.staged) return patch.enabled;
     Camera* cam = GetCamera();
     if (!cam) return false;
     return cam->camera_mode == 3;

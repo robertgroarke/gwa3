@@ -129,8 +129,13 @@ namespace GWA3::Offsets {
     extern uintptr_t ItemClick;          // func — item interaction dispatch
 
     // ===== Memory Patches =====
+    extern uintptr_t CameraUpdateBypass; // ptr — camera interpolation copy-back instruction
     extern uintptr_t LevelDataBypass;    // ptr — JZ instruction for level-data validation
     extern uintptr_t MapPortBypass;      // ptr — JNZ instruction for map/port validation
+
+    // ===== Trade (GWCA) =====
+    extern uintptr_t OfferTradeItem;     // func — __fastcall offer item in trade window
+    extern uintptr_t UpdateTradeCart;    // func — trade cart update (captures window context)
 
     // ===== Chat (GWCA) =====
     extern uintptr_t SendChatFunc;       // func — native chat send
