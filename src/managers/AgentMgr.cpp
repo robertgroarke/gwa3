@@ -223,18 +223,31 @@ void InteractSignpost(uint32_t agentId) {
     CtoS::SendPacket(2, Packets::SIGNPOST_RUN, agentId);
 }
 
+// Agent access via flat pointer chain: *AgentBase = agent_ptr_array, *(AgentBase+8) = maxAgents
 Agent* GetAgentByID(uint32_t agentId) {
-    auto* arr = GetAgentArray();
-    if (!arr || !arr->buffer || agentId >= arr->size) return nullptr;
-    return arr->buffer[agentId];
+    if (!Offsets::AgentBase || agentId == 0) return nullptr;
+    __try {
+        uintptr_t agentArr = *reinterpret_cast<uintptr_t*>(Offsets::AgentBase);
+        if (agentArr <= 0x10000) return nullptr;
+        uint32_t maxAgents = *reinterpret_cast<uint32_t*>(Offsets::AgentBase + 0x8);
+        if (agentId >= maxAgents) return nullptr;
+        uintptr_t agentPtr = *reinterpret_cast<uintptr_t*>(agentArr + agentId * 4);
+        if (agentPtr <= 0x10000) return nullptr;
+        return reinterpret_cast<Agent*>(agentPtr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
 }
 
 AgentLiving* GetMyAgent() {
     uint32_t id = GetMyId();
     if (!id) return nullptr;
     Agent* agent = GetAgentByID(id);
-    if (!agent || agent->type != 0xDB) return nullptr; // 0xDB = Living
-    return static_cast<AgentLiving*>(agent);
+    if (!agent) return nullptr;
+    // Check type == 0xDB (Living), but also accept if type field is valid
+    if (agent->type == 0xDB) return static_cast<AgentLiving*>(agent);
+    // In GW Reforged the type field may differ — check at struct level
+    return nullptr;
 }
 
 AgentLiving* GetTargetAsLiving() {
@@ -246,9 +259,9 @@ AgentLiving* GetTargetAsLiving() {
 }
 
 GWArray<Agent*>* GetAgentArray() {
-    if (!Offsets::AgentBase) return nullptr;
-    auto* ptr = reinterpret_cast<GWArray<Agent*>**>(Offsets::AgentBase);
-    return ptr ? *ptr : nullptr;
+    // Legacy API — returns null because agent array is not a GWArray
+    // Use GetAgentByID directly instead
+    return nullptr;
 }
 
 float GetSquaredDistance(float x1, float y1, float x2, float y2) {
