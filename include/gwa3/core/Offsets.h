@@ -128,6 +128,13 @@ namespace GWA3::Offsets {
     // ===== Items =====
     extern uintptr_t ItemClick;          // func — item interaction dispatch
 
+    // ===== Chat (GWCA) =====
+    extern uintptr_t SendChatFunc;       // func — native chat send
+    extern uintptr_t AddToChatLog;       // func — native chat log write
+
+    // ===== Map (GWCA) =====
+    extern uintptr_t SkipCinematicFunc;  // func — native cinematic skip
+
     // ===== Frame UI (GWA3-new) =====
     extern uintptr_t SendFrameUIMsg;     // func — scanned via pattern 83 C1 DC E8
 

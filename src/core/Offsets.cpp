@@ -95,6 +95,11 @@ uintptr_t GwEndScene = 0;
 
 uintptr_t ItemClick = 0;
 
+uintptr_t SendChatFunc = 0;
+uintptr_t AddToChatLog = 0;
+
+uintptr_t SkipCinematicFunc = 0;
+
 uintptr_t SendFrameUIMsg = 0;
 
 // ===== Pattern table =====
@@ -241,6 +246,13 @@ static const PatternDef s_patterns[] = {
 
     // ===== Items (P1) =====
     PAT("ItemClick",     ItemClick,     "\x8B\x48\x08\x83\xEA\x00\x0F\x84",             "xxxxxxxx",   -0x1C, Priority::P1, PatternType::Func),
+
+    // ===== Chat GWCA (P2) =====
+    PAT("SendChatFunc",  SendChatFunc,  "\x8D\x85\xE0\xFE\xFF\xFF\x50\x68\x1C\x01",     "xxxxxxxxx",  -0x3E, Priority::P2, PatternType::Func),
+    PAT("AddToChatLog",  AddToChatLog,  "\x40\x25\xFF\x01\x00\x00",                      "xxxxxx",     -0x97, Priority::P2, PatternType::Func),
+
+    // ===== Map GWCA (P2) =====
+    PAT("SkipCinematicFunc", SkipCinematicFunc, "\x8B\x40\x30\x83\x78\x04\x00",          "xxxxxxx",    -0x5,  Priority::P2, PatternType::Func),
 
     // ===== Frame UI (P0 — new for GWA3, NOT from AutoIt ASM scanner) =====
     PAT("SendFrameUIMsg", SendFrameUIMsg, "\x83\xC1\xDC\xE8",                   "xxxx",     0x3,    Priority::P0, PatternType::Func),

@@ -21,24 +21,31 @@ bool Initialize() {
     return true;
 }
 
-void SendChat(const wchar_t* message, wchar_t channel) {
-    if (!message) return;
+// Native SendChat: void __cdecl (wchar_t* message, uint32_t agent_id)
+typedef void(__cdecl* NativeSendChatFn)(wchar_t*, uint32_t);
 
-    // Chat packets: header SEND_CHAT, then channel prefix + wchar message
-    // The game expects: SendPacket(size, SEND_CHAT, <wchar_t data...>)
-    // For simplicity, use the packet with the channel prefix built into message
+void SendChat(const wchar_t* message, wchar_t channel) {
+    if (!message || !message[0]) return;
+
     size_t len = wcslen(message);
     if (len == 0) return;
 
     // Build message with channel prefix
-    wchar_t buf[142]; // max chat length ~140 chars
+    wchar_t buf[142];
     buf[0] = channel;
     size_t copyLen = (len < 140) ? len : 140;
     memcpy(buf + 1, message, copyLen * sizeof(wchar_t));
     buf[1 + copyLen] = L'\0';
 
-    // Send as raw dwords: SEND_CHAT header + wchar data packed into dwords
-    uint32_t dataLen = static_cast<uint32_t>((copyLen + 2) * sizeof(wchar_t)); // +1 prefix +1 null
+    // Prefer native SendChat function when resolved
+    if (Offsets::SendChatFunc && Offsets::SendChatFunc > 0x10000) {
+        auto fn = reinterpret_cast<NativeSendChatFn>(Offsets::SendChatFunc);
+        fn(buf, 0);
+        return;
+    }
+
+    // Fallback: raw packet send (limited to ~4 dwords of message)
+    uint32_t dataLen = static_cast<uint32_t>((copyLen + 2) * sizeof(wchar_t));
     uint32_t dwordCount = (dataLen + 3) / 4;
     CtoS::SendPacket(1 + dwordCount, Packets::SEND_CHAT,
                      reinterpret_cast<uint32_t*>(buf)[0],
@@ -57,15 +64,33 @@ struct UIChatMessage {
     uint32_t channel2;
 };
 
+// Native AddToChatLog: void __cdecl (wchar_t* message, uint32_t channel)
+typedef void(__cdecl* NativeAddToChatLogFn)(wchar_t*, uint32_t);
+
 void WriteToChat(const wchar_t* message, uint32_t channel) {
     if (!message || !message[0]) return;
 
     // Wrap message in GW encoding tags: \x108\x107<text>\x1
-    // Copy into a heap-allocated buffer so it survives until the game thread runs.
     wchar_t encoded[300];
     int len = swprintf(encoded, 300, L"\x108\x107%s\x1", message);
     if (len <= 0) return;
 
+    // Prefer native AddToChatLog when resolved (callable from game thread)
+    if (Offsets::AddToChatLog && Offsets::AddToChatLog > 0x10000) {
+        size_t byteLen = (static_cast<size_t>(len) + 1) * sizeof(wchar_t);
+        wchar_t* heap = static_cast<wchar_t*>(malloc(byteLen));
+        if (!heap) return;
+        memcpy(heap, encoded, byteLen);
+
+        GameThread::Enqueue([heap, channel]() {
+            auto fn = reinterpret_cast<NativeAddToChatLogFn>(Offsets::AddToChatLog);
+            fn(heap, channel);
+            free(heap);
+        });
+        return;
+    }
+
+    // Fallback: UIMessage dispatch
     size_t byteLen = (static_cast<size_t>(len) + 1) * sizeof(wchar_t);
     wchar_t* heap = static_cast<wchar_t*>(malloc(byteLen));
     if (!heap) return;

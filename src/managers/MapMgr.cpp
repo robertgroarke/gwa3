@@ -84,6 +84,12 @@ void SetHardMode(bool enabled) {
 }
 
 void SkipCinematic() {
+    // Prefer native function (handles edge cases like checking cinematic state)
+    if (Offsets::SkipCinematicFunc && Offsets::SkipCinematicFunc > 0x10000) {
+        auto fn = reinterpret_cast<void(__cdecl*)()>(Offsets::SkipCinematicFunc);
+        GameThread::Enqueue([fn]() { fn(); });
+        return;
+    }
     CtoS::SendPacket(1, Packets::CINEMATIC_SKIP);
 }
 
