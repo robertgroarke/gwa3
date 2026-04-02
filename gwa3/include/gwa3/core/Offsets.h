@@ -62,6 +62,7 @@ namespace GWA3::Offsets {
     extern uintptr_t AgentBase;
     extern uintptr_t ChangeTarget;       // func
     extern uintptr_t CurrentTarget;
+    extern uintptr_t TargetLog;          // hook seam
     extern uintptr_t MyID;
 
     // ===== Map =====

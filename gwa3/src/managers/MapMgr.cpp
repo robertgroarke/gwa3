@@ -26,7 +26,21 @@ bool Initialize() {
 }
 
 void Travel(uint32_t mapId, uint32_t region, uint32_t district, uint32_t language) {
-    CtoS::MapTravel(mapId, region, district, language);
+    Log::Info("MapMgr: Travel request map=%u region=%u district=%u language=%u", mapId, region, district, language);
+    if (GameThread::IsOnGameThread()) {
+        Log::Info("MapMgr: Travel using direct game-thread packet send");
+        CtoS::MapTravel(mapId, region, district, language);
+        Log::Info("MapMgr: Travel direct send returned");
+        return;
+    }
+
+    Log::Info("MapMgr: Travel enqueueing to GameThread");
+    GameThread::Enqueue([mapId, region, district, language]() {
+        Log::Info("MapMgr: Travel lambda running on GameThread");
+        CtoS::MapTravel(mapId, region, district, language);
+        Log::Info("MapMgr: Travel lambda returned");
+    });
+    Log::Info("MapMgr: Travel enqueue returned to caller");
 }
 
 void TravelGuildHall() {
@@ -119,7 +133,7 @@ bool GetIsInCinematic() {
 
 const AreaInfo* GetAreaInfo(uint32_t mapId) {
     if (!Offsets::AreaInfo) return nullptr;
-    auto* base = *reinterpret_cast<AreaInfo**>(Offsets::AreaInfo);
+    auto* base = reinterpret_cast<AreaInfo*>(Offsets::AreaInfo);
     if (!base) return nullptr;
     return &base[mapId];
 }

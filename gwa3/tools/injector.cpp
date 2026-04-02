@@ -170,6 +170,26 @@ static void ClearTestModeFlags() {
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_integration.flag", dir);
     DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_npc_dialog.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_merchant_quote.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_merchant_variant_standard_ptr.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_merchant_variant_legacy_id.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_merchant_variant_legacy_ptr.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_merchant_stage_travel_only.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_merchant_stage_approach_only.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_merchant_stage_target_only.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_merchant_stage_interact_packet_only.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_merchant_stage_interact_only.flag", dir);
+    DeleteFileA(path);
 }
 
 // ===== Injection =====
@@ -306,6 +326,10 @@ static void PrintUsage(const char* argv0) {
     printf("  --test-bot      Inject in bot framework test mode (GWA3_TEST_BOT=1)\n");
     printf("  --test-commands Inject in behavioral command test mode (GWA3_TEST_COMMANDS=1)\n");
     printf("  --test-integ    Inject in integration test mode (char select -> game)\n");
+    printf("  --test-npc      Inject in isolated NPC/dialog test mode\n");
+    printf("  --test-merchant Inject in isolated merchant/trader quote test mode\n");
+    printf("  --merchant-variant <standard-id|standard-ptr|legacy-id|legacy-ptr>\n");
+    printf("  --merchant-stage <full|travel-only|approach-only|target-only|interact-packet-only|interact-only>\n");
     printf("\nOptions:\n");
     printf("  --pid <N>       Target specific process ID\n");
     printf("  -h, --help      Show this help\n");
@@ -322,6 +346,10 @@ int main(int argc, char* argv[]) {
     bool doTestBot = false;
     bool doTestCommands = false;
     bool doTestInteg = false;
+    bool doTestNpc = false;
+    bool doTestMerchant = false;
+    const char* merchantVariantFlag = nullptr;
+    const char* merchantStageFlag = nullptr;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--pid") == 0 && i + 1 < argc) {
@@ -340,6 +368,44 @@ int main(int argc, char* argv[]) {
             doTestCommands = true;
         } else if (strcmp(argv[i], "--test-integ") == 0) {
             doTestInteg = true;
+        } else if (strcmp(argv[i], "--test-npc") == 0) {
+            doTestNpc = true;
+        } else if (strcmp(argv[i], "--test-merchant") == 0) {
+            doTestMerchant = true;
+        } else if (strcmp(argv[i], "--merchant-variant") == 0 && i + 1 < argc) {
+            const char* variant = argv[++i];
+            if (strcmp(variant, "standard-id") == 0) {
+                merchantVariantFlag = nullptr;
+            } else if (strcmp(variant, "standard-ptr") == 0) {
+                merchantVariantFlag = "gwa3_test_merchant_variant_standard_ptr.flag";
+            } else if (strcmp(variant, "legacy-id") == 0) {
+                merchantVariantFlag = "gwa3_test_merchant_variant_legacy_id.flag";
+            } else if (strcmp(variant, "legacy-ptr") == 0) {
+                merchantVariantFlag = "gwa3_test_merchant_variant_legacy_ptr.flag";
+            } else {
+                printf("[!] Unknown merchant variant: %s\n", variant);
+                PrintUsage(argv[0]);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--merchant-stage") == 0 && i + 1 < argc) {
+            const char* stage = argv[++i];
+            if (strcmp(stage, "full") == 0) {
+                merchantStageFlag = nullptr;
+            } else if (strcmp(stage, "travel-only") == 0) {
+                merchantStageFlag = "gwa3_test_merchant_stage_travel_only.flag";
+            } else if (strcmp(stage, "approach-only") == 0) {
+                merchantStageFlag = "gwa3_test_merchant_stage_approach_only.flag";
+            } else if (strcmp(stage, "target-only") == 0) {
+                merchantStageFlag = "gwa3_test_merchant_stage_target_only.flag";
+            } else if (strcmp(stage, "interact-packet-only") == 0) {
+                merchantStageFlag = "gwa3_test_merchant_stage_interact_packet_only.flag";
+            } else if (strcmp(stage, "interact-only") == 0) {
+                merchantStageFlag = "gwa3_test_merchant_stage_interact_only.flag";
+            } else {
+                printf("[!] Unknown merchant stage: %s\n", stage);
+                PrintUsage(argv[0]);
+                return 1;
+            }
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             PrintUsage(argv[0]);
             return 0;
@@ -408,6 +474,10 @@ int main(int argc, char* argv[]) {
     if (doTestBot) SetTestModeFlag("gwa3_test_bot.flag");
     if (doTestCommands) SetTestModeFlag("gwa3_test_commands.flag");
     if (doTestInteg) SetTestModeFlag("gwa3_test_integration.flag");
+    if (doTestNpc) SetTestModeFlag("gwa3_test_npc_dialog.flag");
+    if (doTestMerchant) SetTestModeFlag("gwa3_test_merchant_quote.flag");
+    if (doTestMerchant && merchantVariantFlag) SetTestModeFlag(merchantVariantFlag);
+    if (doTestMerchant && merchantStageFlag) SetTestModeFlag(merchantStageFlag);
 
     // === --pid (single target) ===
     if (targetPid != 0) {
