@@ -30,6 +30,14 @@
 - Pattern `8B 40 30 83 78 04 00` at -0x5, SkipCinematic prefers native via GameThread
 - **Commit**: `bd5fd78`
 
+### GWA3-067: Level-Data Validation Bypass Patch
+- Pattern `F6 C4 01 74 1D 68 A9 01 00 00` at +3, patches JZ→JMP. Staged, not enabled.
+- **Commit**: `addb02b`
+
+### GWA3-068: Map/Port Branch Bypass Patch
+- Pattern `83 C4 0C 85 C0 75 0C 6A 01` at +5, patches JNZ→NOP NOP. Staged, not enabled.
+- **Commit**: `addb02b`
+
 ---
 
 ## In Progress
@@ -59,38 +67,6 @@
 - [ ] Integration test GWA3-055 already covers camera unlock — verify patch approach works
 
 **GWCA reference**: `Source/CameraMgr.cpp` `patch_cam_update_addr`, Research `GWCA_MemoryPatcher_LiveAddendum.md`
-
----
-
-### GWA3-067: Level-Data Validation Bypass Patch
-**Priority**: Low — only needed for accessing out-of-bounds map data
-**Source**: Research — static offset 0x00639362, patch `EB` over `74` (JZ → JMP)
-
-**Problem**: `GetLevelDataBypassPatch()` is declared but never staged. This patch skips a validation branch with string "beyond available level data", allowing access to map data that would normally be bounds-checked.
-
-**Acceptance criteria**:
-- [ ] Find scan pattern near the "beyond available level data" string xref
-- [ ] Stage patch in Offsets post-processing
-- [ ] Expose toggle via `Memory::GetLevelDataBypassPatch().Enable()`
-- [ ] Integration test: enable/disable patch without crash
-
-**GWCA reference**: Research `GWCA_MemoryPatcher_LiveAddendum.md`
-
----
-
-### GWA3-068: Map/Port Branch Bypass Patch
-**Priority**: Low — only needed for specific travel edge cases
-**Source**: Research — static offset 0x0053898C, patch `90 90` over `75 0C` (JNZ → NOP NOP)
-
-**Problem**: `GetMapPortBypassPatch()` is declared but never staged. This NOP's a branch near GapPorts string references, bypassing map/port validation.
-
-**Acceptance criteria**:
-- [ ] Find scan pattern near GapPorts string references
-- [ ] Stage patch in Offsets post-processing
-- [ ] Expose toggle via `Memory::GetMapPortBypassPatch().Enable()`
-- [ ] Integration test: enable/disable patch without crash
-
-**GWCA reference**: Research `GWCA_MemoryPatcher_LiveAddendum.md`
 
 ---
 
