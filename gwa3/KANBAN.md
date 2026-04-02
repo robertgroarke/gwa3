@@ -38,6 +38,14 @@
 - Pattern `83 C4 0C 85 C0 75 0C 6A 01` at +5, patches JNZ→NOP NOP. Staged, not enabled.
 - **Commit**: `addb02b`
 
+### GWA3-066: Camera Update Bypass Patch
+- Pattern `89 0E DD D9 89 56 04 DD` at offset 0, patches to `EB 0C`. UnlockCam prefers patch.
+- **Commit**: `45c1754`
+
+### GWA3-069: Trade Offer/Cart Functions
+- OfferTradeItem `68 49 04 00 00 89 5D E4 E8` at -0x6B, UpdateTradeCart at -0x24
+- **Commit**: `45c1754`
+
 ---
 
 ## In Progress
@@ -53,37 +61,6 @@
 ---
 
 ## Backlog
-
-### GWA3-066: Camera Update Bypass Patch
-**Priority**: Low — `CameraMgr::UnlockCam` handles camera unlock via struct write
-**Source**: Research — static offset 0x004EFD06, patch `EB 0F` over `8B 45`
-
-**Problem**: The `GetCameraUnlockPatch()` in Memory.h is declared but never staged. It bypasses the camera interpolation/update code, enabling free camera. Currently camera unlock is done by writing `camera_mode = 3` to the Camera struct, which works but the game may reset it.
-
-**Acceptance criteria**:
-- [ ] Find scan pattern for the camera update instruction (near `mov eax, [ebp-...]` → `jmp +0xF`)
-- [ ] Stage patch in `CameraMgr::Initialize` when pattern resolves
-- [ ] Wire `CameraMgr::UnlockCam` to use patch toggle instead of struct write
-- [ ] Integration test GWA3-055 already covers camera unlock — verify patch approach works
-
-**GWCA reference**: `Source/CameraMgr.cpp` `patch_cam_update_addr`, Research `GWCA_MemoryPatcher_LiveAddendum.md`
-
----
-
-### GWA3-069: Trade Offer/Cart Functions
-**Priority**: Medium — needed for player-to-player trading
-**Source**: GWCA TradeMgr.cpp patterns `6849040000895DE4E8` offset -0x6B (OfferTradeItem), `578B7D0C3DEF000010` offset -0x24 (UpdateTradeCart)
-
-**Problem**: `TradeMgr::OfferItem` and related player trade functions use raw packet sends. The native functions handle the full trade protocol including cart validation and UI updates.
-
-**Acceptance criteria**:
-- [ ] Add OfferTradeItem and UpdateTradeCart patterns to Offsets (P1)
-- [ ] Implement `TradeMgr::OfferItem` via resolved function
-- [ ] Integration test: initiate trade with NPC hero, offer/cancel (verify no crash)
-
-**GWCA reference**: `Source/TradeMgr.cpp`
-
----
 
 ### GWA3-070: Quest Log UI Callback
 **Priority**: Low — quest management works via packets
