@@ -18,6 +18,18 @@
 - Pattern `8B 48 08 83 EA 00 0F 84` at -0x1C, ItemMgr::ClickItem implemented
 - **Commit**: `c162c11`
 
+### GWA3-062: SendChat — Native Chat Send
+- Pattern `8D 85 E0 FE FF FF 50 68 1C 01` at -0x3E, ChatMgr prefers native over packet
+- **Commit**: `bd5fd78`
+
+### GWA3-063: AddToChatLog — Native Chat Log Write
+- Pattern `40 25 FF 01 00 00` at -0x97, WriteToChat prefers native over UIMessage
+- **Commit**: `bd5fd78`
+
+### GWA3-065: SkipCinematic — Native Cinematic Skip
+- Pattern `8B 40 30 83 78 04 00` at -0x5, SkipCinematic prefers native via GameThread
+- **Commit**: `bd5fd78`
+
 ---
 
 ## In Progress
@@ -33,56 +45,6 @@
 ---
 
 ## Backlog
-
-### GWA3-062: SendChat Function Resolution
-
----
-
-### GWA3-062: SendChat Function Resolution
-**Priority**: Low — current packet-based approach works
-**Source**: GWCA ChatMgr.cpp pattern `8D85E0FEFFFF50681C01` offset -0x3E
-
-**Problem**: `ChatMgr::SendChat` manually builds chat packets with hardcoded dword packing that only handles short messages. The game's native `SendChat` function handles encoding, length, and channel selection properly.
-
-**Acceptance criteria**:
-- [ ] Add SendChat scan pattern to Offsets (P2)
-- [ ] Implement `ChatMgr::SendChat` via resolved function call
-- [ ] Fallback to current packet approach if pattern fails
-- [ ] Integration test: send a team chat message and verify no crash
-
-**GWCA reference**: `Source/ChatMgr.cpp` line ~50
-
----
-
-### GWA3-063: AddToChatLog / PrintChat Function Resolution
-**Priority**: Low — UIMessage dispatch approach works
-**Source**: GWCA ChatMgr.cpp patterns `4025FF01000000` offset -0x97 (AddToChatLog), `3D000000007300282B6A` offset -0x46 (PrintChat)
-
-**Problem**: `ChatMgr::WriteToChat` uses UIMessage dispatch which works but requires game thread. The native functions may be callable from any thread and support richer formatting (sender name, color, links).
-
-**Acceptance criteria**:
-- [ ] Add AddToChatLog and PrintChat patterns to Offsets (P2)
-- [ ] Implement `ChatMgr::WriteToChatEx` with sender name and color support
-- [ ] Integration test: write colored chat message with sender name
-
-**GWCA reference**: `Source/ChatMgr.cpp` lines ~100-150
-
----
-
-### GWA3-065: SkipCinematic Function Resolution
-**Priority**: Low — packet approach works
-**Source**: GWCA MapMgr.cpp pattern `8B403083780400` offset -0x5
-
-**Problem**: `MapMgr::SkipCinematic` sends `CINEMATIC_SKIP` packet directly. The native function handles edge cases like checking if a cinematic is actually playing.
-
-**Acceptance criteria**:
-- [ ] Add SkipCinematic pattern to Offsets (P2)
-- [ ] Optionally update `MapMgr::SkipCinematic` to use resolved function
-- [ ] Integration test: call during non-cinematic (verify no crash)
-
-**GWCA reference**: `Source/MapMgr.cpp`
-
----
 
 ### GWA3-066: Camera Update Bypass Patch
 **Priority**: Low — `CameraMgr::UnlockCam` handles camera unlock via struct write
