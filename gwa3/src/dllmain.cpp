@@ -4,6 +4,8 @@
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/RenderHook.h>
+#include <gwa3/core/TraderHook.h>
+#include <gwa3/core/TargetLogHook.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/SkillMgr.h>
 #include <gwa3/managers/ItemMgr.h>
@@ -14,6 +16,9 @@
 #include <gwa3/managers/TradeMgr.h>
 #include <gwa3/managers/FriendListMgr.h>
 #include <gwa3/managers/UIMgr.h>
+#include <gwa3/managers/MemoryMgr.h>
+#include <gwa3/managers/PlayerMgr.h>
+#include <gwa3/managers/CameraMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/bot/BotFramework.h>
 #include <gwa3/bot/FroggyHM.h>
@@ -108,6 +113,56 @@ static bool RunCharSelectBootstrap(DWORD timeoutMs) {
     return false;
 }
 
+static bool WaitForPlayerHydration(DWORD timeoutMs) {
+    const DWORD start = GetTickCount();
+    DWORD lastLog = 0;
+
+    while (GetTickCount() - start < timeoutMs) {
+        const uint32_t mapId = GWA3::MapMgr::GetMapId();
+        const uint32_t myId = ReadMyIdRaw();
+        auto* me = GWA3::AgentMgr::GetMyAgent();
+
+        float x = 0.0f;
+        float y = 0.0f;
+        bool havePos = false;
+        uint32_t typeMap = 0;
+        uint32_t modelState = 0;
+
+        if (me) {
+            x = me->x;
+            y = me->y;
+            havePos = !(x == 0.0f && y == 0.0f);
+            typeMap = me->type_map;
+            modelState = me->model_state;
+        }
+
+        const bool hydrated =
+            mapId > 0 &&
+            myId > 0 &&
+            me != nullptr &&
+            me->hp > 0.0f &&
+            havePos &&
+            (typeMap & 0x400000) != 0;
+        if (hydrated) {
+            GWA3::Log::Info("Bootstrap: Player hydrated (MapID=%u MyID=%u TypeMap=0x%X ModelState=%u Pos=(%.1f, %.1f))",
+                            mapId, myId, typeMap, modelState, x, y);
+            return true;
+        }
+
+        const DWORD now = GetTickCount();
+        if (now - lastLog >= 2000) {
+            GWA3::Log::Info("Bootstrap: waiting for player hydration (MapID=%u MyID=%u TypeMap=0x%X ModelState=%u Pos=(%.1f, %.1f))",
+                            mapId, myId, typeMap, modelState, x, y);
+            lastLog = now;
+        }
+
+        Sleep(250);
+    }
+
+    GWA3::Log::Warn("Bootstrap: player hydration timed out; continuing with partial readiness");
+    return false;
+}
+
 DWORD WINAPI InitThread(LPVOID hModule) {
     GWA3::Log::Initialize();
     GWA3::Log::Info("gwa3.dll loaded at 0x%08X", static_cast<uintptr_t>(reinterpret_cast<uintptr_t>(hModule)));
@@ -116,9 +171,12 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     bool botTest = CheckFlag("GWA3_TEST_BOT", "gwa3_test_bot.flag");
     bool cmdTest = CheckFlag("GWA3_TEST_COMMANDS", "gwa3_test_commands.flag");
     bool integrationTest = CheckFlag("GWA3_TEST_INTEGRATION", "gwa3_test_integration.flag");
-    bool anyTest = smokeTest || botTest || cmdTest || integrationTest;
-    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d",
-                    smokeTest, botTest, cmdTest, integrationTest);
+    bool npcDialogTest = CheckFlag("GWA3_TEST_NPC_DIALOG", "gwa3_test_npc_dialog.flag");
+    bool merchantQuoteTest = CheckFlag("GWA3_TEST_MERCHANT_QUOTE", "gwa3_test_merchant_quote.flag");
+    bool advancedTest = CheckFlag("GWA3_TEST_ADVANCED", "gwa3_test_advanced.flag");
+    bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || advancedTest;
+    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d advanced=%d",
+                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, advancedTest);
 
     HMODULE gwModule = GetModuleHandleA(nullptr);
     if (!GWA3::Scanner::Initialize(gwModule)) {
@@ -141,6 +199,9 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     GWA3::TradeMgr::Initialize();
     GWA3::FriendListMgr::Initialize();
     GWA3::UIMgr::Initialize();
+    GWA3::MemoryMgr::Initialize();
+    GWA3::PlayerMgr::Initialize();
+    GWA3::CameraMgr::Initialize();
 
     if (smokeTest) {
         GWA3::Log::Info("=== SMOKE TEST MODE ===");
@@ -156,7 +217,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
-    if (integrationTest || !anyTest) {
+    if (integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || !anyTest) {
         if (!GWA3::RenderHook::Initialize()) {
             GWA3::Log::Error("RenderHook initialization failed - aborting startup");
             return 1;
@@ -166,7 +227,10 @@ DWORD WINAPI InitThread(LPVOID hModule) {
             return 1;
         }
         GWA3::RenderHook::SetMapLoaded(true);
+        WaitForPlayerHydration(45000);
         GWA3::CtoS::Initialize();
+        GWA3::TraderHook::Initialize();
+        GWA3::TargetLogHook::Initialize();
     }
 
     bool gameThreadOk = GWA3::GameThread::Initialize();
@@ -196,6 +260,27 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
+    if (npcDialogTest) {
+        GWA3::Log::Info("=== NPC/DIALOG TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunNpcDialogTest();
+        GWA3::Log::Info("NPC/dialog test complete: %d failures", failures);
+        return static_cast<DWORD>(failures);
+    }
+
+    if (merchantQuoteTest) {
+        GWA3::Log::Info("=== MERCHANT/QUOTE TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunMerchantQuoteTest();
+        GWA3::Log::Info("Merchant/quote test complete: %d failures", failures);
+        return static_cast<DWORD>(failures);
+    }
+
+    if (advancedTest) {
+        GWA3::Log::Info("=== ADVANCED INTEGRATION TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunAdvancedTest();
+        GWA3::Log::Info("Advanced test complete: %d failures", failures);
+        return static_cast<DWORD>(failures);
+    }
+
     GWA3::Bot::Froggy::Register();
     GWA3::Bot::Start();
 
@@ -211,6 +296,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
         CreateThread(nullptr, 0, &InitThread, hModule, 0, nullptr);
     } else if (reason == DLL_PROCESS_DETACH) {
         GWA3::Bot::Stop();
+        GWA3::TraderHook::Shutdown();
+        GWA3::TargetLogHook::Shutdown();
         GWA3::RenderHook::Shutdown();
         GWA3::GameThread::Shutdown();
         GWA3::Log::Shutdown();
