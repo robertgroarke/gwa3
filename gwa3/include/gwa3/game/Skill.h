@@ -82,4 +82,28 @@ struct Skillbar { // total: 0xBC / 188 bytes
     /* +h00B8 */ uint32_t      h00B8;
 };
 
+// ===== Effect / Buff structs (from GWCA GameEntities/Skill.h) =====
+
+struct Effect { // total: 0x18 / 24 bytes
+    /* +h0000 */ uint32_t skill_id;
+    /* +h0004 */ uint32_t attribute_level;
+    /* +h0008 */ uint32_t effect_id;
+    /* +h000C */ uint32_t agent_id;       // non-zero = maintained enchantment caster
+    /* +h0010 */ float    duration;        // seconds, 0 if no duration
+    /* +h0014 */ uint32_t timestamp;       // GW-timestamp when applied
+};
+
+struct Buff { // total: 0x10 / 16 bytes
+    /* +h0000 */ uint32_t skill_id;
+    /* +h0004 */ uint32_t h0004;
+    /* +h0008 */ uint32_t buff_id;
+    /* +h000C */ uint32_t target_agent_id; // 0 if no target
+};
+
+struct AgentEffects { // total: 0x24 / 36 bytes
+    /* +h0000 */ uint32_t          agent_id;
+    /* +h0004 */ GWArray<Buff>     buffs;
+    /* +h0014 */ GWArray<Effect>   effects;
+};
+
 } // namespace GWA3
