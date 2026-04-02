@@ -21,4 +21,18 @@ namespace GWA3::SmokeTest {
     // movement -> targeting. Single injection session.
     int RunIntegrationTest();
 
+    // Run isolated NPC/dialog experiment. Keeps the unstable interaction
+    // out of the stable integration suite while we debug it.
+    int RunNpcDialogTest();
+
+    // Run isolated merchant/trader quote test. Opens a trader window and
+    // requests a quote without buying or selling anything.
+    int RunMerchantQuoteTest();
+
+    // Run advanced integration tests. Exercises PlayerMgr, CameraMgr,
+    // MemoryMgr, deep inventory introspection, agent enumeration,
+    // UI frame validation, AreaInfo, hero flagging, skillbar data,
+    // hard mode toggle, return-to-outpost, and more.
+    int RunAdvancedTest();
+
 } // namespace GWA3::SmokeTest
