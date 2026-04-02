@@ -20,6 +20,7 @@
 #include <gwa3/managers/QuestMgr.h>
 #include <gwa3/managers/TradeMgr.h>
 #include <gwa3/managers/UIMgr.h>
+#include <gwa3/packets/CtoS.h>
 #include <gwa3/managers/PlayerMgr.h>
 #include <gwa3/managers/CameraMgr.h>
 #include <gwa3/managers/MemoryMgr.h>
@@ -2041,7 +2042,9 @@ static bool TestExplorableEntry() {
         const DWORD start = GetTickCount();
         bool reached = false;
         while ((GetTickCount() - start) < static_cast<DWORD>(step.timeoutMs)) {
-            AgentMgr::Move(step.x, step.y);
+            // Use packet-based move as fallback — shellcode Move stops working
+            // after advanced tests (hero flagging/hard mode toggle)
+            CtoS::MoveToCoord(step.x, step.y);
             Sleep(500);
 
             float x = 0.0f;
