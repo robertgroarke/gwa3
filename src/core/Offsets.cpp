@@ -83,6 +83,8 @@ uintptr_t ValidateAsyncDecodeStr = 0;
 uintptr_t PostMessage = 0;
 uintptr_t ChatLog = 0;
 
+uintptr_t CameraClass = 0;
+
 uintptr_t SendFrameUIMsg = 0;
 
 // ===== Pattern table =====
@@ -216,6 +218,9 @@ static const PatternDef s_patterns[] = {
     PAT("PostMessage",    PostMessage,    "\x6A\xFF\x6A\x00\x68\x01\x80",       "xxxxxxx",  0x18,   Priority::P2, PatternType::Ptr),
     PAT("ChatLog",        ChatLog,        "\x8B\x45\x08\x83\x7D\x0C\x07",       "xxxxxxx",  -0x21,  Priority::P2, PatternType::Hook),
 
+    // ===== Camera (P2) =====
+    PAT("CameraClass",    CameraClass,    "\xD9\xEE\xB9\x00\x00\x00\x00\xD9\x55\xFC", "xxx????xxx", 0x3, Priority::P2, PatternType::Ptr),
+
     // ===== Frame UI (P0 — new for GWA3, NOT from AutoIt ASM scanner) =====
     PAT("SendFrameUIMsg", SendFrameUIMsg, "\x83\xC1\xDC\xE8",                   "xxxx",     0x3,    Priority::P0, PatternType::Func),
 };
@@ -348,6 +353,9 @@ static void PostProcessOffsets() {
 
     // ChangeTarget: AutoIt adds +1 to the scan result
     if (ChangeTarget)   ChangeTarget   = ChangeTarget + 1;
+
+    // Camera: scan+3 points at embedded pointer to Camera struct
+    if (CameraClass)    CameraClass    = Deref(CameraClass);
 
     // FriendList: complex post-processing (FindInRange + deref) — skip for now
     // RemoveFriend: complex post-processing (FindInRange + ResolveBranch) — skip for now

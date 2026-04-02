@@ -9,13 +9,11 @@ static bool s_initialized = false;
 static uintptr_t s_cameraPtr = 0;
 static bool s_fogDisabled = false;
 
-// Camera pointer is typically found via a global context.
-// We use SceneContext as a starting point — camera is often at a known offset.
+// Camera pointer resolved via GWCA scan pattern: D9 EE B9 ?? ?? ?? ?? D9 55 FC
+// Post-processed in Offsets to dereference the embedded pointer.
 static Camera* ResolveCameraPtr() {
-    // TODO: Add a dedicated Camera scan pattern to Offsets for robustness.
-    // For now, return null — camera reads will be unavailable until
-    // the offset is added.
-    return nullptr;
+    if (Offsets::CameraClass <= 0x10000) return nullptr;
+    return reinterpret_cast<Camera*>(Offsets::CameraClass);
 }
 
 bool Initialize() {
