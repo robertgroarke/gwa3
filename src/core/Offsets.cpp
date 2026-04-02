@@ -88,6 +88,13 @@ uintptr_t TitleClientDataBase = 0;
 uintptr_t CameraClass = 0;
 uintptr_t FogPatch = 0;
 
+uintptr_t PostProcessEffect = 0;
+uintptr_t DropBuff = 0;
+
+uintptr_t GwEndScene = 0;
+
+uintptr_t ItemClick = 0;
+
 uintptr_t SendFrameUIMsg = 0;
 
 // ===== Pattern table =====
@@ -225,6 +232,16 @@ static const PatternDef s_patterns[] = {
     PAT("CameraClass",    CameraClass,    "\xD9\xEE\xB9\x00\x00\x00\x00\xD9\x55\xFC", "xxx????xxx", 0x3, Priority::P2, PatternType::Ptr),
     PAT("FogPatch",       FogPatch,       "\x83\xE0\x01\x8B\x09\x50\x6A\x1C",         "xxxxxxxx",   0x2, Priority::P2, PatternType::Ptr),
 
+    // ===== Effects (P2) =====
+    PAT("PostProcessEffect", PostProcessEffect, "\xD9\x5D\x0C\xD9\x45\x0C\x8D\x45\xF8", "xxxxxxxxx", -0x1C, Priority::P2, PatternType::Func),
+    PAT("DropBuff",          DropBuff,          "\xf6\x40\x04\x01\x74\x10",               "xxxxxx",    0x9,   Priority::P2, PatternType::Func),
+
+    // ===== Render (P2) =====
+    PAT("GwEndScene",    GwEndScene,    "\x89\x45\xFC\x57\x8B\x7D\x08\x8B\x8F",        "xxxxxxxxx",  -0xD,  Priority::P2, PatternType::Func),
+
+    // ===== Items (P1) =====
+    PAT("ItemClick",     ItemClick,     "\x8B\x48\x08\x83\xEA\x00\x0F\x84",             "xxxxxxxx",   -0x1C, Priority::P1, PatternType::Func),
+
     // ===== Frame UI (P0 — new for GWA3, NOT from AutoIt ASM scanner) =====
     PAT("SendFrameUIMsg", SendFrameUIMsg, "\x83\xC1\xDC\xE8",                   "xxxx",     0x3,    Priority::P0, PatternType::Func),
 };
@@ -360,6 +377,9 @@ static void PostProcessOffsets() {
 
     // Camera: scan+3 points at embedded pointer to Camera struct
     if (CameraClass)    CameraClass    = Deref(CameraClass);
+
+    // Effects: DropBuff scan result contains E8 near call
+    if (DropBuff)       DropBuff       = Scanner::FunctionFromNearCall(DropBuff);
 
     // TitleClientData: scan .rdata for the first entry pattern (00 00 00 00 23 40 00 00)
     // Result - 4 bytes = array base (from GWCA gwca.dll binary analysis)

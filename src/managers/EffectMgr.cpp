@@ -144,11 +144,19 @@ float GetEffectTimeRemaining(uint32_t agentId, uint32_t skillId) {
     return remaining > 0.0f ? remaining : 0.0f;
 }
 
+// DropBuff function signature: void __cdecl DropBuff(uint32_t buffId)
+typedef void(__cdecl* DropBuffFn)(uint32_t);
+
 bool DropBuff(uint32_t buffId) {
-    // DropBuff sends a packet to remove a maintained enchantment.
-    // For now, not implemented — requires the DropBuff function scan pattern.
-    (void)buffId;
-    return false;
+    if (!Offsets::DropBuff || Offsets::DropBuff <= 0x10000) return false;
+
+    auto fn = reinterpret_cast<DropBuffFn>(Offsets::DropBuff);
+    __try {
+        fn(buffId);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 } // namespace GWA3::EffectMgr
