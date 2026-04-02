@@ -4,6 +4,8 @@
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/Log.h>
 
+#include <Windows.h>
+
 namespace GWA3::ItemMgr {
 
 static bool s_initialized = false;
@@ -73,33 +75,90 @@ void DropGold(uint32_t amount) {
 }
 
 Item* GetItemById(uint32_t itemId) {
-    Inventory* inv = GetInventory();
-    if (!inv) return nullptr;
-    for (int b = 0; b < 23; b++) {
-        Bag* bag = inv->bags[b];
-        if (!bag || !bag->items.buffer) continue;
-        for (uint32_t i = 0; i < bag->items.size; i++) {
-            Item* item = bag->items.buffer[i];
-            if (item && item->item_id == itemId) return item;
+    if (!itemId) return nullptr;
+    __try {
+        for (int b = 0; b < 23; b++) {
+            Bag* bag = GetBag(b);
+            if (!bag || !bag->items.buffer || bag->items.size == 0 || bag->items.size > 256) continue;
+            for (uint32_t i = 0; i < bag->items.size; i++) {
+                Item* item = bag->items.buffer[i];
+                if (item && item->item_id == itemId) return item;
+            }
         }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
     }
     return nullptr;
 }
 
+// Read a pointer safely, returning false on null/low addresses
+static bool ReadPtr(uintptr_t address, uintptr_t& value) {
+    if (address <= 0x10000) { value = 0; return false; }
+    __try {
+        value = *reinterpret_cast<uintptr_t*>(address);
+        return value > 0x10000;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        value = 0;
+        return false;
+    }
+}
+
+// AutoIt chain: *BasePointer -> +0x18 -> +0x40 -> +0xF8 = bags array base
+static uintptr_t GetBagsArrayBase() {
+    if (!Offsets::BasePointer) return 0;
+    uintptr_t ctx = 0, p1 = 0, p2 = 0, bagsBase = 0;
+    if (!ReadPtr(Offsets::BasePointer, ctx)) return 0;
+    if (!ReadPtr(ctx + 0x18, p1)) return 0;
+    if (!ReadPtr(p1 + 0x40, p2)) return 0;
+    if (!ReadPtr(p2 + 0xF8, bagsBase)) return 0;
+    return bagsBase;
+}
+
 Bag* GetBag(uint32_t bagIndex) {
-    Inventory* inv = GetInventory();
-    if (!inv || bagIndex >= 23) return nullptr;
-    return inv->bags[bagIndex];
+    if (bagIndex >= 23) return nullptr;
+    uintptr_t bagsBase = GetBagsArrayBase();
+    if (!bagsBase) return nullptr;
+    uintptr_t bagPtr = 0;
+    if (!ReadPtr(bagsBase + 4 * bagIndex, bagPtr)) return nullptr;
+    return reinterpret_cast<Bag*>(bagPtr);
 }
 
 Inventory* GetInventory() {
-    if (!Offsets::BasePointer) return nullptr;
-    // BasePointer → game context → inventory at a known offset
-    auto* ctx = *reinterpret_cast<uintptr_t**>(Offsets::BasePointer);
-    if (!ctx) return nullptr;
-    // Inventory pointer is at context + 0x2C (from GWA2.au3 GetInventoryPtr)
-    auto* invPtr = reinterpret_cast<Inventory**>(reinterpret_cast<uintptr_t>(ctx) + 0x2C);
-    return invPtr ? *invPtr : nullptr;
+    // Inventory struct doesn't map directly to a single pointer.
+    // Build a pseudo-inventory by reading bags individually.
+    // For gold, use the BasePointer chain: *base -> +0x18 -> +0x40 -> gold offsets
+    static Inventory s_cachedInventory = {};
+    uintptr_t bagsBase = GetBagsArrayBase();
+    if (!bagsBase) return nullptr;
+
+    __try {
+        for (int b = 0; b < 23; b++) {
+            uintptr_t bagPtr = 0;
+            if (ReadPtr(bagsBase + 4 * b, bagPtr)) {
+                s_cachedInventory.bags[b] = reinterpret_cast<Bag*>(bagPtr);
+            } else {
+                s_cachedInventory.bags[b] = nullptr;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+
+    // Gold: same chain as bags — bagsBase is already deref'd from +0xF8
+    // Gold char at bagsBase + 0x90, gold storage at bagsBase + 0x94
+    // But bagsBase was the result of 4 derefs. We need the struct BEFORE the +0xF8 deref.
+    uintptr_t ctx = 0, p1 = 0, p2 = 0;
+    if (ReadPtr(Offsets::BasePointer, ctx) && ReadPtr(ctx + 0x18, p1) && ReadPtr(p1 + 0x40, p2)) {
+        uintptr_t invStruct = 0;
+        if (ReadPtr(p2 + 0xF8, invStruct)) {
+            __try {
+                s_cachedInventory.gold_character = *reinterpret_cast<uint32_t*>(invStruct + 0x90);
+                s_cachedInventory.gold_storage = *reinterpret_cast<uint32_t*>(invStruct + 0x94);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+    }
+
+    return &s_cachedInventory;
 }
 
 uint32_t GetGoldCharacter() {
