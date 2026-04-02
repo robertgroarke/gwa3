@@ -6,6 +6,7 @@
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
 
+#include <MinHook.h>
 #include <cstring>
 #include <cstdio>
 
@@ -86,9 +87,52 @@ uint32_t GetPing() {
     return ping < 10 ? 10 : ping;
 }
 
+// ===== Render toggle via MinHook on GwEndScene =====
+// Signature: bool __cdecl GwEndScene(void* ctx, void* unk)
+typedef bool(__cdecl* GwEndSceneFn)(void*, void*);
+static GwEndSceneFn s_originalEndScene = nullptr;
+static bool s_renderHookInstalled = false;
+static bool s_renderingDisabled = false;
+
+static bool __cdecl RenderHookFn(void* ctx, void* unk) {
+    if (s_renderingDisabled) {
+        return true; // skip rendering this frame
+    }
+    return s_originalEndScene(ctx, unk);
+}
+
+static void InstallRenderHook() {
+    if (s_renderHookInstalled) return;
+    if (!Offsets::Render || Offsets::Render < 0x10000) {
+        Log::Warn("ChatMgr: Render offset not resolved, cannot install render hook");
+        return;
+    }
+
+    MH_STATUS status = MH_CreateHook(
+        reinterpret_cast<LPVOID>(Offsets::Render),
+        reinterpret_cast<LPVOID>(&RenderHookFn),
+        reinterpret_cast<LPVOID*>(&s_originalEndScene));
+    if (status != MH_OK) {
+        Log::Warn("ChatMgr: MH_CreateHook for render failed: %s", MH_StatusToString(status));
+        return;
+    }
+
+    status = MH_EnableHook(reinterpret_cast<LPVOID>(Offsets::Render));
+    if (status != MH_OK) {
+        Log::Warn("ChatMgr: MH_EnableHook for render failed: %s", MH_StatusToString(status));
+        return;
+    }
+
+    s_renderHookInstalled = true;
+    Log::Info("ChatMgr: Render hook installed at 0x%08X", Offsets::Render);
+}
+
 void SetRenderingEnabled(bool enabled) {
-    // TODO: implement via Render hook offset
-    (void)enabled;
+    if (!s_renderHookInstalled) {
+        InstallRenderHook();
+    }
+    if (!s_renderHookInstalled) return;
+    s_renderingDisabled = !enabled;
 }
 
 } // namespace GWA3::ChatMgr

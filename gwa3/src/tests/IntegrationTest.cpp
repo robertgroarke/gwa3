@@ -2098,11 +2098,11 @@ static bool TestPlayerData() {
     IntReport("  PlayerArray: %p (size=%u)", playerArray, playerArray ? playerArray->size : 0);
 
     if (!playerArray || playerArray->size == 0) {
-        IntSkip("PlayerNumber valid", "PlayerArray offset not yet resolved (TODO)");
-        IntSkip("PlayerName", "PlayerArray offset not yet resolved");
-        IntSkip("Player struct", "PlayerArray offset not yet resolved");
-        IntSkip("GetPlayerAgentId", "PlayerArray offset not yet resolved");
-        IntSkip("Player count", "PlayerArray offset not yet resolved");
+        IntSkip("PlayerNumber valid", "PlayerArray empty or WorldContext unavailable");
+        IntSkip("PlayerName", "PlayerArray empty or WorldContext unavailable");
+        IntSkip("Player struct", "PlayerArray empty or WorldContext unavailable");
+        IntSkip("GetPlayerAgentId", "PlayerArray empty or WorldContext unavailable");
+        IntSkip("Player count", "PlayerArray empty or WorldContext unavailable");
         IntCheck("PlayerMgr::Initialize ran (no crash)", true);
         IntReport("");
         return true;
@@ -2170,9 +2170,9 @@ static bool TestCameraIntrospection() {
     IntReport("  Camera struct: %p", cam);
 
     if (!cam) {
-        IntSkip("Camera struct", "Camera offset not yet resolved (TODO)");
-        IntSkip("Camera FOV", "Camera offset not yet resolved");
-        IntSkip("Camera Yaw", "Camera offset not yet resolved");
+        IntSkip("Camera struct", "CameraClass scan pattern did not resolve");
+        IntSkip("Camera FOV", "CameraClass unavailable");
+        IntSkip("Camera Yaw", "CameraClass unavailable");
         IntCheck("CameraMgr::Initialize ran (no crash)", true);
         IntReport("");
         return true;
@@ -3199,6 +3199,33 @@ static bool TestCameraControls() {
     return true;
 }
 
+// ===== GWA3-057: Rendering Toggle =====
+
+static bool TestRenderingToggle() {
+    IntReport("=== GWA3-057: Rendering Toggle ===");
+
+    if (ReadMyId() == 0) {
+        IntSkip("Rendering toggle", "Not in game");
+        IntReport("");
+        return false;
+    }
+
+    // Disable rendering briefly
+    IntReport("  Disabling rendering...");
+    ChatMgr::SetRenderingEnabled(false);
+    Sleep(500);
+    IntCheck("SetRenderingEnabled(false) no crash", true);
+
+    // Re-enable rendering
+    IntReport("  Re-enabling rendering...");
+    ChatMgr::SetRenderingEnabled(true);
+    Sleep(500);
+    IntCheck("SetRenderingEnabled(true) no crash", true);
+
+    IntReport("");
+    return true;
+}
+
 // ===== GWA3-056: StoC Packet Hook =====
 
 static bool TestStoCHook() {
@@ -3316,6 +3343,7 @@ int RunAdvancedTest() {
         TestAgentDistanceCrossCheck();
         TestCameraControls();
         TestStoCHook();
+        TestRenderingToggle();
 
         // Chat write (local only, safe anywhere)
         TestChatWriteLocal();
