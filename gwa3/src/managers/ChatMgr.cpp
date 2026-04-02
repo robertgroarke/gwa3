@@ -1,4 +1,5 @@
 #include <gwa3/managers/ChatMgr.h>
+#include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
@@ -6,6 +7,7 @@
 #include <gwa3/core/Log.h>
 
 #include <cstring>
+#include <cstdio>
 
 namespace GWA3::ChatMgr {
 
@@ -44,10 +46,38 @@ void SendChat(const wchar_t* message, wchar_t channel) {
                      reinterpret_cast<uint32_t*>(buf)[3]);
 }
 
+// GWCA UIMessage::kWriteToChatLog = 0x1000007E
+static constexpr uint32_t kWriteToChatLog = 0x1000007Eu;
+
+// UIChatMessage struct passed to SendUIMessage for kWriteToChatLog
+struct UIChatMessage {
+    uint32_t channel;
+    wchar_t* message;
+    uint32_t channel2;
+};
+
 void WriteToChat(const wchar_t* message, uint32_t channel) {
-    // TODO: implement via PostMessage offset when chat log hook is in place
-    (void)message;
-    (void)channel;
+    if (!message || !message[0]) return;
+
+    // Wrap message in GW encoding tags: \x108\x107<text>\x1
+    // Copy into a heap-allocated buffer so it survives until the game thread runs.
+    wchar_t encoded[300];
+    int len = swprintf(encoded, 300, L"\x108\x107%s\x1", message);
+    if (len <= 0) return;
+
+    size_t byteLen = (static_cast<size_t>(len) + 1) * sizeof(wchar_t);
+    wchar_t* heap = static_cast<wchar_t*>(malloc(byteLen));
+    if (!heap) return;
+    memcpy(heap, encoded, byteLen);
+
+    GameThread::Enqueue([heap, channel]() {
+        UIChatMessage param;
+        param.channel = channel;
+        param.message = heap;
+        param.channel2 = channel;
+        UIMgr::SendUIMessage(kWriteToChatLog, &param, nullptr);
+        free(heap);
+    });
 }
 
 uint32_t GetPing() {
