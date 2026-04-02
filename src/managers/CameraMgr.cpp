@@ -1,5 +1,6 @@
 #include <gwa3/managers/CameraMgr.h>
 #include <gwa3/core/Offsets.h>
+#include <gwa3/core/Memory.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
 
@@ -76,11 +77,33 @@ bool GetCameraUnlock() {
 }
 
 bool SetFog(bool flag) {
-    // TODO: Fog toggle requires patching a render instruction.
-    // Needs a dedicated scan pattern and memory patch in Offsets.
+    // Fog patch: scan result is the address of the "and eax, 1" instruction.
+    // Patching the byte at that address to 0x00 disables fog (always zero).
+    // Restoring original byte re-enables fog.
+    static Memory::Patch s_fogPatch;
+    static bool s_fogPatchStaged = false;
+
+    if (!s_fogPatchStaged && Offsets::FogPatch > 0x10000) {
+        const uint8_t nopByte = 0x00;
+        s_fogPatch.SetPatch(Offsets::FogPatch, &nopByte, 1);
+        s_fogPatchStaged = true;
+    }
+
+    if (!s_fogPatchStaged) {
+        Log::Warn("CameraMgr: SetFog unavailable (FogPatch offset not resolved)");
+        return false;
+    }
+
+    if (flag) {
+        // Enable fog = disable the patch (restore original byte)
+        s_fogPatch.Disable();
+    } else {
+        // Disable fog = enable the patch
+        s_fogPatch.Enable();
+    }
+
     s_fogDisabled = !flag;
-    Log::Warn("CameraMgr: SetFog not yet implemented (needs render patch)");
-    return false;
+    return true;
 }
 
 } // namespace GWA3::CameraMgr
