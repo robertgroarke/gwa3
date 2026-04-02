@@ -118,6 +118,16 @@ namespace GWA3::Offsets {
     extern uintptr_t CameraClass;        // ptr — Camera struct global
     extern uintptr_t FogPatch;           // ptr — fog render instruction to patch
 
+    // ===== Effects =====
+    extern uintptr_t PostProcessEffect;  // func — visual post-process effect
+    extern uintptr_t DropBuff;           // func — drop maintained enchantment
+
+    // ===== Render =====
+    extern uintptr_t GwEndScene;         // func — GW render end-scene entry
+
+    // ===== Items =====
+    extern uintptr_t ItemClick;          // func — item interaction dispatch
+
     // ===== Frame UI (GWA3-new) =====
     extern uintptr_t SendFrameUIMsg;     // func — scanned via pattern 83 C1 DC E8
 

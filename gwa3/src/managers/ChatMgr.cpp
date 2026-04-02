@@ -103,13 +103,22 @@ static bool __cdecl RenderHookFn(void* ctx, void* unk) {
 
 static void InstallRenderHook() {
     if (s_renderHookInstalled) return;
-    if (!Offsets::Render || Offsets::Render < 0x10000) {
-        Log::Warn("ChatMgr: Render offset not resolved, cannot install render hook");
+
+    // Prefer GwEndScene (GWCA pattern) over Render (AutoIt hook pattern)
+    uintptr_t target = 0;
+    if (Offsets::GwEndScene && Offsets::GwEndScene > 0x10000) {
+        target = Offsets::GwEndScene;
+        Log::Info("ChatMgr: Using GwEndScene at 0x%08X for render hook", target);
+    } else if (Offsets::Render && Offsets::Render > 0x10000) {
+        target = Offsets::Render;
+        Log::Info("ChatMgr: Using Render fallback at 0x%08X for render hook", target);
+    } else {
+        Log::Warn("ChatMgr: No render offset resolved, cannot install render hook");
         return;
     }
 
     MH_STATUS status = MH_CreateHook(
-        reinterpret_cast<LPVOID>(Offsets::Render),
+        reinterpret_cast<LPVOID>(target),
         reinterpret_cast<LPVOID>(&RenderHookFn),
         reinterpret_cast<LPVOID*>(&s_originalEndScene));
     if (status != MH_OK) {
@@ -117,7 +126,7 @@ static void InstallRenderHook() {
         return;
     }
 
-    status = MH_EnableHook(reinterpret_cast<LPVOID>(Offsets::Render));
+    status = MH_EnableHook(reinterpret_cast<LPVOID>(target));
     if (status != MH_OK) {
         Log::Warn("ChatMgr: MH_EnableHook for render failed: %s", MH_StatusToString(status));
         return;
