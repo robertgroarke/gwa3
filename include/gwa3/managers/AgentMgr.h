@@ -31,6 +31,9 @@ namespace GWA3::AgentMgr {
     Agent* GetAgentByID(uint32_t agentId);
     AgentLiving* GetMyAgent();
     AgentLiving* GetTargetAsLiving();
+    uint32_t GetMaxAgents();
+
+    // Deprecated — returns null. Use GetAgentByID + GetMaxAgents instead.
     GWArray<Agent*>* GetAgentArray();
 
     // Utility

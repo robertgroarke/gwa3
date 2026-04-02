@@ -187,14 +187,14 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
         if (!IsMapLoaded()) return;
 
         // Check for enemies in fight range — auto-attack nearest
-        auto* agents = AgentMgr::GetAgentArray();
-        if (agents && agents->buffer) {
+        {
             float bestDist = fightRange * fightRange;
             uint32_t bestId = 0;
             auto* me = AgentMgr::GetMyAgent();
-            if (me) {
-                for (uint32_t i = 0; i < agents->size; i++) {
-                    auto* a = agents->buffer[i];
+            uint32_t maxAgents = AgentMgr::GetMaxAgents();
+            if (me && maxAgents > 0) {
+                for (uint32_t i = 1; i < maxAgents; i++) {
+                    auto* a = AgentMgr::GetAgentByID(i);
                     if (!a || a->type != 0xDB) continue;
                     auto* living = static_cast<AgentLiving*>(a);
                     if (living->allegiance != 3) continue; // not foe
@@ -371,16 +371,14 @@ static bool ShouldSellItem(const Item* item) {
 }
 
 static uint32_t FindNearestNpcByAllegiance(float x, float y, float maxDist) {
-    auto* agents = AgentMgr::GetAgentArray();
-    if (!agents || !agents->buffer) return 0;
-    auto* me = AgentMgr::GetMyAgent();
-    if (!me) return 0;
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    if (maxAgents == 0) return 0;
 
     float bestDist = maxDist * maxDist;
     uint32_t bestId = 0;
 
-    for (uint32_t i = 0; i < agents->size; i++) {
-        auto* a = agents->buffer[i];
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
         if (!a || a->type != 0xDB) continue;
         auto* living = static_cast<AgentLiving*>(a);
         if (living->allegiance != 6) continue; // not NPC
