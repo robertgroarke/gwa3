@@ -10,6 +10,7 @@
 #include <gwa3/core/Log.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/TargetLogHook.h>
+#include <gwa3/core/RenderHook.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/SkillMgr.h>
@@ -2008,7 +2009,9 @@ static bool TestExplorableEntry() {
     {
         float cx = 0, cy = 0;
         TryReadAgentPosition(ReadMyId(), cx, cy);
-        IntReport("  Current position before exit: (%.0f, %.0f) MapID=%u", cx, cy, ReadMapId());
+        IntReport("  Current position before exit: (%.0f, %.0f) MapID=%u qCtr=%u pending=%u",
+                  cx, cy, ReadMapId(),
+                  RenderHook::GetQueueCounter(), RenderHook::GetPendingCount());
 
         // If we're far from Gadd's exit area, re-travel
         if (ReadMapId() != MAP_GADDS_ENCAMPMENT) {
@@ -3345,6 +3348,57 @@ static bool TestItemClickOffset() {
     return true;
 }
 
+// ===== GWA3-062: SendChat Offset =====
+
+static bool TestSendChatOffset() {
+    IntReport("=== GWA3-062: SendChat Offset ===");
+
+    IntReport("  SendChatFunc: 0x%08X", static_cast<unsigned>(Offsets::SendChatFunc));
+
+    if (Offsets::SendChatFunc > 0x10000) {
+        IntCheck("SendChatFunc offset resolved", true);
+    } else {
+        IntSkip("SendChatFunc offset", "Pattern did not resolve");
+    }
+
+    IntReport("");
+    return true;
+}
+
+// ===== GWA3-063: AddToChatLog Offset =====
+
+static bool TestAddToChatLogOffset() {
+    IntReport("=== GWA3-063: AddToChatLog Offset ===");
+
+    IntReport("  AddToChatLog: 0x%08X", static_cast<unsigned>(Offsets::AddToChatLog));
+
+    if (Offsets::AddToChatLog > 0x10000) {
+        IntCheck("AddToChatLog offset resolved", true);
+    } else {
+        IntSkip("AddToChatLog offset", "Pattern did not resolve");
+    }
+
+    IntReport("");
+    return true;
+}
+
+// ===== GWA3-065: SkipCinematic Offset =====
+
+static bool TestSkipCinematicOffset() {
+    IntReport("=== GWA3-065: SkipCinematic Offset ===");
+
+    IntReport("  SkipCinematicFunc: 0x%08X", static_cast<unsigned>(Offsets::SkipCinematicFunc));
+
+    if (Offsets::SkipCinematicFunc > 0x10000) {
+        IntCheck("SkipCinematicFunc offset resolved", true);
+    } else {
+        IntSkip("SkipCinematicFunc offset", "Pattern did not resolve");
+    }
+
+    IntReport("");
+    return true;
+}
+
 // ===== GWA3-060: Effect/Buff Array =====
 
 static bool TestEffectArray() {
@@ -3544,6 +3598,9 @@ int RunAdvancedTest() {
         TestPostProcessEffectOffset();
         TestGwEndSceneOffset();
         TestItemClickOffset();
+        TestSendChatOffset();
+        TestAddToChatLogOffset();
+        TestSkipCinematicOffset();
         TestEffectArray();
         TestStoCHook();
         TestRenderingToggle();

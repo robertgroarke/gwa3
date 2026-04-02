@@ -19,4 +19,8 @@ namespace GWA3::RenderHook {
 
     bool IsInitialized();
 
+    // Diagnostic: queue counter and pending entry count
+    uint32_t GetQueueCounter();
+    uint32_t GetPendingCount();
+
 } // namespace GWA3::RenderHook
