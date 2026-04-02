@@ -151,7 +151,8 @@ void MoveToCoord(float x, float y) {
     uint32_t ix, iy;
     memcpy(&ix, &x, 4);
     memcpy(&iy, &y, 4);
-    SendPacket(3, Packets::MOVE_TO_COORD, ix, iy);
+    // AutoIt: SendPacket(0x8, HEADER, x, y) — size=8 bytes (matching GW wire format)
+    SendPacket(2, Packets::MOVE_TO_COORD, ix, iy);
 }
 
 void Dialog(uint32_t dialogId) {
