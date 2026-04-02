@@ -6,6 +6,7 @@
 #include <gwa3/core/Log.h>
 
 #include <cstring>
+#include <Windows.h>
 
 namespace GWA3::PlayerMgr {
 
@@ -30,15 +31,35 @@ bool RemoveActiveTitle() {
     return true;
 }
 
-// Title array is typically accessible via a base pointer from Offsets.
-// The structure is: TitleArray at BasePointer + known offset.
-// For now, we use the AgentBase context approach used by GWCA.
+// WorldContext resolution: *BasePointer → +0x18 → +0x2C = WorldContext*
+// GWCA: GameContext(+0x2C)->WorldContext
+// AutoIt: [0, 0x18, 0x2C]
+static uintptr_t ResolveWorldContext() {
+    if (Offsets::BasePointer <= 0x10000) return 0;
 
+    __try {
+        uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+        if (ctx <= 0x10000) return 0;
+        uintptr_t p1 = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
+        if (p1 <= 0x10000) return 0;
+        uintptr_t world = *reinterpret_cast<uintptr_t*>(p1 + 0x2C);
+        if (world <= 0x10000) return 0;
+        return world;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// TitleArray at WorldContext + 0x81C (GWCA WorldContext.h)
 static GWArray<Title>* GetTitleArray() {
-    // TODO: Add dedicated TitleArray scan pattern to Offsets.
-    // GWCA resolves this via a context pointer chain.
-    // For now return null — title reads need the scan pattern.
-    return nullptr;
+    uintptr_t world = ResolveWorldContext();
+    if (!world) return nullptr;
+
+    __try {
+        return reinterpret_cast<GWArray<Title>*>(world + 0x81C);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
 }
 
 Title* GetTitleTrack(uint32_t titleId) {
@@ -69,11 +90,19 @@ Title* GetActiveTitle() {
 
 // ===== Player Data =====
 
+// PlayerArray at WorldContext + 0x80C (GWCA WorldContext.h)
+// AutoIt: [0, 0x18, 0x2C, 0x80C]
 static GWArray<Player>* ResolvePlayerArray() {
-    // Player array is accessed via BasePointer -> context chain.
-    // GWCA uses: *(uint32_t*)(BasePointer) -> player context -> array
-    // TODO: Add dedicated PlayerArray scan pattern to Offsets.
-    return nullptr;
+    uintptr_t world = ResolveWorldContext();
+    if (!world) return nullptr;
+
+    __try {
+        auto* arr = reinterpret_cast<GWArray<Player>*>(world + 0x80C);
+        if (!arr->buffer || arr->size == 0 || arr->size > 1000) return nullptr;
+        return arr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
 }
 
 Player* GetPlayerByID(uint32_t playerId) {
