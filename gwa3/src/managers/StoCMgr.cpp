@@ -1,4 +1,5 @@
 #include <gwa3/managers/StoCMgr.h>
+#include <gwa3/game/GameTypes.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/Scanner.h>
 #include <gwa3/core/GameThread.h>

@@ -20,6 +20,7 @@
 #include <gwa3/managers/PlayerMgr.h>
 #include <gwa3/managers/CameraMgr.h>
 #include <gwa3/packets/CtoS.h>
+#include <gwa3/managers/StoCMgr.h>
 #include <gwa3/bot/BotFramework.h>
 #include <gwa3/bot/FroggyHM.h>
 #include <gwa3/core/SmokeTest.h>
@@ -297,6 +298,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
         CreateThread(nullptr, 0, &InitThread, hModule, 0, nullptr);
     } else if (reason == DLL_PROCESS_DETACH) {
         GWA3::Bot::Stop();
+        GWA3::StoC::Shutdown();
         GWA3::TraderHook::Shutdown();
         GWA3::TargetLogHook::Shutdown();
         GWA3::RenderHook::Shutdown();

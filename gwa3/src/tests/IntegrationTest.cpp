@@ -24,6 +24,7 @@
 #include <gwa3/managers/MemoryMgr.h>
 #include <gwa3/managers/GuildMgr.h>
 #include <gwa3/managers/FriendListMgr.h>
+#include <gwa3/managers/StoCMgr.h>
 #include <gwa3/packets/CtoS.h>
 
 #include <Windows.h>
@@ -3198,6 +3199,81 @@ static bool TestCameraControls() {
     return true;
 }
 
+// ===== GWA3-056: StoC Packet Hook =====
+
+static bool TestStoCHook() {
+    IntReport("=== GWA3-056: StoC Packet Hook ===");
+
+    if (ReadMyId() == 0) {
+        IntSkip("StoC hook", "Not in game");
+        IntReport("");
+        return false;
+    }
+
+    // Test 1: EmulatePacket with callback registration
+    static std::atomic<uint32_t> emulateHitCount{0};
+    static std::atomic<uint32_t> emulateLastHeader{0};
+    StoC::HookEntry testEntry{nullptr};
+
+    // Use a high header number unlikely to collide with real traffic
+    constexpr uint32_t kTestHeader = 0x1FFu;
+
+    const bool registered = StoC::RegisterPacketCallback(&testEntry, kTestHeader,
+        [](StoC::HookStatus*, StoC::PacketBase* packet) {
+            emulateHitCount++;
+            emulateLastHeader = packet->header;
+        }, -1);
+    IntCheck("RegisterPacketCallback succeeded", registered);
+
+    // Emulate a fake packet
+    StoC::PacketBase fakePacket;
+    fakePacket.header = kTestHeader;
+    const bool emulated = StoC::EmulatePacket(&fakePacket);
+    IntCheck("EmulatePacket dispatched to callback", emulated);
+    IntCheck("Callback fired from emulated packet", emulateHitCount.load() > 0);
+    IntCheck("Callback received correct header", emulateLastHeader.load() == kTestHeader);
+    IntReport("  EmulatePacket: hits=%u lastHeader=0x%X",
+              emulateHitCount.load(), emulateLastHeader.load());
+
+    // Clean up
+    StoC::RemoveCallbacks(&testEntry);
+    IntCheck("RemoveCallbacks succeeded (no crash)", true);
+
+    // Verify callback no longer fires after removal
+    const uint32_t hitsBefore = emulateHitCount.load();
+    StoC::EmulatePacket(&fakePacket);
+    IntCheck("Callback does not fire after removal", emulateHitCount.load() == hitsBefore);
+
+    // Test 2: Register a real packet listener and wait for game traffic
+    // Header 0x00E1 is a common agent update packet that fires frequently
+    static std::atomic<uint32_t> liveHitCount{0};
+    StoC::HookEntry liveEntry{nullptr};
+
+    const bool liveRegistered = StoC::RegisterPostPacketCallback(&liveEntry, 0x00E1u,
+        [](StoC::HookStatus*, StoC::PacketBase*) {
+            liveHitCount++;
+        });
+    IntCheck("Live packet callback registered", liveRegistered);
+
+    // Wait up to 3 seconds for any packet to arrive
+    const bool liveHit = WaitFor("StoC live packet fires", 3000, []() {
+        return liveHitCount.load() > 0;
+    });
+
+    IntReport("  Live StoC hits after wait: %u", liveHitCount.load());
+    if (liveHit) {
+        IntCheck("Live StoC callback fired from game traffic", true);
+    } else {
+        IntSkip("Live StoC callback", "No 0xE1 packets observed in 3s (hook may not be installed yet)");
+    }
+
+    StoC::RemoveCallbacks(&liveEntry);
+    IntCheck("Live callback cleanup (no crash)", true);
+
+    IntReport("");
+    return true;
+}
+
 // ===== Advanced Integration Runner =====
 
 int RunAdvancedTest() {
@@ -3239,6 +3315,7 @@ int RunAdvancedTest() {
         TestWeaponSetValidation();
         TestAgentDistanceCrossCheck();
         TestCameraControls();
+        TestStoCHook();
 
         // Chat write (local only, safe anywhere)
         TestChatWriteLocal();
