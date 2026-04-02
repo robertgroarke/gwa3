@@ -7,6 +7,7 @@
 #include <gwa3/managers/PartyMgr.h>
 #include <gwa3/managers/QuestMgr.h>
 #include <gwa3/managers/TradeMgr.h>
+#include <gwa3/managers/EffectMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/managers/ChatMgr.h>
 #include <gwa3/packets/CtoS.h>
@@ -518,18 +519,36 @@ static Item* FindItemByModel(uint32_t modelId) {
     return nullptr;
 }
 
-static float GetMorale() {
-    auto* me = AgentMgr::GetMyAgent();
-    if (!me) return 0.0f;
-    auto* living = static_cast<AgentLiving*>(me);
-    // Morale is stored as hp_pips in some contexts, but in GW the morale
-    // modifier affects max energy/health. For DP detection we check if
-    // max energy or health are reduced below baseline.
-    // Simplified: check energy_regen for negative morale indicator.
-    // The actual morale boost is in the effect list, which we don't have yet.
-    // For now, return 0 (no morale penalty detected).
-    (void)living;
-    return 0.0f;
+// Known buff/effect skill IDs for maintenance detection
+static constexpr uint32_t SKILL_DWARVEN_BLESSING  = 2049;
+static constexpr uint32_t SKILL_ASURAN_BLESSING   = 2050;
+static constexpr uint32_t SKILL_NORN_BLESSING     = 2051;
+static constexpr uint32_t SKILL_VANGUARD_BLESSING = 2052;
+static constexpr uint32_t SKILL_ARMOR_OF_SALVATION = 2053; // conset
+static constexpr uint32_t SKILL_ESSENCE_CELERITY  = 2054; // conset
+static constexpr uint32_t SKILL_GRAIL_OF_MIGHT    = 2055; // conset
+
+static uint32_t GetPlayerEffectCount() {
+    auto* ae = EffectMgr::GetPlayerEffects();
+    if (!ae) return 0;
+    return ae->effects.size;
+}
+
+static bool HasBlessing() {
+    if (Offsets::MyID <= 0x10000) return false;
+    uint32_t myId = *reinterpret_cast<uint32_t*>(Offsets::MyID);
+    return EffectMgr::HasEffect(myId, SKILL_DWARVEN_BLESSING) ||
+           EffectMgr::HasEffect(myId, SKILL_ASURAN_BLESSING) ||
+           EffectMgr::HasEffect(myId, SKILL_NORN_BLESSING) ||
+           EffectMgr::HasEffect(myId, SKILL_VANGUARD_BLESSING);
+}
+
+static bool HasConset() {
+    if (Offsets::MyID <= 0x10000) return false;
+    uint32_t myId = *reinterpret_cast<uint32_t*>(Offsets::MyID);
+    return EffectMgr::HasEffect(myId, SKILL_ARMOR_OF_SALVATION) &&
+           EffectMgr::HasEffect(myId, SKILL_ESSENCE_CELERITY) &&
+           EffectMgr::HasEffect(myId, SKILL_GRAIL_OF_MIGHT);
 }
 
 static bool NeedsMaintenance() {
@@ -828,13 +847,18 @@ BotState HandleMaintenance(BotConfig& cfg) {
     // Use DP removal sweets if we had wipes
     UseDpRemovalIfNeeded();
 
-    // Report inventory status
+    // Report inventory and buff status
     uint32_t freeSlots = CountFreeSlots();
     uint32_t idKits = CountItemByModel(MODEL_ID_KIT) + CountItemByModel(MODEL_SUP_ID_KIT);
     uint32_t salvKits = CountItemByModel(MODEL_SALV_KIT) + CountItemByModel(MODEL_EXP_SALV_KIT);
     uint32_t charGold = ItemMgr::GetGoldCharacter();
+    uint32_t effectCount = GetPlayerEffectCount();
+    bool hasBless = HasBlessing();
+    bool hasCon = HasConset();
     LogBot("Inventory: %u free slots, %u ID kits, %u salvage kits, %u gold",
            freeSlots, idKits, salvKits, charGold);
+    LogBot("Buffs: %u effects, blessing=%s, conset=%s",
+           effectCount, hasBless ? "yes" : "no", hasCon ? "yes" : "no");
 
     // If still critically low on slots after selling, log warning
     if (freeSlots < 3) {

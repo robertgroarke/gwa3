@@ -21,6 +21,7 @@
 #include <gwa3/managers/CameraMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/managers/StoCMgr.h>
+#include <gwa3/managers/EffectMgr.h>
 #include <gwa3/bot/BotFramework.h>
 #include <gwa3/bot/FroggyHM.h>
 #include <gwa3/core/SmokeTest.h>
@@ -203,6 +204,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     GWA3::MemoryMgr::Initialize();
     GWA3::PlayerMgr::Initialize();
     GWA3::CameraMgr::Initialize();
+    GWA3::EffectMgr::Initialize();
 
     if (smokeTest) {
         GWA3::Log::Info("=== SMOKE TEST MODE ===");
