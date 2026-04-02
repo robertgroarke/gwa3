@@ -102,7 +102,7 @@ void CancelAction() {
 }
 
 void MapTravel(uint32_t mapId, uint32_t region, uint32_t district, uint32_t language) {
-    SendPacket(5, Packets::MAP_TRAVEL, mapId, region, district, language);
+    SendPacket(6, Packets::MAP_TRAVEL, mapId, region, district, language, 0u);
 }
 
 void HeroAdd(uint32_t heroId) {
@@ -144,7 +144,7 @@ void DropItem(uint32_t itemId) {
 }
 
 void PickUpItem(uint32_t itemAgentId) {
-    SendPacket(2, Packets::ITEM_INTERACT, itemAgentId);
+    SendPacket(3, Packets::ITEM_INTERACT, itemAgentId, 0u);
 }
 
 void MoveItem(uint32_t itemId, uint32_t bagId, uint32_t slot) {

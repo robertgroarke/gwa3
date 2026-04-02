@@ -42,6 +42,7 @@ uintptr_t SalvageGlobal = 0;
 uintptr_t AgentBase = 0;
 uintptr_t ChangeTarget = 0;
 uintptr_t CurrentTarget = 0;
+uintptr_t TargetLog = 0;
 uintptr_t MyID = 0;
 
 uintptr_t Move = 0;
@@ -159,8 +160,9 @@ static const PatternDef s_patterns[] = {
     // ===== Agents (P0) =====
     PAT("ChangeTarget",   ChangeTarget,   "\x3B\xDF\x0F\x95",                   "xxxx",     -0x8A,  Priority::P0, PatternType::Func),
     PAT("CurrentTarget",  CurrentTarget,
-        "\x83\xC4\x08\x5F\x8B\xE5\x5D\xC3\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\x55",
-        "xxxxxxxxxxxxxxxxxxxxxxxxxxxx", -0xF, Priority::P0, PatternType::Ptr),
+        "\xFF\x35\x00\x00\x00\x00\xD9\x1D\x00\x00\x00\x00\xE8\x00\x00\x00\x00\x83\xC4\x08\x5F\x8B\xE5\x5D\xC3\xCC",
+        "xx????xx????x????xxxxxxxxx", 0x2, Priority::P0, PatternType::Ptr),
+    PAT("TargetLog",      TargetLog,      "\x53\x56\x57\x8B\xFA",                 "xxxxx",     0x0, Priority::P1, PatternType::Hook),
 
     // ===== Map (P0) =====
     PAT("Move",           Move,           "\x55\x8B\xEC\x83\xEC\x20\x8D\x45\xF0", "xxxxxxxxx", 0x0, Priority::P0, PatternType::Func),

@@ -14,6 +14,7 @@ namespace GWA3::AgentMgr {
     // Targeting
     void ChangeTarget(uint32_t agentId);
     uint32_t GetTargetId();
+    uint32_t GetTargetIdFromLog();
     uint32_t GetMyId();
 
     // Combat

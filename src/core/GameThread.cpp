@@ -14,6 +14,7 @@ using GameCallback = void(__cdecl*)(float, int);
 static CRITICAL_SECTION s_cs;
 static bool s_initialized = false;
 static bool s_onGameThread = false;
+static DWORD s_gameThreadId = 0;
 
 static GameCallback s_originalCallback = nullptr;
 static uintptr_t s_hookTarget = 0;
@@ -33,6 +34,7 @@ static std::vector<CallbackRecord> s_registry;
 static void Dispatch() {
     EnterCriticalSection(&s_cs);
     s_onGameThread = true;
+    s_gameThreadId = GetCurrentThreadId();
 
     // Phase 1: Drain singleshot queue (swap to local to avoid holding lock during execution)
     std::vector<Callback> local;
@@ -65,6 +67,7 @@ static void __cdecl DetourCallback(float elapsed, int unknown) {
 
     EnterCriticalSection(&s_cs);
     s_onGameThread = false;
+    s_gameThreadId = 0;
     LeaveCriticalSection(&s_cs);
 }
 
@@ -168,6 +171,7 @@ void Shutdown() {
     s_queue.clear();
     s_registry.clear();
     s_onGameThread = false;
+    s_gameThreadId = 0;
     s_initialized = false;
     LeaveCriticalSection(&s_cs);
 
@@ -184,7 +188,7 @@ void Enqueue(Callback task) {
     EnterCriticalSection(&s_cs);
 
     // Fast path: if already on game thread, execute immediately
-    if (s_onGameThread) {
+    if (s_onGameThread && s_gameThreadId == GetCurrentThreadId()) {
         LeaveCriticalSection(&s_cs);
         task();
         return;
@@ -232,7 +236,7 @@ void RemoveCallback(HookEntry* entry) {
 bool IsOnGameThread() {
     if (!s_initialized) return false;
     EnterCriticalSection(&s_cs);
-    bool result = s_onGameThread;
+    bool result = s_onGameThread && s_gameThreadId == GetCurrentThreadId();
     LeaveCriticalSection(&s_cs);
     return result;
 }

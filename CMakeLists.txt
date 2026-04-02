@@ -30,6 +30,8 @@ add_library(gwa3_core OBJECT
     src/core/GameThread.cpp
     src/core/Memory.cpp
     src/core/RenderHook.cpp
+    src/core/TraderHook.cpp
+    src/core/TargetLogHook.cpp
     src/core/CallbackRegistry.cpp
     src/packets/CtoS.cpp
     src/managers/AgentMgr.cpp
