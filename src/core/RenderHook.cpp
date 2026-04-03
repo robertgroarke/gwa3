@@ -69,6 +69,18 @@ bool Initialize() {
     s_disableRendering = 0;
     ZeroMemory(s_queue, sizeof(s_queue));
 
+    // Dump the original bytes at the hook site for debugging
+    {
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(hookAddr);
+        Log::Info("RenderHook: Original bytes at 0x%08X: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                  hookAddr, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11], p[12], p[13], p[14]);
+        // Also dump 10 bytes BEFORE hook site for context
+        const uint8_t* before = p - 10;
+        Log::Info("RenderHook: 10 bytes before: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                  before[0], before[1], before[2], before[3], before[4],
+                  before[5], before[6], before[7], before[8], before[9]);
+    }
+
     // AutoIt's WriteDetour writes a 5-byte JMP at the hook site and returns
     // to Render+0xA from the detour body. Keep bytes +5..+9 intact.
     memcpy(s_savedBytes, reinterpret_cast<void*>(hookAddr), kPatchSize);
