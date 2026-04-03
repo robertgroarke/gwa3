@@ -69,6 +69,13 @@ class ObservationWindow:
                 f"{'CASTING' if me.get('is_casting') else 'MOVING' if me.get('is_moving') else 'idle'}"
             )
 
+        # Gold (always available from Tier 1)
+        gold = snap.get("gold", {})
+        if gold:
+            lines.append(
+                f"Gold: character={gold.get('character', 0):,} storage={gold.get('storage', 0):,}"
+            )
+
         # Map
         m = snap.get("map", {})
         if m.get("map_id"):
@@ -183,12 +190,36 @@ class ObservationWindow:
                     did = btn.get("dialog_id", 0)
                     lines.append(f"    [{did}] {label}")
 
+        # Merchant/trader window (from tier 2+)
+        merchant = snap.get("merchant", {})
+        if merchant.get("is_open"):
+            lines.append(f"MERCHANT OPEN ({merchant.get('item_count', 0)} items):")
+            merch_items = merchant.get("items", [])
+            for mi in merch_items:
+                mid = mi.get("model_id", 0)
+                mname = item_name(mid) if mid else f"item#{mi.get('item_id', '?')}"
+                mtype = item_type_name(mi.get("type", -1))
+                val = mi.get("value", 0)
+                qty = mi.get("quantity", 1)
+                qty_str = f" x{qty}" if qty > 1 else ""
+                lines.append(
+                    f"  item_id={mi.get('item_id')} {mname}{qty_str} [{mtype}] "
+                    f"value={val} model={mid}"
+                )
+            # Last quote info
+            quote = merchant.get("last_quote")
+            if quote:
+                cost_id = quote.get("cost_item_id", 0)
+                cost_val = quote.get("cost_value", 0)
+                if cost_id == 0:
+                    cost_str = f"{cost_val:,} gold"
+                else:
+                    cost_str = f"{cost_val}x {item_name(cost_id)} (model={cost_id})"
+                lines.append(f"  Last quote: costs {cost_str}")
+
         # Inventory (from tier 3)
         inv = snap.get("inventory", {})
         if inv:
-            lines.append(
-                f"Gold: char={inv.get('gold_character', 0)} storage={inv.get('gold_storage', 0)}"
-            )
             bags = inv.get("bags", [])
             total_items = sum(b.get("item_count", 0) for b in bags)
             lines.append(f"Backpack: {total_items} items across {len(bags)} bags")
