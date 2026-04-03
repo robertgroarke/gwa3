@@ -22,6 +22,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(minhook)
 
+# --- FetchContent: nlohmann/json (header-only) ---
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+)
+FetchContent_MakeAvailable(json)
+
 # --- gwa3_core (OBJECT library — shared between DLL and tests) ---
 add_library(gwa3_core OBJECT
     src/core/Log.cpp
@@ -57,6 +65,10 @@ add_library(gwa3_core OBJECT
     src/tests/BotFrameworkTest.cpp
     src/tests/BehavioralTest.cpp
     src/tests/IntegrationTest.cpp
+    src/llm/IpcServer.cpp
+    src/llm/GameSnapshot.cpp
+    src/llm/ActionExecutor.cpp
+    src/llm/LlmBridge.cpp
 )
 
 target_include_directories(gwa3_core PUBLIC
@@ -67,8 +79,9 @@ target_include_directories(gwa3_core PUBLIC
 set(CRASH_TEST 1 CACHE STRING "Crash test mode")
 target_compile_definitions(gwa3_core PUBLIC CRASH_TEST=${CRASH_TEST})
 
-# gwa3_core needs MinHook headers (for GameThread.cpp) and version.lib (for MemoryMgr)
-target_link_libraries(gwa3_core PUBLIC minhook version)
+# gwa3_core needs MinHook headers (for GameThread.cpp), version.lib (for MemoryMgr),
+# and nlohmann_json (for LLM bridge serialization)
+target_link_libraries(gwa3_core PUBLIC minhook version nlohmann_json::nlohmann_json)
 
 # --- gwa3.dll ---
 add_library(gwa3 SHARED
