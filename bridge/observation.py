@@ -98,11 +98,19 @@ class ObservationWindow:
                 f"(total {len(agents)} agents)"
             )
             if foes:
-                closest = min(foes, key=lambda a: a.get("distance", 99999))
-                lines.append(
-                    f"  Closest foe: id={closest['id']} dist={closest.get('distance', 0):.0f} "
-                    f"hp={closest.get('hp', 0):.0%} lv{closest.get('level', 0)}"
-                )
+                lines.append("  Foes:")
+                for foe in sorted(foes, key=lambda a: a.get("distance", 99999)):
+                    casting = ""
+                    if foe.get("is_casting"):
+                        sk_id = foe.get("casting_skill_id", 0)
+                        sk_type = foe.get("casting_skill_type", "?")
+                        casting = f" CASTING skill {sk_id} (type={sk_type})"
+                    lines.append(
+                        f"    id={foe['id']} dist={foe.get('distance', 0):.0f} "
+                        f"hp={foe.get('hp', 0):.0%} energy={foe.get('energy', 0):.0%} "
+                        f"lv{foe.get('level', 0)} prof={foe.get('primary', 0)}/{foe.get('secondary', 0)}"
+                        f"{casting}"
+                    )
 
         # Inventory (from tier 3)
         inv = snap.get("inventory", {})

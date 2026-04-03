@@ -140,12 +140,30 @@ namespace GWA3::LLM::GameSnapshot {
                 auto* living = reinterpret_cast<AgentLiving*>(agent);
                 a["agent_type"] = "living";
                 a["hp"] = living->hp;
+                a["max_hp"] = living->max_hp;
+                a["energy"] = living->energy;
+                a["max_energy"] = living->max_energy;
                 a["allegiance"] = living->allegiance;
                 a["primary"] = living->primary;
+                a["secondary"] = living->secondary;
                 a["level"] = living->level;
                 a["is_alive"] = (living->hp > 0.0f);
                 a["effects"] = living->effects;
-                a["skill"] = static_cast<uint32_t>(living->skill);
+                a["weapon_type"] = living->weapon_type;
+                a["model_state"] = living->model_state;
+
+                // Casting state: skill field is nonzero while casting
+                uint32_t castingSkillId = static_cast<uint32_t>(living->skill);
+                a["is_casting"] = (castingSkillId != 0);
+                a["casting_skill_id"] = castingSkillId;
+                if (castingSkillId != 0) {
+                    const auto* skillData = SkillMgr::GetSkillConstantData(castingSkillId);
+                    if (skillData) {
+                        a["casting_skill_type"] = skillData->type;
+                        a["casting_skill_activation"] = skillData->activation;
+                        a["casting_skill_profession"] = skillData->profession;
+                    }
+                }
             } else if (agent->type == 0x200) {
                 a["agent_type"] = "gadget";
             } else if (agent->type == 0x400) {
