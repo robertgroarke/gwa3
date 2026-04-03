@@ -8,6 +8,7 @@ namespace GWA3::RenderHook {
 
 static constexpr uint32_t kQueueSize = 256;
 static constexpr uint32_t kPatchSize = 5;
+static constexpr uint32_t kReplaySize = 10; // full instruction group to replay
 
 static volatile LONG s_queueCounter = 0;
 static volatile LONG s_savedCommand = 0;
@@ -16,6 +17,7 @@ static volatile LONG s_disableRendering = 0;
 static uintptr_t s_queue[kQueueSize] = {};
 static bool s_initialized = false;
 static uintptr_t s_returnAddr = 0;
+static uintptr_t s_trampoline = 0;  // executable stub: original 10 bytes + JMP return
 static uint8_t s_savedBytes[kPatchSize] = {};
 
 // Naked detour — called via JMP from mid-function patch.
@@ -48,9 +50,8 @@ no_reset:
 skip_queue:
         popfd
         popad
-        add esp, 4
-        cmp dword ptr [s_disableRendering], 1
-        jmp [s_returnAddr]
+        // Jump to trampoline: original 10 bytes + JMP to hookAddr+0xA
+        jmp [s_trampoline]
     }
 }
 
@@ -84,6 +85,25 @@ bool Initialize() {
     // AutoIt's WriteDetour writes a 5-byte JMP at the hook site and returns
     // to Render+0xA from the detour body. Keep bytes +5..+9 intact.
     memcpy(s_savedBytes, reinterpret_cast<void*>(hookAddr), kPatchSize);
+
+    // Build trampoline: copy original 10 bytes + JMP to hookAddr+0xA
+    {
+        void* tramMem = VirtualAlloc(nullptr, 32, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+        if (!tramMem) {
+            Log::Error("RenderHook: VirtualAlloc failed for trampoline");
+            return false;
+        }
+        auto* t = reinterpret_cast<uint8_t*>(tramMem);
+        // Copy original 10 bytes
+        memcpy(t, reinterpret_cast<void*>(hookAddr), kReplaySize);
+        // Append JMP to hookAddr+0xA
+        t[10] = 0xE9; // JMP rel32
+        int32_t tramRel = static_cast<int32_t>(s_returnAddr - (reinterpret_cast<uintptr_t>(tramMem) + 15));
+        memcpy(t + 11, &tramRel, 4);
+        FlushInstructionCache(GetCurrentProcess(), tramMem, 15);
+        s_trampoline = reinterpret_cast<uintptr_t>(tramMem);
+        Log::Info("RenderHook: Trampoline at 0x%08X", s_trampoline);
+    }
 
     // Write only the 5-byte JMP detour, matching AutoIt's behavior.
     DWORD oldProtect;
