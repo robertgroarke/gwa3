@@ -1,6 +1,13 @@
 """Observation window manager — maintains a sliding window of recent game state snapshots."""
 
 from collections import deque
+from .gamedata import (
+    skill_name,
+    item_name,
+    profession_name,
+    skill_type_name,
+    item_type_name,
+)
 
 
 class ObservationWindow:
@@ -70,14 +77,18 @@ class ObservationWindow:
                 f"time={m.get('instance_time', 0)}ms"
             )
 
-        # Skillbar
+        # Skillbar — show human-readable skill names
         skills = snap.get("skillbar", [])
         if skills:
             sk_parts = []
             for sk in skills:
+                sid = sk.get("skill_id", 0)
                 rech = sk.get("recharge", 0)
+                name = skill_name(sid) if sid else "Empty"
+                cost = sk.get("energy_cost", "?")
+                stype = skill_type_name(sk.get("type", -1)) if "type" in sk else ""
                 status = f"R{rech}" if rech > 0 else "ready"
-                sk_parts.append(f"[{sk['slot']}:{sk.get('skill_id', 0)}={status}]")
+                sk_parts.append(f"[{sk['slot']}:{name}({sid}) {stype} {cost}e {status}]")
             lines.append("Skills: " + " ".join(sk_parts))
 
         # Party
@@ -97,19 +108,41 @@ class ObservationWindow:
                 f"Nearby: {len(foes)} foes, {len(allies)} allies, {len(items)} items "
                 f"(total {len(agents)} agents)"
             )
+
+            # List each foe with details
             if foes:
                 lines.append("  Foes:")
                 for foe in sorted(foes, key=lambda a: a.get("distance", 99999)):
+                    prof = profession_name(foe.get("primary", 0))
+                    sec = profession_name(foe.get("secondary", 0))
                     casting = ""
                     if foe.get("is_casting"):
                         sk_id = foe.get("casting_skill_id", 0)
-                        sk_type = foe.get("casting_skill_type", "?")
-                        casting = f" CASTING skill {sk_id} (type={sk_type})"
+                        sk_nm = skill_name(sk_id)
+                        sk_tp = skill_type_name(foe.get("casting_skill_type", -1))
+                        cast_time = foe.get("casting_skill_activation", 0)
+                        casting = f" CASTING {sk_nm}({sk_id}) [{sk_tp}, {cast_time:.1f}s]"
                     lines.append(
                         f"    id={foe['id']} dist={foe.get('distance', 0):.0f} "
                         f"hp={foe.get('hp', 0):.0%} energy={foe.get('energy', 0):.0%} "
-                        f"lv{foe.get('level', 0)} prof={foe.get('primary', 0)}/{foe.get('secondary', 0)}"
+                        f"lv{foe.get('level', 0)} {prof}/{sec}"
                         f"{casting}"
+                    )
+
+            # List ground items with details
+            if items:
+                lines.append("  Items on ground:")
+                for it in sorted(items, key=lambda a: a.get("distance", 99999)):
+                    model_id = it.get("model_id", 0)
+                    iname = item_name(model_id) if model_id else f"item_id={it.get('item_id', '?')}"
+                    itype = item_type_name(it.get("item_type", -1)) if "item_type" in it else ""
+                    qty = it.get("quantity", 1)
+                    owner = it.get("owner", 0)
+                    qty_str = f" x{qty}" if qty > 1 else ""
+                    owner_str = f" (yours)" if owner == snap.get("me", {}).get("agent_id", -1) else ""
+                    lines.append(
+                        f"    agent_id={it['id']} dist={it.get('distance', 0):.0f} "
+                        f"{iname}{qty_str} [{itype}] model={model_id}{owner_str}"
                     )
 
         # Inventory (from tier 3)

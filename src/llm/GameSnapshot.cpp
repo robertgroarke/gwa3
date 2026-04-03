@@ -71,10 +71,25 @@ namespace GWA3::LLM::GameSnapshot {
         for (int i = 0; i < 8; i++) {
             json sk;
             sk["slot"] = i;
-            sk["skill_id"] = bar->skills[i].skill_id;
+            uint32_t skillId = bar->skills[i].skill_id;
+            sk["skill_id"] = skillId;
             sk["recharge"] = bar->skills[i].recharge;
             sk["adrenaline"] = bar->skills[i].adrenaline_a;
             sk["event"] = bar->skills[i].event;
+            // Include constant data so the LLM knows what each skill does
+            if (skillId != 0) {
+                const auto* data = SkillMgr::GetSkillConstantData(skillId);
+                if (data) {
+                    sk["profession"] = data->profession;
+                    sk["attribute"] = data->attribute;
+                    sk["type"] = data->type;
+                    sk["energy_cost"] = data->energy_cost;
+                    sk["activation"] = data->activation;
+                    sk["aftercast"] = data->aftercast;
+                    sk["recharge_time"] = data->recharge;
+                    sk["aoe_range"] = data->aoe_range;
+                }
+            }
             skills.push_back(sk);
         }
         return skills;
@@ -171,6 +186,15 @@ namespace GWA3::LLM::GameSnapshot {
                 a["agent_type"] = "item";
                 a["item_id"] = item->item_id;
                 a["owner"] = item->owner;
+                // Cross-reference with ItemMgr for details
+                auto* itemData = ItemMgr::GetItemById(item->item_id);
+                if (itemData) {
+                    a["model_id"] = itemData->model_id;
+                    a["item_type"] = itemData->type;
+                    a["quantity"] = itemData->quantity;
+                    a["value"] = itemData->value;
+                    a["interaction"] = itemData->interaction;
+                }
             } else {
                 a["agent_type"] = "unknown";
             }
