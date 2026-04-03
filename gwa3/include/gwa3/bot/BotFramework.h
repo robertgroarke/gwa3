@@ -16,7 +16,8 @@ namespace GWA3::Bot {
         Merchant,
         Maintenance,
         Error,
-        Stopping
+        Stopping,
+        LLMControlled
     };
 
     struct BotConfig {

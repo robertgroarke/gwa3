@@ -26,6 +26,7 @@
 #include <gwa3/bot/BotFramework.h>
 #include <gwa3/bot/FroggyHM.h>
 #include <gwa3/core/SmokeTest.h>
+#include <gwa3/llm/LlmBridge.h>
 
 static HMODULE g_hModule = nullptr;
 
@@ -178,9 +179,10 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     bool npcDialogTest = CheckFlag("GWA3_TEST_NPC_DIALOG", "gwa3_test_npc_dialog.flag");
     bool merchantQuoteTest = CheckFlag("GWA3_TEST_MERCHANT_QUOTE", "gwa3_test_merchant_quote.flag");
     bool advancedTest = CheckFlag("GWA3_TEST_ADVANCED", "gwa3_test_advanced.flag");
+    bool llmMode = CheckFlag("GWA3_LLM_MODE", "gwa3_llm_mode.flag");
     bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || advancedTest;
-    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d advanced=%d",
-                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, advancedTest);
+    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d advanced=%d llm=%d",
+                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, advancedTest, llmMode);
 
     HMODULE gwModule = GetModuleHandleA(nullptr);
     if (!GWA3::Scanner::Initialize(gwModule)) {
@@ -239,10 +241,21 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
+    // Initialize GameThread FIRST — its MinHook at the render function prologue
+    // is used for both pre-game (ButtonClick) and in-game dispatch.
+    // The old mid-function JMP render hook is no longer used (conflicts with MinHook).
+    bool gameThreadOk = GWA3::GameThread::Initialize();
+    if (!gameThreadOk) {
+        GWA3::Log::Warn("GameThread initialization failed — trying RenderHook fallback");
+    }
+
     if (integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || !anyTest) {
-        if (!GWA3::RenderHook::Initialize()) {
-            GWA3::Log::Error("RenderHook initialization failed - aborting startup");
-            return 1;
+        if (!gameThreadOk) {
+            // Fallback: use old render hook if GameThread failed
+            if (!GWA3::RenderHook::Initialize()) {
+                GWA3::Log::Error("Both GameThread and RenderHook failed - aborting");
+                return 1;
+            }
         }
         if (!RunCharSelectBootstrap(90000)) {
             GWA3::Log::Error("Bootstrap failed - aborting startup");
@@ -255,7 +268,6 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::TargetLogHook::Initialize();
     }
 
-    bool gameThreadOk = GWA3::GameThread::Initialize();
     if (!gameThreadOk) {
         GWA3::Log::Warn("GameThread initialization failed");
         if (!anyTest) {
@@ -316,6 +328,20 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
+    if (llmMode) {
+        GWA3::Log::Info("=== LLM AGENT MODE ===");
+        if (!GWA3::LLM::Initialize()) {
+            GWA3::Log::Error("LLM bridge initialization failed");
+            return 1;
+        }
+        GWA3::Log::Info("gwa3.dll initialization complete - LLM bridge active");
+        // LLM bridge runs on its own threads; keep InitThread alive to hold the DLL
+        while (GWA3::LLM::IsRunning()) {
+            Sleep(1000);
+        }
+        return 0;
+    }
+
     GWA3::Bot::Froggy::Register();
     GWA3::Bot::Start();
 
@@ -330,6 +356,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
         DisableThreadLibraryCalls(hModule);
         CreateThread(nullptr, 0, &InitThread, hModule, 0, nullptr);
     } else if (reason == DLL_PROCESS_DETACH) {
+        GWA3::LLM::Shutdown();
         GWA3::Bot::Stop();
         GWA3::StoC::Shutdown();
         GWA3::TraderHook::Shutdown();
