@@ -6,11 +6,13 @@
 #include <gwa3/managers/PartyMgr.h>
 #include <gwa3/managers/EffectMgr.h>
 #include <gwa3/managers/MemoryMgr.h>
+#include <gwa3/managers/DialogMgr.h>
 #include <gwa3/game/Agent.h>
 #include <gwa3/game/Skill.h>
 #include <gwa3/game/Item.h>
 #include <gwa3/game/Effect.h>
 
+#include <Windows.h>
 #include <nlohmann/json.hpp>
 #include <cmath>
 
@@ -62,10 +64,9 @@ namespace GWA3::LLM::GameSnapshot {
         return me;
     }
 
-    // Build skillbar array
-    static json BuildSkillbarJson() {
+    // Build skillbar array from a Skillbar pointer (works for player and heroes)
+    static json BuildSkillbarFromBar(Skillbar* bar) {
         json skills = json::array();
-        auto* bar = SkillMgr::GetPlayerSkillbar();
         if (!bar) return skills;
 
         for (int i = 0; i < 8; i++) {
@@ -76,7 +77,6 @@ namespace GWA3::LLM::GameSnapshot {
             sk["recharge"] = bar->skills[i].recharge;
             sk["adrenaline"] = bar->skills[i].adrenaline_a;
             sk["event"] = bar->skills[i].event;
-            // Include constant data so the LLM knows what each skill does
             if (skillId != 0) {
                 const auto* data = SkillMgr::GetSkillConstantData(skillId);
                 if (data) {
@@ -93,6 +93,50 @@ namespace GWA3::LLM::GameSnapshot {
             skills.push_back(sk);
         }
         return skills;
+    }
+
+    // Build player skillbar
+    static json BuildSkillbarJson() {
+        return BuildSkillbarFromBar(SkillMgr::GetPlayerSkillbar());
+    }
+
+    // Build hero skillbars array (one entry per hero in party)
+    static json BuildHeroSkillbarsJson() {
+        json heroes = json::array();
+        auto* agentArray = AgentMgr::GetAgentArray();
+        if (!agentArray || !agentArray->buffer) return heroes;
+
+        uint32_t myId = AgentMgr::GetMyId();
+        uint32_t count = agentArray->size;
+
+        for (uint32_t i = 0; i < count; i++) {
+            auto* agent = agentArray->buffer[i];
+            if (!agent || agent->agent_id == myId) continue;
+            if (agent->type != 0xDB) continue;
+
+            auto* living = reinterpret_cast<AgentLiving*>(agent);
+            // Heroes are allegiance 1 (ally) and have a skillbar in the array
+            if (living->allegiance != 1) continue;
+
+            auto* bar = SkillMgr::GetSkillbarByAgentId(living->agent_id);
+            if (!bar) continue; // not a hero (henchmen don't have skillbars we can read)
+
+            json h;
+            h["agent_id"] = living->agent_id;
+            h["hp"] = living->hp;
+            h["energy"] = living->energy;
+            h["primary"] = living->primary;
+            h["secondary"] = living->secondary;
+            h["level"] = living->level;
+
+            uint32_t castingSkillId = static_cast<uint32_t>(living->skill);
+            h["is_casting"] = (castingSkillId != 0);
+            h["casting_skill_id"] = castingSkillId;
+
+            h["skillbar"] = BuildSkillbarFromBar(bar);
+            heroes.push_back(h);
+        }
+        return heroes;
     }
 
     // Build map info
@@ -205,7 +249,38 @@ namespace GWA3::LLM::GameSnapshot {
         return agents;
     }
 
-    // Build inventory snapshot
+    // Serialize a single bag to JSON
+    static json SerializeBag(int bagIndex) {
+        json b;
+        auto* bag = ItemMgr::GetBag(bagIndex);
+        if (!bag) return b;
+
+        b["bag_index"] = bagIndex;
+        b["item_count"] = bag->items_count;
+
+        json items = json::array();
+        if (bag->items.buffer && bag->items.size > 0) {
+            for (uint32_t s = 0; s < bag->items.size; s++) {
+                auto* item = bag->items.buffer[s];
+                if (!item) continue;
+
+                json it;
+                it["item_id"] = item->item_id;
+                it["model_id"] = item->model_id;
+                it["type"] = item->type;
+                it["quantity"] = item->quantity;
+                it["value"] = item->value;
+                it["slot"] = item->slot;
+                it["equipped"] = item->equipped;
+                it["interaction"] = item->interaction;
+                items.push_back(it);
+            }
+        }
+        b["items"] = items;
+        return b;
+    }
+
+    // Build inventory snapshot (backpack bags 1-4)
     static json BuildInventoryJson() {
         json inv;
         auto* inventory = ItemMgr::GetInventory();
@@ -215,38 +290,67 @@ namespace GWA3::LLM::GameSnapshot {
         inv["gold_storage"] = inventory->gold_storage;
 
         json bags = json::array();
-        // Bags 1-4 are the main backpack bags
         for (int i = 1; i <= 4; i++) {
-            auto* bag = ItemMgr::GetBag(i);
-            if (!bag) continue;
-
-            json b;
-            b["bag_index"] = i;
-            b["item_count"] = bag->items_count;
-
-            json items = json::array();
-            if (bag->items.buffer && bag->items.size > 0) {
-                for (uint32_t s = 0; s < bag->items.size; s++) {
-                    auto* item = bag->items.buffer[s];
-                    if (!item) continue;
-
-                    json it;
-                    it["item_id"] = item->item_id;
-                    it["model_id"] = item->model_id;
-                    it["type"] = item->type;
-                    it["quantity"] = item->quantity;
-                    it["value"] = item->value;
-                    it["slot"] = item->slot;
-                    it["equipped"] = item->equipped;
-                    it["interaction"] = item->interaction;
-                    items.push_back(it);
-                }
-            }
-            b["items"] = items;
-            bags.push_back(b);
+            json b = SerializeBag(i);
+            if (!b.is_null()) bags.push_back(b);
         }
         inv["bags"] = bags;
         return inv;
+    }
+
+    // Build Xunlai storage snapshot (bags 8-16 are storage panes)
+    static json BuildStorageJson() {
+        json storage = json::array();
+        // Storage panes: bag indices 8-16 (up to 9 panes, depending on unlocks)
+        for (int i = 8; i <= 16; i++) {
+            json b = SerializeBag(i);
+            if (!b.is_null() && b.contains("item_count") && b["item_count"] > 0) {
+                storage.push_back(b);
+            }
+        }
+        return storage;
+    }
+
+    // Build current dialog state
+    static json BuildDialogJson() {
+        json d;
+        if (!DialogMgr::IsDialogOpen()) {
+            d["is_open"] = false;
+            return d;
+        }
+
+        d["is_open"] = true;
+        d["sender_agent_id"] = DialogMgr::GetDialogSenderAgentId();
+
+        // Dialog body text (raw encoded — may contain <a=ID>label</a> tags)
+        const wchar_t* bodyRaw = DialogMgr::GetDialogBodyRaw();
+        if (bodyRaw && bodyRaw[0]) {
+            // Convert wchar_t to UTF-8 for JSON
+            char bodyUtf8[512] = {};
+            WideCharToMultiByte(CP_UTF8, 0, bodyRaw, -1, bodyUtf8, sizeof(bodyUtf8) - 1, nullptr, nullptr);
+            d["body_raw"] = bodyUtf8;
+        }
+
+        // Dialog buttons
+        uint32_t btnCount = DialogMgr::GetButtonCount();
+        json buttons = json::array();
+        for (uint32_t i = 0; i < btnCount; i++) {
+            const auto* btn = DialogMgr::GetButton(i);
+            if (!btn) continue;
+            json b;
+            b["dialog_id"] = btn->dialog_id;
+            b["icon"] = btn->button_icon;
+            // Convert button label to UTF-8
+            char labelUtf8[256] = {};
+            WideCharToMultiByte(CP_UTF8, 0, btn->label, -1, labelUtf8, sizeof(labelUtf8) - 1, nullptr, nullptr);
+            b["label"] = labelUtf8;
+            if (btn->skill_id != 0xFFFFFFFF) {
+                b["skill_id"] = btn->skill_id;
+            }
+            buttons.push_back(b);
+        }
+        d["buttons"] = buttons;
+        return d;
     }
 
     // Build effects for the player
@@ -295,6 +399,8 @@ namespace GWA3::LLM::GameSnapshot {
         j["map"] = BuildMapJson();
         j["party"] = BuildPartyBasicsJson();
         j["agents"] = BuildNearbyAgentsJson();
+        j["heroes"] = BuildHeroSkillbarsJson();
+        j["dialog"] = BuildDialogJson();
         return JsonToHeap(j, outLength);
     }
 
@@ -309,7 +415,10 @@ namespace GWA3::LLM::GameSnapshot {
         j["map"] = BuildMapJson();
         j["party"] = BuildPartyBasicsJson();
         j["agents"] = BuildNearbyAgentsJson();
+        j["heroes"] = BuildHeroSkillbarsJson();
+        j["dialog"] = BuildDialogJson();
         j["inventory"] = BuildInventoryJson();
+        j["storage"] = BuildStorageJson();
         j["effects"] = BuildPlayerEffectsJson();
         return JsonToHeap(j, outLength);
     }
