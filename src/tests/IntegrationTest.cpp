@@ -3992,19 +3992,16 @@ int RunIntegrationTest() {
             // Phase 4: Targeting
             TestTargeting();
 
-            // Both re-enabled — HeroFlagging now guarded to skip in outpost
-            TestHeroFlagging();
             TestHardModeToggle();
 
-            // Phase 5: reserve the session for explorable bootstrap so the
-            // skill slice can run in the right environment.
+            // Phase 5: Explorable bootstrap (GWA3-035 slice)
             IntSkip("Outpost Travel (033)", "Session reserved for explorable skill coverage");
-
-            // Phase 6: Explorable bootstrap (GWA3-035 slice)
             const bool inExplorable = TestExplorableEntry();
 
-            // Phase 7: Skill Activation (GWA3-034 slice)
             if (inExplorable) {
+                // Hero flagging only works in explorable (heroes spawned)
+                TestHeroFlagging();
+
                 TestSkillActivation();
                 TestLootPickup();
 
