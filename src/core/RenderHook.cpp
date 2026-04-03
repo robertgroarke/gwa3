@@ -24,8 +24,12 @@ static uint8_t s_savedBytes[kPatchSize] = {};
 // Mirrors the AutoIt RenderingModProc path:
 // process one queued command during pre-game, then replay the original
 // overwritten instructions before jumping back to Render+0xA.
+static volatile LONG s_savedESP = 0;
+
 static __declspec(naked) void RenderDetourNaked() {
     __asm {
+        // Save ESP BEFORE any stack operations — restore it exactly before exit
+        mov dword ptr [s_savedESP], esp
         pushad
         pushfd
 
@@ -50,6 +54,8 @@ no_reset:
 skip_queue:
         popfd
         popad
+        // Restore ESP to EXACTLY what it was on entry — guarantees zero stack impact
+        mov esp, dword ptr [s_savedESP]
         // Jump to trampoline: original 10 bytes + JMP to hookAddr+0xA
         jmp [s_trampoline]
     }
