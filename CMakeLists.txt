@@ -63,6 +63,10 @@ target_include_directories(gwa3_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# Crash investigation test selector (0=normal, 1=remove JMP after bootstrap, 2=disable GameThread)
+set(CRASH_TEST 1 CACHE STRING "Crash test mode")
+target_compile_definitions(gwa3_core PUBLIC CRASH_TEST=${CRASH_TEST})
+
 # gwa3_core needs MinHook headers (for GameThread.cpp) and version.lib (for MemoryMgr)
 target_link_libraries(gwa3_core PUBLIC minhook version)
 
@@ -77,6 +81,7 @@ target_include_directories(gwa3 PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+target_compile_definitions(gwa3 PRIVATE CRASH_TEST=${CRASH_TEST})
 target_link_libraries(gwa3 PRIVATE minhook version)
 
 set_target_properties(gwa3 PROPERTIES
