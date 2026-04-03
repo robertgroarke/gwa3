@@ -280,6 +280,13 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::Log::Info("=== INTEGRATION TEST MODE ===");
         int failures = GWA3::SmokeTest::RunIntegrationTest();
         GWA3::Log::Info("Integration test complete: %d failures", failures);
+#if CRASH_TEST > 0
+        // In crash test modes, wait 60s after test to observe render hook stability
+        GWA3::Log::Info("Test finished — CRASH_TEST=%d: waiting 60s before termination (hb=%u)...",
+                        CRASH_TEST, GWA3::RenderHook::GetHeartbeat());
+        Sleep(60000);
+        GWA3::Log::Info("Post-test wait done (hb=%u)", GWA3::RenderHook::GetHeartbeat());
+#endif
         // Terminate immediately — don't unhook (race condition with render thread)
         GWA3::Log::Info("Test finished — terminating GW process");
         GWA3::Log::Shutdown();

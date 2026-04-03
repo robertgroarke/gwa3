@@ -1,27 +1,41 @@
 ---
 name: RenderHook crash investigation
-description: Intermittent crash in render detour — original bytes are add esp,4 + cmp, trampoline approach now used
+description: Mid-function render hook crashes in-game after ~2300 frames, stable at char select — trampoline or MinHook conflict suspected
 type: project
 ---
 
-The RenderHook naked detour crashes GW intermittently (~30-90s after install).
+## Definitive Bisection (2026-04-03)
 
-**Current approach (2026-04-03):**
-- Trampoline copies original 10 bytes from hook site + JMP back to hookAddr+0xA
-- Naked detour: saves ESP, pushad/pushfd, processes queue, popfd/popad, restores ESP, jmp trampoline
-- Original bytes at hook: `83 C4 04` (add esp,4) + `83 3D 54748C00 00` (cmp [0x8C7454], 0)
-- These ARE the real game instructions, NOT a stack leak — confirmed by dumping bytes and matching AutoIt
+The naked render detour at `Offsets::Render` (mid-function 5-byte JMP) crashes GW Reforged
+approximately 2200-2600 heartbeats (~37-43 seconds) after entering a map. Stable indefinitely
+at character select screen.
 
-**Symptoms:**
-- Crash is intermittent: sometimes full 114-test suite passes, sometimes crashes at map load
-- Move shellcode works for 200-unit test but may crash later
-- Watchdog (heartbeat-based) successfully detects render freeze and auto-kills GW
+### What was ruled out:
+- **Register corruption**: pushad/popad alone = stable. fxsave/fxrstor didn't help.
+- **Shellcode dispatch**: disabling all `call [s_savedCommand]` after map load = still crashes
+- **FPU/SSE/MXCSR corruption**: full fxsave/fxrstor = still crashes  
+- **Integrity check/patch overwrite**: E9 JMP byte confirmed intact at crash time
+- **Move/ChangeTarget specifics**: routing through GameThread = still crashes
 
-**Key finding (2026-04-03):**
-- Removing `add esp,4` causes immediate crash before Play click (confirms it's required)
-- The `cmp` compares against game address 0x008C7454, not our s_disableRendering
-- Crash root cause still unknown — may be in shellcode dispatch or game state corruption
+### What causes the crash:
+The mere EXISTENCE of the 5-byte JMP + trampoline replay at the Render hook site crashes
+the in-game render path. Even with the absolute minimal detour (`inc heartbeat; jmp trampoline`),
+the in-game render loop freezes after ~2300 frames. Char select is unaffected.
 
-**How to apply:** The `add esp,4` and `cmp` MUST be replayed. Do not remove them.
-The crash is NOT caused by stack leak. Investigate shellcode calling convention,
-ring buffer race conditions, or game state corruption from CtoS packets.
+### Suspected root causes:
+1. **Trampoline relocation issue**: original 10 bytes (`83 C4 04 83 3D XX XX XX XX 00`)
+   execute from a VirtualAlloc'd address instead of the original location. Although the
+   instructions use absolute addressing, something about the execution context matters in-game.
+2. **MinHook conflict**: GameThread hooks the SAME FUNCTION (0x303D10) at the prologue,
+   while RenderHook patches mid-function at 0x303D9E (142 bytes in). Both hooks in the
+   same function might interfere.
+3. **Game-internal watchdog/CRC**: the game may check code integrity specifically during
+   in-game rendering (not at char select).
+
+### Current workaround:
+Move and ChangeTarget route through `GameThread::Enqueue` (MinHook at function entry).
+The render hook is still needed for pre-game ButtonClick (Play button at char select).
+
+**How to apply:** The render hook should be REMOVED or REPLACED with a MinHook-based
+approach. Do not spend time on register save/restore or FPU/SSE — the issue is the
+mid-function JMP+trampoline pattern itself in the in-game render context.

@@ -99,6 +99,11 @@ static uintptr_t FindFunctionStart(uintptr_t assertionSite) {
 bool Initialize() {
     if (s_initialized) return true;
 
+#if CRASH_TEST == 2
+    Log::Info("GameThread: [CRASH_TEST=2] SKIPPED — testing MinHook conflict");
+    return false;
+#endif
+
     InitializeCriticalSection(&s_cs);
 
     // Find the assertion site for the render callback

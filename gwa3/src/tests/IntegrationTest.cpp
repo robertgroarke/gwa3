@@ -70,10 +70,16 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
                 Log::Error("[WATCHDOG] RenderHook qCtr=%u pending=%u",
                            RenderHook::GetQueueCounter(), RenderHook::GetPendingCount());
                 s_crashDetected = true;
-                // Flush log before killing
+#if CRASH_TEST == 0
+                // Only auto-kill in normal mode — crash tests need GW to stay alive
                 if (s_intReport) { fflush(s_intReport); }
                 Log::Error("[WATCHDOG] Terminating GW process...");
                 TerminateProcess(GetCurrentProcess(), 0xDEAD);
+#else
+                Log::Error("[WATCHDOG] (CRASH_TEST mode — NOT killing, continuing observation)");
+                // Reset stall count to keep logging if heartbeat resumes
+                stallCount = 0;
+#endif
             }
         } else {
             stallCount = 0;

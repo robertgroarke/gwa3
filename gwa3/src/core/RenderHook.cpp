@@ -30,61 +30,12 @@ static uint8_t s_savedBytes[kPatchSize] = {};
 // overwritten instructions before jumping back to Render+0xA.
 static volatile LONG s_savedESP = 0;
 
-// Set to 1 to test MINIMAL hook: only heartbeat inc, no pushad/popfd/queue
-// Set to 2 for normal operation with full command dispatch
-// Mode 1: minimal (heartbeat + trampoline only) — PROVEN STABLE at 12309 hb
-// Mode 2: full + FPU save/restore — testing FPU corruption theory
-// Mode 3: pushad/popfd NO queue — PROVEN STABLE at 12338 hb
-// Mode 4: pushad + queue drain (no call) — PROVEN STABLE at 12345 hb
-// Mode 2: full dispatch. Commands called from render hook detour.
-// After SetMapLoaded(true), command dispatch is disabled to test if
-// the crash is from in-game shellcode calls or something else.
-#define RENDERHOOK_MODE 2
-
+// Two-phase detour: full dispatch pre-game, minimal in-game.
+// CRASH_TEST=1 removes the hook entirely on map load (via SetMapLoaded).
+// CRASH_TEST=2 keeps the hook but disables GameThread MinHook.
 static __declspec(naked) void RenderDetourNaked() {
     __asm {
-#if RENDERHOOK_MODE == 1
-        // MINIMAL: only heartbeat, no register save/restore, no queue
-        inc dword ptr [s_heartbeat]
-        jmp [s_trampoline]
-#elif RENDERHOOK_MODE == 3
-        // PUSHAD TEST: save/restore regs but NO queue dispatch
-        mov dword ptr [s_savedESP], esp
-        pushad
-        pushfd
-        inc dword ptr [s_heartbeat]
-        popfd
-        popad
-        mov esp, dword ptr [s_savedESP]
-        jmp [s_trampoline]
-#elif RENDERHOOK_MODE == 4
-        // QUEUE DRAIN TEST: read queue, clear slots, advance counter, but NO call
-        mov dword ptr [s_savedESP], esp
-        pushad
-        pushfd
-
-        mov eax, dword ptr [s_queueCounter]
-        mov ebx, dword ptr [s_queue + eax * 4]
-        test ebx, ebx
-        jz skip_queue
-
-        mov dword ptr [s_queue + eax * 4], 0
-        // Skip: mov [s_savedCommand], ebx / call [s_savedCommand]
-        inc eax
-        cmp eax, kQueueSize
-        jnz no_reset
-        xor eax, eax
-no_reset:
-        mov dword ptr [s_queueCounter], eax
-
-skip_queue:
-        inc dword ptr [s_heartbeat]
-        popfd
-        popad
-        mov esp, dword ptr [s_savedESP]
-        jmp [s_trampoline]
-#else
-        // After map load, do NOTHING except heartbeat + trampoline (mode 1 equivalent)
+        // After map load: minimal (just heartbeat + trampoline)
         cmp dword ptr [s_mapLoaded], 1
         jz ingame_minimal
 
@@ -119,9 +70,7 @@ skip_queue:
         jmp [s_trampoline]
 
 ingame_minimal:
-        // IN-GAME: absolute minimum — just heartbeat, no pushad, no queue
         inc dword ptr [s_heartbeat]
-#endif
         // Jump to trampoline: original 10 bytes + JMP to hookAddr+0xA
         jmp [s_trampoline]
     }
@@ -233,6 +182,12 @@ bool EnqueueCommand(uintptr_t command) {
 void SetMapLoaded(bool loaded) {
     s_mapLoaded = loaded ? 1 : 0;
     Log::Info("RenderHook: MapLoaded=%d", loaded ? 1 : 0);
+#if CRASH_TEST == 1
+    if (loaded) {
+        Log::Info("RenderHook: [CRASH_TEST=1] Removing JMP patch — restoring original bytes");
+        Shutdown();
+    }
+#endif
 }
 
 bool IsInitialized() {
