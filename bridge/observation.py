@@ -98,12 +98,25 @@ class ObservationWindow:
                 sk_parts.append(f"[{sk['slot']}:{name}({sid}) {stype} {cost}e {status}]")
             lines.append("Skills: " + " ".join(sk_parts))
 
-        # Party
+        # Party with per-member status
         party = snap.get("party", {})
         if party:
+            size = party.get("size", "?")
+            dead = party.get("dead_count", 0)
+            defeated = party.get("is_defeated", False)
             lines.append(
-                f"Party: defeated={party.get('is_defeated', False)}"
+                f"Party: size={size} dead={dead} defeated={defeated}"
             )
+            members = party.get("members", [])
+            if members:
+                dead_members = [m for m in members if not m.get("is_alive", True)]
+                if dead_members:
+                    lines.append("  Dead members:")
+                    for dm in dead_members:
+                        role = "player" if dm.get("is_player") else "hero" if dm.get("is_hero") else "henchman"
+                        lines.append(
+                            f"    agent_id={dm.get('agent_id')} {profession_name(dm.get('primary', 0))} ({role})"
+                        )
 
         # Nearby agents (from tier 2+)
         agents = snap.get("agents", [])
@@ -129,11 +142,15 @@ class ObservationWindow:
                         sk_tp = skill_type_name(foe.get("casting_skill_type", -1))
                         cast_time = foe.get("casting_skill_activation", 0)
                         casting = f" CASTING {sk_nm}({sk_id}) [{sk_tp}, {cast_time:.1f}s]"
+                    conditions = []
+                    if foe.get("has_hex"): conditions.append("HEXED")
+                    if foe.get("has_enchantment"): conditions.append("ENCHANTED")
+                    cond_str = f" [{','.join(conditions)}]" if conditions else ""
                     lines.append(
                         f"    id={foe['id']} dist={foe.get('distance', 0):.0f} "
                         f"hp={foe.get('hp', 0):.0%} energy={foe.get('energy', 0):.0%} "
                         f"lv{foe.get('level', 0)} {prof}/{sec}"
-                        f"{casting}"
+                        f"{cond_str}{casting}"
                     )
 
             # List ground items with details
@@ -222,7 +239,8 @@ class ObservationWindow:
         if inv:
             bags = inv.get("bags", [])
             total_items = sum(b.get("item_count", 0) for b in bags)
-            lines.append(f"Backpack: {total_items} items across {len(bags)} bags")
+            free_slots = inv.get("free_slots_total", "?")
+            lines.append(f"Backpack: {total_items} items, {free_slots} free slots across {len(bags)} bags")
 
         # Storage (from tier 3)
         storage = snap.get("storage", [])

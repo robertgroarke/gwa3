@@ -352,6 +352,76 @@ MOVE_ITEM = _tool(
     },
 )
 
+# --- Salvage & Identify ---
+
+IDENTIFY_ITEM = _tool(
+    "identify_item",
+    "Identify an unidentified item using an identification kit.",
+    {
+        "properties": {
+            "item_id": {"type": "integer", "description": "Item ID to identify"},
+            "kit_id": {"type": "integer", "description": "Identification kit item ID"},
+        },
+        "required": ["item_id", "kit_id"],
+    },
+)
+
+SALVAGE_START = _tool(
+    "salvage_start",
+    "Start a salvage session: open the salvage dialog for an item using a salvage kit.",
+    {
+        "properties": {
+            "item_id": {"type": "integer", "description": "Item ID to salvage"},
+            "kit_id": {"type": "integer", "description": "Salvage kit item ID"},
+        },
+        "required": ["item_id", "kit_id"],
+    },
+)
+
+SALVAGE_MATERIALS = _tool(
+    "salvage_materials",
+    "During an active salvage session, salvage for materials (common materials).",
+    {"properties": {}, "required": []},
+)
+
+SALVAGE_DONE = _tool(
+    "salvage_done",
+    "End the current salvage session.",
+    {"properties": {}, "required": []},
+)
+
+# --- Skillbar ---
+
+LOAD_SKILLBAR = _tool(
+    "load_skillbar",
+    "Load a full skillbar (8 skill IDs). hero_index=0 for player, 1-7 for heroes.",
+    {
+        "properties": {
+            "skill_ids": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "Array of 8 skill IDs",
+            },
+            "hero_index": {
+                "type": "integer",
+                "description": "0=player, 1-7=hero (default 0)",
+            },
+        },
+        "required": ["skill_ids"],
+    },
+)
+
+DROP_GOLD = _tool(
+    "drop_gold",
+    "Drop gold coins on the ground.",
+    {
+        "properties": {
+            "amount": {"type": "integer", "description": "Amount of gold to drop"},
+        },
+        "required": ["amount"],
+    },
+)
+
 # --- Trade ---
 
 BUY_MATERIALS = _tool(
@@ -462,11 +532,19 @@ ALL_TOOLS = [
     EQUIP_ITEM,
     DROP_ITEM,
     MOVE_ITEM,
+    # Salvage & Identify
+    IDENTIFY_ITEM,
+    SALVAGE_START,
+    SALVAGE_MATERIALS,
+    SALVAGE_DONE,
+    # Skillbar
+    LOAD_SKILLBAR,
     # Trade
     BUY_MATERIALS,
     REQUEST_QUOTE,
     TRANSACT_ITEMS,
     # Utility
     SEND_CHAT,
+    DROP_GOLD,
     WAIT,
 ]

@@ -161,10 +161,59 @@ namespace GWA3::LLM::GameSnapshot {
         return m;
     }
 
-    // Build party basics
+    // Build party with per-member status
     static json BuildPartyBasicsJson() {
         json p;
         p["is_defeated"] = PartyMgr::GetIsPartyDefeated();
+
+        // Build party member list from agent array (allies near us)
+        auto* me = AgentMgr::GetMyAgent();
+        auto* agentArray = AgentMgr::GetAgentArray();
+        if (me && agentArray && agentArray->buffer) {
+            json members = json::array();
+            uint32_t partySize = 0;
+            uint32_t deadCount = 0;
+            for (uint32_t i = 0; i < agentArray->size; i++) {
+                auto* agent = agentArray->buffer[i];
+                if (!agent || agent->type != 0xDB) continue;
+                auto* living = reinterpret_cast<AgentLiving*>(agent);
+                if (living->allegiance != 1) continue; // allies only
+
+                json m;
+                m["agent_id"] = living->agent_id;
+                m["hp"] = living->hp;
+                m["energy"] = living->energy;
+                m["primary"] = living->primary;
+                m["level"] = living->level;
+                bool alive = living->hp > 0.0f;
+                m["is_alive"] = alive;
+                m["is_player"] = (living->agent_id == me->agent_id);
+                // Has a skillbar = hero; no skillbar = henchman
+                bool isHero = (SkillMgr::GetSkillbarByAgentId(living->agent_id) != nullptr);
+                m["is_hero"] = isHero;
+                members.push_back(m);
+                partySize++;
+                if (!alive) deadCount++;
+            }
+            // Include self
+            {
+                json m;
+                m["agent_id"] = me->agent_id;
+                m["hp"] = me->hp;
+                m["energy"] = me->energy;
+                m["primary"] = me->primary;
+                m["level"] = me->level;
+                m["is_alive"] = (me->hp > 0.0f);
+                m["is_player"] = true;
+                m["is_hero"] = false;
+                members.push_back(m);
+                partySize++;
+                if (me->hp <= 0.0f) deadCount++;
+            }
+            p["members"] = members;
+            p["size"] = partySize;
+            p["dead_count"] = deadCount;
+        }
         return p;
     }
 
@@ -213,8 +262,10 @@ namespace GWA3::LLM::GameSnapshot {
                 a["effects"] = living->effects;
                 a["weapon_type"] = living->weapon_type;
                 a["model_state"] = living->model_state;
+                a["hex"] = living->hex;
+                a["player_number"] = living->player_number;
 
-                // Casting state: skill field is nonzero while casting
+                // Casting state
                 uint32_t castingSkillId = static_cast<uint32_t>(living->skill);
                 a["is_casting"] = (castingSkillId != 0);
                 a["casting_skill_id"] = castingSkillId;
@@ -224,6 +275,36 @@ namespace GWA3::LLM::GameSnapshot {
                         a["casting_skill_type"] = skillData->type;
                         a["casting_skill_activation"] = skillData->activation;
                         a["casting_skill_profession"] = skillData->profession;
+                    }
+                }
+
+                // Per-agent buffs and effects (hex/enchant detection)
+                auto* agentEffects = EffectMgr::GetAgentEffects(living->agent_id);
+                if (agentEffects) {
+                    bool hasHex = false;
+                    bool hasEnchant = false;
+                    json activeEffects = json::array();
+                    if (agentEffects->effects.buffer) {
+                        for (uint32_t ei = 0; ei < agentEffects->effects.size; ei++) {
+                            auto& eff = agentEffects->effects.buffer[ei];
+                            if (eff.skill_id == 0) continue;
+                            json e;
+                            e["skill_id"] = eff.skill_id;
+                            e["duration"] = eff.duration;
+                            e["timestamp"] = eff.timestamp;
+                            const auto* sd = SkillMgr::GetSkillConstantData(eff.skill_id);
+                            if (sd) {
+                                e["type"] = sd->type;
+                                if (sd->type == 1) hasHex = true;        // Hex
+                                if (sd->type == 3 || sd->type == 16) hasEnchant = true; // Enchantment/Flash Enchantment
+                            }
+                            activeEffects.push_back(e);
+                        }
+                    }
+                    a["has_hex"] = hasHex;
+                    a["has_enchantment"] = hasEnchant;
+                    if (!activeEffects.empty()) {
+                        a["active_effects"] = activeEffects;
                     }
                 }
             } else if (agent->type == 0x200) {
@@ -276,6 +357,15 @@ namespace GWA3::LLM::GameSnapshot {
                 it["slot"] = item->slot;
                 it["equipped"] = item->equipped;
                 it["interaction"] = item->interaction;
+                // Rarity from interaction flags
+                uint32_t inter = item->interaction;
+                const char* rarity = "white";
+                if (inter == 2627) rarity = "green";
+                else if (inter == 2624) rarity = "gold";
+                else if (inter == 2626) rarity = "purple";
+                else if (inter == 2623) rarity = "blue";
+                else if (inter == 2622) rarity = "gray";
+                it["rarity"] = rarity;
                 items.push_back(it);
             }
         }
@@ -283,7 +373,7 @@ namespace GWA3::LLM::GameSnapshot {
         return b;
     }
 
-    // Build inventory snapshot (backpack bags 1-4)
+    // Build inventory snapshot (backpack bags 1-4) with free slot count
     static json BuildInventoryJson() {
         json inv;
         auto* inventory = ItemMgr::GetInventory();
@@ -293,11 +383,23 @@ namespace GWA3::LLM::GameSnapshot {
         inv["gold_storage"] = inventory->gold_storage;
 
         json bags = json::array();
+        uint32_t totalFreeSlots = 0;
         for (int i = 1; i <= 4; i++) {
+            auto* bag = ItemMgr::GetBag(i);
+            if (!bag) continue;
             json b = SerializeBag(i);
-            if (!b.is_null()) bags.push_back(b);
+            if (!b.is_null()) {
+                // Count free slots in this bag
+                uint32_t capacity = bag->items.size;  // allocated slot count
+                uint32_t used = bag->items_count;
+                uint32_t free = (capacity > used) ? (capacity - used) : 0;
+                b["free_slots"] = free;
+                totalFreeSlots += free;
+                bags.push_back(b);
+            }
         }
         inv["bags"] = bags;
+        inv["free_slots_total"] = totalFreeSlots;
         return inv;
     }
 
@@ -437,7 +539,7 @@ namespace GWA3::LLM::GameSnapshot {
         return m;
     }
 
-    // Build effects for the player
+    // Build effects for the player (with skill type and time remaining)
     static json BuildPlayerEffectsJson() {
         json effs = json::array();
         auto* myAgent = AgentMgr::GetMyAgent();
@@ -452,7 +554,16 @@ namespace GWA3::LLM::GameSnapshot {
                 e["skill_id"] = eff.skill_id;
                 e["attribute_level"] = eff.attribute_level;
                 e["duration"] = eff.duration;
-                e["agent_id"] = eff.agent_id;
+                e["timestamp"] = eff.timestamp;
+                e["caster_agent_id"] = eff.agent_id;
+                // Time remaining
+                float remaining = EffectMgr::GetEffectTimeRemaining(myAgent->agent_id, eff.skill_id);
+                e["time_remaining"] = remaining;
+                // Skill type for hex/enchant classification
+                const auto* sd = SkillMgr::GetSkillConstantData(eff.skill_id);
+                if (sd) {
+                    e["type"] = sd->type;
+                }
                 effs.push_back(e);
             }
         }
