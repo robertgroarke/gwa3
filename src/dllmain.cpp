@@ -279,6 +279,15 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::Log::Info("=== INTEGRATION TEST MODE ===");
         int failures = GWA3::SmokeTest::RunIntegrationTest();
         GWA3::Log::Info("Integration test complete: %d failures", failures);
+        // Clean exit: shut down hooks and terminate to avoid idle crash
+        GWA3::Log::Info("Test finished — terminating GW process");
+        GWA3::TraderHook::Shutdown();
+        GWA3::TargetLogHook::Shutdown();
+        GWA3::RenderHook::Shutdown();
+        GWA3::GameThread::Shutdown();
+        GWA3::Log::Shutdown();
+        Sleep(500);
+        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
         return static_cast<DWORD>(failures);
     }
 
