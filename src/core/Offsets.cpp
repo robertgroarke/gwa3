@@ -107,6 +107,16 @@ uintptr_t AddToChatLog = 0;
 
 uintptr_t SkipCinematicFunc = 0;
 
+uintptr_t RequestQuestInfo = 0;
+
+uintptr_t FriendListAddr = 0;
+uintptr_t FriendEventHandler = 0;
+
+uintptr_t DrawOnCompass = 0;
+
+uintptr_t GetSenderColor = 0;
+uintptr_t GetMessageColor = 0;
+
 uintptr_t SendFrameUIMsg = 0;
 
 // ===== Pattern table =====
@@ -265,6 +275,20 @@ static const PatternDef s_patterns[] = {
     // ===== Map GWCA (P2) =====
     PAT("SkipCinematicFunc", SkipCinematicFunc, "\x8B\x40\x30\x83\x78\x04\x00",          "xxxxxxx",    -0x5,  Priority::P2, PatternType::Func),
 
+    // ===== Quest GWCA (P2) =====
+    PAT("RequestQuestInfo", RequestQuestInfo, "\x68\x4A\x01\x00\x10\xFF\x77\x04",           "xxxxxxxx",   0x7A, Priority::P2, PatternType::Func),
+
+    // ===== FriendList GWCA (P2) =====
+    PAT("FriendListAddr",    FriendListAddr,    "\x74\x30\x8D\x47\xFF\x83\xF8\x01",          "xxxxxxxx",   -0xB, Priority::P2, PatternType::Ptr),
+    PAT("FriendEventHandler", FriendEventHandler, "\x83\xC0\xDA\x83\xF8\x06",                "xxxxxx",     -0xC, Priority::P2, PatternType::Func),
+
+    // ===== Compass GWCA (P2) =====
+    ASSERT_PAT("DrawOnCompass", DrawOnCompass, -0x2E, Priority::P2, PatternType::Func, "p:\\code\\gw\\char\\charmsg.cpp", "knotCount <= arrsize(message.knotData)"),
+
+    // ===== Chat Colors GWCA (P2) =====
+    PAT("GetSenderColor",  GetSenderColor,  "\xC7\x00\x60\xC0\xFF\xFF\x5D\xC3",             "xxxxxxxx",   -0x1C, Priority::P2, PatternType::Func),
+    PAT("GetMessageColor", GetMessageColor, "\xC7\x00\xB0\xB0\xB0\xFF\x5D\xC3",             "xxxxxxxx",   -0x27, Priority::P2, PatternType::Func),
+
     // ===== Memory Patches (P2) =====
     // Camera update bypass: MOV [ESI],ECX / FSTP ST(1) / MOV [ESI+4],EDX — patch to JMP +0xC
     PAT("CameraUpdateBypass", CameraUpdateBypass, "\x89\x0E\xDD\xD9\x89\x56\x04\xDD",    "xxxxxxxx",   0x0, Priority::P2, PatternType::Ptr),
@@ -411,6 +435,12 @@ static void PostProcessOffsets() {
 
     // Effects: DropBuff scan result contains E8 near call
     if (DropBuff)       DropBuff       = Scanner::FunctionFromNearCall(DropBuff);
+
+    // Quest: RequestQuestInfo scan result contains E8 near call
+    if (RequestQuestInfo) RequestQuestInfo = Scanner::FunctionFromNearCall(RequestQuestInfo);
+
+    // FriendList: scan result contains embedded pointer, deref to get FriendList struct
+    if (FriendListAddr) FriendListAddr = Deref(FriendListAddr);
 
     // TitleClientData: scan .rdata for the first entry pattern (00 00 00 00 23 40 00 00)
     // Result - 4 bytes = array base (from GWCA gwca.dll binary analysis)

@@ -3352,6 +3352,76 @@ static bool TestItemClickOffset() {
     return true;
 }
 
+// ===== GWA3-070: RequestQuestInfo Offset =====
+
+static bool TestRequestQuestInfoOffset() {
+    IntReport("=== GWA3-070: RequestQuestInfo Offset ===");
+    IntReport("  RequestQuestInfo: 0x%08X", static_cast<unsigned>(Offsets::RequestQuestInfo));
+    if (Offsets::RequestQuestInfo > 0x10000) {
+        IntCheck("RequestQuestInfo offset resolved", true);
+    } else {
+        IntSkip("RequestQuestInfo", "Pattern did not resolve");
+    }
+    IntReport("");
+    return true;
+}
+
+// ===== GWA3-071: FriendList Offsets =====
+
+static bool TestFriendListOffsets() {
+    IntReport("=== GWA3-071: FriendList Offsets ===");
+    IntReport("  FriendListAddr: 0x%08X", static_cast<unsigned>(Offsets::FriendListAddr));
+    IntReport("  FriendEventHandler: 0x%08X", static_cast<unsigned>(Offsets::FriendEventHandler));
+
+    if (Offsets::FriendListAddr > 0x10000) {
+        IntCheck("FriendListAddr resolved", true);
+    } else {
+        IntSkip("FriendListAddr", "Pattern did not resolve");
+    }
+    if (Offsets::FriendEventHandler > 0x10000) {
+        IntCheck("FriendEventHandler resolved", true);
+    } else {
+        IntSkip("FriendEventHandler", "Pattern did not resolve");
+    }
+    IntReport("");
+    return true;
+}
+
+// ===== GWA3-072: DrawOnCompass Offset =====
+
+static bool TestDrawOnCompassOffset() {
+    IntReport("=== GWA3-072: DrawOnCompass Offset ===");
+    IntReport("  DrawOnCompass: 0x%08X", static_cast<unsigned>(Offsets::DrawOnCompass));
+    if (Offsets::DrawOnCompass > 0x10000) {
+        IntCheck("DrawOnCompass offset resolved", true);
+    } else {
+        IntSkip("DrawOnCompass", "Assertion pattern did not resolve");
+    }
+    IntReport("");
+    return true;
+}
+
+// ===== GWA3-073: Chat Color Offsets =====
+
+static bool TestChatColorOffsets() {
+    IntReport("=== GWA3-073: Chat Color Offsets ===");
+    IntReport("  GetSenderColor: 0x%08X", static_cast<unsigned>(Offsets::GetSenderColor));
+    IntReport("  GetMessageColor: 0x%08X", static_cast<unsigned>(Offsets::GetMessageColor));
+
+    if (Offsets::GetSenderColor > 0x10000) {
+        IntCheck("GetSenderColor resolved", true);
+    } else {
+        IntSkip("GetSenderColor", "Pattern did not resolve");
+    }
+    if (Offsets::GetMessageColor > 0x10000) {
+        IntCheck("GetMessageColor resolved", true);
+    } else {
+        IntSkip("GetMessageColor", "Pattern did not resolve");
+    }
+    IntReport("");
+    return true;
+}
+
 // ===== GWA3-066: Camera Update Bypass Patch =====
 
 static bool TestCameraUpdateBypassPatch() {
@@ -3716,6 +3786,10 @@ int RunAdvancedTest() {
         TestSendChatOffset();
         TestAddToChatLogOffset();
         TestSkipCinematicOffset();
+        TestRequestQuestInfoOffset();
+        TestFriendListOffsets();
+        TestDrawOnCompassOffset();
+        TestChatColorOffsets();
         TestCameraUpdateBypassPatch();
         TestTradeOffsets();
         TestLevelDataBypassPatch();
