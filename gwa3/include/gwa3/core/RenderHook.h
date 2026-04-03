@@ -23,4 +23,10 @@ namespace GWA3::RenderHook {
     uint32_t GetQueueCounter();
     uint32_t GetPendingCount();
 
+    // Heartbeat: incremented every render frame (~60fps)
+    uint32_t GetHeartbeat();
+
+    // Crash detection helper (not used directly — watchdog thread compares heartbeats)
+    bool IsCrashDetected();
+
 } // namespace GWA3::RenderHook
