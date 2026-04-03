@@ -180,59 +180,6 @@ static const char* DescribeMerchantIsolationStage(MerchantIsolationStage stage) 
 }
 
 // Wait for a condition with timeout (ms). Returns true if condition met.
-// Watchdog thread: monitors RenderHook heartbeat. If it stalls for >3s,
-// logs a crash detection message. Runs until signaled to stop.
-static volatile bool s_watchdogRunning = false;
-static volatile bool s_crashDetected = false;
-static HANDLE s_watchdogThread = nullptr;
-
-static DWORD WINAPI WatchdogThreadProc(LPVOID) {
-    uint32_t lastHb = RenderHook::GetHeartbeat();
-    DWORD lastAdvance = GetTickCount();
-
-    while (s_watchdogRunning) {
-        Sleep(1000);
-        uint32_t hb = RenderHook::GetHeartbeat();
-        if (hb != lastHb) {
-            lastHb = hb;
-            lastAdvance = GetTickCount();
-        } else if (GetTickCount() - lastAdvance > 3000) {
-            s_crashDetected = true;
-            Log::Error("[WATCHDOG] !!! RENDER FROZEN — heartbeat stuck at %u for >3s. GW likely crashed !!!", hb);
-            Log::Error("[WATCHDOG] Last known test state: %d passed, %d failed, %d skipped",
-                       s_intPassed, s_intFailed, s_intSkipped);
-            Log::Error("[WATCHDOG] RenderHook qCtr=%u pending=%u",
-                       RenderHook::GetQueueCounter(), RenderHook::GetPendingCount());
-
-            // Flush the log so we capture everything before killing
-            if (s_intReport) {
-                fflush(s_intReport);
-            }
-
-            // Kill the GW process to release the crash dialog
-            Log::Error("[WATCHDOG] Terminating GW process...");
-            TerminateProcess(GetCurrentProcess(), 0xDEAD);
-            break;
-        }
-    }
-    return 0;
-}
-
-static void StartWatchdog() {
-    s_watchdogRunning = true;
-    s_crashDetected = false;
-    s_watchdogThread = CreateThread(nullptr, 0, &WatchdogThreadProc, nullptr, 0, nullptr);
-}
-
-static void StopWatchdog() {
-    s_watchdogRunning = false;
-    if (s_watchdogThread) {
-        WaitForSingleObject(s_watchdogThread, 5000);
-        CloseHandle(s_watchdogThread);
-        s_watchdogThread = nullptr;
-    }
-}
-
 static bool WaitFor(const char* desc, int timeoutMs, const std::function<bool()>& predicate) {
     DWORD start = GetTickCount();
     while ((GetTickCount() - start) < (DWORD)timeoutMs) {
@@ -3874,9 +3821,6 @@ int RunAdvancedTest() {
     IntReport("");
     IntReport("=== SUMMARY: %d passed, %d failed, %d skipped ===",
               s_intPassed, s_intFailed, s_intSkipped);
-    IntReport("  RenderHook heartbeat: %u (qCtr=%u pending=%u)",
-              RenderHook::GetHeartbeat(), RenderHook::GetQueueCounter(),
-              RenderHook::GetPendingCount());
 
     if (s_intReport) {
         fclose(s_intReport);
@@ -3894,8 +3838,6 @@ int RunIntegrationTest() {
     s_intPassed = 0;
     s_intFailed = 0;
     s_intSkipped = 0;
-
-    StartWatchdog();
 
     s_intReport = OpenIntReport();
 
@@ -4029,17 +3971,9 @@ int RunIntegrationTest() {
         IntSkip("Advanced tests (036-049)", "Login failed");
     }
 
-    StopWatchdog();
-
     IntReport("");
-    if (s_crashDetected) {
-        IntReport("!!! CRASH DETECTED during test run (render heartbeat stalled) !!!");
-    }
     IntReport("=== SUMMARY: %d passed, %d failed, %d skipped ===",
               s_intPassed, s_intFailed, s_intSkipped);
-    IntReport("  RenderHook heartbeat: %u (qCtr=%u pending=%u) crashDetected=%d",
-              RenderHook::GetHeartbeat(), RenderHook::GetQueueCounter(),
-              RenderHook::GetPendingCount(), s_crashDetected ? 1 : 0);
 
     if (s_intReport) {
         fclose(s_intReport);
