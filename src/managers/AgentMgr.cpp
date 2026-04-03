@@ -106,14 +106,15 @@ void Move(float x, float y) {
         return;
     }
 
-    // Dispatch Move on the game thread (at function entry, not mid-render)
-    // This avoids re-entrancy issues with calling game functions from the
-    // mid-function render hook detour.
-    MoveData move{x, y, 0};
-    auto fn = s_moveFn;
-    GameThread::Enqueue([fn, move]() {
-        fn(&move);
-    });
+    // Direct function call on the game thread. IMPORTANT: the caller must
+    // ensure this is called from within the game thread context (e.g., via
+    // GameThread::Enqueue wrapping the call). The fn() only works during
+    // the game's own frame callback execution.
+    static MoveData s_moveData;
+    s_moveData.x = x;
+    s_moveData.y = y;
+    s_moveData.plane = 0;
+    s_moveFn(&s_moveData);
 }
 
 void ChangeTarget(uint32_t agentId) {
