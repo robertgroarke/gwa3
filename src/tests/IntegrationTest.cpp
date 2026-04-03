@@ -607,7 +607,9 @@ static uint32_t FindNearbyFoeAgent(float maxDistance) {
 static bool MovePlayerNear(float x, float y, float threshold, int timeoutMs) {
     const DWORD start = GetTickCount();
     while ((GetTickCount() - start) < static_cast<DWORD>(timeoutMs)) {
-        AgentMgr::Move(x, y);
+        GameThread::Enqueue([x, y]() {
+            AgentMgr::Move(x, y);
+        });
         Sleep(500);
 
         float px = 0.0f;
@@ -1096,7 +1098,8 @@ static bool TryForceNearbyLootDrop() {
                 if (TryReadAgentPosition(ReadMyId(), px, py)) {
                     const float dist = AgentMgr::GetDistance(px, py, foe->x, foe->y);
                     if (dist > 250.0f) {
-                        AgentMgr::Move(foe->x, foe->y);
+                        float fx = foe->x, fy = foe->y;
+                        GameThread::Enqueue([fx, fy]() { AgentMgr::Move(fx, fy); });
                         Sleep(dist > 1200.0f ? 750 : 350);
                     }
                 }
@@ -2659,6 +2662,15 @@ static bool TestHeroFlagging() {
         return false;
     }
 
+    // Hero flagging only works in explorable zones — heroes aren't spawned
+    // in outposts. Calling FlagHero in outpost corrupts Move state.
+    const AreaInfo* flagArea = MapMgr::GetAreaInfo(ReadMapId());
+    if (flagArea && !IsSkillCastMapType(flagArea->type)) {
+        IntSkip("Hero flagging", "Not in explorable (heroes not spawned in outpost)");
+        IntReport("");
+        return false;
+    }
+
     // Get player position for relative flagging
     float myX = 0.0f;
     float myY = 0.0f;
@@ -3980,8 +3992,9 @@ int RunIntegrationTest() {
             // Phase 4: Targeting
             TestTargeting();
 
-            // HeroFlagging + HardModeToggle DISABLED — they corrupt Move state
-            // TODO: investigate which one (or both) breaks the Move function
+            // Both re-enabled — HeroFlagging now guarded to skip in outpost
+            TestHeroFlagging();
+            TestHardModeToggle();
 
             // Phase 5: reserve the session for explorable bootstrap so the
             // skill slice can run in the right environment.
