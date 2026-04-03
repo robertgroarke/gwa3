@@ -3968,30 +3968,10 @@ int RunIntegrationTest() {
             // Phase 4: Targeting
             TestTargeting();
 
-            // Advanced introspection tests — SKIPPED to isolate exit movement bug
-            // IntReport("  Running advanced introspection tests (outpost phase)...");
-            // TestPlayerData();
-            // TestCameraIntrospection();
-            // TestClientInfo();
-            // ALL ADVANCED TESTS SKIPPED to isolate exit movement bug
-            /*
-            TestInventoryIntrospection();
-            TestAgentArrayEnumeration();
-            TestUIFrameValidation();
-            TestAreaInfoValidation();
-            TestSkillbarDataValidation();
-            TestPartyState();
-            TestTargetLogHook();
-            TestGuildData();
-            TestMapStateQueries();
-            TestPingStability();
-            TestWeaponSetValidation();
-            TestAgentDistanceCrossCheck();
-            TestCameraControls();
-            TestChatWriteLocal();
+            // === BISECT: re-enable suspects to isolate Move corruption ===
+            IntReport("  BISECT: Running HeroFlagging + HardModeToggle to test Move corruption...");
             TestHeroFlagging();
             TestHardModeToggle();
-            */
 
             // Phase 5: reserve the session for explorable bootstrap so the
             // skill slice can run in the right environment.

@@ -15,6 +15,9 @@ static volatile LONG s_savedCommand = 0;
 static volatile LONG s_mapLoaded = 0;
 static volatile LONG s_disableRendering = 0;
 static volatile LONG s_heartbeat = 0;
+
+// FPU save area — 108 bytes required by fsave/frstor, aligned to 16 bytes
+__declspec(align(16)) static uint8_t s_fpuState[112] = {};
 static uintptr_t s_queue[kQueueSize] = {};
 static bool s_initialized = false;
 static uintptr_t s_returnAddr = 0;
@@ -27,8 +30,57 @@ static uint8_t s_savedBytes[kPatchSize] = {};
 // overwritten instructions before jumping back to Render+0xA.
 static volatile LONG s_savedESP = 0;
 
+// Set to 1 to test MINIMAL hook: only heartbeat inc, no pushad/popfd/queue
+// Set to 2 for normal operation with full command dispatch
+// Mode 1: minimal (heartbeat + trampoline only) — PROVEN STABLE at 12309 hb
+// Mode 2: full + FPU save/restore — testing FPU corruption theory
+// Mode 3: pushad/popfd NO queue — PROVEN STABLE at 12338 hb
+// Mode 4: pushad + queue drain (no call) — PROVEN STABLE at 12345 hb
+#define RENDERHOOK_MODE 2
+
 static __declspec(naked) void RenderDetourNaked() {
     __asm {
+#if RENDERHOOK_MODE == 1
+        // MINIMAL: only heartbeat, no register save/restore, no queue
+        inc dword ptr [s_heartbeat]
+        jmp [s_trampoline]
+#elif RENDERHOOK_MODE == 3
+        // PUSHAD TEST: save/restore regs but NO queue dispatch
+        mov dword ptr [s_savedESP], esp
+        pushad
+        pushfd
+        inc dword ptr [s_heartbeat]
+        popfd
+        popad
+        mov esp, dword ptr [s_savedESP]
+        jmp [s_trampoline]
+#elif RENDERHOOK_MODE == 4
+        // QUEUE DRAIN TEST: read queue, clear slots, advance counter, but NO call
+        mov dword ptr [s_savedESP], esp
+        pushad
+        pushfd
+
+        mov eax, dword ptr [s_queueCounter]
+        mov ebx, dword ptr [s_queue + eax * 4]
+        test ebx, ebx
+        jz skip_queue
+
+        mov dword ptr [s_queue + eax * 4], 0
+        // Skip: mov [s_savedCommand], ebx / call [s_savedCommand]
+        inc eax
+        cmp eax, kQueueSize
+        jnz no_reset
+        xor eax, eax
+no_reset:
+        mov dword ptr [s_queueCounter], eax
+
+skip_queue:
+        inc dword ptr [s_heartbeat]
+        popfd
+        popad
+        mov esp, dword ptr [s_savedESP]
+        jmp [s_trampoline]
+#else
         // Save ESP BEFORE any stack operations — restore it exactly before exit
         mov dword ptr [s_savedESP], esp
         pushad
@@ -50,7 +102,11 @@ static __declspec(naked) void RenderDetourNaked() {
         xor eax, eax
 no_reset:
         mov dword ptr [s_queueCounter], eax
+        // Save FPU state before calling shellcode — game's render path uses FPU
+        fsave [s_fpuState]
         call dword ptr [s_savedCommand]
+        // Restore FPU state after shellcode — prevent FPU register corruption
+        frstor [s_fpuState]
 
 skip_queue:
         inc dword ptr [s_heartbeat]
@@ -58,6 +114,7 @@ skip_queue:
         popad
         // Restore ESP to EXACTLY what it was on entry — guarantees zero stack impact
         mov esp, dword ptr [s_savedESP]
+#endif
         // Jump to trampoline: original 10 bytes + JMP to hookAddr+0xA
         jmp [s_trampoline]
     }
