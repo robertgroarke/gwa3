@@ -1907,12 +1907,11 @@ static bool TestLootPickup() {
     const DWORD pickupStart = GetTickCount();
     bool pickupDone = false;
     while ((GetTickCount() - pickupStart) < 10000 && !pickupDone) {
-        // Move toward item
-        GameThread::Enqueue([itemX, itemY]() {
+        // Move toward item and send pickup interact — both on game thread
+        GameThread::Enqueue([itemX, itemY, itemAgentId]() {
             AgentMgr::Move(itemX, itemY);
+            ItemMgr::PickUpItem(itemAgentId);
         });
-        // Send pickup interact
-        ItemMgr::PickUpItem(itemAgentId);
         Sleep(500);
         // Check if ground item disappeared
         if (!FindGroundItemByAgentId(itemAgentId)) {
