@@ -82,8 +82,9 @@ static bool RunCharSelectBootstrap(DWORD timeoutMs) {
         if (now - lastLog >= 3000) {
             const uintptr_t playFrame = GWA3::UIMgr::GetFrameByHash(GWA3::UIMgr::Hashes::PlayButton);
             const uint32_t playState = playFrame ? GWA3::UIMgr::GetFrameState(playFrame) : 0;
-            GWA3::Log::Info("Bootstrap: waiting (MapID=%u MyID=%u PlayFrame=0x%08X state=0x%X)",
-                            mapId, myId, playFrame, playState);
+            GWA3::Log::Info("Bootstrap: waiting (MapID=%u MyID=%u PlayFrame=0x%08X state=0x%X hb=%u)",
+                            mapId, myId, playFrame, playState,
+                            GWA3::RenderHook::GetHeartbeat());
             lastLog = now;
         }
 
