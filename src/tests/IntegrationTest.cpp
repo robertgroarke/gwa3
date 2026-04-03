@@ -641,6 +641,9 @@ static size_t CollectNearbyFoeAgents(float maxDistance, uint32_t* outIds, size_t
     Candidate best[8] = {};
     size_t bestCount = 0;
 
+    static bool s_loggedAgentScan = false;
+    uint32_t totalAgents = 0, livingCount = 0, foeCount = 0;
+
     __try {
         uintptr_t agentArr = *reinterpret_cast<uintptr_t*>(Offsets::AgentBase);
         const uint32_t maxAgents = *reinterpret_cast<uint32_t*>(Offsets::AgentBase + 0x8);
@@ -653,13 +656,16 @@ static size_t CollectNearbyFoeAgents(float maxDistance, uint32_t* outIds, size_t
 
             uintptr_t agentPtr = *reinterpret_cast<uintptr_t*>(agentArr + i * 4);
             if (agentPtr <= 0x10000) continue;
+            totalAgents++;
 
             auto* base = reinterpret_cast<Agent*>(agentPtr);
             if (base->type != 0xDB) continue;
+            livingCount++;
 
             auto* living = reinterpret_cast<AgentLiving*>(agentPtr);
             if (living->allegiance != 3) continue;
             if (living->hp <= 0.0f) continue;
+            foeCount++;
 
             const float distSq = AgentMgr::GetSquaredDistance(myX, myY, living->x, living->y);
             if (distSq > maxDistSq) continue;
@@ -684,6 +690,13 @@ static size_t CollectNearbyFoeAgents(float maxDistance, uint32_t* outIds, size_t
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
+    }
+
+    if (!s_loggedAgentScan) {
+        Log::Info("[INTG] Agent scan: total=%u living=%u foes=%u nearby=%u (maxAgents=%u)",
+                  totalAgents, livingCount, foeCount, static_cast<uint32_t>(bestCount),
+                  *reinterpret_cast<uint32_t*>(Offsets::AgentBase + 0x8));
+        s_loggedAgentScan = true;
     }
 
     for (size_t i = 0; i < bestCount; ++i) {
@@ -1064,8 +1077,8 @@ static bool TryForceNearbyLootDrop() {
         MovePlayerNear(step.x, step.y, 350.0f, 15000);
         Sleep(1000);
 
-        uint32_t foeIds[4] = {};
-        const size_t foeCount = CollectNearbyFoeAgents(5000.0f, foeIds, 4);
+        uint32_t foeIds[8] = {};
+        const size_t foeCount = CollectNearbyFoeAgents(5000.0f, foeIds, 8);
         if (foeCount == 0) continue;
 
         IntReport("  Found %u nearby foe(s) for loot setup", static_cast<unsigned>(foeCount));
@@ -1161,11 +1174,11 @@ static bool TryForceNearbyLootDrop() {
             }
 
             if (FindNearbyGroundItem(5000.0f)) return true;
-            if (foesDefeated >= 3) break;
+            if (foesDefeated >= 8) break;
         }
 
         if (FindNearbyGroundItem(5000.0f)) return true;
-        if (foesDefeated >= 3) break;
+        if (foesDefeated >= 8) break;
     }
 
     IntReport("  Loot setup summary: foesDamaged=%d foesDefeated=%d",
