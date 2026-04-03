@@ -1,6 +1,7 @@
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/RenderHook.h>
+#include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
 
 #include <Windows.h>
@@ -208,13 +209,6 @@ bool ButtonClick(uintptr_t frame) {
         Log::Warn("UIMgr: ButtonClick no sendAddr or invalid frame");
         return false;
     }
-    if (!RenderHook::IsInitialized()) {
-        Log::Warn("UIMgr: ButtonClick RenderHook not initialized");
-        return false;
-    }
-    if (!EnsureFrameClickShellcode()) {
-        return false;
-    }
 
     uint32_t state = GetFrameState(frame);
     if (!(state & FRAME_CREATED)) {
@@ -228,20 +222,41 @@ bool ButtonClick(uintptr_t frame) {
         return false;
     }
 
+    // Build the mouse action data
     MouseAction action{};
     action.frame_id = GetFrameId(frame);
     action.child_offset_id = GetChildOffsetId(frame);
     action.action_state = ACTION_MOUSE_UP;
     action.wparam = 0;
     action.lparam = 0;
+
+    void* thisPtr = reinterpret_cast<void*>(context + 0xA8);
+
+    // Dispatch via GameThread (MinHook at function entry — safe, no mid-function conflict)
+    if (GameThread::IsInitialized()) {
+        GameThread::Enqueue([thisPtr, action]() {
+            // Copy action to persistent storage for the call
+            static MouseAction s_action;
+            s_action = action;
+            CallSendFrameUI(thisPtr, MSG_MOUSE_CLICK2, &s_action, nullptr);
+        });
+        return true;
+    }
+
+    // Fallback: old RenderHook shellcode path (only if GameThread unavailable)
+    if (!RenderHook::IsInitialized() || !EnsureFrameClickShellcode()) {
+        Log::Warn("UIMgr: ButtonClick — no dispatch mechanism available");
+        return false;
+    }
+
     memcpy(reinterpret_cast<void*>(s_frameClickAction), &action, sizeof(action));
 
-    const uint32_t thisPtr = static_cast<uint32_t>(context + 0xA8);
+    const uint32_t thisPtrU32 = static_cast<uint32_t>(context + 0xA8);
     const uint32_t sendFrame = static_cast<uint32_t>(s_sendFrameUIAddr);
     auto* sc = reinterpret_cast<uint8_t*>(s_frameClickShellcode);
 
     sc[0] = 0xB9;
-    WriteLE32(sc + 1, thisPtr);
+    WriteLE32(sc + 1, thisPtrU32);
     sc[5] = 0x6A;
     sc[6] = 0x00;
     sc[7] = 0x68;
