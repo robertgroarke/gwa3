@@ -3184,7 +3184,7 @@ static bool TestReturnToOutpost() {
     IntReport("  Traveling to Gadd's Encampment (map %u) from explorable map %u...",
               MAP_GADDS_ENCAMPMENT, mapId);
     GameThread::Enqueue([]() {
-        MapMgr::Travel(MAP_GADDS_ENCAMPMENT);
+        MapMgr::Travel(638); // Gadd's Encampment
     });
 
     const bool returned = WaitFor("MapID changes after ReturnToOutpost", 60000, [mapId]() {
