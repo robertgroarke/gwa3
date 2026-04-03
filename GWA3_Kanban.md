@@ -2000,6 +2000,290 @@ WAVE 7 (Endgame — needs all integration):
 
 ---
 
+### Epic 11: LLM Bridge Gaps
+
+> Tickets for missing game state observations and actions identified during the Froggy gap analysis.
+> These fill the remaining holes needed for Gemma 4 to fully replicate Froggy's decision-making.
+> All depend on existing manager infrastructure and the LLM bridge (implemented in `src/llm/`).
+
+#### GWA3-055 — MoraleMgr: Read Party Morale
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-005, GWA3-006 |
+| **Blocks** | — |
+| **Parallel Group** | PG-LLM-OBS |
+
+**Description:**
+Find the memory offset for party morale (death penalty / morale boost). Froggy uses `GetMorale()` to decide when to use DP-removal sweets and when to resign. Without this, Gemma can't make DP recovery decisions.
+
+**Acceptance Criteria:**
+- [ ] Scan for morale value in game memory (int, range -60 to +10)
+- [ ] Add `GetMorale()` to PartyMgr or a new MoraleMgr
+- [ ] Expose morale in GameSnapshot Tier 1
+- [ ] Test: verify morale reads correctly after deaths and morale boosts
+
+**Reference:** AutoIt `GetMorale()` in `BotsHub-latest/lib/GWA2.au3`. GWCA `PartyMgr::GetMorale()`.
+
+---
+
+#### GWA3-056 — Quest State Reader: Active Quest + Objectives
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-005, GWA3-006 |
+| **Blocks** | — |
+| **Parallel Group** | PG-LLM-OBS |
+
+**Description:**
+Read the active quest state from game memory: which quest is active, its current objectives, completion state, and map markers. Froggy uses `AcceptQuest`, `QuestReward`, and checks quest log state to know when dungeon quests are complete. Gemma needs this to know when objectives are met.
+
+**Acceptance Criteria:**
+- [ ] Read active quest ID from memory
+- [ ] Read quest log entries: quest ID, state (active/complete), map_from, map_to
+- [ ] Read quest objective text (encoded, decode via EncStrCodec)
+- [ ] Expose active quest + objectives in GameSnapshot Tier 2
+- [ ] Test: accept a quest, verify state transitions
+
+**Reference:** GWCA `QuestMgr` — `GetActiveQuest()`, `GetQuestLog()`, quest struct at `Quest.h`.
+
+---
+
+#### GWA3-057 — Vanquish Progress: Foes Killed / Foes To Kill
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-005, GWA3-006 |
+| **Blocks** | — |
+| **Parallel Group** | PG-LLM-OBS |
+
+**Description:**
+Read vanquish/area progress counters: foes killed and total foes in the explorable area. AutoIt exposes `GetFoesKilled()` and `GetFoesToKill()`. Useful for vanquish runs and knowing when an area is clear.
+
+**Acceptance Criteria:**
+- [ ] Find memory offsets for foes_killed and foes_to_kill counters
+- [ ] Add to MapMgr or a dedicated VanquishMgr
+- [ ] Expose in GameSnapshot Tier 1 (when in explorable area)
+- [ ] Test: enter explorable, kill foes, verify counter increments
+
+**Reference:** AutoIt `GetFoesKilled()`, `GetFoesToKill()`, `GetAreaVanquished()` in `GWA2.au3`.
+
+---
+
+#### GWA3-058 — Title Progression Snapshot
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-049 |
+| **Blocks** | — |
+| **Parallel Group** | PG-LLM-OBS |
+
+**Description:**
+Expose EotN title progression (Vanguard, Norn, Asura, Deldrimor) and core titles (Sunspear, Lightbringer, Survivor) in the game snapshot. PlayerMgr already has `GetTitleTrack()` — wire it into GameSnapshot Tier 3. Froggy uses these to validate run completion and optimize farming route selection.
+
+**Acceptance Criteria:**
+- [ ] Read EotN title points via `GetTitleTrack()` for IDs 28-31
+- [ ] Read Sunspear (20), Lightbringer (21), Survivor (11)
+- [ ] Include in GameSnapshot Tier 3 as `titles` object
+- [ ] Include current rank name if decodable
+
+---
+
+#### GWA3-059 — Map Loading 3-State Detection
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-005 |
+| **Blocks** | — |
+| **Parallel Group** | PG-LLM-OBS |
+
+**Description:**
+Distinguish between 3 map loading states: `0` = not loaded (loading screen), `1` = loaded (in game), `2` = disconnected/error. Currently the bridge only exposes a boolean `is_loaded`. Froggy uses the 3-state value to detect disconnects and bail out early.
+
+**Acceptance Criteria:**
+- [ ] Find memory location for full map loading state (0/1/2)
+- [ ] Expose as `map.loading_state` in GameSnapshot (alongside existing `is_loaded`)
+- [ ] Test: verify state 0 during map transitions, state 2 on disconnect
+
+**Reference:** AutoIt `GetMapLoading()` in `GWA2_Extensions.au3`. GWCA `MapMgr::GetInstanceType()`.
+
+---
+
+#### GWA3-060 — Agent Name Decoding
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-051, GWA3-005 |
+| **Blocks** | — |
+| **Parallel Group** | PG-LLM-OBS |
+
+**Description:**
+Decode encoded NPC and player names so the LLM sees "Mergoyle" instead of raw encoded bytes. Use `EncStrCodec` (GWA3-051) to decode `name_enc` strings from Agent and Player structs. Expose decoded names for nearby agents in the snapshot.
+
+**Acceptance Criteria:**
+- [ ] Decode `player->name_enc` for players
+- [ ] Decode NPC names from the game's string table (model-id based)
+- [ ] Include `name` field in nearby agent entries
+- [ ] Handle edge cases: empty strings, unresolvable names
+
+---
+
+#### GWA3-061 — Dialog Body Decoding
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-051, GWA3-053 |
+| **Blocks** | — |
+| **Parallel Group** | PG-LLM-OBS |
+
+**Description:**
+The dialog body text from StoC packets is an encoded `wchar_t` string with embedded `<a=DIALOG_ID>label</a>` tags. Currently we pass the raw encoded string. Implement decoding using the game's `AsyncDecodeStr` function (as GWToolbox does) or our `EncStrCodec`, so Gemma sees readable dialog text instead of encoded gibberish.
+
+**Acceptance Criteria:**
+- [ ] Decode dialog body encoded strings to readable text
+- [ ] Parse embedded `<a=ID>label</a>` tags to extract inline dialog options
+- [ ] Decode dialog button label strings
+- [ ] Expose decoded text in GameSnapshot `dialog.body` field
+
+**Reference:** GWToolbox `DialogModule.cpp` — calls `GW::UI::AsyncDecodeStr()`.
+
+---
+
+#### GWA3-062 — Resign Action
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-010 |
+| **Blocks** | — |
+| **Parallel Group** | PG-LLM-ACTIONS |
+
+**Description:**
+Add a `resign` action to the LLM bridge. In Guild Wars, resigning is done via chat command `/resign`. Froggy uses `ResignAndReturn()` which sends `/resign` then waits for the resign vote to pass before returning to outpost.
+
+**Acceptance Criteria:**
+- [ ] Add `resign` action to ActionExecutor — sends `/resign` via ChatMgr
+- [ ] Add tool schema in Python bridge
+- [ ] Test: resign in an explorable area, verify return to outpost
+
+---
+
+#### GWA3-063 — Chest Interaction + Lockpick Support
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-010, GWA3-016 |
+| **Blocks** | — |
+| **Parallel Group** | PG-LLM-ACTIONS |
+
+**Description:**
+Froggy opens dungeon chests via `OpenChest()` which interacts with the nearest chest signpost. The LLM can already `interact_signpost(agent_id)`, but needs to know which agents are chests (vs other gadgets) and track which chests have been opened to avoid re-interaction. May need lockpick usage logic if chest requires a key.
+
+**Acceptance Criteria:**
+- [ ] Identify chest agents by gadget ID or model (differentiate from other signposts)
+- [ ] Add `is_chest` flag to gadget agents in GameSnapshot
+- [ ] Optionally: add `open_chest(agent_id)` action as a convenience wrapper
+- [ ] Document lockpick item model IDs for the LLM
+
+---
+
+#### GWA3-064 — Craft Item Action
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-010, GWA3-053 |
+| **Blocks** | — |
+| **Parallel Group** | PG-LLM-ACTIONS |
+
+**Description:**
+Implement crafter NPC transaction flow. Froggy's maintenance routine crafts grails and longswords via specific NPC dialogs + crafting packets. The LLM needs: detect crafter window, see available recipes, and execute craft transactions. May reuse existing merchant item list + dialog system, or need dedicated CraftMgr.
+
+**Acceptance Criteria:**
+- [ ] Detect crafter NPC window open (similar to merchant detection)
+- [ ] Read available craft recipes (model IDs + material requirements)
+- [ ] Add `craft_item(recipe_id)` or reuse `transact_items` for crafting
+- [ ] Test: interact with crafter NPC, craft an item, verify inventory change
+
+**Reference:** AutoIt `CraftItemSafe()` in `GWA2_Crafting.au3`. GWCA `Merchant::TransactionType::CrafterBuy (3)`.
+
+---
+
+#### GWA3-065 — StoC Event Push to Bridge
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-053, LLM IPC |
+| **Blocks** | — |
+| **Parallel Group** | PG-LLM-EVENTS |
+
+**Description:**
+Register StoC packet callbacks for discrete game events and push them to the bridge as `event` messages (instead of waiting for the next snapshot). Events to intercept: map change, party wipe, agent killed, item dropped, chest opened, chat message received, skill activated. This gives Gemma real-time event awareness between snapshot ticks.
+
+**Acceptance Criteria:**
+- [ ] Register StoC callbacks for key packet types (map load, agent death, item drop, chat)
+- [ ] Serialize events as JSON `{"type": "event", "event": "...", ...}`
+- [ ] Send via IpcServer::Send immediately (not batched)
+- [ ] Add event display in Python observation summary
+- [ ] Test: kill an enemy, verify event appears in bridge output
+
+---
+
+#### GWA3-066 — Advisory Mode: LLM Overrides FroggyHM
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-025, GWA3-026, LLM Bridge |
+| **Blocks** | — |
+| **Parallel Group** | — |
+
+**Description:**
+Implement advisory autonomy mode where the LLM handles high-level strategy (when to sell, which route, priority targeting) while FroggyHM's scripted routines handle combat micro and pathfinding. The LLM can override bot state transitions via the `BotState::LLMControlled` enum. When in advisory mode, Froggy's state machine runs normally but the LLM can inject state change commands ("go to merchant now", "return to outpost").
+
+**Acceptance Criteria:**
+- [ ] Add `set_bot_state(state)` action to ActionExecutor
+- [ ] LLM can read current bot state from GameSnapshot
+- [ ] LLM can override state transitions (e.g., force Merchant state)
+- [ ] Froggy continues running its handlers for the current state
+- [ ] "Hold" behavior when LLM is thinking (maintain current action)
+- [ ] Test: LLM overrides from InDungeon to Merchant mid-run
+
+---
+
 ## Ticket Summary
 
 | ID | Title | Est | Depends On | Status |
@@ -2071,7 +2355,21 @@ WAVE 7 (Endgame — needs all integration):
 | GWA3-053 | StoCMgr (Packet Callbacks) | L | 005, 006 | `done` |
 | GWA3-054 | GuildMgr | S | 005, 006 | `done` |
 
-**Total: 54 tickets across 10 epics.**
+| **Epic 11: LLM Bridge Gaps** | | | | |
+| GWA3-055 | MoraleMgr — Read Party Morale | M | 005, 006 | `backlog` |
+| GWA3-056 | Quest State Reader — Active Quest + Objectives | L | 005, 006 | `backlog` |
+| GWA3-057 | Vanquish Progress — Foes Killed / Foes To Kill | M | 005, 006 | `backlog` |
+| GWA3-058 | Title Progression Snapshot — EotN + Core Titles | S | 049 | `backlog` |
+| GWA3-059 | Map Loading 3-State — Not Loaded / Loaded / Disconnected | S | 005 | `backlog` |
+| GWA3-060 | Agent Name Decoding — Decode Encoded NPC/Player Names | M | 051, 005 | `backlog` |
+| GWA3-061 | Dialog Body Decoding — AsyncDecodeStr for Dialog Text | M | 051, 053 | `backlog` |
+| GWA3-062 | Resign Action — Resign + Return to Outpost Combo | S | 010 | `backlog` |
+| GWA3-063 | Chest Interaction — Open Chest + Lockpick Support | S | 010, 016 | `backlog` |
+| GWA3-064 | Craft Item Action — Crafter NPC Transaction Flow | M | 010, 053 | `backlog` |
+| GWA3-065 | StoC Event Push — Map Change / Kill / Loot / Chat Events to Bridge | L | 053, LLM IPC | `backlog` |
+| GWA3-066 | Advisory Mode — LLM Overrides FroggyHM State Machine | L | 025, 026, LLM Bridge | `backlog` |
+
+**Total: 66 tickets across 11 epics.**
 
 ---
 
