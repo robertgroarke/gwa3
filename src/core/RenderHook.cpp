@@ -50,10 +50,13 @@ skip_queue:
         inc dword ptr [s_heartbeat]
         popfd
         popad
-        // Jump to Render+0xA — past the 5 bytes we overwrote with JMP
-        // plus 5 more bytes of the original instruction (total 10 bytes skipped).
-        // AutoIt's RenderingModProc does exactly the same: ljmp RenderingModReturn.
-        // Do NOT replay any "original" bytes here — they're dead code after our JMP.
+        // Replay the original overwritten bytes (from AutoIt RenderingModProc):
+        //   add esp, 4
+        //   cmp dword ptr [DisableRendering], 1
+        // These are NOT a stack leak — they are the original game instructions
+        // at the Render hook site that we overwrote with our 5-byte JMP.
+        add esp, 4
+        cmp dword ptr [s_disableRendering], 1
         jmp [s_returnAddr]
     }
 }
