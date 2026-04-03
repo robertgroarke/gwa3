@@ -26,6 +26,9 @@ namespace GWA3::RenderHook {
     // Heartbeat: incremented every render frame (~60fps)
     uint32_t GetHeartbeat();
 
+    // Check if the JMP patch is still intact at the hook site
+    bool IsHookIntact();
+
     // Crash detection helper (not used directly — watchdog thread compares heartbeats)
     bool IsCrashDetected();
 
