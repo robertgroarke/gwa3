@@ -23,6 +23,7 @@
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/managers/StoCMgr.h>
 #include <gwa3/managers/EffectMgr.h>
+#include <gwa3/managers/DialogMgr.h>
 #include <gwa3/bot/BotFramework.h>
 #include <gwa3/bot/FroggyHM.h>
 #include <gwa3/core/SmokeTest.h>
@@ -279,6 +280,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
             GWA3::Log::Info("Hello from game thread! Hook is working.");
         });
         GWA3::StoC::Initialize();
+        GWA3::DialogMgr::Initialize();
     }
 
     if (cmdTest) {
@@ -358,6 +360,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
     } else if (reason == DLL_PROCESS_DETACH) {
         GWA3::LLM::Shutdown();
         GWA3::Bot::Stop();
+        GWA3::DialogMgr::Shutdown();
         GWA3::StoC::Shutdown();
         GWA3::TraderHook::Shutdown();
         GWA3::TargetLogHook::Shutdown();

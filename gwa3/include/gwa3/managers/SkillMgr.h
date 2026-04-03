@@ -18,6 +18,7 @@ namespace GWA3::SkillMgr {
 
     // Skillbar data access
     Skillbar* GetPlayerSkillbar();
+    Skillbar* GetSkillbarByAgentId(uint32_t agentId);
     SkillbarSkill* GetSkillbarSkill(uint32_t slot);
     const Skill* GetSkillConstantData(uint32_t skillId);
 

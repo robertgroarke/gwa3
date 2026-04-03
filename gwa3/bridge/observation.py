@@ -145,12 +145,59 @@ class ObservationWindow:
                         f"{iname}{qty_str} [{itype}] model={model_id}{owner_str}"
                     )
 
+        # Hero skillbars and casting (from tier 2+)
+        heroes = snap.get("heroes", [])
+        if heroes:
+            lines.append(f"Heroes ({len(heroes)}):")
+            for hero in heroes:
+                prof = profession_name(hero.get("primary", 0))
+                casting = ""
+                if hero.get("is_casting"):
+                    sk_id = hero.get("casting_skill_id", 0)
+                    casting = f" CASTING {skill_name(sk_id)}({sk_id})"
+                hero_skills = hero.get("skillbar", [])
+                sk_summary = " ".join(
+                    f"[{s.get('slot')}:{skill_name(s.get('skill_id',0))}={'R'+str(s['recharge']) if s.get('recharge',0)>0 else 'rdy'}]"
+                    for s in hero_skills if s.get("skill_id", 0)
+                )
+                lines.append(
+                    f"  agent={hero.get('agent_id')} {prof} "
+                    f"hp={hero.get('hp', 0):.0%} energy={hero.get('energy', 0):.0%}"
+                    f"{casting}"
+                )
+                if sk_summary:
+                    lines.append(f"    {sk_summary}")
+
+        # Dialog state (from tier 2+)
+        dialog = snap.get("dialog", {})
+        if dialog.get("is_open"):
+            lines.append("DIALOG OPEN:")
+            body = dialog.get("body_raw", "")
+            if body:
+                lines.append(f"  NPC says: {body[:300]}")
+            buttons = dialog.get("buttons", [])
+            if buttons:
+                lines.append("  Options:")
+                for btn in buttons:
+                    label = btn.get("label", "???")
+                    did = btn.get("dialog_id", 0)
+                    lines.append(f"    [{did}] {label}")
+
         # Inventory (from tier 3)
         inv = snap.get("inventory", {})
         if inv:
             lines.append(
                 f"Gold: char={inv.get('gold_character', 0)} storage={inv.get('gold_storage', 0)}"
             )
+            bags = inv.get("bags", [])
+            total_items = sum(b.get("item_count", 0) for b in bags)
+            lines.append(f"Backpack: {total_items} items across {len(bags)} bags")
+
+        # Storage (from tier 3)
+        storage = snap.get("storage", [])
+        if storage:
+            total_stored = sum(b.get("item_count", 0) for b in storage)
+            lines.append(f"Xunlai Storage: {total_stored} items across {len(storage)} panes")
 
         # Recent events
         events = self.get_recent_events(5)
