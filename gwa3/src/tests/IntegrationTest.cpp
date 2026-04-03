@@ -1043,7 +1043,9 @@ static bool TryForceNearbyLootDrop() {
     } kProbeSteps[] = {
         {-4559.0f, -14406.0f},
         {-5204.0f,  -9831.0f},
+        {-7520.0f, -14166.0f},
         { -928.0f,  -8699.0f},
+        {-6374.0f, -13639.0f},
     };
 
     auto waitForDropAfterCombat = []() {
@@ -1085,7 +1087,7 @@ static bool TryForceNearbyLootDrop() {
             bool foeDefeated = false;
             bool foeDamaged = false;
             const DWORD fightStart = GetTickCount();
-            while ((GetTickCount() - fightStart) < 20000) {
+            while ((GetTickCount() - fightStart) < 30000) {
                 foe = GetAgentLivingRaw(foeId);
                 if (!foe || foe->hp <= 0.0f) {
                     foeDefeated = true;
@@ -1106,13 +1108,30 @@ static bool TryForceNearbyLootDrop() {
 
                 AgentMgr::ChangeTarget(foeId);
                 AgentMgr::Attack(foeId);
+
+                // Flag heroes to the foe position so they engage too
+                {
+                    float fx = foe->x, fy = foe->y;
+                    GameThread::Enqueue([fx, fy]() {
+                        PartyMgr::FlagAll(fx, fy);
+                    });
+                }
+
                 if (haveOffensiveSkill) {
                     Skillbar* liveBar = SkillMgr::GetPlayerSkillbar();
                     if (liveBar && liveBar->skills[offensiveSkill.slot - 1].recharge == 0) {
                         SkillMgr::UseSkill(offensiveSkill.slot, foeId, 0);
                     }
                 }
-                Sleep(1250);
+                Sleep(1500);
+
+                // Log combat progress
+                foe = GetAgentLivingRaw(foeId);
+                if (foe) {
+                    if (foe->hp < hpBefore && foe->hp > 0.0f) {
+                        IntReport("  Foe %u HP: %.2f (taking damage)", foeId, foe->hp);
+                    }
+                }
 
                 if (FindNearbyGroundItem(5000.0f)) return true;
 
@@ -1128,6 +1147,7 @@ static bool TryForceNearbyLootDrop() {
             }
 
             AgentMgr::CancelAction();
+            GameThread::Enqueue([]() { PartyMgr::UnflagAll(); });
             Sleep(250);
 
             if (foeDamaged) {
