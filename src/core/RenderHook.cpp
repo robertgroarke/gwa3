@@ -13,7 +13,6 @@ static volatile LONG s_queueCounter = 0;
 static volatile LONG s_savedCommand = 0;
 static volatile LONG s_mapLoaded = 0;
 static volatile LONG s_disableRendering = 0;
-static volatile LONG s_heartbeat = 0;  // incremented every render frame
 static uintptr_t s_queue[kQueueSize] = {};
 static bool s_initialized = false;
 static uintptr_t s_returnAddr = 0;
@@ -49,11 +48,6 @@ no_reset:
 skip_queue:
         popfd
         popad
-        // Replay the original overwritten bytes (from AutoIt RenderingModProc):
-        //   add esp, 4
-        //   cmp dword ptr [DisableRendering], 1
-        // These are NOT a stack leak — they are the original game instructions
-        // at the Render hook site that we overwrote with our 5-byte JMP.
         add esp, 4
         cmp dword ptr [s_disableRendering], 1
         jmp [s_returnAddr]
@@ -151,18 +145,6 @@ uint32_t GetPendingCount() {
         if (s_queue[i] != 0) count++;
     }
     return count;
-}
-
-uint32_t GetHeartbeat() {
-    return static_cast<uint32_t>(s_heartbeat);
-}
-
-bool IsRenderFrozen(uint32_t timeoutMs) {
-    if (!s_initialized) return true;
-    uint32_t before = static_cast<uint32_t>(s_heartbeat);
-    Sleep(timeoutMs);
-    uint32_t after = static_cast<uint32_t>(s_heartbeat);
-    return (after == before);
 }
 
 } // namespace GWA3::RenderHook
