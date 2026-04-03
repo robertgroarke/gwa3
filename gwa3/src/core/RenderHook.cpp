@@ -13,6 +13,7 @@ static volatile LONG s_queueCounter = 0;
 static volatile LONG s_savedCommand = 0;
 static volatile LONG s_mapLoaded = 0;
 static volatile LONG s_disableRendering = 0;
+static volatile LONG s_heartbeat = 0;  // incremented every render frame
 static uintptr_t s_queue[kQueueSize] = {};
 static bool s_initialized = false;
 static uintptr_t s_returnAddr = 0;
@@ -46,6 +47,7 @@ no_reset:
         call dword ptr [s_savedCommand]
 
 skip_queue:
+        inc dword ptr [s_heartbeat]
         popfd
         popad
         add esp, 4
@@ -145,6 +147,18 @@ uint32_t GetPendingCount() {
         if (s_queue[i] != 0) count++;
     }
     return count;
+}
+
+uint32_t GetHeartbeat() {
+    return static_cast<uint32_t>(s_heartbeat);
+}
+
+bool IsRenderFrozen(uint32_t timeoutMs) {
+    if (!s_initialized) return true;
+    uint32_t before = static_cast<uint32_t>(s_heartbeat);
+    Sleep(timeoutMs);
+    uint32_t after = static_cast<uint32_t>(s_heartbeat);
+    return (after == before);
 }
 
 } // namespace GWA3::RenderHook

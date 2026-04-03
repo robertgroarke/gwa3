@@ -23,4 +23,12 @@ namespace GWA3::RenderHook {
     uint32_t GetQueueCounter();
     uint32_t GetPendingCount();
 
+    // Heartbeat: incremented every render frame. If it stops advancing,
+    // the render loop is frozen (crash dialog, hang, etc.)
+    uint32_t GetHeartbeat();
+
+    // Returns true if the heartbeat hasn't advanced in the given timeout.
+    // Call from a non-render thread (e.g., test thread).
+    bool IsRenderFrozen(uint32_t timeoutMs = 2000);
+
 } // namespace GWA3::RenderHook
