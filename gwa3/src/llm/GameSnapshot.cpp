@@ -580,7 +580,6 @@ namespace GWA3::LLM::GameSnapshot {
         j["skillbar"] = BuildSkillbarJson();
         j["map"] = BuildMapJson();
         j["party"] = BuildPartyBasicsJson();
-        j["gold"] = BuildGoldJson();
         return JsonToHeap(j, outLength);
     }
 
@@ -594,7 +593,6 @@ namespace GWA3::LLM::GameSnapshot {
         j["skillbar"] = BuildSkillbarJson();
         j["map"] = BuildMapJson();
         j["party"] = BuildPartyBasicsJson();
-        j["gold"] = BuildGoldJson();
         j["agents"] = BuildNearbyAgentsJson();
         j["heroes"] = BuildHeroSkillbarsJson();
         j["dialog"] = BuildDialogJson();
@@ -612,7 +610,6 @@ namespace GWA3::LLM::GameSnapshot {
         j["skillbar"] = BuildSkillbarJson();
         j["map"] = BuildMapJson();
         j["party"] = BuildPartyBasicsJson();
-        j["gold"] = BuildGoldJson();
         j["agents"] = BuildNearbyAgentsJson();
         j["heroes"] = BuildHeroSkillbarsJson();
         j["dialog"] = BuildDialogJson();

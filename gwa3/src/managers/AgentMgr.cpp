@@ -4,6 +4,7 @@
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/RenderHook.h>
+#include <gwa3/core/Scanner.h>
 #include <gwa3/core/TargetLogHook.h>
 #include <gwa3/core/Log.h>
 
@@ -15,6 +16,7 @@ namespace GWA3::AgentMgr {
 
 using MoveFn = void(__cdecl*)(const void*);
 using ChangeTargetFn = void(__cdecl*)(uint32_t, uint32_t);
+using InteractItemFn = void(__cdecl*)(uint32_t, uint32_t);
 
 struct MoveData {
     float x;
@@ -33,6 +35,7 @@ static volatile LONG s_targetSlotIndex = 0;
 
 static MoveFn s_moveFn = nullptr;
 static ChangeTargetFn s_changeTargetFn = nullptr;
+static InteractItemFn s_interactItemFn = nullptr;
 static bool s_initialized = false;
 static bool s_loggedCurrentTargetRead = false;
 static bool s_loggedCurrentTargetFault = false;
@@ -77,15 +80,48 @@ static uintptr_t NextTargetSlot() {
     return s_targetShellcodeBase + idx * kTargetSlotSize;
 }
 
+static uintptr_t FindNearCallTarget(uintptr_t center, int backward, int forward) {
+    if (!center) return 0;
+    uintptr_t start = center > static_cast<uintptr_t>(backward) ? center - backward : center;
+    uintptr_t end = center + forward;
+    for (uintptr_t p = start; p <= end; ++p) {
+        __try {
+            if (*reinterpret_cast<uint8_t*>(p) != 0xE8) continue;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            continue;
+        }
+        uintptr_t fn = Scanner::FunctionFromNearCall(p);
+        if (fn > 0x10000) return fn;
+    }
+    return 0;
+}
+
 bool Initialize() {
     if (s_initialized) return true;
 
     if (Offsets::Move) s_moveFn = reinterpret_cast<MoveFn>(Offsets::Move);
     if (Offsets::ChangeTarget) s_changeTargetFn = reinterpret_cast<ChangeTargetFn>(Offsets::ChangeTarget);
+    uintptr_t interactAgentCall = Scanner::Find("\xC7\x45\xF0\x98\x3A\x00\x00", "xxxxxxx", 0x41);
+    if (interactAgentCall) {
+        uintptr_t interactAgentFn = FindNearCallTarget(interactAgentCall, 8, 8);
+        if (interactAgentFn) {
+            uintptr_t interactItemFn = FindNearCallTarget(interactAgentFn + 0xF8, 8, 8);
+            if (!interactItemFn) {
+                interactItemFn = FindNearCallTarget(interactAgentFn + 0xF0, 24, 24);
+            }
+            if (interactItemFn) {
+                s_interactItemFn = reinterpret_cast<InteractItemFn>(interactItemFn);
+            }
+            Log::Info("AgentMgr: Interact scan anchor=0x%08X agentFn=0x%08X itemFn=0x%08X",
+                      static_cast<unsigned>(interactAgentCall),
+                      static_cast<unsigned>(interactAgentFn),
+                      static_cast<unsigned>(interactItemFn));
+        }
+    }
 
     s_initialized = true;
-    Log::Info("AgentMgr: Initialized (Move=0x%08X, ChangeTarget=0x%08X)",
-              Offsets::Move, Offsets::ChangeTarget);
+    Log::Info("AgentMgr: Initialized (Move=0x%08X, ChangeTarget=0x%08X, InteractItem=0x%08X)",
+              Offsets::Move, Offsets::ChangeTarget, static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_interactItemFn)));
     return true;
 }
 
@@ -190,6 +226,24 @@ void CancelAction() {
 
 void CallTarget(uint32_t agentId) {
     CtoS::SendPacket(2, Packets::CALL_TARGET, agentId);
+}
+
+void InteractItem(uint32_t agentId, bool callTarget) {
+    if (!s_interactItemFn) {
+        CtoS::PickUpItem(agentId);
+        return;
+    }
+    if (!GameThread::IsInitialized()) {
+        Log::Warn("AgentMgr: InteractItem falling back to packet path (GameThread not ready)");
+        CtoS::PickUpItem(agentId);
+        return;
+    }
+
+    auto fn = s_interactItemFn;
+    const uint32_t ct = callTarget ? 1u : 0u;
+    GameThread::Enqueue([fn, agentId, ct]() {
+        fn(agentId, ct);
+    });
 }
 
 void InteractNPC(uint32_t agentId) {

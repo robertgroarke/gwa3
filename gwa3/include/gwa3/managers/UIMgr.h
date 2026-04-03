@@ -27,6 +27,7 @@ namespace GWA3::UIMgr {
         constexpr uint32_t LogOutButton         = 1117342925;
         constexpr uint32_t CharacterFrame       = 828467986;
         constexpr uint32_t EditAccount          = 1601494406;
+        constexpr uint32_t ReturnToOutpost     = 22386219;
     }
 
     bool Initialize();

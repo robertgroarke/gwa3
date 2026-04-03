@@ -69,13 +69,6 @@ class ObservationWindow:
                 f"{'CASTING' if me.get('is_casting') else 'MOVING' if me.get('is_moving') else 'idle'}"
             )
 
-        # Gold (always available from Tier 1)
-        gold = snap.get("gold", {})
-        if gold:
-            lines.append(
-                f"Gold: character={gold.get('character', 0):,} storage={gold.get('storage', 0):,}"
-            )
-
         # Map
         m = snap.get("map", {})
         if m.get("map_id"):
@@ -237,6 +230,9 @@ class ObservationWindow:
         # Inventory (from tier 3)
         inv = snap.get("inventory", {})
         if inv:
+            lines.append(
+                f"Gold: character={inv.get('gold_character', 0):,} storage={inv.get('gold_storage', 0):,}"
+            )
             bags = inv.get("bags", [])
             total_items = sum(b.get("item_count", 0) for b in bags)
             free_slots = inv.get("free_slots_total", "?")

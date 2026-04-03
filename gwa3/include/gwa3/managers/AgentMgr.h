@@ -23,6 +23,7 @@ namespace GWA3::AgentMgr {
     void CallTarget(uint32_t agentId);
 
     // Interaction
+    void InteractItem(uint32_t agentId, bool callTarget = false);
     void InteractNPC(uint32_t agentId);
     void InteractPlayer(uint32_t agentId);
     void InteractSignpost(uint32_t agentId);

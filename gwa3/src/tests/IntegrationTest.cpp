@@ -3121,11 +3121,11 @@ static bool TestReturnToOutpost() {
     GameThread::Enqueue([]() {
         ChatMgr::SendChat(L"resign", L'/');
     });
-    Sleep(3000); // Wait for resign to process
+    Sleep(5000); // Wait for resign + party wipe to process
 
-    // Step 2: Send return-to-outpost packet (works after resign)
-    IntReport("  Sending ReturnToOutpost packet...");
-    MapMgr::ReturnToOutpost();
+    // Step 2: Click the "Return to Outpost" button in the death dialog
+    IntReport("  Clicking Return to Outpost button (hash=%u)...", UIMgr::Hashes::ReturnToOutpost);
+    UIMgr::ButtonClickByHash(UIMgr::Hashes::ReturnToOutpost);
 
     const bool returned = WaitFor("MapID changes after ReturnToOutpost", 60000, [mapId]() {
         const uint32_t newMap = ReadMapId();

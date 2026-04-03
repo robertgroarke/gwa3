@@ -1,4 +1,5 @@
 #include <gwa3/managers/ItemMgr.h>
+#include <gwa3/managers/AgentMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
@@ -20,7 +21,7 @@ bool Initialize() {
 void UseItem(uint32_t itemId)       { CtoS::UseItem(itemId); }
 void EquipItem(uint32_t itemId)     { CtoS::EquipItem(itemId); }
 void DropItem(uint32_t itemId)      { CtoS::DropItem(itemId); }
-void PickUpItem(uint32_t agentId)   { CtoS::PickUpItem(agentId); }
+void PickUpItem(uint32_t agentId)   { AgentMgr::InteractItem(agentId, false); }
 
 void DestroyItem(uint32_t itemId) {
     CtoS::SendPacket(2, Packets::ITEM_DESTROY, itemId);
