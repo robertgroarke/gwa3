@@ -2043,9 +2043,7 @@ static bool TestExplorableEntry() {
         const DWORD start = GetTickCount();
         bool reached = false;
         while ((GetTickCount() - start) < static_cast<DWORD>(step.timeoutMs)) {
-            // Use packet-based move as fallback — shellcode Move stops working
-            // after advanced tests (hero flagging/hard mode toggle)
-            CtoS::MoveToCoord(step.x, step.y);
+            AgentMgr::Move(step.x, step.y);
             Sleep(500);
 
             float x = 0.0f;
