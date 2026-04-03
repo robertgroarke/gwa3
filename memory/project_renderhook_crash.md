@@ -1,29 +1,27 @@
 ---
 name: RenderHook crash investigation
-description: Intermittent crash in naked render detour — add esp,4 stack leak suspected
+description: Intermittent crash in render detour — original bytes are add esp,4 + cmp, trampoline approach now used
 type: project
 ---
 
 The RenderHook naked detour crashes GW intermittently (~30-90s after install).
 
+**Current approach (2026-04-03):**
+- Trampoline copies original 10 bytes from hook site + JMP back to hookAddr+0xA
+- Naked detour: saves ESP, pushad/pushfd, processes queue, popfd/popad, restores ESP, jmp trampoline
+- Original bytes at hook: `83 C4 04` (add esp,4) + `83 3D 54748C00 00` (cmp [0x8C7454], 0)
+- These ARE the real game instructions, NOT a stack leak — confirmed by dumping bytes and matching AutoIt
+
 **Symptoms:**
-- Crash during ChangeTarget or Move shellcode execution
-- Sometimes survives full 114-test suite, sometimes crashes at char select
-- Watchdog detected heartbeat freeze at ~2800 frames
+- Crash is intermittent: sometimes full 114-test suite passes, sometimes crashes at map load
+- Move shellcode works for 200-unit test but may crash later
+- Watchdog (heartbeat-based) successfully detects render freeze and auto-kills GW
 
-**Root cause investigation:**
-- `add esp, 4` replays original game code at hook site
-- AutoIt's RenderingModProc also replays `add esp,4` + `cmp [DisableRendering],1`
-- BUT: the JMP detour enters mid-function, the `add esp,4` may consume stack
-  that wasn't set up because we bypassed the code before the hook point
-- Each frame leaks 4 bytes of stack → overflow after ~2800 frames (~47s)
+**Key finding (2026-04-03):**
+- Removing `add esp,4` causes immediate crash before Play click (confirms it's required)
+- The `cmp` compares against game address 0x008C7454, not our s_disableRendering
+- Crash root cause still unknown — may be in shellcode dispatch or game state corruption
 
-**Why:** The 5-byte JMP overwrites the first instruction(s) at the hook site.
-The code BEFORE the hook site pushes something that `add esp,4` was meant to
-clean up. Since we JMP past that push, the `add esp,4` removes 4 bytes of
-the calling function's stack frame instead.
-
-**How to apply:** Need to examine the ACTUAL original bytes at the Render hook
-site to understand the stack discipline. The fix may be to save/restore ESP
-around the detour body, or to not replay `add esp,4` but instead adjust the
-return address to skip the original `add esp,4` instruction.
+**How to apply:** The `add esp,4` and `cmp` MUST be replayed. Do not remove them.
+The crash is NOT caused by stack leak. Investigate shellcode calling convention,
+ring buffer race conditions, or game state corruption from CtoS packets.
