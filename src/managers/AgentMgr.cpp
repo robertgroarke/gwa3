@@ -125,6 +125,10 @@ void Move(float x, float y) {
     sc[12] = 0xC3; // ret
     FlushInstructionCache(GetCurrentProcess(), sc, 13);
 
+    Log::Info("AgentMgr::Move(%.1f, %.1f) slot=0x%08X fn=0x%08X rel=0x%08X hb=%u qCtr=%u",
+              x, y, slot, reinterpret_cast<uintptr_t>(s_moveFn), rel,
+              RenderHook::GetHeartbeat(), RenderHook::GetQueueCounter());
+
     bool queued = RenderHook::EnqueueCommand(slot);
     if (!queued) {
         Log::Warn("AgentMgr: Move enqueue FAILED (queue full?) falling back to CtoS");
@@ -160,6 +164,9 @@ void ChangeTarget(uint32_t agentId) {
     sc[17] = 0xC3; // ret
     FlushInstructionCache(GetCurrentProcess(), sc, 18);
 
+    Log::Info("AgentMgr::ChangeTarget(%u) slot=0x%08X fn=0x%08X hb=%u",
+              agentId, slot, reinterpret_cast<uintptr_t>(s_changeTargetFn),
+              RenderHook::GetHeartbeat());
     RenderHook::EnqueueCommand(slot);
 }
 

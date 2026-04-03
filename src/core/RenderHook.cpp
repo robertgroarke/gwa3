@@ -14,6 +14,7 @@ static volatile LONG s_queueCounter = 0;
 static volatile LONG s_savedCommand = 0;
 static volatile LONG s_mapLoaded = 0;
 static volatile LONG s_disableRendering = 0;
+static volatile LONG s_heartbeat = 0;
 static uintptr_t s_queue[kQueueSize] = {};
 static bool s_initialized = false;
 static uintptr_t s_returnAddr = 0;
@@ -52,6 +53,7 @@ no_reset:
         call dword ptr [s_savedCommand]
 
 skip_queue:
+        inc dword ptr [s_heartbeat]
         popfd
         popad
         // Restore ESP to EXACTLY what it was on entry — guarantees zero stack impact
@@ -183,6 +185,15 @@ uint32_t GetPendingCount() {
         if (s_queue[i] != 0) count++;
     }
     return count;
+}
+
+uint32_t GetHeartbeat() {
+    return static_cast<uint32_t>(s_heartbeat);
+}
+
+bool IsCrashDetected() {
+    // Caller should compare two heartbeat readings ~3s apart
+    return false; // Watchdog thread handles this logic
 }
 
 } // namespace GWA3::RenderHook

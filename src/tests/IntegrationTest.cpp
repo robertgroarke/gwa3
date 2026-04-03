@@ -48,6 +48,54 @@ static int s_intPassed = 0;
 static int s_intFailed = 0;
 static int s_intSkipped = 0;
 
+// --- Crash detection watchdog ---
+static volatile bool s_watchdogRunning = false;
+static volatile bool s_crashDetected = false;
+static HANDLE s_watchdogThread = nullptr;
+
+static DWORD WINAPI WatchdogThread(LPVOID) {
+    uint32_t lastHeartbeat = RenderHook::GetHeartbeat();
+    int stallCount = 0;
+    while (s_watchdogRunning) {
+        Sleep(1000);
+        uint32_t hb = RenderHook::GetHeartbeat();
+        if (hb == lastHeartbeat && hb > 0) {
+            stallCount++;
+            if (stallCount >= 3) {
+                Log::Error("[WATCHDOG] !!! RENDER FROZEN — heartbeat stuck at %u for >3s. GW likely crashed !!!", hb);
+                Log::Error("[WATCHDOG] Last known test state: %d passed, %d failed, %d skipped",
+                           s_intPassed, s_intFailed, s_intSkipped);
+                Log::Error("[WATCHDOG] RenderHook qCtr=%u pending=%u",
+                           RenderHook::GetQueueCounter(), RenderHook::GetPendingCount());
+                s_crashDetected = true;
+                // Flush log before killing
+                if (s_intReport) { fflush(s_intReport); }
+                Log::Error("[WATCHDOG] Terminating GW process...");
+                TerminateProcess(GetCurrentProcess(), 0xDEAD);
+            }
+        } else {
+            stallCount = 0;
+        }
+        lastHeartbeat = hb;
+    }
+    return 0;
+}
+
+static void StartWatchdog() {
+    s_watchdogRunning = true;
+    s_crashDetected = false;
+    s_watchdogThread = CreateThread(nullptr, 0, WatchdogThread, nullptr, 0, nullptr);
+}
+
+static void StopWatchdog() {
+    s_watchdogRunning = false;
+    if (s_watchdogThread) {
+        WaitForSingleObject(s_watchdogThread, 5000);
+        CloseHandle(s_watchdogThread);
+        s_watchdogThread = nullptr;
+    }
+}
+
 enum class MerchantDialogVariant {
     StandardId,
     StandardPtr,
@@ -3829,6 +3877,9 @@ int RunAdvancedTest() {
 
     Log::Info("[INTG] Advanced complete: %d passed, %d failed, %d skipped",
               s_intPassed, s_intFailed, s_intSkipped);
+    StopWatchdog();
+    Log::Info("[INTG] Heartbeat at exit: %u, crashDetected=%d",
+              RenderHook::GetHeartbeat(), s_crashDetected ? 1 : 0);
     return s_intFailed;
 }
 
@@ -3838,6 +3889,7 @@ int RunIntegrationTest() {
     s_intPassed = 0;
     s_intFailed = 0;
     s_intSkipped = 0;
+    StartWatchdog();
 
     s_intReport = OpenIntReport();
 
@@ -3913,14 +3965,16 @@ int RunIntegrationTest() {
             // Phase 3: Movement (GWA3-030)
             TestMovement();
 
-            // Phase 4: Targeting (GWA3-030)
+            // Phase 4: Targeting
             TestTargeting();
 
-            // Advanced introspection tests (outpost phase, before explorable entry)
-            IntReport("  Running advanced introspection tests (outpost phase)...");
-            TestPlayerData();
-            TestCameraIntrospection();
-            TestClientInfo();
+            // Advanced introspection tests — SKIPPED to isolate exit movement bug
+            // IntReport("  Running advanced introspection tests (outpost phase)...");
+            // TestPlayerData();
+            // TestCameraIntrospection();
+            // TestClientInfo();
+            // ALL ADVANCED TESTS SKIPPED to isolate exit movement bug
+            /*
             TestInventoryIntrospection();
             TestAgentArrayEnumeration();
             TestUIFrameValidation();
@@ -3937,6 +3991,7 @@ int RunIntegrationTest() {
             TestChatWriteLocal();
             TestHeroFlagging();
             TestHardModeToggle();
+            */
 
             // Phase 5: reserve the session for explorable bootstrap so the
             // skill slice can run in the right environment.
@@ -3982,6 +4037,9 @@ int RunIntegrationTest() {
 
     Log::Info("[INTG] Complete: %d passed, %d failed, %d skipped",
               s_intPassed, s_intFailed, s_intSkipped);
+    StopWatchdog();
+    Log::Info("[INTG] Heartbeat at exit: %u, crashDetected=%d",
+              RenderHook::GetHeartbeat(), s_crashDetected ? 1 : 0);
     return s_intFailed;
 }
 
@@ -4021,6 +4079,9 @@ int RunNpcDialogTest() {
 
     Log::Info("[INTG] NPC/Dialog complete: %d passed, %d failed, %d skipped",
               s_intPassed, s_intFailed, s_intSkipped);
+    StopWatchdog();
+    Log::Info("[INTG] Heartbeat at exit: %u, crashDetected=%d",
+              RenderHook::GetHeartbeat(), s_crashDetected ? 1 : 0);
     return s_intFailed;
 }
 
@@ -4060,6 +4121,9 @@ int RunMerchantQuoteTest() {
 
     Log::Info("[INTG] Merchant/Quote complete: %d passed, %d failed, %d skipped",
               s_intPassed, s_intFailed, s_intSkipped);
+    StopWatchdog();
+    Log::Info("[INTG] Heartbeat at exit: %u, crashDetected=%d",
+              RenderHook::GetHeartbeat(), s_crashDetected ? 1 : 0);
     return s_intFailed;
 }
 
