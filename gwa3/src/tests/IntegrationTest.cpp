@@ -201,8 +201,18 @@ static DWORD WINAPI WatchdogThreadProc(LPVOID) {
             Log::Error("[WATCHDOG] !!! RENDER FROZEN — heartbeat stuck at %u for >3s. GW likely crashed !!!", hb);
             Log::Error("[WATCHDOG] Last known test state: %d passed, %d failed, %d skipped",
                        s_intPassed, s_intFailed, s_intSkipped);
-            // Don't break — keep logging so we capture the stuck state
-            lastAdvance = GetTickCount(); // reset to avoid spamming
+            Log::Error("[WATCHDOG] RenderHook qCtr=%u pending=%u",
+                       RenderHook::GetQueueCounter(), RenderHook::GetPendingCount());
+
+            // Flush the log so we capture everything before killing
+            if (s_intReport) {
+                fflush(s_intReport);
+            }
+
+            // Kill the GW process to release the crash dialog
+            Log::Error("[WATCHDOG] Terminating GW process...");
+            TerminateProcess(GetCurrentProcess(), 0xDEAD);
+            break;
         }
     }
     return 0;
