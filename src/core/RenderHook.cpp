@@ -47,7 +47,6 @@ no_reset:
         call dword ptr [s_savedCommand]
 
 skip_queue:
-        inc dword ptr [s_heartbeat]
         popfd
         popad
         // Replay the original overwritten bytes (from AutoIt RenderingModProc):
