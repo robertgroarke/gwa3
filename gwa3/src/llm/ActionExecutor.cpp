@@ -369,6 +369,60 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
+    static ActionResult HandleIdentifyItem(const json& p) {
+        if (!p.contains("item_id") || !p.contains("kit_id"))
+            return MakeError("missing item_id or kit_id");
+        uint32_t itemId = p["item_id"].get<uint32_t>();
+        uint32_t kitId = p["kit_id"].get<uint32_t>();
+        if (!ItemMgr::GetItemById(itemId)) return MakeError("item_not_found");
+        if (!ItemMgr::GetItemById(kitId)) return MakeError("kit_not_found");
+        GWA3::GameThread::Enqueue([itemId, kitId]() { ItemMgr::IdentifyItem(itemId, kitId); });
+        return MakeOk();
+    }
+
+    static ActionResult HandleSalvageStart(const json& p) {
+        if (!p.contains("item_id") || !p.contains("kit_id"))
+            return MakeError("missing item_id or kit_id");
+        uint32_t itemId = p["item_id"].get<uint32_t>();
+        uint32_t kitId = p["kit_id"].get<uint32_t>();
+        if (!ItemMgr::GetItemById(itemId)) return MakeError("item_not_found");
+        if (!ItemMgr::GetItemById(kitId)) return MakeError("kit_not_found");
+        GWA3::GameThread::Enqueue([kitId, itemId]() { ItemMgr::SalvageSessionOpen(kitId, itemId); });
+        return MakeOk();
+    }
+
+    static ActionResult HandleSalvageMaterials(const json&) {
+        GWA3::GameThread::Enqueue([]() { ItemMgr::SalvageMaterials(); });
+        return MakeOk();
+    }
+
+    static ActionResult HandleSalvageDone(const json&) {
+        GWA3::GameThread::Enqueue([]() { ItemMgr::SalvageSessionDone(); });
+        return MakeOk();
+    }
+
+    static ActionResult HandleLoadSkillbar(const json& p) {
+        if (!p.contains("skill_ids")) return MakeError("missing skill_ids");
+        auto ids = p["skill_ids"];
+        if (!ids.is_array() || ids.size() != 8) return MakeError("skill_ids must be array of 8");
+        uint32_t skillIds[8] = {};
+        for (int i = 0; i < 8; i++) {
+            skillIds[i] = ids[i].get<uint32_t>();
+        }
+        uint32_t heroIndex = p.value("hero_index", 0u);
+        GWA3::GameThread::Enqueue([skillIds, heroIndex]() {
+            SkillMgr::LoadSkillbar(skillIds, heroIndex);
+        });
+        return MakeOk();
+    }
+
+    static ActionResult HandleDropGold(const json& p) {
+        if (!p.contains("amount")) return MakeError("missing amount");
+        uint32_t amount = p["amount"].get<uint32_t>();
+        GWA3::GameThread::Enqueue([amount]() { ItemMgr::DropGold(amount); });
+        return MakeOk();
+    }
+
     static ActionResult HandleWait(const json& p) {
         // Wait is a no-op on the C++ side — the bridge handles timing
         (void)p;
@@ -421,13 +475,23 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["drop_item"] = HandleDropItem;
         g_dispatch["move_item"] = HandleMoveItem;
 
+        // Salvage & Identify
+        g_dispatch["identify_item"] = HandleIdentifyItem;
+        g_dispatch["salvage_start"] = HandleSalvageStart;
+        g_dispatch["salvage_materials"] = HandleSalvageMaterials;
+        g_dispatch["salvage_done"] = HandleSalvageDone;
+
         // Trade
         g_dispatch["buy_materials"] = HandleBuyMaterials;
         g_dispatch["request_quote"] = HandleRequestQuote;
         g_dispatch["transact_items"] = HandleTransactItems;
 
+        // Skillbar
+        g_dispatch["load_skillbar"] = HandleLoadSkillbar;
+
         // Utility
         g_dispatch["send_chat"] = HandleSendChat;
+        g_dispatch["drop_gold"] = HandleDropGold;
         g_dispatch["wait"] = HandleWait;
 
         GWA3::Log::Info("[LLM-Action] Initialized with %u actions", static_cast<uint32_t>(g_dispatch.size()));
