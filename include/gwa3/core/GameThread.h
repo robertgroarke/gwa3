@@ -24,6 +24,11 @@ namespace GWA3::GameThread {
     // If already on game thread, executes immediately (fast path).
     void Enqueue(Callback task);
 
+    // Enqueue a task that runs AFTER the original game callback.
+    // Use for game functions (Move, ChangeTarget) that depend on
+    // frame state set up by the game's own render callback.
+    void EnqueuePost(Callback task);
+
     // Register a persistent per-frame callback, altitude-sorted (higher = earlier).
     // Default altitude = 0x4000. Unique by HookEntry* — re-registering replaces.
     void RegisterCallback(HookEntry* entry, Callback cb, int altitude = 0x4000);

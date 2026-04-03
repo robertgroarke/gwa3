@@ -607,7 +607,7 @@ static uint32_t FindNearbyFoeAgent(float maxDistance) {
 static bool MovePlayerNear(float x, float y, float threshold, int timeoutMs) {
     const DWORD start = GetTickCount();
     while ((GetTickCount() - start) < static_cast<DWORD>(timeoutMs)) {
-        GameThread::Enqueue([x, y]() {
+        GameThread::EnqueuePost([x, y]() {
             AgentMgr::Move(x, y);
         });
         Sleep(500);
@@ -1200,7 +1200,7 @@ static bool TryForceNearbyLootDrop() {
                             const float dist = AgentMgr::GetDistance(px, py, foe->x, foe->y);
                             if (dist > 250.0f) {
                                 float fx = foe->x, fy = foe->y;
-                                GameThread::Enqueue([fx, fy]() { AgentMgr::Move(fx, fy); });
+                                GameThread::EnqueuePost([fx, fy]() { AgentMgr::Move(fx, fy); });
                                 Sleep(dist > 1200.0f ? 750 : 350);
                             }
                         }
@@ -1300,7 +1300,7 @@ static bool TryForceNearbyLootDrop() {
                     const float dist = AgentMgr::GetDistance(px, py, foe->x, foe->y);
                     if (dist > 250.0f) {
                         float fx = foe->x, fy = foe->y;
-                        GameThread::Enqueue([fx, fy]() { AgentMgr::Move(fx, fy); });
+                        GameThread::EnqueuePost([fx, fy]() { AgentMgr::Move(fx, fy); });
                         Sleep(dist > 1200.0f ? 750 : 350);
                     }
                 }
@@ -1608,7 +1608,7 @@ static bool TestMovement() {
     float targetX = startX + 200.0f;
     float targetY = startY;
     IntReport("  Moving to (%.1f, %.1f)...", targetX, targetY);
-    GameThread::Enqueue([targetX, targetY]() {
+    GameThread::EnqueuePost([targetX, targetY]() {
         AgentMgr::Move(targetX, targetY);
     });
 
@@ -1633,7 +1633,7 @@ static bool TestMovement() {
     IntCheck("Character moved > 50 units", dist > 50.0f);
 
     // Move back
-    GameThread::Enqueue([startX, startY]() {
+    GameThread::EnqueuePost([startX, startY]() {
         AgentMgr::Move(startX, startY);
     });
     Sleep(3000);
@@ -1907,8 +1907,8 @@ static bool TestLootPickup() {
     const DWORD pickupStart = GetTickCount();
     bool pickupDone = false;
     while ((GetTickCount() - pickupStart) < 10000 && !pickupDone) {
-        // Move toward item and send pickup interact — both on game thread
-        GameThread::Enqueue([itemX, itemY, itemAgentId]() {
+        // Move toward item (post-callback) and send pickup interact
+        GameThread::EnqueuePost([itemX, itemY, itemAgentId]() {
             AgentMgr::Move(itemX, itemY);
             ItemMgr::PickUpItem(itemAgentId);
         });
@@ -2404,7 +2404,7 @@ static bool TestExplorableEntry() {
         const DWORD start = GetTickCount();
         bool reached = false;
         while ((GetTickCount() - start) < static_cast<DWORD>(step.timeoutMs)) {
-            GameThread::Enqueue([&step]() {
+            GameThread::EnqueuePost([&step]() {
                 AgentMgr::Move(step.x, step.y);
             });
             Sleep(500);
@@ -2438,7 +2438,7 @@ static bool TestExplorableEntry() {
     const DWORD zoneStart = GetTickCount();
     bool enteredExplorable = false;
     while ((GetTickCount() - zoneStart) < 30000) {
-        GameThread::Enqueue([]() {
+        GameThread::EnqueuePost([]() {
             AgentMgr::Move(-9451.0f, -19766.0f);
         });
         Sleep(500);
