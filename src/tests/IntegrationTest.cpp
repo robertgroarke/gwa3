@@ -3176,17 +3176,16 @@ static bool TestReturnToOutpost() {
         return false;
     }
 
-    // Step 1: /resign to trigger the return-to-outpost flow
-    // This also tests ChatMgr::SendChat with slash commands.
-    IntReport("  Sending /resign in explorable map %u...", mapId);
+    // Travel back to Gadd's Encampment (map 638) from explorable.
+    // This tests MapMgr::Travel which is the standard way bots return.
+    // (Previously used /resign + death dialog click, but resign only works
+    //  if the party actually wipes — doesn't happen in safe areas.)
+    constexpr uint32_t MAP_GADDS_ENCAMPMENT = 638;
+    IntReport("  Traveling to Gadd's Encampment (map %u) from explorable map %u...",
+              MAP_GADDS_ENCAMPMENT, mapId);
     GameThread::Enqueue([]() {
-        ChatMgr::SendChat(L"resign", L'/');
+        MapMgr::Travel(MAP_GADDS_ENCAMPMENT);
     });
-    Sleep(5000); // Wait for resign + party wipe to process
-
-    // Step 2: Click the "Return to Outpost" button in the death dialog
-    IntReport("  Clicking Return to Outpost button (hash=%u)...", UIMgr::Hashes::ReturnToOutpost);
-    UIMgr::ButtonClickByHash(UIMgr::Hashes::ReturnToOutpost);
 
     const bool returned = WaitFor("MapID changes after ReturnToOutpost", 60000, [mapId]() {
         const uint32_t newMap = ReadMapId();
@@ -4311,6 +4310,16 @@ int RunIntegrationTest() {
             const bool inExplorable = TestExplorableEntry();
 
             if (inExplorable) {
+                // Wait for explorable to fully load (agents, navmesh, etc.)
+                IntReport("  Waiting for explorable runtime to stabilize...");
+                WaitFor("explorable map loaded + agents available", 15000, []() {
+                    if (!MapMgr::GetIsMapLoaded()) return false;
+                    if (ReadMyId() == 0) return false;
+                    AgentLiving* me = AgentMgr::GetMyAgent();
+                    if (!me || me->hp <= 0.0f) return false;
+                    return AgentMgr::GetMaxAgents() > 10;
+                });
+
                 // Hero flagging only works in explorable (heroes spawned)
                 TestHeroFlagging();
 
