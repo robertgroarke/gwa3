@@ -90,8 +90,8 @@ static bool RunCharSelectBootstrap(DWORD timeoutMs) {
         }
 
         if (GWA3::UIMgr::IsFrameVisible(GWA3::UIMgr::Hashes::ReconnectYes)) {
-            GWA3::Log::Info("Bootstrap: reconnect dialog visible, clicking YES");
-            GWA3::UIMgr::ButtonClickByHash(GWA3::UIMgr::Hashes::ReconnectYes);
+            GWA3::Log::Info("Bootstrap: reconnect dialog visible, clicking NO (return to outpost)");
+            GWA3::UIMgr::ButtonClickByHash(GWA3::UIMgr::Hashes::ReconnectNo);
             Sleep(1000);
             continue;
         }
