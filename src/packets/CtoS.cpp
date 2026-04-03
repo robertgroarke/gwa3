@@ -87,6 +87,15 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
 
     const uint32_t sizeBytes = size * 4;
 
+    // Re-read PacketLocation every call — it changes after zone transitions
+    uintptr_t freshLocation = 0;
+    if (Offsets::PacketLocation) {
+        freshLocation = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
+    }
+    if (freshLocation && freshLocation != s_packetLocation) {
+        s_packetLocation = freshLocation;
+    }
+
     // Fast path: already on game thread
     if (GameThread::IsOnGameThread()) {
         s_packetSendFn(reinterpret_cast<void*>(s_packetLocation), sizeBytes, data);
