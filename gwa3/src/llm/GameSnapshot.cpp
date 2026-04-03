@@ -6,7 +6,10 @@
 #include <gwa3/managers/PartyMgr.h>
 #include <gwa3/managers/EffectMgr.h>
 #include <gwa3/managers/MemoryMgr.h>
+#include <gwa3/managers/TradeMgr.h>
 #include <gwa3/managers/DialogMgr.h>
+#include <gwa3/core/TraderHook.h>
+#include <gwa3/core/Offsets.h>
 #include <gwa3/game/Agent.h>
 #include <gwa3/game/Skill.h>
 #include <gwa3/game/Item.h>
@@ -353,6 +356,87 @@ namespace GWA3::LLM::GameSnapshot {
         return d;
     }
 
+    // Build gold amounts (lightweight — included in Tier 1)
+    static json BuildGoldJson() {
+        json g;
+        auto* inventory = ItemMgr::GetInventory();
+        if (inventory) {
+            g["character"] = inventory->gold_character;
+            g["storage"] = inventory->gold_storage;
+        } else {
+            g["character"] = 0;
+            g["storage"] = 0;
+        }
+        return g;
+    }
+
+    // SEH-safe helper: read merchant item IDs into a flat buffer.
+    // Returns count of valid IDs written (0 on failure).
+    static uint32_t ReadMerchantItemIds(uint32_t* outIds, uint32_t maxIds) {
+        if (Offsets::BasePointer <= 0x10000) return 0;
+        __try {
+            uintptr_t p0 = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+            if (p0 <= 0x10000) return 0;
+            uintptr_t p1 = *reinterpret_cast<uintptr_t*>(p0 + 0x18);
+            if (p1 <= 0x10000) return 0;
+            uintptr_t p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x2C);
+            if (p2 <= 0x10000) return 0;
+            uintptr_t base = *reinterpret_cast<uintptr_t*>(p2 + 0x24);
+            uint32_t size = *reinterpret_cast<uint32_t*>(p2 + 0x28);
+            if (base <= 0x10000 || size == 0 || size > maxIds) return 0;
+            for (uint32_t i = 0; i < size; i++) {
+                outIds[i] = *reinterpret_cast<uint32_t*>(base + i * 4);
+            }
+            return size;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
+        }
+    }
+
+    // Build merchant/trader window state
+    static json BuildMerchantJson() {
+        json m;
+        uint32_t itemCount = TradeMgr::GetMerchantItemCount();
+        m["is_open"] = (itemCount > 0);
+        if (itemCount == 0) return m;
+
+        m["item_count"] = itemCount;
+
+        // Last quote from TraderHook
+        uint32_t quoteId = TraderHook::GetQuoteId();
+        uint32_t costItemId = TraderHook::GetCostItemId();
+        uint32_t costValue = TraderHook::GetCostValue();
+        if (quoteId > 0 && costValue > 0) {
+            json quote;
+            quote["quote_id"] = quoteId;
+            quote["cost_item_id"] = costItemId;  // 0 = gold, nonzero = material item ID
+            quote["cost_value"] = costValue;
+            m["last_quote"] = quote;
+        }
+
+        // Read merchant item IDs via SEH-safe helper
+        uint32_t ids[256] = {};
+        uint32_t count = ReadMerchantItemIds(ids, 256);
+
+        json items = json::array();
+        for (uint32_t i = 0; i < count; i++) {
+            if (!ids[i]) continue;
+            auto* item = ItemMgr::GetItemById(ids[i]);
+            if (!item) continue;
+
+            json it;
+            it["item_id"] = item->item_id;
+            it["model_id"] = item->model_id;
+            it["type"] = item->type;
+            it["value"] = item->value;
+            it["quantity"] = item->quantity;
+            it["interaction"] = item->interaction;
+            items.push_back(it);
+        }
+        m["items"] = items;
+        return m;
+    }
+
     // Build effects for the player
     static json BuildPlayerEffectsJson() {
         json effs = json::array();
@@ -385,6 +469,7 @@ namespace GWA3::LLM::GameSnapshot {
         j["skillbar"] = BuildSkillbarJson();
         j["map"] = BuildMapJson();
         j["party"] = BuildPartyBasicsJson();
+        j["gold"] = BuildGoldJson();
         return JsonToHeap(j, outLength);
     }
 
@@ -398,9 +483,11 @@ namespace GWA3::LLM::GameSnapshot {
         j["skillbar"] = BuildSkillbarJson();
         j["map"] = BuildMapJson();
         j["party"] = BuildPartyBasicsJson();
+        j["gold"] = BuildGoldJson();
         j["agents"] = BuildNearbyAgentsJson();
         j["heroes"] = BuildHeroSkillbarsJson();
         j["dialog"] = BuildDialogJson();
+        j["merchant"] = BuildMerchantJson();
         return JsonToHeap(j, outLength);
     }
 
@@ -414,9 +501,11 @@ namespace GWA3::LLM::GameSnapshot {
         j["skillbar"] = BuildSkillbarJson();
         j["map"] = BuildMapJson();
         j["party"] = BuildPartyBasicsJson();
+        j["gold"] = BuildGoldJson();
         j["agents"] = BuildNearbyAgentsJson();
         j["heroes"] = BuildHeroSkillbarsJson();
         j["dialog"] = BuildDialogJson();
+        j["merchant"] = BuildMerchantJson();
         j["inventory"] = BuildInventoryJson();
         j["storage"] = BuildStorageJson();
         j["effects"] = BuildPlayerEffectsJson();
