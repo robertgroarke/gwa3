@@ -43,4 +43,9 @@ def parse_args():
         default=PIPE_NAME,
         help=f"Named pipe path (default: {PIPE_NAME})",
     )
+    parser.add_argument(
+        "--objective",
+        default=None,
+        help="Standing objective for autonomous play (e.g., 'Farm Bogroot Growths HM repeatedly')",
+    )
     return parser.parse_args()
