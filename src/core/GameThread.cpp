@@ -60,10 +60,14 @@ static void Dispatch() {
 
 // --- MinHook detour ---
 static void __cdecl DetourCallback(float elapsed, int unknown) {
-    Dispatch();
+    // Run original game callback FIRST — sets up frame state that
+    // game functions (Move, ChangeTarget, etc.) depend on.
     if (s_originalCallback) {
         s_originalCallback(elapsed, unknown);
     }
+
+    // Then dispatch our queued commands — game state is now valid.
+    Dispatch();
 
     EnterCriticalSection(&s_cs);
     s_onGameThread = false;
