@@ -46,6 +46,22 @@
 - OfferTradeItem `68 49 04 00 00 89 5D E4 E8` at -0x6B, UpdateTradeCart at -0x24
 - **Commit**: `45c1754`
 
+### GWA3-070: RequestQuestInfo
+- Pattern `68 4A 01 00 10 FF 77 04` at +0x7A → FunctionFromNearCall
+- **Commit**: `ff876b7`
+
+### GWA3-071: FriendList Resolution
+- FriendListAddr `74 30 8D 47 FF 83 F8 01` at -0xB → deref, FriendEventHandler at -0xC
+- **Commit**: `ff876b7`
+
+### GWA3-072: DrawOnCompass
+- Assertion pattern charmsg.cpp / "knotCount <= arrsize(message.knotData)" at -0x2E
+- **Commit**: `ff876b7`
+
+### GWA3-073: Chat Color Functions
+- GetSenderColor `C7 00 60 C0 FF FF 5D C3` at -0x1C, GetMessageColor at -0x27
+- **Commit**: `ff876b7`
+
 ---
 
 ## In Progress
@@ -62,59 +78,4 @@
 
 ## Backlog
 
-### GWA3-070: Quest Log UI Callback
-**Priority**: Low — quest management works via packets
-**Source**: GWCA QuestMgr.cpp — FindAssertion-based, plus `684A010010FF7704` offset 0x7A (RequestQuestInfo)
-
-**Problem**: Quest info requests use raw dialog packets. The native callback provides richer quest data including map markers and objective text.
-
-**Acceptance criteria**:
-- [ ] Add RequestQuestInfo pattern to Offsets (P2)
-- [ ] Implement `QuestMgr::RequestQuestInfo` via resolved function
-- [ ] Integration test: request info for active quest, verify no crash
-
-**GWCA reference**: `Source/QuestMgr.cpp`
-
----
-
-### GWA3-071: FriendList Post-Processing
-**Priority**: Low — friend list functions declared but need complex resolution
-**Source**: GWCA FriendListMgr.cpp — FriendList assertion + FindInRange + deref chain
-
-**Problem**: `FriendList` offset resolves via assertion but needs complex post-processing (FindInRange within a specific code range, then deref chain). `RemoveFriend` needs FindInRange + ResolveBranchChain. Both are commented as "skip for now" in PostProcessOffsets.
-
-**Acceptance criteria**:
-- [ ] Implement FriendList post-processing: find the data pointer via the assertion site context
-- [ ] Implement RemoveFriend post-processing: FindInRange + ResolveBranchChain
-- [ ] Verify `FriendListMgr::AddFriend` and `RemoveFriend` work end-to-end
-- [ ] Integration test: read friend list count (verify no crash)
-
-**GWCA reference**: `Source/FriendListMgr.cpp`
-
----
-
-### GWA3-072: DrawCompass Hook
-**Priority**: Very Low — cosmetic only
-**Source**: GWCA MapMgr.cpp pattern `568BF7` offset -0x13 (backward search)
-
-**Problem**: No ability to customize compass drawing or add custom markers.
-
-**Acceptance criteria**:
-- [ ] Add DrawCompass pattern to Offsets (P2)
-- [ ] Expose as hook target for custom compass overlay
-
-**GWCA reference**: `Source/MapMgr.cpp`
-
----
-
-### GWA3-073: Chat Color Customization
-**Priority**: Very Low — cosmetic only
-**Source**: GWCA ChatMgr.cpp patterns `C70060C0FFFF5DC3` offset -0x1C (GetSenderColor), `C700B0B0B0FF5DC3` offset -0x27 (GetMessageColor)
-
-**Problem**: No ability to customize chat channel colors.
-
-**Acceptance criteria**:
-- [ ] Add GetSenderColor and GetMessageColor patterns to Offsets (P2)
-- [ ] Implement color override hooks
-
-**GWCA reference**: `Source/ChatMgr.cpp`
+(empty — all 16 stories completed)
