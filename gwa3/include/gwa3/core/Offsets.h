@@ -144,6 +144,20 @@ namespace GWA3::Offsets {
     // ===== Map (GWCA) =====
     extern uintptr_t SkipCinematicFunc;  // func — native cinematic skip
 
+    // ===== Quest (GWCA) =====
+    extern uintptr_t RequestQuestInfo;   // func — quest info request
+
+    // ===== FriendList (GWCA) =====
+    extern uintptr_t FriendListAddr;     // ptr — FriendList struct base
+    extern uintptr_t FriendEventHandler; // func — friend status event handler
+
+    // ===== Compass (GWCA) =====
+    extern uintptr_t DrawOnCompass;      // func — compass drawing callback
+
+    // ===== Chat Colors (GWCA) =====
+    extern uintptr_t GetSenderColor;     // func — chat sender name color
+    extern uintptr_t GetMessageColor;    // func — chat message body color
+
     // ===== Frame UI (GWA3-new) =====
     extern uintptr_t SendFrameUIMsg;     // func — scanned via pattern 83 C1 DC E8
 
