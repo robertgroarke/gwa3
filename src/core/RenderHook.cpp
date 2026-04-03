@@ -50,8 +50,10 @@ skip_queue:
         inc dword ptr [s_heartbeat]
         popfd
         popad
-        add esp, 4
-        cmp dword ptr [s_disableRendering], 1
+        // Jump to Render+0xA — past the 5 bytes we overwrote with JMP
+        // plus 5 more bytes of the original instruction (total 10 bytes skipped).
+        // AutoIt's RenderingModProc does exactly the same: ljmp RenderingModReturn.
+        // Do NOT replay any "original" bytes here — they're dead code after our JMP.
         jmp [s_returnAddr]
     }
 }
