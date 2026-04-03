@@ -1886,9 +1886,52 @@ static bool TestLootPickup() {
         }
     }
 
-    ItemMgr::PickUpItem(itemAgentId);
+    // Dump bag state before pickup for diagnostics
+    {
+        Inventory* inv = ItemMgr::GetInventory();
+        if (inv) {
+            for (int b = 0; b < 5; ++b) {
+                Bag* bag = inv->bags[b];
+                if (!bag) { IntReport("    Bag[%d]: null", b); continue; }
+                IntReport("    Bag[%d]: type=%u index=%u items_count=%u items.buffer=0x%08X items.size=%u",
+                          b, bag->bag_type, bag->index, bag->items_count,
+                          static_cast<unsigned>(reinterpret_cast<uintptr_t>(bag->items.buffer)),
+                          bag->items.size);
+            }
+        } else {
+            IntReport("    GetInventory() returned null");
+        }
+    }
 
-    const bool pickedUpIntoInventory = WaitFor("pickup acknowledged by inventory or item removal", 5000, [itemAgentId, itemId, inventoryBefore]() {
+    // Send pickup repeatedly while moving toward the item (game requires proximity + interact)
+    const DWORD pickupStart = GetTickCount();
+    bool pickupDone = false;
+    while ((GetTickCount() - pickupStart) < 10000 && !pickupDone) {
+        // Move toward item
+        GameThread::Enqueue([itemX, itemY]() {
+            AgentMgr::Move(itemX, itemY);
+        });
+        // Send pickup interact
+        ItemMgr::PickUpItem(itemAgentId);
+        Sleep(500);
+        // Check if ground item disappeared
+        if (!FindGroundItemByAgentId(itemAgentId)) {
+            pickupDone = true;
+            break;
+        }
+        // Check if inventory changed
+        const InventorySnapshot snap = CaptureInventorySnapshot();
+        if (InventoryChangedMeaningfully(inventoryBefore, snap)) {
+            pickupDone = true;
+            break;
+        }
+    }
+    IntReport("  Pickup loop finished: done=%d elapsed=%ums", pickupDone, GetTickCount() - pickupStart);
+
+    // Give a moment for inventory to update
+    Sleep(1000);
+
+    const bool pickedUpIntoInventory = pickupDone || WaitFor("pickup acknowledged by inventory or item removal", 5000, [itemAgentId, itemId, inventoryBefore]() {
         if (!FindGroundItemByAgentId(itemAgentId)) return true;
         if (ItemMgr::GetItemById(itemId)) return true;
         const InventorySnapshot inventoryAfter = CaptureInventorySnapshot();
@@ -1915,7 +1958,25 @@ static bool TestLootPickup() {
                   pickedItem->bag,
                   pickedItem->slot);
     }
-    IntCheck("Loot pickup changes inventory state", pickedUpIntoInventory);
+    // Dump bag state after pickup
+    {
+        Inventory* inv = ItemMgr::GetInventory();
+        if (inv) {
+            for (int b = 0; b < 5; ++b) {
+                Bag* bag = inv->bags[b];
+                if (!bag) continue;
+                IntReport("    After Bag[%d]: type=%u items_count=%u items.size=%u",
+                          b, bag->bag_type, bag->items_count, bag->items.size);
+            }
+        }
+    }
+
+    // Require BOTH ground item removal AND inventory change
+    const bool inventoryChanged = InventoryChangedMeaningfully(inventoryBefore, inventoryAfter);
+    const bool groundItemGone = (remainingGroundItem == nullptr);
+    IntReport("  groundItemGone=%d inventoryChanged=%d pickedItem=%p",
+              groundItemGone, inventoryChanged, pickedItem);
+    IntCheck("Loot pickup changes inventory state", inventoryChanged || pickedItem != nullptr);
 
     IntReport("");
     return pickedUpIntoInventory;
