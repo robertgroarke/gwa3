@@ -30,6 +30,9 @@ struct CallbackRecord {
 };
 static std::vector<CallbackRecord> s_registry;
 
+// Post-callback queue — for commands that must run AFTER the game's frame callback
+static std::vector<Callback> s_postQueue;
+
 // --- Dispatcher (runs before original game callback each frame) ---
 static void Dispatch() {
     EnterCriticalSection(&s_cs);
@@ -58,12 +61,26 @@ static void Dispatch() {
     }
 }
 
+static void DispatchPost() {
+    EnterCriticalSection(&s_cs);
+    std::vector<Callback> local;
+    if (!s_postQueue.empty()) {
+        local.swap(s_postQueue);
+    }
+    LeaveCriticalSection(&s_cs);
+
+    for (auto& task : local) {
+        task();
+    }
+}
+
 // --- MinHook detour ---
 static void __cdecl DetourCallback(float elapsed, int unknown) {
     Dispatch();
     if (s_originalCallback) {
         s_originalCallback(elapsed, unknown);
     }
+    DispatchPost();
 
     EnterCriticalSection(&s_cs);
     s_onGameThread = false;
@@ -200,6 +217,22 @@ void Enqueue(Callback task) {
     }
 
     s_queue.push_back(std::move(task));
+    LeaveCriticalSection(&s_cs);
+}
+
+void EnqueuePost(Callback task) {
+    if (!s_initialized) return;
+
+    EnterCriticalSection(&s_cs);
+
+    // Fast path: if already on game thread during post-dispatch, execute immediately
+    if (s_onGameThread && s_gameThreadId == GetCurrentThreadId()) {
+        LeaveCriticalSection(&s_cs);
+        task();
+        return;
+    }
+
+    s_postQueue.push_back(std::move(task));
     LeaveCriticalSection(&s_cs);
 }
 
