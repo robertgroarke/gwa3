@@ -328,6 +328,7 @@ static void PrintUsage(const char* argv0) {
     printf("  --test-integ    Inject in integration test mode (char select -> game)\n");
     printf("  --test-npc      Inject in isolated NPC/dialog test mode\n");
     printf("  --test-merchant Inject in isolated merchant/trader quote test mode\n");
+    printf("  --llm           Inject in LLM agent mode (named pipe bridge for Gemma 4)\n");
     printf("  --merchant-variant <standard-id|standard-ptr|legacy-id|legacy-ptr>\n");
     printf("  --merchant-stage <full|travel-only|approach-only|target-only|interact-packet-only|interact-only>\n");
     printf("\nOptions:\n");
@@ -348,6 +349,7 @@ int main(int argc, char* argv[]) {
     bool doTestInteg = false;
     bool doTestNpc = false;
     bool doTestMerchant = false;
+    bool doLlm = false;
     const char* merchantVariantFlag = nullptr;
     const char* merchantStageFlag = nullptr;
 
@@ -372,6 +374,8 @@ int main(int argc, char* argv[]) {
             doTestNpc = true;
         } else if (strcmp(argv[i], "--test-merchant") == 0) {
             doTestMerchant = true;
+        } else if (strcmp(argv[i], "--llm") == 0) {
+            doLlm = true;
         } else if (strcmp(argv[i], "--merchant-variant") == 0 && i + 1 < argc) {
             const char* variant = argv[++i];
             if (strcmp(variant, "standard-id") == 0) {
@@ -478,6 +482,7 @@ int main(int argc, char* argv[]) {
     if (doTestMerchant) SetTestModeFlag("gwa3_test_merchant_quote.flag");
     if (doTestMerchant && merchantVariantFlag) SetTestModeFlag(merchantVariantFlag);
     if (doTestMerchant && merchantStageFlag) SetTestModeFlag(merchantStageFlag);
+    if (doLlm) SetTestModeFlag("gwa3_llm_mode.flag");
 
     // === --pid (single target) ===
     if (targetPid != 0) {

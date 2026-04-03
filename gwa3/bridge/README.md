@@ -23,70 +23,104 @@ GW.exe (gwa3.dll)  <--Named Pipe-->  Python Bridge  <--HTTP-->  vLLM/Ollama (Gem
 - **Gemma 4 32B** running locally via vLLM or Ollama
 - **GPU** with enough VRAM for 32B parameter model (~20GB+ for quantized, ~64GB for full precision)
 
-## Setup
+## Quick Start (Step by Step)
 
-### 1. Install Python dependencies
+### Step 1: One-time setup
 
 ```bash
+# Install Python dependencies
 cd gwa3/bridge
 pip install -r requirements.txt
-```
 
-This installs:
-- `httpx` — async HTTP client for the LLM API
-- `pywin32` — Windows named pipe support
-
-### 2. Start Gemma 4
-
-**Option A: vLLM (recommended for tool-use)**
-
-```bash
-pip install vllm
-vllm serve google/gemma-4-27b-it --port 8000
-```
-
-**Option B: Ollama**
-
-```bash
+# Pull Gemma 4 model via Ollama (one-time download)
 ollama pull gemma4:27b
+```
+
+### Step 2: Start Ollama
+
+```bash
 ollama serve
 ```
 
-When using Ollama, set the LLM URL to `http://localhost:11434/v1`.
+Leave this terminal running. Ollama serves an OpenAI-compatible API on `http://localhost:11434/v1`.
 
-### 3. Inject gwa3.dll in LLM mode
-
-Create a flag file named `gwa3_llm_mode.flag` in the same directory as `gwa3.dll`:
-
+Verify it's working:
 ```bash
-# From the gwa3 build output directory
-touch gwa3_llm_mode.flag
+curl http://localhost:11434/v1/models
 ```
 
-Alternatively, set the environment variable before launching the injector:
+### Step 3: Launch Guild Wars
+
+Launch GW normally (via GW Launcher, shortcut, etc.). Wait for the client to reach the character select screen or log in to a character.
+
+### Step 4: Inject gwa3.dll in LLM mode
 
 ```bash
-set GWA3_LLM_MODE=1
-injector.exe <gw_pid>
+cd gwa3/build/bin/Release
+injector.exe --llm
 ```
 
-When gwa3 detects this flag, it starts the named pipe server instead of the normal bot state machine. You'll see in the gwa3 log:
+This does three things:
+1. Auto-detects the running GW.exe window
+2. Creates the `gwa3_llm_mode.flag` file
+3. Injects `gwa3.dll` into the GW process
+
+gwa3 handles character select automatically (clicks Play), waits for the map to load, then starts the named pipe server. Watch the gwa3 log for:
 
 ```
 [LLM-Bridge] Initialized — listening on \\.\pipe\gwa3_llm
 ```
 
-### 4. Run the bridge
+### Step 5: Run the Python bridge
 
 ```bash
 cd gwa3
-python -m bridge
+python -m bridge --llm-url http://localhost:11434/v1 --model gemma4:27b
 ```
 
-With options:
+The bridge connects to both the named pipe (gwa3) and the LLM API (Ollama), then starts the agent loop:
+
+```
+============================================================
+  GWA3 LLM Bridge — Gemma 4 Agent
+============================================================
+  LLM:      http://localhost:11434/v1
+  Model:    gemma4:27b
+  Autonomy: tactical
+  Pipe:     \\.\pipe\gwa3_llm
+============================================================
+[Bridge] Connecting to gwa3...
+[Bridge] Connected to gwa3!
+[Agent] Starting agent loop...
+[Chat] Type messages to communicate with Gemma. Press Ctrl+C to quit.
+```
+
+### Step 6: Talk to Gemma
+
+Type natural language instructions in the terminal:
+
+```
+> Farm Bogroot Growths in hard mode
+> Go sell at the merchant
+> What's in my inventory?
+```
+
+Press `Ctrl+C` to stop the bridge.
+
+## CLI Reference
+
+### Injector
 
 ```bash
-python -m bridge --llm-url http://localhost:8000/v1 --model gemma-4-27b-it --autonomy tactical
+injector.exe --llm              # Inject in LLM mode (auto-detect GW)
+injector.exe --llm --pid 12345  # Inject specific PID in LLM mode
+injector.exe --llm --all        # Inject ALL GW instances in LLM mode
+```
+
+### Bridge
+
+```bash
+python -m bridge [options]
 ```
 
 | Flag | Default | Description |
