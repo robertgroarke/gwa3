@@ -458,20 +458,6 @@ namespace GWA3::LLM::GameSnapshot {
         return d;
     }
 
-    // Build gold amounts (lightweight — included in Tier 1)
-    static json BuildGoldJson() {
-        json g;
-        auto* inventory = ItemMgr::GetInventory();
-        if (inventory) {
-            g["character"] = inventory->gold_character;
-            g["storage"] = inventory->gold_storage;
-        } else {
-            g["character"] = 0;
-            g["storage"] = 0;
-        }
-        return g;
-    }
-
     // SEH-safe helper: read merchant item IDs into a flat buffer.
     // Returns count of valid IDs written (0 on failure).
     static uint32_t ReadMerchantItemIds(uint32_t* outIds, uint32_t maxIds) {
