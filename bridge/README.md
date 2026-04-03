@@ -1,29 +1,20 @@
 # GWA3 LLM Bridge
 
-Connect a local LLM (Gemma 4 32B) to Guild Wars through gwa3. The LLM observes real-time game state and controls the game via function calling — replacing hardcoded bot scripts with natural language instructions.
+An autonomous AI agent that plays Guild Wars using a local LLM (Gemma 4). Give it an objective, walk away, come back to loot.
 
-## Architecture
+## How It Works
 
 ```
-GW.exe (gwa3.dll)  <--Named Pipe-->  Python Bridge  <--HTTP-->  vLLM/Ollama (Gemma 4)
-   IpcServer                          Agent Loop                  Tool-use API
-   GameSnapshot                       Chat UI
-   ActionExecutor                     Tool Dispatch
+GW.exe (gwa3.dll)  <--Named Pipe-->  Python Bridge  <--HTTP-->  Ollama (Gemma 4)
+   Reads game state                   Agent Loop                  Decides actions
+   Executes actions                   Sends snapshots             Issues tool calls
 ```
 
-- **gwa3.dll** runs inside the game process, reads game state, and executes actions
-- **Python bridge** connects to gwa3 via named pipe and to the LLM via OpenAI-compatible HTTP API
-- **Gemma 4** receives game state snapshots, reasons about what to do, and issues tool calls that map to game actions
+1. **gwa3.dll** is injected into Guild Wars. It reads game memory (player, enemies, inventory, dialogs, merchants) and exposes 41 game actions.
+2. **Python bridge** connects gwa3 to the LLM. It sends game state snapshots to Gemma and forwards Gemma's tool calls back to gwa3.
+3. **Gemma 4** receives a standing objective ("Farm Bogroot Growths HM repeatedly") and plays the game autonomously — fighting, looting, selling, traveling, repeating — without human input.
 
-## Prerequisites
-
-- **Guild Wars** client running
-- **gwa3.dll** built (see main project README)
-- **Python 3.10+**
-- **Gemma 4 32B** running locally via vLLM or Ollama
-- **GPU** with enough VRAM for 32B parameter model (~20GB+ for quantized, ~64GB for full precision)
-
-## Quick Start (Step by Step)
+## Quick Start
 
 ### Step 1: One-time setup
 
@@ -32,80 +23,106 @@ GW.exe (gwa3.dll)  <--Named Pipe-->  Python Bridge  <--HTTP-->  vLLM/Ollama (Gem
 cd gwa3/bridge
 pip install -r requirements.txt
 
-# Pull Gemma 4 model via Ollama (one-time download)
+# Pull Gemma 4 model (one-time download, ~16GB for quantized 27B)
 ollama pull gemma4:27b
 ```
 
 ### Step 2: Start Ollama
 
+Open a terminal and leave it running:
+
 ```bash
 ollama serve
 ```
 
-Leave this terminal running. Ollama serves an OpenAI-compatible API on `http://localhost:11434/v1`.
-
-Verify it's working:
-```bash
-curl http://localhost:11434/v1/models
-```
-
 ### Step 3: Launch Guild Wars
 
-Launch GW normally (via GW Launcher, shortcut, etc.). Wait for the client to reach the character select screen or log in to a character.
+Launch GW normally (GW Launcher, shortcut, etc.). Get to the character select screen or log into a character.
 
-### Step 4: Inject gwa3.dll in LLM mode
+### Step 4: Inject gwa3 in LLM mode
 
 ```bash
 cd gwa3/build/bin/Release
 injector.exe --llm
 ```
 
-This does three things:
-1. Auto-detects the running GW.exe window
-2. Creates the `gwa3_llm_mode.flag` file
-3. Injects `gwa3.dll` into the GW process
+This auto-detects GW, sets the LLM mode flag, and injects. gwa3 handles character select automatically, waits for map load, then starts the named pipe server.
 
-gwa3 handles character select automatically (clicks Play), waits for the map to load, then starts the named pipe server. Watch the gwa3 log for:
-
-```
-[LLM-Bridge] Initialized — listening on \\.\pipe\gwa3_llm
-```
-
-### Step 5: Run the Python bridge
+### Step 5: Launch the agent
 
 ```bash
 cd gwa3
-python -m bridge --llm-url http://localhost:11434/v1 --model gemma4:27b
+python -m bridge \
+  --llm-url http://localhost:11434/v1 \
+  --model gemma4:27b \
+  --objective "Farm Bogroot Growths HM repeatedly. Sell loot when inventory is full."
 ```
 
-The bridge connects to both the named pipe (gwa3) and the LLM API (Ollama), then starts the agent loop:
+Gemma starts playing immediately. No further input required.
+
+### What you'll see
 
 ```
 ============================================================
-  GWA3 LLM Bridge — Gemma 4 Agent
+  GWA3 LLM Bridge — Gemma 4 Autonomous Agent
 ============================================================
-  LLM:      http://localhost:11434/v1
-  Model:    gemma4:27b
-  Autonomy: tactical
-  Pipe:     \\.\pipe\gwa3_llm
+  LLM:       http://localhost:11434/v1
+  Model:     gemma4:27b
+  Autonomy:  tactical
+  Objective: Farm Bogroot Growths HM repeatedly. Sell loot when inventory is full.
 ============================================================
 [Bridge] Connecting to gwa3...
 [Bridge] Connected to gwa3!
-[Agent] Starting agent loop...
-[Chat] Type messages to communicate with Gemma. Press Ctrl+C to quit.
+[Agent] Starting autonomous agent loop
+[Agent] Objective: Farm Bogroot Growths HM repeatedly. Sell loot when inventory is full.
+[Chat] Gemma is playing autonomously. Type to send messages (optional).
+[Gemma -> GW] set_hard_mode, kick_all_heroes, add_hero, add_hero, add_hero
+[Gemma -> GW] travel
+[Gemma -> GW] enter_mission
+[Gemma -> GW] move_to
+[Gemma -> GW] use_skill, attack, use_skill
+[Gemma -> GW] pick_up_item, pick_up_item
+[Gemma] Run complete. Returning to sell.
+[Gemma -> GW] return_to_outpost
+[Gemma -> GW] interact_npc, transact_items, transact_items
+[Gemma -> GW] travel
+...
 ```
 
-### Step 6: Talk to Gemma
+Gemma runs indefinitely. Press `Ctrl+C` to stop.
 
-Type natural language instructions in the terminal:
+## Objectives
+
+The `--objective` flag tells Gemma what to do. It stays in context across the entire session — Gemma never forgets what it's working on. Examples:
+
+```bash
+# Dungeon farming (most common)
+--objective "Farm Bogroot Growths HM repeatedly. Sell loot when inventory is full."
+
+# Material farming
+--objective "Farm Vaettirs in HM at Jaga Moraine. Pick up all drops. Sell whites and blues, keep golds."
+
+# Shopping
+--objective "Go to Kamadan, buy 50 Iron Ingots and 25 Dust from the materials trader."
+
+# Maintenance
+--objective "Identify all gold items, salvage blues and purples for materials, store ectos in Xunlai."
+```
+
+If no objective is provided, Gemma defaults to: *"Farm continuously. Complete dungeon/mission runs, sell loot when inventory is full, restock consumables, and repeat."*
+
+## Talking to Gemma (Optional)
+
+While Gemma plays, you can type messages in the terminal to adjust its behavior:
 
 ```
-> Farm Bogroot Growths in hard mode
-> Go sell at the merchant
-> What's in my inventory?
+> switch to normal mode
+> go sell now, inventory is almost full
+> stop farming, just stand in town
+> what's your status?
 ```
 
-Press `Ctrl+C` to stop the bridge.
+This is entirely optional. Gemma will play for hours without any input.
 
 ## CLI Reference
 
@@ -125,135 +142,124 @@ python -m bridge [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--llm-url` | `http://localhost:8000/v1` | OpenAI-compatible API endpoint |
-| `--model` | `gemma-4-32b-it` | Model name to request |
-| `--autonomy` | `tactical` | Autonomy level: `advisory`, `tactical`, or `full` |
-| `--pipe` | `\\.\pipe\gwa3_llm` | Named pipe path (rarely needs changing) |
-
-## Usage
-
-Once connected, you'll see a terminal interface:
-
-```
-============================================================
-  GWA3 LLM Bridge — Gemma 4 Agent
-============================================================
-  LLM:      http://localhost:8000/v1
-  Model:    gemma-4-27b-it
-  Autonomy: tactical
-  Pipe:     \\.\pipe\gwa3_llm
-============================================================
-[Bridge] Connecting to gwa3...
-[Bridge] Connected to gwa3!
-[Agent] Starting agent loop...
-[Chat] Type messages to communicate with Gemma. Press Ctrl+C to quit.
-```
-
-Type natural language instructions:
-
-```
-> Farm Bogroot Growths in hard mode
-[Gemma] Setting up for Bogroot Growths HM. Adding heroes and traveling to Gadd's Encampment.
-[Gemma -> GW] kick_all_heroes, add_hero, add_hero, add_hero, ...
-[Gemma -> GW] set_hard_mode, travel
-```
-
-```
-> Go sell items at the merchant
-[Gemma] Returning to outpost to visit the merchant.
-[Gemma -> GW] return_to_outpost
-```
-
-```
-> What's my current HP and energy?
-[Gemma] You're at 85% HP (442/520) and 62% energy (25/40). No immediate threats nearby.
-```
+| `--llm-url` | `http://localhost:8000/v1` | Ollama/vLLM API endpoint |
+| `--model` | `gemma-4-32b-it` | Model name (check `ollama list`) |
+| `--objective` | Generic farming | What Gemma should do |
+| `--autonomy` | `tactical` | `advisory`, `tactical`, or `full` |
+| `--pipe` | `\\.\pipe\gwa3_llm` | Named pipe path |
 
 ## Autonomy Modes
 
-| Mode | LLM Controls | Bot Code Handles |
-|------|-------------|-----------------|
-| **advisory** | High-level strategy (where to go, when to sell) | Combat rotations, pathfinding micro |
-| **tactical** | Skill usage, targeting, movement decisions | Low-level action queuing |
-| **full** | Everything — pure LLM decision making | Action execution only |
+| Mode | Gemma Decides | Scripted Code Handles |
+|------|--------------|----------------------|
+| **advisory** | High-level strategy (where to go, when to sell) | Combat micro, pathfinding |
+| **tactical** | Skills, targets, movement, inventory | Low-level action queuing |
+| **full** | Everything | Pure action executor |
 
-Start with `tactical`. Use `advisory` if the LLM's combat decisions are too slow, or `full` if you want maximum LLM control.
+Start with `tactical` (default). Use `advisory` if Gemma's combat is too slow (~200ms per decision). Use `full` if you want Gemma to control every aspect.
 
-## Game State Snapshots
+## Game State
 
-The bridge receives three tiers of game data at different intervals:
+Gemma sees three tiers of data, sent at different frequencies:
 
-| Tier | Interval | Contents | Size |
-|------|----------|----------|------|
-| 1 | 200ms | Player position/HP/energy, skillbar recharges, map ID, party status | ~500 bytes |
-| 2 | 500ms | Tier 1 + nearby agents (enemies, allies, items within 2500 range) | ~2-4KB |
-| 3 | 2000ms | Tier 2 + full inventory, active effects/buffs, gold counts | ~5-10KB |
+| Tier | Interval | What Gemma Sees |
+|------|----------|-----------------|
+| 1 | 200ms | Player HP/energy/position, skillbar with recharges, map ID, party alive/dead status |
+| 2 | 500ms | + All nearby enemies (HP, casting skill, hexed/enchanted), allies, ground items, hero skillbars, dialogs, merchant windows |
+| 3 | 2s | + Full inventory with rarity and free slots, Xunlai storage, gold, active effects with time remaining |
 
-## Available Actions (34 tools)
+All skill IDs, item IDs, and profession IDs are resolved to human-readable names before Gemma sees them.
 
-The LLM can call any of these as function/tool calls:
+## Available Actions (41 tools)
 
-**Movement:** `move_to`, `change_target`, `cancel_action`
+**Movement (3):** `move_to`, `change_target`, `cancel_action`
 
-**Combat:** `attack`, `call_target`, `use_skill`, `use_hero_skill`
+**Combat (4):** `attack`, `call_target`, `use_skill`, `use_hero_skill`
 
-**Interaction:** `interact_npc`, `interact_player`, `interact_signpost`, `dialog`
+**Interaction (4):** `interact_npc`, `interact_player`, `interact_signpost`, `dialog`
 
-**Party/Hero:** `add_hero`, `kick_hero`, `kick_all_heroes`, `flag_hero`, `flag_all`, `unflag_all`, `set_hero_behavior`, `lock_hero_target`
+**Party/Hero (8):** `add_hero`, `kick_hero`, `kick_all_heroes`, `flag_hero`, `flag_all`, `unflag_all`, `set_hero_behavior`, `lock_hero_target`
 
-**Travel:** `travel`, `enter_mission`, `return_to_outpost`, `set_hard_mode`, `skip_cinematic`
+**Travel (5):** `travel`, `enter_mission`, `return_to_outpost`, `set_hard_mode`, `skip_cinematic`
 
-**Items:** `pick_up_item`, `use_item`, `equip_item`, `drop_item`, `move_item`
+**Items (5):** `pick_up_item`, `use_item`, `equip_item`, `drop_item`, `move_item`
 
-**Trade:** `buy_materials`, `request_quote`, `transact_items`
+**Salvage/Identify (4):** `identify_item`, `salvage_start`, `salvage_materials`, `salvage_done`
 
-**Utility:** `send_chat`, `wait`
+**Skillbar (1):** `load_skillbar`
 
-All actions are validated before execution (agent exists, skill not on recharge, coordinates in range, etc.) and rate-limited to 10 actions/second.
+**Trade (3):** `buy_materials`, `request_quote`, `transact_items`
+
+**Utility (4):** `send_chat`, `drop_gold`, `wait`
+
+All actions are validated (agent exists? skill recharged? item found?) and rate-limited to 10/second.
+
+## Autonomous Behavior
+
+Gemma's decision loop runs every ~300ms:
+
+```
+1. Am I alive?           → No: wait for recovery or return to outpost
+2. Party defeated?       → return_to_outpost
+3. Right map?            → No: travel to target area
+4. In outpost?           → Set up party, hard mode, enter mission
+5. In explorable?        → Move toward objectives, fight, loot
+6. Inventory full?       → Return to outpost, sell/salvage, resume
+7. Dialog open?          → Read options, choose the right one
+8. Merchant open?        → Buy/sell as needed
+```
+
+Error recovery is built in:
+- **Stuck** — if position doesn't change for 3+ cycles, tries a different movement
+- **Wipe** — returns to outpost and restarts the run
+- **Idle** — if no actions for 10 cycles, system nudges Gemma to act
+- **Disconnect** — stops acting, waits for reconnection
 
 ## Troubleshooting
 
 **"Could not connect to gwa3 pipe"**
-- Verify gwa3.dll is injected and the `gwa3_llm_mode.flag` file exists next to the DLL
-- Check gwa3 log for `[LLM-Bridge] Initialized` message
-- Make sure GW is past the character select screen (map must be loaded)
+- Is GW running? Did you run `injector.exe --llm`?
+- Check gwa3 log for `[LLM-Bridge] Initialized`
+- GW must be past character select (map loaded)
 
 **LLM not responding / timeout**
-- Verify vLLM or Ollama is running: `curl http://localhost:8000/v1/models`
-- Check that the model name matches what's served
-- 32B models need significant VRAM — monitor GPU usage
+- Is Ollama running? `curl http://localhost:11434/v1/models`
+- Model name must match `ollama list` output
+- Check GPU memory — 27B model needs ~16GB VRAM (quantized)
 
-**Actions not executing**
-- Check gwa3 log for `[LLM-Action]` messages — validation errors are logged
-- Verify the game is in a state where actions make sense (map loaded, not in cinematic)
-- Rate limiter caps at 10 actions/sec — the LLM may be sending too many
+**Gemma not taking actions**
+- Check terminal for `[Gemma -> GW]` lines
+- If only `[Gemma]` text with no tool calls, the model may not support function calling — try vLLM instead of Ollama
+- Try a more specific objective
 
-**Game stuttering**
-- The IPC runs on a dedicated thread and should not block the game
-- If snapshots are too frequent, the bridge can send a `subscribe` message to reduce tier frequency (not yet implemented — adjust `TIER*_INTERVAL_MS` constants in `LlmBridge.cpp`)
+**Actions failing**
+- Check gwa3 log for `[LLM-Action]` error messages
+- Common: "map_not_loaded", "agent_not_found", "skill_on_recharge"
+- Rate limiter blocks if >10 actions/sec
 
 ## File Structure
 
 ```
 gwa3/
-├── bridge/                      # Python bridge process
-│   ├── __main__.py              # Entry point: python -m bridge
-│   ├── ipc_client.py            # Named pipe client
-│   ├── agent_loop.py            # Observe-think-act cycle
+├── bridge/                      # Python bridge (autonomous agent)
+│   ├── __main__.py              # Entry point
+│   ├── agent_loop.py            # Autonomous observe-think-act loop
 │   ├── llm_client.py            # OpenAI-compatible HTTP client
-│   ├── tool_schema.py           # 34 tool definitions
-│   ├── observation.py           # Snapshot window manager
-│   ├── chat_interface.py        # Terminal chat UI
-│   ├── config.py                # CLI args and defaults
-│   └── requirements.txt         # Python dependencies
+│   ├── tool_schema.py           # 41 tool definitions
+│   ├── observation.py           # Game state summary builder
+│   ├── gamedata.py              # 2,978 skill + 1,091 item name lookups
+│   ├── chat_interface.py        # Optional user chat
+│   ├── config.py                # CLI args
+│   ├── ipc_client.py            # Named pipe client
+│   └── requirements.txt         # httpx, pywin32
 ├── include/gwa3/llm/            # C++ headers
-│   ├── IpcServer.h
-│   ├── GameSnapshot.h
-│   ├── ActionExecutor.h
-│   └── LlmBridge.h
+│   ├── IpcServer.h              # Named pipe server
+│   ├── GameSnapshot.h           # State serialization
+│   ├── ActionExecutor.h         # Action validation + dispatch
+│   └── LlmBridge.h             # Coordinator
 └── src/llm/                     # C++ implementation
-    ├── IpcServer.cpp             # Named pipe server
-    ├── GameSnapshot.cpp          # State serialization
-    ├── ActionExecutor.cpp        # Action validation + dispatch
-    └── LlmBridge.cpp            # Coordinator thread
+    ├── IpcServer.cpp
+    ├── GameSnapshot.cpp
+    ├── ActionExecutor.cpp
+    └── LlmBridge.cpp
 ```
