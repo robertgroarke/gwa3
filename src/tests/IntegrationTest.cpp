@@ -705,6 +705,56 @@ static size_t CollectNearbyFoeAgents(float maxDistance, uint32_t* outIds, size_t
     return bestCount;
 }
 
+static bool FindNearestFoeAgent(float maxDistance, uint32_t& outId, float& outX, float& outY, float& outDistance) {
+    outId = 0;
+    outX = 0.0f;
+    outY = 0.0f;
+    outDistance = 0.0f;
+
+    const uint32_t myId = ReadMyId();
+    float myX = 0.0f;
+    float myY = 0.0f;
+    if (!TryReadAgentPosition(myId, myX, myY)) return false;
+    if (Offsets::AgentBase <= 0x10000) return false;
+
+    __try {
+        uintptr_t agentArr = *reinterpret_cast<uintptr_t*>(Offsets::AgentBase);
+        const uint32_t maxAgents = *reinterpret_cast<uint32_t*>(Offsets::AgentBase + 0x8);
+        if (agentArr <= 0x10000 || maxAgents == 0) return false;
+
+        const float maxDistSq = maxDistance * maxDistance;
+        float bestDistSq = maxDistSq;
+
+        for (uint32_t i = 1; i < maxAgents && i < 4096; ++i) {
+            if (i == myId) continue;
+
+            uintptr_t agentPtr = *reinterpret_cast<uintptr_t*>(agentArr + i * 4);
+            if (agentPtr <= 0x10000) continue;
+
+            auto* base = reinterpret_cast<Agent*>(agentPtr);
+            if (base->type != 0xDB) continue;
+
+            auto* living = reinterpret_cast<AgentLiving*>(agentPtr);
+            if (living->allegiance != 3) continue;
+            if (living->hp <= 0.0f) continue;
+
+            const float distSq = AgentMgr::GetSquaredDistance(myX, myY, living->x, living->y);
+            if (distSq >= bestDistSq) continue;
+
+            bestDistSq = distSq;
+            outId = i;
+            outX = living->x;
+            outY = living->y;
+        }
+
+        if (outId == 0) return false;
+        outDistance = sqrtf(bestDistSq);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 static AgentItem* FindGroundItemByAgentId(uint32_t agentId);
 static AgentItem* FindNearbyGroundItem(float maxDistance);
 
@@ -860,7 +910,9 @@ static InventorySnapshot CaptureInventorySnapshot() {
 }
 
 static bool InventoryChangedMeaningfully(const InventorySnapshot& before, const InventorySnapshot& after) {
-    return after.count != before.count ||
+    return after.goldCharacter != before.goldCharacter ||
+           after.goldStorage != before.goldStorage ||
+           after.count != before.count ||
            after.itemIdSum != before.itemIdSum ||
            after.modelIdSum != before.modelIdSum ||
            after.quantitySum != before.quantitySum;
@@ -900,12 +952,22 @@ static AgentItem* FindNearbyGroundItem(float maxDistance) {
         const float maxDistSq = maxDistance * maxDistance;
         float bestDistSq = maxDistSq;
         AgentItem* bestItem = nullptr;
+        static bool s_loggedItemTypes = false;
+        uint32_t typeCounts[8] = {}; // bucket agent types for diagnostics
 
         for (uint32_t i = 1; i < maxAgents && i < 4096; ++i) {
             uintptr_t agentPtr = *reinterpret_cast<uintptr_t*>(agentArr + i * 4);
             if (agentPtr <= 0x10000) continue;
 
             auto* base = reinterpret_cast<Agent*>(agentPtr);
+            // Log type distribution once
+            uint32_t t = base->type;
+            if (t == 0xDB) typeCounts[0]++;       // Living
+            else if (t == 0x400) typeCounts[1]++;  // Item (classic)
+            else if (t & 0x400) typeCounts[2]++;   // Item-like
+            else if (t == 0x200) typeCounts[3]++;  // Gadget
+            else typeCounts[4]++;                   // Other
+
             if ((base->type & 0x400) == 0) continue;
 
             auto* item = reinterpret_cast<AgentItem*>(agentPtr);
@@ -914,6 +976,17 @@ static AgentItem* FindNearbyGroundItem(float maxDistance) {
                 bestDistSq = distSq;
                 bestItem = item;
             }
+        }
+
+        if (!s_loggedItemTypes || bestItem) {
+            Log::Info("[INTG] FindItem types: living(0xDB)=%u item(0x400)=%u itemLike=%u gadget(0x200)=%u other=%u bestItem=%p",
+                      typeCounts[0], typeCounts[1], typeCounts[2], typeCounts[3], typeCounts[4], bestItem);
+            if (bestItem) {
+                Log::Info("[INTG] Found item agent: type=0x%X agent_id=%u item_id=%u pos=(%.0f, %.0f)",
+                          reinterpret_cast<Agent*>(bestItem)->type,
+                          bestItem->agent_id, bestItem->item_id, bestItem->x, bestItem->y);
+            }
+            s_loggedItemTypes = true;
         }
 
         return bestItem;
@@ -1079,7 +1152,120 @@ static bool TryForceNearbyLootDrop() {
 
         uint32_t foeIds[8] = {};
         const size_t foeCount = CollectNearbyFoeAgents(5000.0f, foeIds, 8);
-        if (foeCount == 0) continue;
+        if (foeCount == 0) {
+            uint32_t nearestFoeId = 0;
+            float nearestFoeX = 0.0f;
+            float nearestFoeY = 0.0f;
+            float nearestFoeDist = 0.0f;
+            if (FindNearestFoeAgent(25000.0f, nearestFoeId, nearestFoeX, nearestFoeY, nearestFoeDist)) {
+                IntReport("  No nearby foes at probe point; moving toward nearest foe %u at (%.0f, %.0f), dist=%.0f...",
+                          nearestFoeId, nearestFoeX, nearestFoeY, nearestFoeDist);
+                MovePlayerNear(nearestFoeX, nearestFoeY, 1200.0f, 25000);
+                Sleep(1000);
+                const size_t retriedFoeCount = CollectNearbyFoeAgents(5000.0f, foeIds, 8);
+                if (retriedFoeCount == 0) continue;
+                IntReport("  Found %u nearby foe(s) after nearest-foe chase", static_cast<unsigned>(retriedFoeCount));
+                for (size_t i = retriedFoeCount; i < 8; ++i) foeIds[i] = 0;
+                // Reuse the same loop body below with the refreshed foeIds set.
+                const size_t foeCountAfterChase = retriedFoeCount;
+                IntReport("  Found %u nearby foe(s) for loot setup", static_cast<unsigned>(foeCountAfterChase));
+                for (size_t i = 0; i < foeCountAfterChase; ++i) {
+                    const uint32_t foeId = foeIds[i];
+                    AgentLiving* foe = GetAgentLivingRaw(foeId);
+                    if (!foe || foe->hp <= 0.0f) continue;
+
+                    const float hpBefore = foe->hp;
+                    IntReport("  Engaging nearby foe %u to create a loot drop opportunity (hp=%.2f)...", foeId, hpBefore);
+
+                    SkillTestCandidate offensiveSkill{};
+                    const bool haveOffensiveSkill = TryChooseOffensiveSkillCandidate(foeId, offensiveSkill);
+                    if (haveOffensiveSkill) {
+                        IntReport("  Offensive skill available for loot setup: slot %u skill %u", offensiveSkill.slot, offensiveSkill.skillId);
+                    }
+
+                    bool foeDefeated = false;
+                    bool foeDamaged = false;
+                    const DWORD fightStart = GetTickCount();
+                    while ((GetTickCount() - fightStart) < 30000) {
+                        foe = GetAgentLivingRaw(foeId);
+                        if (!foe || foe->hp <= 0.0f) {
+                            foeDefeated = true;
+                            ++foesDefeated;
+                            break;
+                        }
+
+                        float px = 0.0f;
+                        float py = 0.0f;
+                        if (TryReadAgentPosition(ReadMyId(), px, py)) {
+                            const float dist = AgentMgr::GetDistance(px, py, foe->x, foe->y);
+                            if (dist > 250.0f) {
+                                float fx = foe->x, fy = foe->y;
+                                GameThread::Enqueue([fx, fy]() { AgentMgr::Move(fx, fy); });
+                                Sleep(dist > 1200.0f ? 750 : 350);
+                            }
+                        }
+
+                        AgentMgr::ChangeTarget(foeId);
+                        AgentMgr::Attack(foeId);
+
+                        {
+                            float fx = foe->x, fy = foe->y;
+                            GameThread::Enqueue([fx, fy]() {
+                                PartyMgr::FlagAll(fx, fy);
+                            });
+                        }
+
+                        if (haveOffensiveSkill) {
+                            Skillbar* liveBar = SkillMgr::GetPlayerSkillbar();
+                            if (liveBar && liveBar->skills[offensiveSkill.slot - 1].recharge == 0) {
+                                SkillMgr::UseSkill(offensiveSkill.slot, foeId, 0);
+                            }
+                        }
+                        Sleep(1500);
+
+                        foe = GetAgentLivingRaw(foeId);
+                        if (foe) {
+                            if (foe->hp < hpBefore && foe->hp > 0.0f) {
+                                IntReport("  Foe %u HP: %.2f (taking damage)", foeId, foe->hp);
+                            }
+                        }
+
+                        if (FindNearbyGroundItem(5000.0f)) return true;
+
+                        foe = GetAgentLivingRaw(foeId);
+                        if (foe && foe->hp < hpBefore) {
+                            foeDamaged = true;
+                        }
+                        if (!foe || foe->hp <= 0.0f) {
+                            foeDefeated = true;
+                            ++foesDefeated;
+                            break;
+                        }
+                    }
+
+                    AgentMgr::CancelAction();
+                    GameThread::Enqueue([]() { PartyMgr::UnflagAll(); });
+                    Sleep(250);
+
+                    if (foeDamaged) {
+                        ++foesDamaged;
+                    } else {
+                        IntReport("  Loot setup combat did not reduce foe %u HP", foeId);
+                    }
+
+                    if (foeDefeated && waitForDropAfterCombat()) {
+                        return true;
+                    }
+
+                    if (FindNearbyGroundItem(5000.0f)) return true;
+                    if (foesDefeated >= 8) break;
+                }
+                if (FindNearbyGroundItem(5000.0f)) return true;
+                if (foesDefeated >= 8) break;
+                continue;
+            }
+            continue;
+        }
 
         IntReport("  Found %u nearby foe(s) for loot setup", static_cast<unsigned>(foeCount));
 
@@ -1671,20 +1857,39 @@ static bool TestLootPickup() {
     const float itemX = item->x;
     const float itemY = item->y;
     const InventorySnapshot inventoryBefore = CaptureInventorySnapshot();
+    float myX = 0.0f;
+    float myY = 0.0f;
+    const bool havePlayerPos = TryReadAgentPosition(ReadMyId(), myX, myY);
+    const float itemDistance = havePlayerPos ? AgentMgr::GetDistance(myX, myY, itemX, itemY) : -1.0f;
 
-    IntReport("  Picking up item agent=%u item=%u at (%.0f, %.0f), inventoryCount=%u itemIdSum=%llu modelIdSum=%llu quantitySum=%llu",
+    IntReport("  Picking up item agent=%u item=%u at (%.0f, %.0f), dist=%.0f, gold=%u/%u inventoryCount=%u itemIdSum=%llu modelIdSum=%llu quantitySum=%llu",
               itemAgentId,
               itemId,
               itemX,
               itemY,
+              itemDistance,
+              inventoryBefore.goldCharacter,
+              inventoryBefore.goldStorage,
               inventoryBefore.count,
               inventoryBefore.itemIdSum,
               inventoryBefore.modelIdSum,
               inventoryBefore.quantitySum);
 
+    if (itemDistance < 0.0f || itemDistance > 180.0f) {
+        IntReport("  Moving closer to loot before pickup...");
+        MovePlayerNear(itemX, itemY, 120.0f, 12000);
+
+        float pickupX = 0.0f;
+        float pickupY = 0.0f;
+        if (TryReadAgentPosition(ReadMyId(), pickupX, pickupY)) {
+            IntReport("  Post-move loot distance: %.0f", AgentMgr::GetDistance(pickupX, pickupY, itemX, itemY));
+        }
+    }
+
     ItemMgr::PickUpItem(itemAgentId);
 
-    const bool pickedUpIntoInventory = WaitFor("inventory changes after item pickup", 5000, [itemId, inventoryBefore]() {
+    const bool pickedUpIntoInventory = WaitFor("pickup acknowledged by inventory or item removal", 5000, [itemAgentId, itemId, inventoryBefore]() {
+        if (!FindGroundItemByAgentId(itemAgentId)) return true;
         if (ItemMgr::GetItemById(itemId)) return true;
         const InventorySnapshot inventoryAfter = CaptureInventorySnapshot();
         return InventoryChangedMeaningfully(inventoryBefore, inventoryAfter);
@@ -1692,12 +1897,16 @@ static bool TestLootPickup() {
 
     const InventorySnapshot inventoryAfter = CaptureInventorySnapshot();
     Item* pickedItem = ItemMgr::GetItemById(itemId);
-    IntReport("  After pickup: inventoryCount=%u itemIdSum=%llu modelIdSum=%llu quantitySum=%llu pickedItem=%p",
+    AgentItem* remainingGroundItem = FindGroundItemByAgentId(itemAgentId);
+    IntReport("  After pickup: gold=%u/%u inventoryCount=%u itemIdSum=%llu modelIdSum=%llu quantitySum=%llu pickedItem=%p groundItem=%p",
+              inventoryAfter.goldCharacter,
+              inventoryAfter.goldStorage,
               inventoryAfter.count,
               inventoryAfter.itemIdSum,
               inventoryAfter.modelIdSum,
               inventoryAfter.quantitySum,
-              pickedItem);
+              pickedItem,
+              remainingGroundItem);
     if (pickedItem) {
         IntReport("  Picked item in inventory: item_id=%u model_id=%u quantity=%u bag=%p slot=%u",
                   pickedItem->item_id,
@@ -2906,7 +3115,16 @@ static bool TestReturnToOutpost() {
         return false;
     }
 
-    IntReport("  Returning to outpost from explorable map %u...", mapId);
+    // Step 1: /resign to trigger the return-to-outpost flow
+    // This also tests ChatMgr::SendChat with slash commands.
+    IntReport("  Sending /resign in explorable map %u...", mapId);
+    GameThread::Enqueue([]() {
+        ChatMgr::SendChat(L"resign", L'/');
+    });
+    Sleep(3000); // Wait for resign to process
+
+    // Step 2: Send return-to-outpost packet (works after resign)
+    IntReport("  Sending ReturnToOutpost packet...");
     MapMgr::ReturnToOutpost();
 
     const bool returned = WaitFor("MapID changes after ReturnToOutpost", 60000, [mapId]() {
