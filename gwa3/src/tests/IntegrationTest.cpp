@@ -62,7 +62,9 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
         if (hb == lastHeartbeat && hb > 0) {
             stallCount++;
             if (stallCount >= 3) {
+                bool hookIntact = RenderHook::IsHookIntact();
                 Log::Error("[WATCHDOG] !!! RENDER FROZEN — heartbeat stuck at %u for >3s. GW likely crashed !!!", hb);
+                Log::Error("[WATCHDOG] Hook JMP intact: %s", hookIntact ? "YES" : "NO — OVERWRITTEN!");
                 Log::Error("[WATCHDOG] Last known test state: %d passed, %d failed, %d skipped",
                            s_intPassed, s_intFailed, s_intSkipped);
                 Log::Error("[WATCHDOG] RenderHook qCtr=%u pending=%u",

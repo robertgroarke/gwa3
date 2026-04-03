@@ -36,6 +36,9 @@ static volatile LONG s_savedESP = 0;
 // Mode 2: full + FPU save/restore — testing FPU corruption theory
 // Mode 3: pushad/popfd NO queue — PROVEN STABLE at 12338 hb
 // Mode 4: pushad + queue drain (no call) — PROVEN STABLE at 12345 hb
+// Mode 2: full dispatch. Commands called from render hook detour.
+// After SetMapLoaded(true), command dispatch is disabled to test if
+// the crash is from in-game shellcode calls or something else.
 #define RENDERHOOK_MODE 2
 
 static __declspec(naked) void RenderDetourNaked() {
@@ -81,7 +84,11 @@ skip_queue:
         mov esp, dword ptr [s_savedESP]
         jmp [s_trampoline]
 #else
-        // Save ESP BEFORE any stack operations — restore it exactly before exit
+        // After map load, do NOTHING except heartbeat + trampoline (mode 1 equivalent)
+        cmp dword ptr [s_mapLoaded], 1
+        jz ingame_minimal
+
+        // PRE-GAME: full dispatch for bootstrap ButtonClick
         mov dword ptr [s_savedESP], esp
         pushad
         pushfd
@@ -108,8 +115,12 @@ skip_queue:
         inc dword ptr [s_heartbeat]
         popfd
         popad
-        // Restore ESP to EXACTLY what it was on entry — guarantees zero stack impact
         mov esp, dword ptr [s_savedESP]
+        jmp [s_trampoline]
+
+ingame_minimal:
+        // IN-GAME: absolute minimum — just heartbeat, no pushad, no queue
+        inc dword ptr [s_heartbeat]
 #endif
         // Jump to trampoline: original 10 bytes + JMP to hookAddr+0xA
         jmp [s_trampoline]
@@ -245,8 +256,15 @@ uint32_t GetHeartbeat() {
 }
 
 bool IsCrashDetected() {
-    // Caller should compare two heartbeat readings ~3s apart
-    return false; // Watchdog thread handles this logic
+    return false;
+}
+
+bool IsHookIntact() {
+    if (!s_initialized) return false;
+    uintptr_t hookAddr = Offsets::Render;
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(hookAddr);
+    // Check if our E9 JMP is still the first byte
+    return (p[0] == 0xE9);
 }
 
 } // namespace GWA3::RenderHook
