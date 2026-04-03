@@ -16,8 +16,8 @@ static volatile LONG s_mapLoaded = 0;
 static volatile LONG s_disableRendering = 0;
 static volatile LONG s_heartbeat = 0;
 
-// FPU save area — 108 bytes required by fsave/frstor, aligned to 16 bytes
-__declspec(align(16)) static uint8_t s_fpuState[112] = {};
+// Full FP/SSE/MXCSR save area — fxsave needs 512 bytes, 16-byte aligned
+__declspec(align(16)) static uint8_t s_fxState[512] = {};
 static uintptr_t s_queue[kQueueSize] = {};
 static bool s_initialized = false;
 static uintptr_t s_returnAddr = 0;
@@ -102,11 +102,7 @@ skip_queue:
         xor eax, eax
 no_reset:
         mov dword ptr [s_queueCounter], eax
-        // Save FPU state before calling shellcode — game's render path uses FPU
-        fsave [s_fpuState]
         call dword ptr [s_savedCommand]
-        // Restore FPU state after shellcode — prevent FPU register corruption
-        frstor [s_fpuState]
 
 skip_queue:
         inc dword ptr [s_heartbeat]

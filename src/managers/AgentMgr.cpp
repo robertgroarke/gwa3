@@ -100,40 +100,20 @@ void Move(float x, float y) {
         CtoS::MoveToCoord(x, y);
         return;
     }
-    if (!RenderHook::IsInitialized() || !EnsureMoveShellcode()) {
-        Log::Warn("AgentMgr: Move falling back to packet path");
+    if (!GameThread::IsInitialized()) {
+        Log::Warn("AgentMgr: Move falling back to packet path (GameThread not ready)");
         CtoS::MoveToCoord(x, y);
         return;
     }
 
-    uintptr_t slot = NextMoveSlot();
-    // Layout: [0..15] shellcode, [32..43] MoveData
-    uintptr_t dataAddr = slot + 32;
-
+    // Dispatch Move on the game thread (at function entry, not mid-render)
+    // This avoids re-entrancy issues with calling game functions from the
+    // mid-function render hook detour.
     MoveData move{x, y, 0};
-    memcpy(reinterpret_cast<void*>(dataAddr), &move, sizeof(move));
-
-    auto* sc = reinterpret_cast<uint8_t*>(slot);
-    sc[0] = 0xB8; // mov eax, imm32
-    uint32_t dataAddr32 = static_cast<uint32_t>(dataAddr);
-    memcpy(sc + 1, &dataAddr32, sizeof(uint32_t));
-    sc[5] = 0x50; // push eax
-    sc[6] = 0xE8; // call rel32
-    int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(s_moveFn) - (slot + 11));
-    memcpy(sc + 7, &rel, sizeof(rel));
-    sc[11] = 0x58; // pop eax
-    sc[12] = 0xC3; // ret
-    FlushInstructionCache(GetCurrentProcess(), sc, 13);
-
-    Log::Info("AgentMgr::Move(%.1f, %.1f) slot=0x%08X fn=0x%08X rel=0x%08X hb=%u qCtr=%u",
-              x, y, slot, reinterpret_cast<uintptr_t>(s_moveFn), rel,
-              RenderHook::GetHeartbeat(), RenderHook::GetQueueCounter());
-
-    bool queued = RenderHook::EnqueueCommand(slot);
-    if (!queued) {
-        Log::Warn("AgentMgr: Move enqueue FAILED (queue full?) falling back to CtoS");
-        CtoS::MoveToCoord(x, y);
-    }
+    auto fn = s_moveFn;
+    GameThread::Enqueue([fn, move]() {
+        fn(&move);
+    });
 }
 
 void ChangeTarget(uint32_t agentId) {
@@ -141,33 +121,16 @@ void ChangeTarget(uint32_t agentId) {
         CtoS::ChangeTarget(agentId);
         return;
     }
-    if (!RenderHook::IsInitialized() || !EnsureTargetShellcode()) {
+    if (!GameThread::IsInitialized()) {
         Log::Warn("AgentMgr: ChangeTarget falling back to packet path");
         CtoS::ChangeTarget(agentId);
         return;
     }
 
-    uintptr_t slot = NextTargetSlot();
-    auto* sc = reinterpret_cast<uint8_t*>(slot);
-    sc[0] = 0x33; // xor edx, edx
-    sc[1] = 0xD2;
-    sc[2] = 0x52; // push edx
-    sc[3] = 0xB8; // mov eax, imm32
-    memcpy(sc + 4, &agentId, sizeof(agentId));
-    sc[8] = 0x50; // push eax
-    sc[9] = 0xE8; // call rel32
-    int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(s_changeTargetFn) - (slot + 14));
-    memcpy(sc + 10, &rel, sizeof(rel));
-    sc[14] = 0x83; // add esp, 8
-    sc[15] = 0xC4;
-    sc[16] = 0x08;
-    sc[17] = 0xC3; // ret
-    FlushInstructionCache(GetCurrentProcess(), sc, 18);
-
-    Log::Info("AgentMgr::ChangeTarget(%u) slot=0x%08X fn=0x%08X hb=%u",
-              agentId, slot, reinterpret_cast<uintptr_t>(s_changeTargetFn),
-              RenderHook::GetHeartbeat());
-    RenderHook::EnqueueCommand(slot);
+    auto fn = s_changeTargetFn;
+    GameThread::Enqueue([fn, agentId]() {
+        fn(agentId, 0);
+    });
 }
 
 uint32_t GetTargetId() {
