@@ -128,10 +128,11 @@ namespace GWA3::DialogMgr {
         return static_cast<uint32_t>(g_buttons.size());
     }
 
-    const DialogButton* GetButton(uint32_t index) {
+    bool GetButton(uint32_t index, DialogButton& out) {
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (index >= g_buttons.size()) return nullptr;
-        return &g_buttons[index];
+        if (index >= g_buttons.size()) return false;
+        out = g_buttons[index];
+        return true;
     }
 
     void ClearDialog() {
@@ -143,3 +144,4 @@ namespace GWA3::DialogMgr {
     }
 
 } // namespace GWA3::DialogMgr
+

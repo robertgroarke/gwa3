@@ -440,17 +440,17 @@ namespace GWA3::LLM::GameSnapshot {
         uint32_t btnCount = DialogMgr::GetButtonCount();
         json buttons = json::array();
         for (uint32_t i = 0; i < btnCount; i++) {
-            const auto* btn = DialogMgr::GetButton(i);
-            if (!btn) continue;
+            DialogMgr::DialogButton btn;
+            if (!DialogMgr::GetButton(i, btn)) continue;
             json b;
-            b["dialog_id"] = btn->dialog_id;
-            b["icon"] = btn->button_icon;
+            b["dialog_id"] = btn.dialog_id;
+            b["icon"] = btn.button_icon;
             // Convert button label to UTF-8
             char labelUtf8[256] = {};
-            WideCharToMultiByte(CP_UTF8, 0, btn->label, -1, labelUtf8, sizeof(labelUtf8) - 1, nullptr, nullptr);
+            WideCharToMultiByte(CP_UTF8, 0, btn.label, -1, labelUtf8, sizeof(labelUtf8) - 1, nullptr, nullptr);
             b["label"] = labelUtf8;
-            if (btn->skill_id != 0xFFFFFFFF) {
-                b["skill_id"] = btn->skill_id;
+            if (btn.skill_id != 0xFFFFFFFF) {
+                b["skill_id"] = btn.skill_id;
             }
             buttons.push_back(b);
         }

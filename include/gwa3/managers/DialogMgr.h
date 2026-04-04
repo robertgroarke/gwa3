@@ -41,7 +41,7 @@ namespace GWA3::DialogMgr {
     uint32_t GetButtonCount();
 
     // Get a dialog button by index (0-based). Returns nullptr if out of range.
-    const DialogButton* GetButton(uint32_t index);
+    bool GetButton(uint32_t index, DialogButton& out);
 
     // Clear the current dialog state (called when dialog closes).
     void ClearDialog();

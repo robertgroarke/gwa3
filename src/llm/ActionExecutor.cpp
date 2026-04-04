@@ -79,7 +79,7 @@ namespace GWA3::LLM::ActionExecutor {
         float y = p["y"].get<float>();
         if (std::abs(x) > 100000 || std::abs(y) > 100000) return MakeError("coordinates_out_of_range");
         if (!MapMgr::GetIsMapLoaded()) return MakeError("map_not_loaded");
-        GWA3::GameThread::Enqueue([x, y]() { AgentMgr::Move(x, y); });
+        GWA3::GameThread::EnqueuePost([x, y]() { AgentMgr::Move(x, y); });
         return MakeOk();
     }
 
@@ -87,7 +87,7 @@ namespace GWA3::LLM::ActionExecutor {
         if (!p.contains("agent_id")) return MakeError("missing agent_id");
         uint32_t id = p["agent_id"].get<uint32_t>();
         if (!AgentMgr::GetAgentExists(id)) return MakeError("agent_not_found");
-        GWA3::GameThread::Enqueue([id]() { AgentMgr::ChangeTarget(id); });
+        GWA3::GameThread::EnqueuePost([id]() { AgentMgr::ChangeTarget(id); });
         return MakeOk();
     }
 
@@ -131,7 +131,7 @@ namespace GWA3::LLM::ActionExecutor {
         uint32_t target = p.value("target_agent_id", 0u);
         uint32_t callTarget = p.value("call_target", 0u);
         GWA3::GameThread::Enqueue([slot, target, callTarget]() {
-            SkillMgr::UseSkill(slot, target, callTarget);
+            SkillMgr::UseSkill(slot + 1, target, callTarget); // slot+1: LLM uses 0-based, UseSkill expects 1-based
         });
         return MakeOk();
     }
