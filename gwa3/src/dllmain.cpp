@@ -181,10 +181,11 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     bool npcDialogTest = CheckFlag("GWA3_TEST_NPC_DIALOG", "gwa3_test_npc_dialog.flag");
     bool merchantQuoteTest = CheckFlag("GWA3_TEST_MERCHANT_QUOTE", "gwa3_test_merchant_quote.flag");
     bool advancedTest = CheckFlag("GWA3_TEST_ADVANCED", "gwa3_test_advanced.flag");
+    bool workflowTest = CheckFlag("GWA3_TEST_WORKFLOW", "gwa3_test_workflow.flag");
     bool llmMode = CheckFlag("GWA3_LLM_MODE", "gwa3_llm_mode.flag");
-    bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || advancedTest;
-    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d advanced=%d llm=%d",
-                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, advancedTest, llmMode);
+    bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || workflowTest;
+    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d advanced=%d workflow=%d llm=%d",
+                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, advancedTest, workflowTest, llmMode);
 
     HMODULE gwModule = GetModuleHandleA(nullptr);
     if (!GWA3::Scanner::Initialize(gwModule)) {
@@ -251,7 +252,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::Log::Warn("GameThread initialization failed — trying RenderHook fallback");
     }
 
-    if (integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || !anyTest) {
+    if (integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || workflowTest || !anyTest) {
         if (!gameThreadOk) {
             // Fallback: use old render hook if GameThread failed
             if (!GWA3::RenderHook::Initialize()) {
@@ -329,6 +330,13 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::Log::Info("=== ADVANCED INTEGRATION TEST MODE ===");
         int failures = GWA3::SmokeTest::RunAdvancedTest();
         GWA3::Log::Info("Advanced test complete: %d failures", failures);
+        return static_cast<DWORD>(failures);
+    }
+
+    if (workflowTest) {
+        GWA3::Log::Info("=== ADVANCED WORKFLOW TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunAdvancedWorkflowTest();
+        GWA3::Log::Info("Workflow test complete: %d failures", failures);
         return static_cast<DWORD>(failures);
     }
 

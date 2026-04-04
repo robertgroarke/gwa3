@@ -35,4 +35,9 @@ namespace GWA3::SmokeTest {
     // hard mode toggle, return-to-outpost, and more.
     int RunAdvancedTest();
 
+    // Run advanced workflow tests. Exercises item manipulation, salvage,
+    // skillbar management, party composition, titles, callbacks, StoC
+    // packet coverage, and other previously untested APIs.
+    int RunAdvancedWorkflowTest();
+
 } // namespace GWA3::SmokeTest
