@@ -2487,7 +2487,7 @@ Test the ActionExecutor's validation and error paths: rate limiting, unknown act
 | GWA3-058 | Title Progression Snapshot — EotN + Core Titles | S | 049 | `done` |
 | GWA3-059 | Map Loading 3-State — Not Loaded / Loaded / Disconnected | S | 005 | `done` |
 | GWA3-060 | Agent Name Decoding — Decode Encoded NPC/Player Names | M | 051, 005 | `done` |
-| GWA3-061 | Dialog Body Decoding — AsyncDecodeStr for Dialog Text | M | 051, 053 | `backlog` |
+| GWA3-061 | Dialog Body Decoding — AsyncDecodeStr for Dialog Text | M | 051, 053 | `done` |
 | GWA3-062 | Resign Action — Resign + Return to Outpost Combo | S | 010 | `done` |
 | GWA3-063 | Chest Interaction — Open Chest + Lockpick Support | S | 010, 016 | `done` |
 | GWA3-064 | Craft Item Action — Crafter NPC Transaction Flow | M | 010, 053 | `backlog` |
