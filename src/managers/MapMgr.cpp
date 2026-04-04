@@ -137,10 +137,19 @@ uint32_t GetInstanceTime() {
 }
 
 bool GetIsMapLoaded() {
-    // AutoIt: GetMapIsLoaded() = GetAgentExists(GetMyID())
-    // StatusCode offset is unreliable in GW Reforged
-    return GetMapId() > 0 && AgentMgr::GetMyId() > 0 &&
-           AgentMgr::GetAgentByID(AgentMgr::GetMyId()) != nullptr;
+    return GetLoadingState() == 1;
+}
+
+uint32_t GetLoadingState() {
+    // 0 = loading (map_id > 0 but agent not ready)
+    // 1 = loaded (map_id > 0 and agent exists)
+    // 2 = disconnected / no map (map_id == 0)
+    uint32_t mapId = GetMapId();
+    if (mapId == 0) return 2;
+    uint32_t myId = AgentMgr::GetMyId();
+    if (myId == 0) return 0;
+    if (AgentMgr::GetAgentByID(myId) == nullptr) return 0;
+    return 1;
 }
 
 // GameContext: *BasePointer → +0x18 → deref

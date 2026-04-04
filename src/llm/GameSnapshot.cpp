@@ -9,6 +9,7 @@
 #include <gwa3/managers/TradeMgr.h>
 #include <gwa3/managers/DialogMgr.h>
 #include <gwa3/managers/ChatLogMgr.h>
+#include <gwa3/managers/PlayerMgr.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/game/Agent.h>
@@ -149,6 +150,7 @@ namespace GWA3::LLM::GameSnapshot {
         json m;
         m["map_id"] = MapMgr::GetMapId();
         m["is_loaded"] = MapMgr::GetIsMapLoaded();
+        m["loading_state"] = MapMgr::GetLoadingState();  // 0=loading, 1=loaded, 2=disconnected
         m["instance_time"] = MapMgr::GetInstanceTime();
         m["region"] = MapMgr::GetRegion();
         m["district"] = MapMgr::GetDistrict();
@@ -600,6 +602,35 @@ namespace GWA3::LLM::GameSnapshot {
         return chatLog;
     }
 
+    // Build title progression for key titles
+    static json BuildTitlesJson() {
+        json titles = json::object();
+
+        struct TitleEntry { uint32_t id; const char* name; };
+        static const TitleEntry TRACKED_TITLES[] = {
+            {TitleID::Vanguard,    "vanguard"},
+            {TitleID::Norn,        "norn"},
+            {TitleID::Asura,       "asura"},
+            {TitleID::Deldrimor,   "deldrimor"},
+            {TitleID::Sunspear,    "sunspear"},
+            {TitleID::Lightbringer,"lightbringer"},
+            {TitleID::Survivor,    "survivor"},
+            {TitleID::KindOfABigDeal, "kind_of_a_big_deal"},
+        };
+
+        for (const auto& entry : TRACKED_TITLES) {
+            auto* track = PlayerMgr::GetTitleTrack(entry.id);
+            if (!track) continue;
+            json t;
+            t["current_points"] = track->current_points;
+            t["current_rank"] = track->current_title_tier_index;
+            t["points_needed_next"] = track->points_needed_next_rank;
+            t["max_rank"] = track->max_title_rank;
+            titles[entry.name] = t;
+        }
+        return titles;
+    }
+
     char* SerializeTier1(uint32_t* outLength) {
         g_tick++;
         json j;
@@ -648,6 +679,7 @@ namespace GWA3::LLM::GameSnapshot {
         j["inventory"] = BuildInventoryJson();
         j["storage"] = BuildStorageJson();
         j["effects"] = BuildPlayerEffectsJson();
+        j["titles"] = BuildTitlesJson();
         return JsonToHeap(j, outLength);
     }
 

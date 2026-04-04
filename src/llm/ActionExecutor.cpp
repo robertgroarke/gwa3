@@ -423,6 +423,14 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
+    static ActionResult HandleResign(const json&) {
+        wchar_t msg[] = L"/resign";
+        GWA3::GameThread::Enqueue([msg]() {
+            ChatMgr::SendChat(msg, L'/');
+        });
+        return MakeOk();
+    }
+
     static ActionResult HandleWait(const json& p) {
         // Wait is a no-op on the C++ side — the bridge handles timing
         (void)p;
@@ -492,6 +500,7 @@ namespace GWA3::LLM::ActionExecutor {
         // Utility
         g_dispatch["send_chat"] = HandleSendChat;
         g_dispatch["drop_gold"] = HandleDropGold;
+        g_dispatch["resign"] = HandleResign;
         g_dispatch["wait"] = HandleWait;
 
         GWA3::Log::Info("[LLM-Action] Initialized with %u actions", static_cast<uint32_t>(g_dispatch.size()));

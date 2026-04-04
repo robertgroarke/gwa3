@@ -31,6 +31,9 @@ namespace GWA3::MapMgr {
     bool GetIsObserving();
     bool GetIsInCinematic();
 
+    // 3-state loading: 0=loading/not loaded, 1=loaded, 2=disconnected/no map
+    uint32_t GetLoadingState();
+
     // Area info
     const AreaInfo* GetAreaInfo(uint32_t mapId);
 
