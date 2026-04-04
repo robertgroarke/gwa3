@@ -135,6 +135,172 @@ static DWORD s_runStartTime = 0;
 static DWORD s_totalStartTime = 0;
 static DWORD s_bestRunTime = 0xFFFFFFFF;
 
+// ===== Forward declarations =====
+static int PickupNearbyLoot(float maxRange = 1200.0f);
+static bool OpenNearbyChest(float maxRange = 1200.0f);
+
+// ===== Skill System (GWA3-097) =====
+
+// Skill type classification (from Skill::type)
+enum SkillCategory {
+    CAT_UNKNOWN     = 0,
+    CAT_OFFENSIVE   = 1,  // Hexes, damage spells, attacks
+    CAT_DEFENSIVE   = 2,  // Heals, prots, enchants on self
+    CAT_UTILITY     = 3,  // Stances, shouts, preparations
+    CAT_INTERRUPT   = 4,  // Fast-cast skills usable as interrupts
+};
+
+struct CachedSkill {
+    uint32_t skill_id;
+    uint8_t  slot;         // 0-7
+    uint8_t  target_type;  // from Skill::target (0=self, 3=ally, 5=foe, 6=dead)
+    uint8_t  energy_cost;
+    float    activation;
+    SkillCategory category;
+};
+
+static CachedSkill s_skillCache[8] = {};
+static bool s_skillsCached = false;
+
+static void CacheSkillBar() {
+    s_skillsCached = false;
+    auto* bar = SkillMgr::GetPlayerSkillbar();
+    if (!bar) return;
+
+    for (int i = 0; i < 8; i++) {
+        auto& c = s_skillCache[i];
+        c.skill_id = bar->skills[i].skill_id;
+        c.slot = static_cast<uint8_t>(i);
+        c.category = CAT_UNKNOWN;
+        c.target_type = 0;
+        c.energy_cost = 0;
+        c.activation = 0;
+
+        if (c.skill_id == 0) continue;
+
+        const auto* data = SkillMgr::GetSkillConstantData(c.skill_id);
+        if (!data) continue;
+
+        c.target_type = data->target;
+        c.energy_cost = data->energy_cost;
+        c.activation = data->activation;
+
+        // Categorize by type
+        switch (data->type) {
+        case 1:  // Hex
+        case 2:  // Spell (damage)
+        case 5:  // Well
+        case 7:  // Ward
+            c.category = (data->target == 5 || data->target == 0) ? CAT_OFFENSIVE : CAT_DEFENSIVE;
+            break;
+        case 3:  // Enchantment
+        case 16: // Flash Enchantment
+            c.category = (data->target == 5) ? CAT_OFFENSIVE : CAT_DEFENSIVE;
+            break;
+        case 0:  // Stance
+        case 8:  // Glyph
+        case 10: // Shout
+        case 11: // Preparation
+        case 20: // Chant
+            c.category = CAT_UTILITY;
+            break;
+        case 4:  // Signet
+            c.category = (data->target == 5) ? CAT_OFFENSIVE : CAT_DEFENSIVE;
+            break;
+        case 9:  // Attack skill
+        case 17: // Double Attack
+            c.category = CAT_OFFENSIVE;
+            break;
+        case 6:  // Skill (generic)
+            // Fast activation + targets foe = potential interrupt
+            if (data->activation <= 0.25f && data->target == 5) {
+                c.category = CAT_INTERRUPT;
+            } else if (data->target == 5) {
+                c.category = CAT_OFFENSIVE;
+            } else {
+                c.category = CAT_UTILITY;
+            }
+            break;
+        case 12: // Trap
+        case 13: // Ritual
+        case 14: // Item Spell
+        case 15: // Weapon Spell
+            c.category = (data->target == 5) ? CAT_OFFENSIVE : CAT_DEFENSIVE;
+            break;
+        default:
+            c.category = CAT_UTILITY;
+            break;
+        }
+    }
+    s_skillsCached = true;
+    LogBot("Skillbar cached: %u/%u/%u/%u/%u/%u/%u/%u",
+           s_skillCache[0].skill_id, s_skillCache[1].skill_id,
+           s_skillCache[2].skill_id, s_skillCache[3].skill_id,
+           s_skillCache[4].skill_id, s_skillCache[5].skill_id,
+           s_skillCache[6].skill_id, s_skillCache[7].skill_id);
+}
+
+// Try to use a skill from the cache. Returns true if a skill was used.
+static bool TryUseSkill(uint32_t targetId, SkillCategory preferredCat) {
+    auto* bar = SkillMgr::GetPlayerSkillbar();
+    auto* me = AgentMgr::GetMyAgent();
+    if (!bar || !me) return false;
+
+    float myEnergy = me->energy * me->max_energy; // absolute energy points
+
+    for (int i = 0; i < 8; i++) {
+        auto& c = s_skillCache[i];
+        if (c.skill_id == 0) continue;
+        if (c.category != preferredCat) continue;
+        if (bar->skills[i].recharge > 0) continue; // still recharging
+        if (c.energy_cost > static_cast<uint8_t>(myEnergy)) continue; // not enough energy
+
+        // Determine target for this skill
+        uint32_t skillTarget = 0;
+        if (c.target_type == 5) {
+            skillTarget = targetId; // targets foe
+        } else if (c.target_type == 3) {
+            skillTarget = me->agent_id; // targets ally (self)
+        }
+        // target_type 0 = no target needed
+
+        SkillMgr::UseSkill(i + 1, skillTarget, 0);
+        return true;
+    }
+    return false;
+}
+
+// Full combat routine: use skills then fall back to auto-attack
+static void FightTarget(uint32_t targetId) {
+    if (!s_skillsCached) CacheSkillBar();
+
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return;
+
+    // Priority 1: If HP low, use defensive skill
+    if (me->hp < 0.3f) {
+        TryUseSkill(targetId, CAT_DEFENSIVE);
+    }
+
+    // Priority 2: Use utility (stances, shouts, buffs) if not already buffed
+    TryUseSkill(targetId, CAT_UTILITY);
+
+    // Priority 3: Check if target is casting — try interrupt
+    auto* target = AgentMgr::GetAgentByID(targetId);
+    if (target && target->type == 0xDB) {
+        auto* living = static_cast<AgentLiving*>(target);
+        if (living->skill != 0) {
+            TryUseSkill(targetId, CAT_INTERRUPT);
+        }
+    }
+
+    // Priority 4: Offensive skills
+    if (!TryUseSkill(targetId, CAT_OFFENSIVE)) {
+        // No offensive skills ready — auto-attack
+        AgentMgr::Attack(targetId);
+    }
+}
+
 // ===== Helpers =====
 
 static float DistanceTo(float x, float y) {
@@ -209,9 +375,20 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
             }
             if (bestId) {
                 AgentMgr::ChangeTarget(bestId);
-                AgentMgr::Attack(bestId);
-                // Wait for combat to resolve
-                WaitMs(1000);
+                FightTarget(bestId);
+                // Brief wait for skill activation
+                WaitMs(500);
+                // Continue fighting if enemy still alive
+                auto* foe = AgentMgr::GetAgentByID(bestId);
+                if (foe && foe->type == 0xDB) {
+                    auto* living = static_cast<AgentLiving*>(foe);
+                    if (living->hp > 0.0f) {
+                        WaitMs(500);
+                        continue; // keep fighting same target
+                    }
+                }
+                // Enemy dead or gone — pick up loot
+                PickupNearbyLoot(600.0f);
                 continue;
             }
         }
@@ -260,8 +437,9 @@ static void FollowWaypoints(const Waypoint* wps, int count) {
         }
         if (strcmp(wps[i].label, "Dungeon Key") == 0) {
             AggroMoveToEx(wps[i].x, wps[i].y, wps[i].fightRange);
-            // Pickup with large radius
+            // Pickup dungeon key + any loot in area
             WaitMs(500);
+            PickupNearbyLoot(1200.0f);
             continue;
         }
         if (strcmp(wps[i].label, "Dungeon Door") == 0) {
@@ -275,9 +453,12 @@ static void FollowWaypoints(const Waypoint* wps, int count) {
             AggroMoveToEx(wps[i].x, wps[i].y, wps[i].fightRange);
             // Boss encounter — fight then loot
             WaitMs(3000);
+            PickupNearbyLoot(1500.0f);
             // Open chest
             MoveToAndWait(14876, -19033);
-            WaitMs(5000);
+            OpenNearbyChest(1000.0f);
+            WaitMs(2000);
+            PickupNearbyLoot(1000.0f);
             // Talk to Tekk for reward
             MoveToAndWait(14618, -17828);
             QuestMgr::Dialog(DIALOG_QUEST_REWARD);
@@ -287,9 +468,10 @@ static void FollowWaypoints(const Waypoint* wps, int count) {
             return;
         }
 
-        // Standard waypoint — aggro move
+        // Standard waypoint — aggro move then loot sweep
         if (wps[i].fightRange > 0 && IsMapLoaded()) {
             AggroMoveToEx(wps[i].x, wps[i].y, wps[i].fightRange);
+            PickupNearbyLoot(800.0f);
         } else {
             MoveToAndWait(wps[i].x, wps[i].y);
         }
@@ -336,6 +518,139 @@ static constexpr uint32_t MODEL_GRAIL_MIGHT  = 5902;  // Grail of Might (conset)
 static constexpr uint32_t MODEL_BIRTHDAY_CUPCAKE  = 22269;
 static constexpr uint32_t MODEL_SLICE_BIRTHDAY     = 28436;
 static constexpr uint32_t MODEL_CANDY_CORN         = 28431;
+
+// ===== Loot Pickup (GWA3-098) =====
+
+// Model IDs that should always be picked up regardless of rarity
+static bool IsAlwaysPickupModel(uint32_t modelId) {
+    switch (modelId) {
+    // Ectoplasm, obsidian
+    case 930: case 945:
+    // Diamonds, rubies, sapphires, onyx
+    case 935: case 936: case 937: case 938:
+    // DP removal sweets
+    case 22269: case 28436: case 28431:
+    // Lockpicks
+    case 22751:
+    // Tomes (all professions)
+    case 21796: case 21797: case 21798: case 21799: case 21800:
+    case 21801: case 21802: case 21803: case 21804: case 21805:
+        return true;
+    }
+    return false;
+}
+
+static bool ShouldPickUp(const Agent* agent, uint32_t myAgentId) {
+    if (!agent || agent->type != 0x400) return false;
+    auto* itemAgent = static_cast<const AgentItem*>(agent);
+
+    // Don't pick up items reserved for other players
+    if (itemAgent->owner != 0 && itemAgent->owner != myAgentId) return false;
+
+    // Cross-reference with actual item data
+    auto* item = ItemMgr::GetItemById(itemAgent->item_id);
+    if (!item) return true; // Can't read item data — pick up anyway
+
+    // Always pick up whitelisted models
+    if (IsAlwaysPickupModel(item->model_id)) return true;
+
+    uint16_t rarity = GetItemRarity(item);
+
+    // Always pick up gold and green rarity
+    if (rarity == RARITY_GOLD || rarity == RARITY_GREEN) return true;
+
+    // Pick up purple if we have space
+    if (rarity == RARITY_PURPLE) return true;
+
+    // Skip white and blue (not worth the time unless it's a material)
+    if (item->type == 11) return true; // Materials always
+
+    return false;
+}
+
+static int PickupNearbyLoot(float maxRange) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return 0;
+    uint32_t myId = me->agent_id;
+
+    // Check free slots
+    auto* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+    uint32_t freeSlots = 0;
+    for (int b = 1; b <= 4; b++) {
+        auto* bag = ItemMgr::GetBag(b);
+        if (!bag) continue;
+        freeSlots += (bag->items.size > bag->items_count) ? (bag->items.size - bag->items_count) : 0;
+    }
+    if (freeSlots == 0) return 0;
+
+    int picked = 0;
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1; i < maxAgents && freeSlots > 0; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0x400) continue;
+        float dist = AgentMgr::GetDistance(me->x, me->y, a->x, a->y);
+        if (dist > maxRange) continue;
+        if (!ShouldPickUp(a, myId)) continue;
+
+        // Move close enough to pick up
+        if (dist > 200.0f) {
+            AgentMgr::Move(a->x, a->y);
+            DWORD start = GetTickCount();
+            while (AgentMgr::GetDistance(me->x, me->y, a->x, a->y) > 200.0f &&
+                   (GetTickCount() - start) < 5000) {
+                WaitMs(100);
+                me = AgentMgr::GetMyAgent();
+                if (!me || IsDead()) return picked;
+            }
+        }
+
+        ItemMgr::PickUpItem(a->agent_id);
+        WaitMs(300);
+        picked++;
+        freeSlots--;
+        me = AgentMgr::GetMyAgent(); // refresh after pickup
+        if (!me) return picked;
+    }
+    return picked;
+}
+
+// Known chest gadget IDs
+static bool IsChestGadgetId(uint32_t gadgetId) {
+    return gadgetId == 6062 || gadgetId == 4579 || gadgetId == 4582 ||
+           gadgetId == 8141 || gadgetId == 74 || gadgetId == 68 || gadgetId == 9157;
+}
+
+static bool OpenNearbyChest(float maxRange) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return false;
+
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0x200) continue;
+        float dist = AgentMgr::GetDistance(me->x, me->y, a->x, a->y);
+        if (dist > maxRange) continue;
+
+        auto* gadget = static_cast<const AgentGadget*>(a);
+        if (!IsChestGadgetId(gadget->gadget_id)) continue;
+
+        LogBot("Opening chest (agent=%u gadget=%u dist=%.0f)", a->agent_id, gadget->gadget_id, dist);
+
+        // Move to chest
+        if (dist > 200.0f) {
+            MoveToAndWait(a->x, a->y, 200.0f);
+        }
+
+        AgentMgr::InteractSignpost(a->agent_id);
+        WaitMs(2000);
+
+        // Pick up any drops from chest
+        PickupNearbyLoot(800.0f);
+        return true;
+    }
+    return false;
+}
 
 static bool ShouldSellItem(const Item* item) {
     if (!item || item->item_id == 0 || item->model_id == 0) return false;
@@ -690,6 +1005,9 @@ BotState HandleTownSetup(BotConfig& cfg) {
         WaitMs(100);
     }
 
+    // Cache player skillbar for combat
+    CacheSkillBar();
+
     return BotState::Traveling;
 }
 
@@ -893,15 +1211,15 @@ void Register() {
     Bot::RegisterStateHandler(BotState::Maintenance, HandleMaintenance);
     Bot::RegisterStateHandler(BotState::Error, HandleError);
 
-    // Default hero config (Standard.txt heroes)
+    // Default hero config for the BEASTRIT account ("Mercs" profile in GWA Censured/hero_configs/Mercs.txt)
     auto& cfg = Bot::GetConfig();
-    cfg.hero_ids[0] = 25; // Xandra
+    cfg.hero_ids[0] = 30; // Mercenary 3
     cfg.hero_ids[1] = 14; // Olias
     cfg.hero_ids[2] = 21; // Livia
     cfg.hero_ids[3] = 4;  // Master of Whispers
     cfg.hero_ids[4] = 24; // Gwen
     cfg.hero_ids[5] = 15; // Norgu
-    cfg.hero_ids[6] = 1;  // Razah
+    cfg.hero_ids[6] = 29; // Mercenary 2
     cfg.hard_mode = true;
     cfg.target_map_id = MAP_BOGROOT_LVL1;
     cfg.outpost_map_id = MAP_GADDS_ENCAMPMENT;
