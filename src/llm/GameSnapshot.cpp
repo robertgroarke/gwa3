@@ -10,6 +10,7 @@
 #include <gwa3/managers/DialogMgr.h>
 #include <gwa3/managers/ChatLogMgr.h>
 #include <gwa3/managers/PlayerMgr.h>
+#include <gwa3/managers/QuestMgr.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/game/Agent.h>
@@ -706,6 +707,72 @@ namespace GWA3::LLM::GameSnapshot {
         return titles;
     }
 
+    // Build quest state: active quest + quest log summary
+    static json BuildQuestJson() {
+        json q;
+        uint32_t activeId = QuestMgr::GetActiveQuestId();
+        q["active_quest_id"] = activeId;
+
+        uint32_t logSize = QuestMgr::GetQuestLogSize();
+        q["quest_log_size"] = logSize;
+
+        // Active quest details
+        if (activeId != 0) {
+            Quest* active = QuestMgr::GetQuestById(activeId);
+            if (active) {
+                json aq;
+                aq["quest_id"] = active->quest_id;
+                aq["log_state"] = active->log_state;
+                aq["is_completed"] = (active->log_state & 0x02) != 0;
+                aq["is_primary"] = (active->log_state & 0x20) != 0;
+                aq["map_from"] = active->map_from;
+                aq["map_to"] = active->map_to;
+                aq["marker_x"] = active->marker_x;
+                aq["marker_y"] = active->marker_y;
+
+                // Convert encoded name/objectives to UTF-8 if available
+                if (active->name && active->name[0]) {
+                    char buf[256] = {};
+                    WideCharToMultiByte(CP_UTF8, 0, active->name, -1, buf, sizeof(buf) - 1, nullptr, nullptr);
+                    aq["name"] = buf;
+                }
+                if (active->objectives && active->objectives[0]) {
+                    char buf[512] = {};
+                    WideCharToMultiByte(CP_UTF8, 0, active->objectives, -1, buf, sizeof(buf) - 1, nullptr, nullptr);
+                    aq["objectives"] = buf;
+                }
+                if (active->description && active->description[0]) {
+                    char buf[512] = {};
+                    WideCharToMultiByte(CP_UTF8, 0, active->description, -1, buf, sizeof(buf) - 1, nullptr, nullptr);
+                    aq["description"] = buf;
+                }
+                q["active_quest"] = aq;
+            }
+        }
+
+        // Quest log summary (IDs + completion state)
+        json log = json::array();
+        for (uint32_t i = 0; i < logSize && i < 32; i++) {
+            Quest* quest = QuestMgr::GetQuestByIndex(i);
+            if (!quest || quest->quest_id == 0) continue;
+            json entry;
+            entry["quest_id"] = quest->quest_id;
+            entry["log_state"] = quest->log_state;
+            entry["is_completed"] = (quest->log_state & 0x02) != 0;
+            entry["map_from"] = quest->map_from;
+            entry["map_to"] = quest->map_to;
+            if (quest->name && quest->name[0]) {
+                char buf[128] = {};
+                WideCharToMultiByte(CP_UTF8, 0, quest->name, -1, buf, sizeof(buf) - 1, nullptr, nullptr);
+                entry["name"] = buf;
+            }
+            log.push_back(entry);
+        }
+        q["quest_log"] = log;
+
+        return q;
+    }
+
     char* SerializeTier1(uint32_t* outLength) {
         g_tick++;
         json j;
@@ -733,6 +800,7 @@ namespace GWA3::LLM::GameSnapshot {
         j["heroes"] = BuildHeroSkillbarsJson();
         j["dialog"] = BuildDialogJson();
         j["merchant"] = BuildMerchantJson();
+        j["quests"] = BuildQuestJson();
         j["chat"] = BuildChatLogJson();
         return JsonToHeap(j, outLength);
     }
@@ -751,6 +819,7 @@ namespace GWA3::LLM::GameSnapshot {
         j["heroes"] = BuildHeroSkillbarsJson();
         j["dialog"] = BuildDialogJson();
         j["merchant"] = BuildMerchantJson();
+        j["quests"] = BuildQuestJson();
         j["inventory"] = BuildInventoryJson();
         j["storage"] = BuildStorageJson();
         j["effects"] = BuildPlayerEffectsJson();

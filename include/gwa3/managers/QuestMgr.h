@@ -18,4 +18,10 @@ namespace GWA3::QuestMgr {
     // Cinematic
     void SkipCinematic();
 
+    // Quest state reading (WorldContext + 0x528 / 0x52C)
+    uint32_t GetActiveQuestId();
+    Quest* GetQuestById(uint32_t questId);
+    Quest* GetQuestByIndex(uint32_t index);
+    uint32_t GetQuestLogSize();
+
 } // namespace GWA3::QuestMgr
