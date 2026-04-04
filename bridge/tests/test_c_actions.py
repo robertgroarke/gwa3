@@ -418,3 +418,102 @@ async def test_send_chat_success(tc: BridgeTestCase):
 async def test_wait_success(tc: BridgeTestCase):
     result = await tc.send_action("wait", {"milliseconds": 100})
     tc.assert_action_success(result)
+
+
+# ============================================================
+# C13: Craft item (GWA3-092)
+# ============================================================
+
+async def test_craft_item_missing_id(tc: BridgeTestCase):
+    result = await tc.send_action("craft_item", {})
+    tc.assert_action_error(result, "missing item_id")
+
+
+async def test_craft_item_success_with_merchant(tc: BridgeTestCase):
+    """If merchant/crafter window is open, craft_item should succeed."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    merchant = snap.get("merchant", {})
+    if not merchant.get("is_open"):
+        tc.skip("No merchant/crafter window open")
+    items = merchant.get("items", [])
+    if not items:
+        tc.skip("No items available in merchant window")
+    result = await tc.send_action("craft_item", {"item_id": items[0]["item_id"], "quantity": 1})
+    tc.assert_action_success(result)
+
+
+async def test_transact_items_craft_type(tc: BridgeTestCase):
+    """transact_items with type=3 (CrafterBuy) should accept valid params."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    merchant = snap.get("merchant", {})
+    if not merchant.get("is_open"):
+        tc.skip("No merchant window open")
+    items = merchant.get("items", [])
+    if not items:
+        tc.skip("No items in merchant list")
+    result = await tc.send_action("transact_items", {
+        "type": 3, "quantity": 1, "item_id": items[0]["item_id"]
+    })
+    tc.assert_action_success(result)
+
+
+# ============================================================
+# C14: Resign action (GWA3-093)
+# ============================================================
+
+async def test_resign_success(tc: BridgeTestCase):
+    """Resign action should succeed (sends /resign chat)."""
+    result = await tc.send_action("resign", {})
+    tc.assert_action_success(result)
+
+
+# ============================================================
+# C15: Set bot state (GWA3-093, GWA3-096)
+# ============================================================
+
+async def test_set_bot_state_missing(tc: BridgeTestCase):
+    result = await tc.send_action("set_bot_state", {})
+    tc.assert_action_error(result, "missing state")
+
+
+async def test_set_bot_state_unknown(tc: BridgeTestCase):
+    result = await tc.send_action("set_bot_state", {"state": "nonexistent_state"})
+    tc.assert_action_error(result, "unknown_state")
+
+
+async def test_set_bot_state_idle(tc: BridgeTestCase):
+    """set_bot_state to idle should succeed."""
+    result = await tc.send_action("set_bot_state", {"state": "idle"})
+    tc.assert_action_success(result)
+
+
+async def test_set_bot_state_llm_controlled(tc: BridgeTestCase):
+    """set_bot_state to llm_controlled should succeed."""
+    result = await tc.send_action("set_bot_state", {"state": "llm_controlled"})
+    tc.assert_action_success(result)
+
+
+async def test_set_bot_state_reflects_in_snapshot(tc: BridgeTestCase):
+    """After set_bot_state, the bot.state field in snapshot should change."""
+    result = await tc.send_action("set_bot_state", {"state": "maintenance"})
+    tc.assert_action_success(result)
+
+    def check(snap):
+        return snap.get("bot", {}).get("state") == "maintenance"
+
+    try:
+        await tc.wait_for_state_change(check, tier=1, timeout=5.0)
+    finally:
+        # Restore to idle
+        await tc.send_action("set_bot_state", {"state": "idle"})
+
+
+async def test_set_bot_state_all_valid_states(tc: BridgeTestCase):
+    """All valid state names should be accepted."""
+    valid = ["idle", "in_town", "traveling", "in_dungeon", "looting",
+             "merchant", "maintenance", "llm_controlled"]
+    for state in valid:
+        result = await tc.send_action("set_bot_state", {"state": state})
+        tc.assert_action_success(result)
+    # Restore
+    await tc.send_action("set_bot_state", {"state": "idle"})
