@@ -27,7 +27,7 @@ cmake -B build -A Win32
 cmake --build build --config Release
 ```
 
-Output: `build/Release/gwa3.dll`
+Output: `build/bin/Release/gwa3.dll`
 
 ## Usage
 
@@ -35,13 +35,13 @@ Inject the built DLL into a running Guild Wars client (`Gw.exe`) using the inclu
 
 ```bash
 # Inject into first found GW process
-tools/gwa3_inject.exe
+build/bin/Release/injector.exe
 
 # Inject into specific PID
-tools/gwa3_inject.exe --pid 12345
+build/bin/Release/injector.exe --pid 12345
 
 # List running GW clients
-tools/gwa3_inject.exe --list
+build/bin/Release/injector.exe --list
 ```
 
 ## Project Structure
@@ -70,10 +70,10 @@ Integration tests run inside the injected DLL and exercise the full API against 
 
 ```bash
 # Create flag file to trigger tests on next injection
-echo. > build/Release/gwa3_test_integration.flag
+touch build/bin/Release/gwa3_test_integration.flag
 
-# Inject — tests run automatically, results written to gwa3_integration_report.txt
-tools/gwa3_inject.exe
+# Or use the injector's --test-integ flag
+build/bin/Release/injector.exe --test-integ
 ```
 
 ## License
