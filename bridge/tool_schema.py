@@ -449,17 +449,35 @@ REQUEST_QUOTE = _tool(
 
 TRANSACT_ITEMS = _tool(
     "transact_items",
-    "Buy or sell items with a merchant. Type determines buy/sell.",
+    "Execute a transaction with an NPC merchant/crafter/trader. "
+    "Type: 1=merchant buy, 3=crafter buy (craft item), 11=merchant sell, "
+    "12=trader buy, 13=trader sell. "
+    "The item_id must come from the merchant.items list in the snapshot.",
     {
         "properties": {
             "type": {
                 "type": "integer",
-                "description": "Transaction type (1=buy, 2=sell)",
+                "description": "Transaction type: 1=merchant buy, 3=craft, 11=sell, 12=trader buy, 13=trader sell",
             },
-            "quantity": {"type": "integer", "description": "Quantity"},
-            "item_id": {"type": "integer", "description": "Item ID"},
+            "quantity": {"type": "integer", "description": "Quantity to transact"},
+            "item_id": {"type": "integer", "description": "Item ID from merchant item list"},
         },
         "required": ["type", "quantity", "item_id"],
+    },
+)
+
+CRAFT_ITEM = _tool(
+    "craft_item",
+    "Craft an item at a crafter NPC. Shorthand for transact_items with type=3. "
+    "Must have the crafter window open (merchant.is_open). "
+    "The item_id comes from merchant.items in the snapshot. "
+    "Requires sufficient gold and materials in inventory.",
+    {
+        "properties": {
+            "item_id": {"type": "integer", "description": "Item ID from crafter's item list"},
+            "quantity": {"type": "integer", "description": "Number to craft (default 1)"},
+        },
+        "required": ["item_id"],
     },
 )
 
@@ -546,10 +564,11 @@ ALL_TOOLS = [
     SALVAGE_DONE,
     # Skillbar
     LOAD_SKILLBAR,
-    # Trade
+    # Trade & Crafting
     BUY_MATERIALS,
     REQUEST_QUOTE,
     TRANSACT_ITEMS,
+    CRAFT_ITEM,
     # Utility
     SEND_CHAT,
     DROP_GOLD,
