@@ -74,9 +74,14 @@ class ObservationWindow:
         if m.get("map_id"):
             loading = m.get("loading_state", "?")
             load_str = {0: "loading", 1: "loaded", 2: "disconnected"}.get(loading, f"state={loading}")
+            vanquish = ""
+            fk = m.get("foes_killed")
+            ft = m.get("foes_to_kill")
+            if fk is not None and ft is not None and (fk > 0 or ft > 0):
+                vanquish = f" foes={fk}/{fk+ft}"
             lines.append(
                 f"Map: id={m['map_id']} {load_str} "
-                f"time={m.get('instance_time', 0)}ms"
+                f"time={m.get('instance_time', 0)}ms{vanquish}"
             )
 
         # Skillbar — show human-readable skill names
@@ -141,8 +146,10 @@ class ObservationWindow:
                     if foe.get("has_hex"): conditions.append("HEXED")
                     if foe.get("has_enchantment"): conditions.append("ENCHANTED")
                     cond_str = f" [{','.join(conditions)}]" if conditions else ""
+                    name = foe.get("name", "")
+                    name_str = f" \"{name}\"" if name else ""
                     lines.append(
-                        f"    id={foe['id']} dist={foe.get('distance', 0):.0f} "
+                        f"    id={foe['id']}{name_str} dist={foe.get('distance', 0):.0f} "
                         f"hp={foe.get('hp', 0):.0%} energy={foe.get('energy', 0):.0%} "
                         f"lv{foe.get('level', 0)} {prof}/{sec}"
                         f"{cond_str}{casting}"
@@ -162,6 +169,17 @@ class ObservationWindow:
                     lines.append(
                         f"    agent_id={it['id']} dist={it.get('distance', 0):.0f} "
                         f"{iname}{qty_str} [{itype}] model={model_id}{owner_str}"
+                    )
+
+            # List chests / interactive gadgets
+            gadgets = [a for a in agents if a.get("agent_type") == "gadget"]
+            chests = [g for g in gadgets if g.get("is_chest")]
+            if chests:
+                lines.append("  Chests:")
+                for ch in sorted(chests, key=lambda a: a.get("distance", 99999)):
+                    lines.append(
+                        f"    agent_id={ch['id']} dist={ch.get('distance', 0):.0f} "
+                        f"gadget_id={ch.get('gadget_id', '?')}"
                     )
 
         # Hero skillbars and casting (from tier 2+)
