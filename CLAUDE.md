@@ -30,6 +30,50 @@ This applies to ALL development actions without exception:
 
 If a remote is ever added, treat it as read-only unless the user explicitly says otherwise. Never configure or add git remotes without explicit instruction.
 
+## gwa3 GitHub Workflow (Subtree → PR)
+
+The `gwa3/` directory is a **git subtree** within this parent repo. The GitHub repo is at `https://github.com/robertgroarke/gwa3.git` with remote name `gwa3-origin`.
+
+### Creating a PR from local gwa3 changes
+
+1. **Commit all gwa3 changes** to the parent repo's current branch first.
+2. **Split the subtree** into a standalone branch:
+   ```bash
+   git subtree split --prefix=gwa3 -b gwa3-standalone-update
+   ```
+3. **Push the split branch** to GitHub as a feature branch:
+   ```bash
+   git push gwa3-origin gwa3-standalone-update:feature/my-branch-name
+   ```
+4. **Create the PR** using `gh pr create --repo robertgroarke/gwa3 --base main --head feature/my-branch-name`.
+
+### Addressing PR review comments
+
+You **cannot** edit gwa3 files directly from the parent repo and push to the PR branch. Instead:
+
+1. **Clone the gwa3 repo** to a temp directory:
+   ```bash
+   cd /tmp && git clone https://github.com/robertgroarke/gwa3.git gwa3-fix
+   ```
+2. **Checkout the PR branch**:
+   ```bash
+   cd /tmp/gwa3-fix && git fetch origin feature/my-branch && git checkout -b feature/my-branch FETCH_HEAD
+   ```
+3. **Make fixes, commit, and push** from that clone.
+
+### Rebasing a PR on updated main
+
+After merging another PR into main, rebase the feature branch:
+```bash
+cd /tmp/gwa3-fix && git fetch origin && git rebase origin/main && git push origin feature/my-branch --force
+```
+
+### Key facts
+- `gwa3-standalone` branch tracks the last subtree split state
+- The parent repo's `main` branch must **NEVER** be pushed to GitHub (contains credentials)
+- Only push gwa3 subtree splits to `gwa3-origin`
+- Force push is allowed on feature branches in the gwa3 repo (for rebases)
+
 ## Secrets & Credentials
 
 | File | Contains | Rules |
