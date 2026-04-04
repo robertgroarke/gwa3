@@ -145,6 +145,26 @@ namespace GWA3::LLM::GameSnapshot {
         return heroes;
     }
 
+    // SEH-safe vanquish counter reader
+    static bool ReadVanquishCounters(uint32_t& killed, uint32_t& toKill) {
+        killed = 0;
+        toKill = 0;
+        if (Offsets::BasePointer <= 0x10000) return false;
+        __try {
+            uintptr_t p0 = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+            if (p0 <= 0x10000) return false;
+            uintptr_t p1 = *reinterpret_cast<uintptr_t*>(p0 + 0x18);
+            if (p1 <= 0x10000) return false;
+            uintptr_t p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x2C);
+            if (p2 <= 0x10000) return false;
+            killed = *reinterpret_cast<uint32_t*>(p2 + 0x84C);
+            toKill = *reinterpret_cast<uint32_t*>(p2 + 0x850);
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
     // Build map info
     static json BuildMapJson() {
         json m;
@@ -162,6 +182,14 @@ namespace GWA3::LLM::GameSnapshot {
             m["map_type"] = area->type;
             m["campaign"] = area->campaign;
         }
+
+        // Vanquish progress (foes killed / foes to kill)
+        uint32_t foesKilled = 0, foesToKill = 0;
+        if (ReadVanquishCounters(foesKilled, foesToKill)) {
+            m["foes_killed"] = foesKilled;
+            m["foes_to_kill"] = foesToKill;
+        }
+
         return m;
     }
 
@@ -270,6 +298,16 @@ namespace GWA3::LLM::GameSnapshot {
                 a["hex"] = living->hex;
                 a["player_number"] = living->player_number;
 
+                // Name resolution: players have login_number > 0
+                if (living->login_number > 0) {
+                    wchar_t* wName = PlayerMgr::GetPlayerName(living->login_number);
+                    if (wName && wName[0]) {
+                        char nameUtf8[64] = {};
+                        WideCharToMultiByte(CP_UTF8, 0, wName, -1, nameUtf8, sizeof(nameUtf8) - 1, nullptr, nullptr);
+                        a["name"] = nameUtf8;
+                    }
+                }
+
                 // Casting state
                 uint32_t castingSkillId = static_cast<uint32_t>(living->skill);
                 a["is_casting"] = (castingSkillId != 0);
@@ -313,7 +351,19 @@ namespace GWA3::LLM::GameSnapshot {
                     }
                 }
             } else if (agent->type == 0x200) {
+                auto* gadget = reinterpret_cast<AgentGadget*>(agent);
                 a["agent_type"] = "gadget";
+                a["gadget_id"] = gadget->gadget_id;
+                a["extra_type"] = gadget->extra_type;
+                // Known chest gadget IDs
+                bool isChest = (gadget->gadget_id == 6062 ||  // Istani
+                                gadget->gadget_id == 4579 ||  // Shing Jea
+                                gadget->gadget_id == 4582 ||  // NM chest
+                                gadget->gadget_id == 8141 ||  // HM chest
+                                gadget->gadget_id == 74   ||  // Obsidian
+                                gadget->gadget_id == 68   ||  // Phantom
+                                gadget->gadget_id == 9157);   // Brotherhood
+                a["is_chest"] = isChest;
             } else if (agent->type == 0x400) {
                 auto* item = reinterpret_cast<AgentItem*>(agent);
                 a["agent_type"] = "item";
