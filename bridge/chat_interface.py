@@ -20,6 +20,8 @@ async def chat_input_loop(agent: AgentLoop):
     while True:
         try:
             line = await loop.run_in_executor(None, sys.stdin.readline)
+            if line == "":  # EOF
+                break
             line = line.strip()
             if not line:
                 continue

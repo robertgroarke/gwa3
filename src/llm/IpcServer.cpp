@@ -102,31 +102,34 @@ namespace GWA3::LLM::IpcServer {
             // Wait for a client to connect (blocking, but we check g_running periodically)
             OVERLAPPED ov = {};
             ov.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
-            ConnectNamedPipe(g_pipe, &ov);
+            BOOL connected = ConnectNamedPipe(g_pipe, &ov);
 
-            DWORD err = GetLastError();
-            if (err == ERROR_IO_PENDING) {
-                // Wait with timeout so we can check g_running
-                while (g_running.load()) {
-                    DWORD wait = WaitForSingleObject(ov.hEvent, 500);
-                    if (wait == WAIT_OBJECT_0) break;
-                }
-                if (!g_running.load()) {
-                    CancelIo(g_pipe);
+            if (connected) {
+                // Synchronous success — client already connected
+            } else {
+                DWORD err = GetLastError();
+                if (err == ERROR_IO_PENDING) {
+                    // Wait with timeout so we can check g_running
+                    while (g_running.load()) {
+                        DWORD wait = WaitForSingleObject(ov.hEvent, 500);
+                        if (wait == WAIT_OBJECT_0) break;
+                    }
+                    if (!g_running.load()) {
+                        CancelIo(g_pipe);
+                        CloseHandle(ov.hEvent);
+                        CloseHandle(g_pipe);
+                        g_pipe = INVALID_HANDLE_VALUE;
+                        break;
+                    }
+                } else if (err != ERROR_PIPE_CONNECTED) {
+                    GWA3::Log::Error("[LLM-IPC] ConnectNamedPipe failed: %u", err);
                     CloseHandle(ov.hEvent);
                     CloseHandle(g_pipe);
                     g_pipe = INVALID_HANDLE_VALUE;
-                    break;
+                    Sleep(500);
+                    continue;
                 }
-            } else if (err != ERROR_PIPE_CONNECTED && err != 0) {
-                GWA3::Log::Error("[LLM-IPC] ConnectNamedPipe failed: %u", err);
-                CloseHandle(ov.hEvent);
-                CloseHandle(g_pipe);
-                g_pipe = INVALID_HANDLE_VALUE;
-                Sleep(500);
-                continue;
             }
-
             CloseHandle(ov.hEvent);
             g_clientConnected.store(true);
             GWA3::Log::Info("[LLM-IPC] Client connected");
