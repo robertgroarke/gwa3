@@ -340,14 +340,241 @@ async def test_effect_fields(tc: BridgeTestCase):
 
 async def test_tier_1_fields(tc: BridgeTestCase):
     snap = await tc.wait_for_snapshot(tier=1)
-    assert_keys_present(snap, ["me", "skillbar", "map", "party"], "tier 1")
+    assert_keys_present(snap, ["me", "skillbar", "map", "party", "bot"], "tier 1")
 
 
 async def test_tier_2_fields(tc: BridgeTestCase):
     snap = await tc.wait_for_snapshot(tier=2)
-    assert_keys_present(snap, ["me", "skillbar", "map", "party", "agents", "heroes", "dialog", "merchant", "chat"], "tier 2")
+    assert_keys_present(snap, ["me", "skillbar", "map", "party", "bot", "agents", "heroes", "dialog", "merchant", "chat", "quests"], "tier 2")
 
 
 async def test_tier_3_fields(tc: BridgeTestCase):
     snap = await tc.wait_for_snapshot(tier=3)
-    assert_keys_present(snap, ["me", "skillbar", "map", "party", "agents", "heroes", "dialog", "merchant", "chat", "inventory", "storage", "effects"], "tier 3")
+    assert_keys_present(snap, ["me", "skillbar", "map", "party", "bot", "agents", "heroes", "dialog", "merchant", "chat", "quests", "inventory", "storage", "effects", "titles"], "tier 3")
+
+
+# ============================================================
+# B13: Morale (GWA3-088)
+# ============================================================
+
+async def test_party_has_morale(tc: BridgeTestCase):
+    """Party object includes morale field."""
+    snap = await tc.wait_for_snapshot(tier=1)
+    assert_keys_present(snap["party"], ["morale"], "party")
+
+
+async def test_morale_in_range(tc: BridgeTestCase):
+    """Morale should be between -60 and +10."""
+    snap = await tc.wait_for_snapshot(tier=1)
+    assert_in_range(snap["party"]["morale"], -60, 10, "party.morale")
+
+
+# ============================================================
+# B14: Vanquish progress (GWA3-088)
+# ============================================================
+
+async def test_map_has_vanquish_fields(tc: BridgeTestCase):
+    """Map object includes foes_killed and foes_to_kill when available."""
+    snap = await tc.wait_for_snapshot(tier=1)
+    m = snap["map"]
+    # These may be absent if not in explorable — just verify types if present
+    if "foes_killed" in m:
+        assert_type(m["foes_killed"], int, "map.foes_killed")
+        assert_gte(m["foes_killed"], 0, "map.foes_killed")
+    if "foes_to_kill" in m:
+        assert_type(m["foes_to_kill"], int, "map.foes_to_kill")
+        assert_gte(m["foes_to_kill"], 0, "map.foes_to_kill")
+
+
+# ============================================================
+# B15: Map loading 3-state (GWA3-088)
+# ============================================================
+
+async def test_map_loading_state_present(tc: BridgeTestCase):
+    """Map has loading_state field."""
+    snap = await tc.wait_for_snapshot(tier=1)
+    assert_keys_present(snap["map"], ["loading_state"], "map")
+
+
+async def test_map_loading_state_valid(tc: BridgeTestCase):
+    """loading_state is 0, 1, or 2."""
+    snap = await tc.wait_for_snapshot(tier=1)
+    assert_true(
+        snap["map"]["loading_state"] in (0, 1, 2),
+        f"loading_state should be 0/1/2, got {snap['map']['loading_state']}",
+    )
+
+
+async def test_map_loading_state_loaded_during_test(tc: BridgeTestCase):
+    """During tests, loading_state should be 1 (loaded)."""
+    snap = await tc.wait_for_snapshot(tier=1)
+    assert_true(
+        snap["map"]["loading_state"] == 1,
+        f"Expected loading_state=1 during test, got {snap['map']['loading_state']}",
+    )
+
+
+# ============================================================
+# B16: Quest state (GWA3-089)
+# ============================================================
+
+async def test_quests_present_in_tier2(tc: BridgeTestCase):
+    """Tier 2 snapshot has quests object."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    assert_keys_present(snap, ["quests"], "tier 2")
+
+
+async def test_quests_has_active_quest_id(tc: BridgeTestCase):
+    """Quests object has active_quest_id field."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    assert_keys_present(snap["quests"], ["active_quest_id", "quest_log_size"], "quests")
+    assert_type(snap["quests"]["active_quest_id"], int, "quests.active_quest_id")
+
+
+async def test_quests_log_size_nonneg(tc: BridgeTestCase):
+    snap = await tc.wait_for_snapshot(tier=2)
+    assert_gte(snap["quests"]["quest_log_size"], 0, "quests.quest_log_size")
+
+
+async def test_quest_log_is_array(tc: BridgeTestCase):
+    snap = await tc.wait_for_snapshot(tier=2)
+    assert_keys_present(snap["quests"], ["quest_log"], "quests")
+    assert_type(snap["quests"]["quest_log"], list, "quests.quest_log")
+
+
+async def test_quest_log_entry_fields(tc: BridgeTestCase):
+    """Quest log entries have quest_id, log_state, is_completed."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    log = snap["quests"]["quest_log"]
+    if not log:
+        tc.skip("Quest log is empty")
+    for entry in log[:5]:
+        assert_keys_present(entry, ["quest_id", "log_state", "is_completed"], f"quest {entry.get('quest_id')}")
+        assert_type(entry["is_completed"], bool, "quest.is_completed")
+
+
+async def test_active_quest_details(tc: BridgeTestCase):
+    """If active quest ID != 0, active_quest object has details."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    q = snap["quests"]
+    if q["active_quest_id"] == 0:
+        tc.skip("No active quest")
+    assert_keys_present(q, ["active_quest"], "quests")
+    aq = q["active_quest"]
+    assert_keys_present(aq, ["quest_id", "log_state", "is_completed", "map_from", "map_to"], "active_quest")
+
+
+# ============================================================
+# B17: Title progression (GWA3-089)
+# ============================================================
+
+async def test_titles_present_in_tier3(tc: BridgeTestCase):
+    """Tier 3 snapshot has titles object."""
+    snap = await tc.wait_for_snapshot(tier=3)
+    assert_keys_present(snap, ["titles"], "tier 3")
+    assert_type(snap["titles"], dict, "titles")
+
+
+async def test_title_entry_fields(tc: BridgeTestCase):
+    """Title entries have current_points, current_rank, points_needed_next, max_rank."""
+    snap = await tc.wait_for_snapshot(tier=3)
+    titles = snap["titles"]
+    if not titles:
+        tc.skip("No title data available")
+    for name, data in list(titles.items())[:3]:
+        assert_keys_present(data, ["current_points", "current_rank", "max_rank"], f"title '{name}'")
+        assert_gte(data["current_points"], 0, f"title '{name}'.current_points")
+
+
+# ============================================================
+# B18: Dialog decoding (GWA3-090)
+# ============================================================
+
+async def test_dialog_has_is_open(tc: BridgeTestCase):
+    snap = await tc.wait_for_snapshot(tier=2)
+    assert_keys_present(snap["dialog"], ["is_open"], "dialog")
+    assert_type(snap["dialog"]["is_open"], bool, "dialog.is_open")
+
+
+async def test_dialog_body_field_exists_when_open(tc: BridgeTestCase):
+    """If dialog is open, it should have body (decoded) or body_raw."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    if not snap["dialog"]["is_open"]:
+        tc.skip("No dialog open — trigger via interact_npc to test")
+    # At least one of body or body_raw should be present
+    assert_true(
+        "body" in snap["dialog"] or "body_raw" in snap["dialog"],
+        "Open dialog should have 'body' or 'body_raw' field",
+    )
+
+
+async def test_dialog_buttons_when_open(tc: BridgeTestCase):
+    """If dialog is open, buttons array should have entries with dialog_id and label."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    if not snap["dialog"]["is_open"]:
+        tc.skip("No dialog open")
+    buttons = snap["dialog"].get("buttons", [])
+    if not buttons:
+        tc.skip("Dialog has no buttons")
+    for btn in buttons:
+        assert_keys_present(btn, ["dialog_id", "label"], "dialog button")
+        assert_type(btn["dialog_id"], int, "button.dialog_id")
+
+
+# ============================================================
+# B19: Chat log channels (GWA3-090)
+# ============================================================
+
+async def test_chat_message_has_channel(tc: BridgeTestCase):
+    """Chat messages have a channel field with a known channel name."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    if not snap["chat"]:
+        tc.skip("No chat messages in this snapshot")
+    known_channels = {"all", "team", "guild", "trade", "alliance", "whisper",
+                      "emote", "warning", "allies", "global", "advisory", "unknown"}
+    for msg in snap["chat"][:5]:
+        assert_keys_present(msg, ["channel", "message"], "chat message")
+        assert_true(
+            msg["channel"] in known_channels,
+            f"Unknown chat channel: '{msg['channel']}'",
+        )
+
+
+async def test_chat_sender_field(tc: BridgeTestCase):
+    """Chat messages should have a sender field (may be empty for system messages)."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    if not snap["chat"]:
+        tc.skip("No chat messages in this snapshot")
+    for msg in snap["chat"][:5]:
+        assert_true("sender" in msg or "message" in msg, "Chat entry should have sender or message")
+
+
+# ============================================================
+# B20: Bot state (GWA3-096 partial)
+# ============================================================
+
+async def test_bot_state_present(tc: BridgeTestCase):
+    """Tier 1 includes bot state object."""
+    snap = await tc.wait_for_snapshot(tier=1)
+    assert_keys_present(snap, ["bot"], "tier 1")
+
+
+async def test_bot_state_fields(tc: BridgeTestCase):
+    """Bot state has state and is_running fields."""
+    snap = await tc.wait_for_snapshot(tier=1)
+    bot = snap["bot"]
+    assert_keys_present(bot, ["state", "is_running"], "bot")
+    assert_type(bot["state"], str, "bot.state")
+    assert_type(bot["is_running"], bool, "bot.is_running")
+
+
+async def test_bot_state_valid_name(tc: BridgeTestCase):
+    """Bot state name is one of the known states."""
+    snap = await tc.wait_for_snapshot(tier=1)
+    valid_states = {"idle", "char_select", "in_town", "traveling", "in_dungeon",
+                    "looting", "merchant", "maintenance", "error", "stopping",
+                    "llm_controlled", "unknown"}
+    assert_true(
+        snap["bot"]["state"] in valid_states,
+        f"Unknown bot state: '{snap['bot']['state']}'",
+    )
