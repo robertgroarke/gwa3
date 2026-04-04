@@ -165,7 +165,7 @@ void ChangeTarget(uint32_t agentId) {
     }
 
     auto fn = s_changeTargetFn;
-    GameThread::Enqueue([fn, agentId]() {
+    GameThread::EnqueuePost([fn, agentId]() {
         fn(agentId, 0);
     });
 }
