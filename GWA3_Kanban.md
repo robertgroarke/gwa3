@@ -2826,7 +2826,7 @@ Quest accept and reward with retry logic. AutoIt retries dialog interactions if 
 | GWA3-100 | Salvage System (salvage kits, trophy/material salvage) | M | 018, 026 | `done` |
 | GWA3-101 | Hero Skillbar Loading (load from hero_configs/ files) | M | 017, 022, 026 | `done` |
 | GWA3-102 | Consumable Usage (consets, blessings, stones before runs) | M | 018, 026 | `done` |
-| GWA3-103 | Kit & Material Purchasing (buy ID kits, salvage kits) | M | 024, 026 | `backlog` |
+| GWA3-103 | Kit & Material Purchasing (buy ID kits, salvage kits) | M | 024, 026 | `done` |
 | GWA3-104 | Conset Crafting (Grail, Essence, Armor at Embark Beach) | L | 024, 026 | `backlog` |
 | GWA3-105 | Xunlai Chest Operations (deposit/withdraw items + gold) | M | 018, 026 | `backlog` |
 | GWA3-106 | Wipe Recovery (smart restart waypoints, morale-based DP) | M | 026 | `backlog` |
