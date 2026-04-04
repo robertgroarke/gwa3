@@ -143,6 +143,7 @@ static uint32_t CountItemByModel(uint32_t modelId);
 static void FlagAllHeroes(float x, float y);
 static void UnflagAllHeroes();
 static bool SendDialogWithRetry(uint32_t dialogId, int maxRetries = 3, DWORD delayMs = 1000);
+static void UseDpRemovalIfNeeded();
 
 // ===== Skill Template Decoder (GWA3-101) =====
 
@@ -550,20 +551,31 @@ static void FollowWaypoints(const Waypoint* wps, int count) {
         if (MapMgr::GetMapId() != mapId) return;
         if (IsDead()) {
             s_wipeCount++;
-            LogBot("WIPE detected at waypoint %d (%s)", i, wps[i].label);
-            // Wait for resurrection
+            LogBot("WIPE detected at waypoint %d (%s) — wipe #%u", i, wps[i].label, s_wipeCount);
+
+            // Wait for resurrection (up to 2 minutes)
             DWORD wipeStart = GetTickCount();
             while (IsDead() && (GetTickCount() - wipeStart) < 120000) {
                 WaitMs(500);
             }
             if (IsDead()) {
-                // Party defeated — return to outpost
+                // Party fully defeated — return to outpost
+                LogBot("Party defeated — returning to outpost");
                 MapMgr::ReturnToOutpost();
                 return;
             }
+
+            // Alive again — use DP removal if we've wiped multiple times
+            if (s_wipeCount >= 2) {
+                LogBot("Multiple wipes (%u) — using DP removal", s_wipeCount);
+                UseDpRemovalIfNeeded();
+                WaitMs(500);
+            }
+
             // Resume from nearest waypoint
-            i = GetNearestWaypointIndex(wps, count);
-            LogBot("Resuming from waypoint %d after wipe", i);
+            int restartIdx = GetNearestWaypointIndex(wps, count);
+            LogBot("Resuming from waypoint %d after wipe (was at %d)", restartIdx, i);
+            i = restartIdx;
         }
 
         LogBot("Moving to waypoint %d: %s (%.0f, %.0f)", i, wps[i].label, wps[i].x, wps[i].y);
@@ -1099,6 +1111,80 @@ static void SellJunkToMerchant() {
     LogBot("Sold %u items for ~%u gold", itemsSold, goldEarned);
 }
 
+// ===== Xunlai Chest Operations (GWA3-105) =====
+
+static constexpr float kGaddsXunlaiX = -10481.0f;
+static constexpr float kGaddsXunlaiY = -22787.0f;
+
+// Model IDs worth storing in Xunlai
+static bool ShouldStore(const Item* item) {
+    if (!item || item->item_id == 0) return false;
+    uint16_t rarity = GetItemRarity(item);
+    // Store ectos, gems, rare materials
+    switch (item->model_id) {
+    case 930:   // Glob of Ectoplasm
+    case 935: case 936: case 937: case 938:  // Diamond, Onyx, Ruby, Sapphire
+    case 945:   // Obsidian Shard
+        return true;
+    }
+    // Store green items
+    if (rarity == RARITY_GREEN) return true;
+    return false;
+}
+
+static void DepositValuablesToXunlai() {
+    // Move to Xunlai chest
+    LogBot("Moving to Xunlai chest...");
+    MoveToAndWait(kGaddsXunlaiX, kGaddsXunlaiY, 350.0f);
+    WaitMs(500);
+
+    // Find and interact with Xunlai NPC
+    uint32_t xunlaiId = FindNearestNpcByAllegiance(kGaddsXunlaiX, kGaddsXunlaiY, 900.0f);
+    if (!xunlaiId) {
+        LogBot("No Xunlai chest NPC found");
+        return;
+    }
+
+    auto* npc = AgentMgr::GetAgentByID(xunlaiId);
+    if (npc) {
+        MoveToAndWait(npc->x, npc->y, 120.0f);
+    }
+    CtoS::SendPacket(2, 0x38u, xunlaiId); // INTERACT_NPC
+    WaitMs(1500);
+
+    // Move valuable items from backpack (bags 1-4) to storage (bag 8 = first storage pane)
+    auto* inv = ItemMgr::GetInventory();
+    if (!inv) return;
+
+    int deposited = 0;
+    for (int b = 1; b <= 4; b++) {
+        auto* bag = ItemMgr::GetBag(b);
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t s = 0; s < bag->items.size; s++) {
+            auto* item = bag->items.buffer[s];
+            if (!item) continue;
+            if (!ShouldStore(item)) continue;
+
+            // Find a free slot in storage (bags 8-16)
+            for (int sb = 8; sb <= 16; sb++) {
+                auto* storageBag = ItemMgr::GetBag(sb);
+                if (!storageBag) continue;
+                if (storageBag->items_count < storageBag->items.size) {
+                    LogBot("Depositing item %u (model=%u) to storage bag %d",
+                           item->item_id, item->model_id, sb);
+                    ItemMgr::MoveItem(item->item_id, sb, storageBag->items_count);
+                    WaitMs(500);
+                    deposited++;
+                    break;
+                }
+            }
+        }
+    }
+    if (deposited > 0) {
+        LogBot("Deposited %d items to Xunlai storage", deposited);
+    }
+}
+
 // ===== Kit Purchasing (GWA3-103) =====
 
 static void BuyKitsIfNeeded() {
@@ -1210,6 +1296,101 @@ static bool HasConset() {
     return EffectMgr::HasEffect(myId, SKILL_ARMOR_OF_SALVATION) &&
            EffectMgr::HasEffect(myId, SKILL_ESSENCE_CELERITY) &&
            EffectMgr::HasEffect(myId, SKILL_GRAIL_OF_MIGHT);
+}
+
+// ===== Conset Crafting (GWA3-104) =====
+
+static constexpr uint32_t MAP_EMBARK_BEACH = 857;
+
+// Embark Beach crafter NPC coordinates
+static constexpr float kEyjaX = 3336.0f, kEyjaY = 627.0f;       // Grail of Might
+static constexpr float kKwatX = 3596.0f, kKwatY = 107.0f;       // Essence of Celerity
+static constexpr float kAlcusX = 3704.0f, kAlcusY = -163.0f;    // Armor of Salvation
+
+static void CraftConsetsIfNeeded() {
+    // Only craft if config says to use consets
+    auto& cfg = Bot::GetConfig();
+    if (!cfg.use_consets) return;
+
+    // Count current consets
+    uint32_t armor = CountItemByModel(MODEL_ARMOR_SALV);
+    uint32_t essence = CountItemByModel(MODEL_ESSENCE_CEL);
+    uint32_t grail = CountItemByModel(MODEL_GRAIL_MIGHT);
+
+    // Need at least 3 of each for a few runs
+    static constexpr uint32_t MIN_CONSETS = 3;
+    if (armor >= MIN_CONSETS && essence >= MIN_CONSETS && grail >= MIN_CONSETS) {
+        return; // Well stocked
+    }
+
+    LogBot("Consets low (armor=%u essence=%u grail=%u) — traveling to Embark Beach to craft",
+           armor, essence, grail);
+
+    // Travel to Embark Beach
+    MapMgr::Travel(MAP_EMBARK_BEACH);
+    DWORD travelStart = GetTickCount();
+    while (MapMgr::GetMapId() != MAP_EMBARK_BEACH && (GetTickCount() - travelStart) < 60000) {
+        WaitMs(1000);
+    }
+    if (MapMgr::GetMapId() != MAP_EMBARK_BEACH) {
+        LogBot("Failed to travel to Embark Beach for crafting");
+        return;
+    }
+    WaitMs(3000);
+
+    // Helper: interact with crafter NPC and craft
+    auto craftAt = [](float npcX, float npcY, uint32_t modelId, uint32_t count, const char* name) {
+        MoveToAndWait(npcX, npcY, 350.0f);
+        uint32_t npcId = FindNearestNpcByAllegiance(npcX, npcY, 900.0f);
+        if (!npcId) {
+            LogBot("Crafter NPC '%s' not found", name);
+            return;
+        }
+        auto* npc = AgentMgr::GetAgentByID(npcId);
+        if (npc) MoveToAndWait(npc->x, npc->y, 120.0f);
+
+        CtoS::SendPacket(2, 0x38u, npcId); // INTERACT_NPC
+        WaitMs(750);
+        CtoS::SendPacket(2, 0x3Bu, npcId); // Open crafter dialog
+        WaitMs(1000);
+
+        if (TradeMgr::GetMerchantItemCount() == 0) {
+            LogBot("Crafter window did not open for '%s'", name);
+            return;
+        }
+
+        // Find the item in the crafter's list
+        auto* item = TradeMgr::GetMerchantItemByModelId(modelId);
+        if (!item) {
+            LogBot("Item model %u not found in crafter list", modelId);
+            return;
+        }
+
+        for (uint32_t i = 0; i < count; i++) {
+            TradeMgr::TransactItems(3, 1, item->item_id); // type=3 = CrafterBuy
+            WaitMs(500 + ChatMgr::GetPing());
+        }
+        LogBot("Crafted %u x %s", count, name);
+    };
+
+    // Craft what's needed
+    if (grail < MIN_CONSETS) {
+        craftAt(kEyjaX, kEyjaY, MODEL_GRAIL_MIGHT, MIN_CONSETS - grail, "Grail of Might");
+    }
+    if (essence < MIN_CONSETS) {
+        craftAt(kKwatX, kKwatY, MODEL_ESSENCE_CEL, MIN_CONSETS - essence, "Essence of Celerity");
+    }
+    if (armor < MIN_CONSETS) {
+        craftAt(kAlcusX, kAlcusY, MODEL_ARMOR_SALV, MIN_CONSETS - armor, "Armor of Salvation");
+    }
+
+    // Travel back to Gadd's
+    MapMgr::Travel(MAP_GADDS_ENCAMPMENT);
+    DWORD returnStart = GetTickCount();
+    while (MapMgr::GetMapId() != MAP_GADDS_ENCAMPMENT && (GetTickCount() - returnStart) < 60000) {
+        WaitMs(1000);
+    }
+    WaitMs(3000);
 }
 
 // ===== Consumable Usage (GWA3-102) =====
@@ -1598,7 +1779,14 @@ BotState HandleMaintenance(BotConfig& cfg) {
     LogBot("Buffs: %u effects, blessing=%s, conset=%s",
            effectCount, hasBless ? "yes" : "no", hasCon ? "yes" : "no");
 
-    // If still critically low on slots after selling, log warning
+    // Deposit valuable items to Xunlai storage
+    DepositValuablesToXunlai();
+
+    // Craft consets if running low
+    CraftConsetsIfNeeded();
+
+    // If still critically low on slots after selling + depositing, log warning
+    freeSlots = CountFreeSlots();
     if (freeSlots < 3) {
         LogBot("WARNING: Critically low inventory space (%u slots). Consider manual cleanup.", freeSlots);
     }
