@@ -1145,6 +1145,51 @@ static bool HasConset() {
            EffectMgr::HasEffect(myId, SKILL_GRAIL_OF_MIGHT);
 }
 
+// ===== Consumable Usage (GWA3-102) =====
+
+static void UseConsumables(const BotConfig& cfg) {
+    if (!cfg.use_consets) return;
+
+    if (Offsets::MyID <= 0x10000) return;
+    uint32_t myId = *reinterpret_cast<uint32_t*>(Offsets::MyID);
+
+    // Conset: Armor of Salvation
+    if (!EffectMgr::HasEffect(myId, SKILL_ARMOR_OF_SALVATION)) {
+        Item* item = FindItemByModel(MODEL_ARMOR_SALV);
+        if (item) {
+            LogBot("Using Armor of Salvation (item=%u)", item->item_id);
+            ItemMgr::UseItem(item->item_id);
+            WaitMs(1000);
+        }
+    }
+
+    // Conset: Essence of Celerity
+    if (!EffectMgr::HasEffect(myId, SKILL_ESSENCE_CELERITY)) {
+        Item* item = FindItemByModel(MODEL_ESSENCE_CEL);
+        if (item) {
+            LogBot("Using Essence of Celerity (item=%u)", item->item_id);
+            ItemMgr::UseItem(item->item_id);
+            WaitMs(1000);
+        }
+    }
+
+    // Conset: Grail of Might
+    if (!EffectMgr::HasEffect(myId, SKILL_GRAIL_OF_MIGHT)) {
+        Item* item = FindItemByModel(MODEL_GRAIL_MIGHT);
+        if (item) {
+            LogBot("Using Grail of Might (item=%u)", item->item_id);
+            ItemMgr::UseItem(item->item_id);
+            WaitMs(1000);
+        }
+    }
+
+    if (HasConset()) {
+        LogBot("All consets active");
+    } else {
+        LogBot("Some consets missing — may need to craft/buy");
+    }
+}
+
 static bool NeedsMaintenance() {
     static constexpr uint32_t MIN_FREE_SLOTS   = 7;
     static constexpr uint32_t MIN_ID_KITS      = 1;
@@ -1305,6 +1350,9 @@ BotState HandleTownSetup(BotConfig& cfg) {
 
     // Cache player skillbar for combat
     CacheSkillBar();
+
+    // Use consumables before entering dungeon
+    UseConsumables(cfg);
 
     return BotState::Traveling;
 }
