@@ -139,6 +139,7 @@ static DWORD s_bestRunTime = 0xFFFFFFFF;
 static void WaitMs(DWORD ms);
 static int PickupNearbyLoot(float maxRange = 1200.0f);
 static bool OpenNearbyChest(float maxRange = 1200.0f);
+static uint32_t CountItemByModel(uint32_t modelId);
 
 // ===== Skill Template Decoder (GWA3-101) =====
 
@@ -1065,6 +1066,39 @@ static void SellJunkToMerchant() {
     LogBot("Sold %u items for ~%u gold", itemsSold, goldEarned);
 }
 
+// ===== Kit Purchasing (GWA3-103) =====
+
+static void BuyKitsIfNeeded() {
+    static constexpr uint32_t TARGET_ID_KITS   = 3;
+    static constexpr uint32_t TARGET_SALV_KITS = 3;
+
+    // Check if merchant window is open
+    if (TradeMgr::GetMerchantItemCount() == 0) {
+        LogBot("BuyKits: merchant window not open, skipping");
+        return;
+    }
+
+    // Count current kits
+    uint32_t idKits = CountItemByModel(MODEL_ID_KIT) + CountItemByModel(MODEL_SUP_ID_KIT);
+    uint32_t salvKits = CountItemByModel(MODEL_SALV_KIT) + CountItemByModel(MODEL_EXP_SALV_KIT);
+
+    // Buy ID kits
+    if (idKits < TARGET_ID_KITS) {
+        uint32_t toBuy = TARGET_ID_KITS - idKits;
+        LogBot("Buying %u ID kits (have %u, target %u)", toBuy, idKits, TARGET_ID_KITS);
+        TradeMgr::BuyMaterials(MODEL_ID_KIT, toBuy);
+        WaitMs(500 + ChatMgr::GetPing());
+    }
+
+    // Buy salvage kits
+    if (salvKits < TARGET_SALV_KITS) {
+        uint32_t toBuy = TARGET_SALV_KITS - salvKits;
+        LogBot("Buying %u salvage kits (have %u, target %u)", toBuy, salvKits, TARGET_SALV_KITS);
+        TradeMgr::BuyMaterials(MODEL_SALV_KIT, toBuy);
+        WaitMs(500 + ChatMgr::GetPing());
+    }
+}
+
 static uint32_t CountFreeSlots() {
     Inventory* inv = ItemMgr::GetInventory();
     if (!inv) return 0;
@@ -1486,6 +1520,9 @@ BotState HandleMerchant(BotConfig& cfg) {
 
     // Sell junk items to merchant
     SellJunkToMerchant();
+
+    // Buy kits while merchant window is still open
+    BuyKitsIfNeeded();
     WaitMs(500);
 
     // Deposit gold earned from selling
