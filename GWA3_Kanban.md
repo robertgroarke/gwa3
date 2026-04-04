@@ -2409,6 +2409,297 @@ Test the ActionExecutor's validation and error paths: rate limiting, unknown act
 
 ---
 
+### Epic 14: C++ Froggy Feature Parity
+
+> Port the remaining AutoIt Froggy capabilities to C++.
+> The C++ FroggyHM currently does movement + auto-attack + basic merchant selling.
+> These tickets add the missing combat, loot, maintenance, and recovery systems.
+
+#### GWA3-097 — Skill Casting During Combat
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | XL |
+| **Depends On** | GWA3-017, GWA3-026 |
+| **Blocks** | GWA3-033 |
+| **Parallel Group** | — |
+
+**Description:**
+Replace the auto-attack-only combat in `AggroMoveToEx()` with intelligent skill usage. AutoIt's `Fight()` loop casts skills based on type (hex, pressure, heal, enchant removal, interrupt). The C++ version needs a skill rotation system that reads the skillbar, categorizes skills by type using `SkillMgr::GetSkillConstantData()`, and casts them appropriately.
+
+**Acceptance Criteria:**
+- [ ] `CacheSkillBar()` equivalent: analyze 8 skills on login, categorize by type
+- [ ] During combat: cast offensive skills (hexes, damage) on target
+- [ ] Cast defensive skills (heals, enchants) on self/allies when HP low
+- [ ] Respect recharge timers — skip skills still cooling down
+- [ ] Respect energy — don't cast if insufficient energy
+- [ ] Call target before engaging priority enemies (monks/healers)
+- [ ] Use interrupt skills when enemy is casting a dangerous spell
+- [ ] Test: complete a Bogroot run using skills, not just auto-attack
+
+**Reference:** AutoIt `BotCore-Combat.au3` — `Fight()`, `UseSkills()`, `UseSkillSmart()`, `CanUse()`, `CanCast()`
+
+---
+
+#### GWA3-098 — Loot Pickup Policy
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-018, GWA3-026 |
+| **Blocks** | GWA3-033 |
+| **Parallel Group** | PG-FROGGY |
+
+**Description:**
+Implement item pickup during dungeon runs. AutoIt's `CanPickUpEx()` uses model-ID whitelists (quest items, tomes, consumables, DP removal) and rarity rules (always pick gold/green). Also needs chest detection + opening via `interact_signpost` on chest gadgets.
+
+**Acceptance Criteria:**
+- [ ] Pick up gold-rarity and green-rarity items automatically after fights
+- [ ] Pick up items on the always-pickup list (quest items, tomes, ectos)
+- [ ] Detect and open dungeon chests (use `is_chest` flag from gadget agents)
+- [ ] Don't pick up items owned by other players (check `owner` field)
+- [ ] Don't pick up if inventory is full (check `CountFreeSlots()`)
+- [ ] Integrate into `FollowWaypoints()` — pick up between fights, not during
+
+**Reference:** AutoIt `BotCore-Loot.au3` — `PickupLootEx()`, `CanPickUpEx()`, `CheckForChest()`
+
+---
+
+#### GWA3-099 — Item Identification
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-018, GWA3-026 |
+| **Blocks** | — |
+| **Parallel Group** | PG-FROGGY |
+
+**Description:**
+Before selling gold items, identify them with an ID kit. Unidentified items sell for base value; identified ones sell for full value. Need to find ID kits in inventory, loop through unidentified gold items, and call `ItemMgr::IdentifyItem()`.
+
+**Acceptance Criteria:**
+- [ ] Find identification kit in inventory by model ID
+- [ ] Iterate inventory for unidentified gold-rarity items
+- [ ] `ItemMgr::IdentifyItem(itemId, kitId)` for each
+- [ ] Wait between identifications (game rate limit)
+- [ ] Skip if no ID kits available
+- [ ] Integrate into `HandleMerchant()` before selling
+
+---
+
+#### GWA3-100 — Salvage System
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-018, GWA3-026 |
+| **Blocks** | — |
+| **Parallel Group** | PG-FROGGY |
+
+**Description:**
+Salvage white/blue items for materials instead of vendoring. Uses salvage kit + item → materials. AutoIt does `SalvageSessionOpen()` → `SalvageMaterials()` → `SalvageSessionDone()` per item.
+
+**Acceptance Criteria:**
+- [ ] Find salvage kit in inventory
+- [ ] Iterate salvageable items (white/blue non-quest, non-kit items)
+- [ ] Open salvage session, extract materials, close session
+- [ ] Wait between salvage operations
+- [ ] Integrate into `HandleMerchant()` or `HandleMaintenance()`
+
+---
+
+#### GWA3-101 — Hero Skillbar Loading
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-017, GWA3-022, GWA3-026 |
+| **Blocks** | — |
+| **Parallel Group** | PG-FROGGY |
+
+**Description:**
+Load hero skill templates from `hero_configs/` text files instead of relying on whatever the heroes already have equipped. AutoIt reads skill IDs + attribute distributions from files and calls `LoadSkillbar()` per hero.
+
+**Acceptance Criteria:**
+- [ ] Parse hero config file format (hero_id, skill_ids[8], attributes)
+- [ ] `SkillMgr::LoadSkillbar(skillIds, heroIndex)` for each hero
+- [ ] Load during `HandleTownSetup()` after adding heroes
+- [ ] Support multiple config files (Standard.txt, Mercs.txt)
+- [ ] Config file path from `BotConfig::hero_config_file`
+
+**Reference:** AutoIt `BotCore-HeroSetup.au3` — `LoadHeroConfigFromFile()`
+
+---
+
+#### GWA3-102 — Consumable Usage
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-018, GWA3-026 |
+| **Blocks** | — |
+| **Parallel Group** | PG-FROGGY |
+
+**Description:**
+Use consumables before dungeon runs: consets (Grail of Might, Essence of Celerity, Armor of Salvation), EotN blessings, and stones. Check if already buffed via `EffectMgr::HasEffect()`, find consumable in inventory, use it.
+
+**Acceptance Criteria:**
+- [ ] Check conset buff status before each run
+- [ ] Find conset items in inventory by model ID
+- [ ] `ItemMgr::UseItem()` for each missing conset
+- [ ] Check blessing status, use blessing scrolls if needed
+- [ ] Configurable via `BotConfig::use_consets` / `use_stones`
+- [ ] Integrate into `HandleTownSetup()` or `HandleMaintenance()`
+
+---
+
+#### GWA3-103 — Kit & Material Purchasing
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-024, GWA3-026 |
+| **Blocks** | — |
+| **Parallel Group** | PG-FROGGY |
+
+**Description:**
+Buy identification kits and salvage kits from merchant when running low. AutoIt's `BuyKitsUntilTarget()` buys kits up to a target count. Needs merchant interaction → purchase via `BuyMaterials()` or `TransactItems()`.
+
+**Acceptance Criteria:**
+- [ ] Count current ID kits and salvage kits in inventory
+- [ ] If below threshold, interact with merchant NPC
+- [ ] Buy kits up to target count (e.g., 3 ID kits, 3 salvage kits)
+- [ ] Integrate into `HandleMaintenance()`
+
+---
+
+#### GWA3-104 — Conset Crafting
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-024, GWA3-026 |
+| **Blocks** | — |
+| **Parallel Group** | PG-FROGGY |
+
+**Description:**
+Craft consets at Embark Beach (or Gadd's) crafter NPCs. Each conset requires specific materials + gold. AutoIt travels to specific NPCs (Eyja, Kwat, Alcus), opens crafter window, and crafts.
+
+**Acceptance Criteria:**
+- [ ] Check conset count in inventory
+- [ ] If below threshold, travel to crafter NPC location
+- [ ] Interact with crafter, open crafting dialog
+- [ ] `TransactItems(type=3, quantity, itemId)` to craft
+- [ ] Buy missing materials from material trader first if needed
+- [ ] Integrate into `HandleMaintenance()` when consets are low
+
+---
+
+#### GWA3-105 — Xunlai Chest Operations
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-018, GWA3-026 |
+| **Blocks** | — |
+| **Parallel Group** | PG-FROGGY |
+
+**Description:**
+Interact with Xunlai chest to deposit/withdraw items and gold. Already have storage bag reading (bags 8-16), but need the NPC interaction to open the storage panel and the item move operations.
+
+**Acceptance Criteria:**
+- [ ] Find Xunlai chest NPC and interact
+- [ ] Deposit specific items to storage (ectos, valuable materials)
+- [ ] Withdraw items from storage (craft materials for consets)
+- [ ] `ItemMgr::MoveItem()` between backpack and storage bags
+- [ ] Integrate into `HandleMaintenance()`
+
+---
+
+#### GWA3-106 — Wipe Recovery
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-026 |
+| **Blocks** | — |
+| **Parallel Group** | PG-FROGGY |
+
+**Description:**
+When party wipes, calculate the best restart waypoint based on current position and map, use DP removal items, and restart the run from the nearest safe point instead of always returning to outpost.
+
+**Acceptance Criteria:**
+- [ ] Detect wipe (party defeated or player dead)
+- [ ] Calculate nearest resurrection shrine / restart waypoint
+- [ ] Use DP removal sweets when morale < -40
+- [ ] Restart dungeon run from calculated waypoint
+- [ ] Fall back to return_to_outpost if recovery impossible
+
+---
+
+#### GWA3-107 — Hero Flagging
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-022, GWA3-026 |
+| **Blocks** | — |
+| **Parallel Group** | PG-FROGGY |
+
+**Description:**
+Flag heroes to specific positions during combat encounters for optimal positioning. AutoIt flags heroes at key dungeon locations.
+
+**Acceptance Criteria:**
+- [ ] Flag heroes at waypoint-specific positions during dungeon runs
+- [ ] Unflag after combat is resolved
+- [ ] Use `PartyMgr::FlagHero()` / `FlagAll()` / `UnflagAll()`
+
+---
+
+#### GWA3-108 — Quest Dialog Retry
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-023, GWA3-026 |
+| **Blocks** | — |
+| **Parallel Group** | PG-FROGGY |
+
+**Description:**
+Quest accept and reward with retry logic. AutoIt retries dialog interactions if they fail (NPC not responding, dialog not opening). Current C++ just sends one dialog call without verification.
+
+**Acceptance Criteria:**
+- [ ] Send dialog, verify quest state changed
+- [ ] Retry up to 3 times with 1s delay between attempts
+- [ ] Handle quest reward claiming with verification
+- [ ] Integrate into `HandleDungeon()` quest acceptance
+
+---
+
 ## Ticket Summary
 
 | ID | Title | Est | Depends On | Status |
@@ -2425,14 +2716,14 @@ Test the ActionExecutor's validation and error paths: rate limiting, unknown act
 | GWA3-006 | Game Thread Hook + Queue | L | 002, 003, 005 | `done` |
 | GWA3-010 | Packet Sending (CtoS) | M | 004, 005, 006 | `done` |
 | **Epic 3: Structs** | | | | |
-| GWA3-007 | Agent Struct | L | 001, 003, 005 | `backlog` |
-| GWA3-008 | Skill Struct | M | 001, 003, 005 | `backlog` |
-| GWA3-009 | Item & Bag Struct | M | 001, 003, 005 | `backlog` |
-| GWA3-011 | Map & Instance Struct | S | 001, 003, 005 | `backlog` |
-| GWA3-012 | Party & Hero Struct | M | 001, 003, 005 | `backlog` |
-| GWA3-013 | Quest Struct | S | 001, 003, 005 | `backlog` |
-| GWA3-014 | Effect & Buff Struct | M | 001, 003, 005 | `backlog` |
-| GWA3-015 | Chat Struct + Constants | S | 001, 003, 005 | `backlog` |
+| GWA3-007 | Agent Struct | L | 001, 003, 005 | `done` |
+| GWA3-008 | Skill Struct | M | 001, 003, 005 | `done` |
+| GWA3-009 | Item & Bag Struct | M | 001, 003, 005 | `done` |
+| GWA3-011 | Map & Instance Struct | S | 001, 003, 005 | `done` |
+| GWA3-012 | Party & Hero Struct | M | 001, 003, 005 | `done` |
+| GWA3-013 | Quest Struct | S | 001, 003, 005 | `done` |
+| GWA3-014 | Effect & Buff Struct | M | 001, 003, 005 | `done` |
+| GWA3-015 | Chat Struct + Constants | S | 001, 003, 005 | `done` |
 | **Epic 4: Managers** | | | | |
 | GWA3-016 | AgentMgr | L | 006, 007, 010, 014 | `done` |
 | GWA3-017 | SkillMgr | M | 006, 008, 010 | `done` |
@@ -2446,7 +2737,7 @@ Test the ActionExecutor's validation and error paths: rate limiting, unknown act
 | **Epic 5: C++ Bot Module** | | | | |
 | GWA3-025 | Bot Framework + State Machine | L | 006, 016-024, 049, 051 | `done` |
 | GWA3-026 | Froggy HM Bot Module (C++ Port) | XL | 025 | `done` |
-| GWA3-027 | IPC Server (Optional) | L | 025 | `backlog` |
+| GWA3-027 | IPC Server (Optional) | L | 025 | `done` |
 | **Epic 6: Integration** | | | | |
 | GWA3-028 | Integration: Char Select + Login | M | 021, 026, **047** | `backlog` |
 | GWA3-029 | Integration: Hero Setup + Consumables | M | 026, **046** | `backlog` |
@@ -2528,7 +2819,21 @@ Test the ActionExecutor's validation and error paths: rate limiting, unknown act
 | GWA3-095 | Test: Advisory Mode (Froggy + LLM coexistence) | L | 068 | `done` |
 | GWA3-096 | Test: Bot State in Snapshot + State Override (C-act) | M | 068 | `done` |
 
-**Total: 96 tickets across 13 epics.**
+| **Epic 14: C++ Froggy Feature Parity** | | | | |
+| GWA3-097 | Skill Casting During Combat (UseSkills / Fight loop) | XL | 017, 026 | `backlog` |
+| GWA3-098 | Loot Pickup Policy (CanPickUp, chest opening, quest items) | L | 018, 026 | `backlog` |
+| GWA3-099 | Item Identification (ID kit usage before selling) | M | 018, 026 | `backlog` |
+| GWA3-100 | Salvage System (salvage kits, trophy/material salvage) | M | 018, 026 | `backlog` |
+| GWA3-101 | Hero Skillbar Loading (load from hero_configs/ files) | M | 017, 022, 026 | `backlog` |
+| GWA3-102 | Consumable Usage (consets, blessings, stones before runs) | M | 018, 026 | `backlog` |
+| GWA3-103 | Kit & Material Purchasing (buy ID kits, salvage kits) | M | 024, 026 | `backlog` |
+| GWA3-104 | Conset Crafting (Grail, Essence, Armor at Embark Beach) | L | 024, 026 | `backlog` |
+| GWA3-105 | Xunlai Chest Operations (deposit/withdraw items + gold) | M | 018, 026 | `backlog` |
+| GWA3-106 | Wipe Recovery (smart restart waypoints, morale-based DP) | M | 026 | `backlog` |
+| GWA3-107 | Hero Flagging (position heroes at specific combat locations) | S | 022, 026 | `backlog` |
+| GWA3-108 | Quest Dialog Retry (accept/reward with validation + retry) | S | 023, 026 | `backlog` |
+
+**Total: 108 tickets across 14 epics.**
 
 ---
 
