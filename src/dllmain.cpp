@@ -184,9 +184,10 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     bool advancedTest = CheckFlag("GWA3_TEST_ADVANCED", "gwa3_test_advanced.flag");
     bool workflowTest = CheckFlag("GWA3_TEST_WORKFLOW", "gwa3_test_workflow.flag");
     bool llmMode = CheckFlag("GWA3_LLM_MODE", "gwa3_llm_mode.flag");
+    bool llmAdvisory = CheckFlag("GWA3_LLM_ADVISORY", "gwa3_llm_advisory.flag");
     bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || workflowTest;
-    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d advanced=%d workflow=%d llm=%d",
-                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, advancedTest, workflowTest, llmMode);
+    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d advanced=%d workflow=%d llm=%d advisory=%d",
+                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, advancedTest, workflowTest, llmMode, llmAdvisory);
 
     HMODULE gwModule = GetModuleHandleA(nullptr);
     if (!GWA3::Scanner::Initialize(gwModule)) {
@@ -342,6 +343,24 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
+    if (llmAdvisory) {
+        GWA3::Log::Info("=== LLM ADVISORY MODE (Froggy + LLM) ===");
+        // Start Froggy bot first
+        GWA3::Bot::Froggy::Register();
+        GWA3::Bot::Start();
+        // Then start LLM bridge alongside
+        if (!GWA3::LLM::Initialize()) {
+            GWA3::Log::Error("LLM bridge initialization failed — Froggy running solo");
+        } else {
+            GWA3::Log::Info("gwa3.dll initialization complete - advisory mode active");
+        }
+        // Keep alive while either is running
+        while (GWA3::Bot::IsRunning() || GWA3::LLM::IsRunning()) {
+            Sleep(1000);
+        }
+        return 0;
+    }
+
     if (llmMode) {
         GWA3::Log::Info("=== LLM AGENT MODE ===");
         if (!GWA3::LLM::Initialize()) {
@@ -349,7 +368,6 @@ DWORD WINAPI InitThread(LPVOID hModule) {
             return 1;
         }
         GWA3::Log::Info("gwa3.dll initialization complete - LLM bridge active");
-        // LLM bridge runs on its own threads; keep InitThread alive to hold the DLL
         while (GWA3::LLM::IsRunning()) {
             Sleep(1000);
         }

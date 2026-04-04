@@ -11,6 +11,7 @@
 #include <gwa3/managers/ChatLogMgr.h>
 #include <gwa3/managers/PlayerMgr.h>
 #include <gwa3/managers/QuestMgr.h>
+#include <gwa3/bot/BotFramework.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/game/Agent.h>
@@ -778,6 +779,29 @@ namespace GWA3::LLM::GameSnapshot {
         return q;
     }
 
+    // Bot state (for advisory mode — shows what Froggy is doing)
+    static json BuildBotStateJson() {
+        json b;
+        auto state = Bot::GetState();
+        const char* name = "unknown";
+        switch (state) {
+            case Bot::BotState::Idle:          name = "idle"; break;
+            case Bot::BotState::CharSelect:    name = "char_select"; break;
+            case Bot::BotState::InTown:        name = "in_town"; break;
+            case Bot::BotState::Traveling:     name = "traveling"; break;
+            case Bot::BotState::InDungeon:     name = "in_dungeon"; break;
+            case Bot::BotState::Looting:       name = "looting"; break;
+            case Bot::BotState::Merchant:      name = "merchant"; break;
+            case Bot::BotState::Maintenance:   name = "maintenance"; break;
+            case Bot::BotState::Error:         name = "error"; break;
+            case Bot::BotState::Stopping:      name = "stopping"; break;
+            case Bot::BotState::LLMControlled: name = "llm_controlled"; break;
+        }
+        b["state"] = name;
+        b["is_running"] = Bot::IsRunning();
+        return b;
+    }
+
     char* SerializeTier1(uint32_t* outLength) {
         g_tick++;
         json j;
@@ -788,6 +812,7 @@ namespace GWA3::LLM::GameSnapshot {
         j["skillbar"] = BuildSkillbarJson();
         j["map"] = BuildMapJson();
         j["party"] = BuildPartyBasicsJson();
+        j["bot"] = BuildBotStateJson();
         return JsonToHeap(j, outLength);
     }
 

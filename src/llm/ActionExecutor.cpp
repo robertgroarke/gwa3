@@ -12,6 +12,7 @@
 #include <gwa3/managers/TradeMgr.h>
 #include <gwa3/managers/CameraMgr.h>
 #include <gwa3/game/Agent.h>
+#include <gwa3/bot/BotFramework.h>
 
 #include <nlohmann/json.hpp>
 #include <unordered_map>
@@ -434,6 +435,26 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
+    static ActionResult HandleSetBotState(const json& p) {
+        if (!p.contains("state")) return MakeError("missing state");
+        std::string stateName = p["state"].get<std::string>();
+
+        GWA3::Bot::BotState target;
+        if (stateName == "idle") target = GWA3::Bot::BotState::Idle;
+        else if (stateName == "in_town") target = GWA3::Bot::BotState::InTown;
+        else if (stateName == "traveling") target = GWA3::Bot::BotState::Traveling;
+        else if (stateName == "in_dungeon") target = GWA3::Bot::BotState::InDungeon;
+        else if (stateName == "looting") target = GWA3::Bot::BotState::Looting;
+        else if (stateName == "merchant") target = GWA3::Bot::BotState::Merchant;
+        else if (stateName == "maintenance") target = GWA3::Bot::BotState::Maintenance;
+        else if (stateName == "llm_controlled") target = GWA3::Bot::BotState::LLMControlled;
+        else return MakeError("unknown_state");
+
+        GWA3::Bot::SetState(target);
+        GWA3::Log::Info("[LLM-Action] Bot state overridden to: %s", stateName.c_str());
+        return MakeOk();
+    }
+
     static ActionResult HandleResign(const json&) {
         wchar_t msg[] = L"/resign";
         GWA3::GameThread::Enqueue([msg]() {
@@ -508,6 +529,9 @@ namespace GWA3::LLM::ActionExecutor {
 
         // Skillbar
         g_dispatch["load_skillbar"] = HandleLoadSkillbar;
+
+        // Bot control (advisory mode)
+        g_dispatch["set_bot_state"] = HandleSetBotState;
 
         // Utility
         g_dispatch["send_chat"] = HandleSendChat;

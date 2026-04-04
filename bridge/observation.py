@@ -69,6 +69,11 @@ class ObservationWindow:
                 f"{'CASTING' if me.get('is_casting') else 'MOVING' if me.get('is_moving') else 'idle'}"
             )
 
+        # Bot state (advisory mode)
+        bot = snap.get("bot", {})
+        if bot and bot.get("is_running"):
+            lines.append(f"Bot: state={bot.get('state', '?')}")
+
         # Map
         m = snap.get("map", {})
         if m.get("map_id"):
