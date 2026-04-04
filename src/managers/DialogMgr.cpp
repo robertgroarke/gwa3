@@ -1,5 +1,6 @@
 #include <gwa3/managers/DialogMgr.h>
 #include <gwa3/managers/StoCMgr.h>
+#include <gwa3/utils/StringEncoding.h>
 #include <gwa3/core/Log.h>
 
 #include <mutex>
@@ -33,33 +34,54 @@ namespace GWA3::DialogMgr {
     static bool g_dialogOpen = false;
     static uint32_t g_senderAgentId = 0;
     static wchar_t g_bodyRaw[256] = {};
+    static wchar_t g_bodyDecoded[512] = {};
     static std::vector<DialogButton> g_buttons;
 
     static StoC::HookEntry g_hookBody;
     static StoC::HookEntry g_hookButton;
     static StoC::HookEntry g_hookSender;
 
+    // Attempt to decode an encoded wchar string into a buffer.
+    // Returns true if decoding produced any output.
+    static bool TryDecode(const wchar_t* encoded, wchar_t* outBuf, uint32_t outSize) {
+        outBuf[0] = L'\0';
+        if (!encoded || !encoded[0]) return false;
+
+        // Check if it's an encoded string (starts with word >= 0x100)
+        if (StringEncoding::IsValidEncStr(encoded)) {
+            uint32_t chars = StringEncoding::DecodeStr(encoded, outBuf, outSize, 500);
+            if (chars > 0) return true;
+        }
+
+        // Not encoded or decode failed — copy as-is
+        wcsncpy_s(outBuf, outSize, encoded, outSize - 1);
+        return true;
+    }
+
     static void OnDialogBody(StoC::HookStatus*, StoC::PacketBase* packet) {
         auto* p = reinterpret_cast<StoC_DialogBody*>(packet);
         std::lock_guard<std::mutex> lock(g_mutex);
 
         if (p->message[0] == L'\0') {
-            // Empty body = dialog closed by server
             g_dialogOpen = false;
             g_bodyRaw[0] = L'\0';
+            g_bodyDecoded[0] = L'\0';
             g_buttons.clear();
             g_senderAgentId = 0;
             GWA3::Log::Info("[DialogMgr] Dialog closed");
             return;
         }
 
-        // New dialog opened — clear old state
         g_dialogOpen = true;
         g_buttons.clear();
         wcsncpy_s(g_bodyRaw, p->message, 255);
 
-        GWA3::Log::Info("[DialogMgr] Dialog body received (%u chars)",
-                        static_cast<uint32_t>(wcslen(g_bodyRaw)));
+        // Decode the body text
+        TryDecode(p->message, g_bodyDecoded, 512);
+
+        GWA3::Log::Info("[DialogMgr] Dialog body received (%u raw chars, decoded=%u chars)",
+                        static_cast<uint32_t>(wcslen(g_bodyRaw)),
+                        static_cast<uint32_t>(wcslen(g_bodyDecoded)));
     }
 
     static void OnDialogButton(StoC::HookStatus*, StoC::PacketBase* packet) {
@@ -70,7 +92,15 @@ namespace GWA3::DialogMgr {
         btn.dialog_id = p->dialog_id;
         btn.button_icon = p->button_icon;
         btn.skill_id = p->skill_id;
+
+        // Store raw label, then try to decode
         wcsncpy_s(btn.label, p->message, 127);
+
+        // Attempt decode — overwrite label with decoded text if successful
+        wchar_t decoded[128] = {};
+        if (TryDecode(p->message, decoded, 128) && decoded[0]) {
+            wcsncpy_s(btn.label, decoded, 127);
+        }
 
         g_buttons.push_back(btn);
 
@@ -117,9 +147,12 @@ namespace GWA3::DialogMgr {
         return g_senderAgentId;
     }
 
-    void GetDialogBodyRaw(wchar_t* out, uint32_t outSize) {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        wcsncpy_s(out, outSize, g_bodyRaw, _TRUNCATE);
+    const wchar_t* GetDialogBodyRaw() {
+        return g_bodyRaw;
+    }
+
+    const wchar_t* GetDialogBodyDecoded() {
+        return g_bodyDecoded;
     }
 
     uint32_t GetButtonCount() {
@@ -139,6 +172,7 @@ namespace GWA3::DialogMgr {
         g_dialogOpen = false;
         g_senderAgentId = 0;
         g_bodyRaw[0] = L'\0';
+        g_bodyDecoded[0] = L'\0';
         g_buttons.clear();
     }
 

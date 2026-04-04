@@ -32,10 +32,12 @@ namespace GWA3::DialogMgr {
     // Get the NPC agent ID that sent the dialog (0 if no dialog open).
     uint32_t GetDialogSenderAgentId();
 
-    // Get the dialog body text as a wide string.
-    // Returns empty string if no dialog is open.
-    // Note: this is the raw encoded string from the server.
-    void GetDialogBodyRaw(wchar_t* out, uint32_t outSize);
+    // Get the dialog body text as a wide string (raw encoded from server).
+    const wchar_t* GetDialogBodyRaw();
+
+    // Get the decoded (readable) dialog body text.
+    // Returns empty string if not yet decoded or no dialog open.
+    const wchar_t* GetDialogBodyDecoded();
 
     // Get the number of dialog buttons currently available.
     uint32_t GetButtonCount();

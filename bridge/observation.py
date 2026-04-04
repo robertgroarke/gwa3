@@ -228,7 +228,7 @@ class ObservationWindow:
         dialog = snap.get("dialog", {})
         if dialog.get("is_open"):
             lines.append("DIALOG OPEN:")
-            body = dialog.get("body_raw", "")
+            body = dialog.get("body") or dialog.get("body_raw", "")
             if body:
                 lines.append(f"  NPC says: {body[:300]}")
             buttons = dialog.get("buttons", [])

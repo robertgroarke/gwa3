@@ -508,13 +508,18 @@ namespace GWA3::LLM::GameSnapshot {
         d["is_open"] = true;
         d["sender_agent_id"] = DialogMgr::GetDialogSenderAgentId();
 
-        // Dialog body text (raw encoded — may contain <a=ID>label</a> tags)
-        wchar_t bodyRaw[256] = {}; DialogMgr::GetDialogBodyRaw(bodyRaw, 256);
+        // Dialog body text — prefer decoded, fallback to raw
+        const wchar_t* bodyDecoded = DialogMgr::GetDialogBodyDecoded();
+        const wchar_t* bodyRaw = DialogMgr::GetDialogBodyRaw();
+        if (bodyDecoded && bodyDecoded[0]) {
+            char bodyUtf8[1024] = {};
+            WideCharToMultiByte(CP_UTF8, 0, bodyDecoded, -1, bodyUtf8, sizeof(bodyUtf8) - 1, nullptr, nullptr);
+            d["body"] = bodyUtf8;
+        }
         if (bodyRaw && bodyRaw[0]) {
-            // Convert wchar_t to UTF-8 for JSON
-            char bodyUtf8[512] = {};
-            WideCharToMultiByte(CP_UTF8, 0, bodyRaw, -1, bodyUtf8, sizeof(bodyUtf8) - 1, nullptr, nullptr);
-            d["body_raw"] = bodyUtf8;
+            char rawUtf8[512] = {};
+            WideCharToMultiByte(CP_UTF8, 0, bodyRaw, -1, rawUtf8, sizeof(rawUtf8) - 1, nullptr, nullptr);
+            d["body_raw"] = rawUtf8;
         }
 
         // Dialog buttons
