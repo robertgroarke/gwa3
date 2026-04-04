@@ -31,8 +31,9 @@ static const char* StateToString(BotState state) {
         case BotState::Merchant:    return "Merchant";
         case BotState::Maintenance: return "Maintenance";
         case BotState::Error:       return "Error";
-        case BotState::Stopping:    return "Stopping";
-        default:                    return "Unknown";
+        case BotState::Stopping:      return "Stopping";
+        case BotState::LLMControlled: return "LLMControlled";
+        default:                      return "Unknown";
     }
 }
 

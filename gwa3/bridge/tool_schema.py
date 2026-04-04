@@ -498,6 +498,22 @@ SEND_CHAT = _tool(
     },
 )
 
+SET_BOT_STATE = _tool(
+    "set_bot_state",
+    "Override the Froggy bot's current state (advisory mode only). "
+    "States: idle, in_town, traveling, in_dungeon, looting, merchant, "
+    "maintenance, llm_controlled. Use llm_controlled to take full control.",
+    {
+        "properties": {
+            "state": {
+                "type": "string",
+                "description": "Bot state: idle, in_town, traveling, in_dungeon, looting, merchant, maintenance, llm_controlled",
+            },
+        },
+        "required": ["state"],
+    },
+)
+
 RESIGN = _tool(
     "resign",
     "Resign from the current mission/explorable area. Sends /resign in chat. "
@@ -569,6 +585,8 @@ ALL_TOOLS = [
     REQUEST_QUOTE,
     TRANSACT_ITEMS,
     CRAFT_ITEM,
+    # Bot control (advisory mode)
+    SET_BOT_STATE,
     # Utility
     SEND_CHAT,
     DROP_GOLD,

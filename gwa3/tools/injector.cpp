@@ -190,6 +190,12 @@ static void ClearTestModeFlags() {
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_stage_interact_only.flag", dir);
     DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_advanced.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_workflow.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_llm_mode.flag", dir);
+    DeleteFileA(path);
 }
 
 // ===== Injection =====
@@ -326,9 +332,12 @@ static void PrintUsage(const char* argv0) {
     printf("  --test-bot      Inject in bot framework test mode (GWA3_TEST_BOT=1)\n");
     printf("  --test-commands Inject in behavioral command test mode (GWA3_TEST_COMMANDS=1)\n");
     printf("  --test-integ    Inject in integration test mode (char select -> game)\n");
+    printf("  --test-advanced Inject in advanced integration test mode\n");
+    printf("  --test-workflow Inject in advanced workflow test mode\n");
     printf("  --test-npc      Inject in isolated NPC/dialog test mode\n");
     printf("  --test-merchant Inject in isolated merchant/trader quote test mode\n");
     printf("  --llm           Inject in LLM agent mode (named pipe bridge for Gemma 4)\n");
+    printf("  --llm-advisory  Inject in advisory mode (Froggy bot + LLM bridge together)\n");
     printf("  --merchant-variant <standard-id|standard-ptr|legacy-id|legacy-ptr>\n");
     printf("  --merchant-stage <full|travel-only|approach-only|target-only|interact-packet-only|interact-only>\n");
     printf("\nOptions:\n");
@@ -347,9 +356,12 @@ int main(int argc, char* argv[]) {
     bool doTestBot = false;
     bool doTestCommands = false;
     bool doTestInteg = false;
+    bool doTestAdvanced = false;
+    bool doTestWorkflow = false;
     bool doTestNpc = false;
     bool doTestMerchant = false;
     bool doLlm = false;
+    bool doLlmAdvisory = false;
     const char* merchantVariantFlag = nullptr;
     const char* merchantStageFlag = nullptr;
 
@@ -370,12 +382,18 @@ int main(int argc, char* argv[]) {
             doTestCommands = true;
         } else if (strcmp(argv[i], "--test-integ") == 0) {
             doTestInteg = true;
+        } else if (strcmp(argv[i], "--test-advanced") == 0) {
+            doTestAdvanced = true;
+        } else if (strcmp(argv[i], "--test-workflow") == 0) {
+            doTestWorkflow = true;
         } else if (strcmp(argv[i], "--test-npc") == 0) {
             doTestNpc = true;
         } else if (strcmp(argv[i], "--test-merchant") == 0) {
             doTestMerchant = true;
         } else if (strcmp(argv[i], "--llm") == 0) {
             doLlm = true;
+        } else if (strcmp(argv[i], "--llm-advisory") == 0) {
+            doLlmAdvisory = true;
         } else if (strcmp(argv[i], "--merchant-variant") == 0 && i + 1 < argc) {
             const char* variant = argv[++i];
             if (strcmp(variant, "standard-id") == 0) {
@@ -478,11 +496,14 @@ int main(int argc, char* argv[]) {
     if (doTestBot) SetTestModeFlag("gwa3_test_bot.flag");
     if (doTestCommands) SetTestModeFlag("gwa3_test_commands.flag");
     if (doTestInteg) SetTestModeFlag("gwa3_test_integration.flag");
+    if (doTestAdvanced) SetTestModeFlag("gwa3_test_advanced.flag");
+    if (doTestWorkflow) SetTestModeFlag("gwa3_test_workflow.flag");
     if (doTestNpc) SetTestModeFlag("gwa3_test_npc_dialog.flag");
     if (doTestMerchant) SetTestModeFlag("gwa3_test_merchant_quote.flag");
     if (doTestMerchant && merchantVariantFlag) SetTestModeFlag(merchantVariantFlag);
     if (doTestMerchant && merchantStageFlag) SetTestModeFlag(merchantStageFlag);
     if (doLlm) SetTestModeFlag("gwa3_llm_mode.flag");
+    if (doLlmAdvisory) SetTestModeFlag("gwa3_llm_advisory.flag");
 
     // === --pid (single target) ===
     if (targetPid != 0) {
