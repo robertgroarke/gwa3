@@ -136,8 +136,140 @@ static DWORD s_totalStartTime = 0;
 static DWORD s_bestRunTime = 0xFFFFFFFF;
 
 // ===== Forward declarations =====
+static void WaitMs(DWORD ms);
 static int PickupNearbyLoot(float maxRange = 1200.0f);
 static bool OpenNearbyChest(float maxRange = 1200.0f);
+
+// ===== Skill Template Decoder (GWA3-101) =====
+
+// GW's custom base64 alphabet
+static const char* BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static int Base64CharToVal(char c) {
+    const char* p = strchr(BASE64_CHARS, c);
+    return p ? static_cast<int>(p - BASE64_CHARS) : -1;
+}
+
+// Decode a GW skill template code into 8 skill IDs.
+// Returns true on success, fills skillIds[8].
+static bool DecodeSkillTemplate(const char* code, uint32_t skillIds[8]) {
+    // Convert base64 to bit stream
+    uint8_t bits[256] = {};
+    int totalBits = 0;
+    for (int i = 0; code[i] && totalBits < 240; i++) {
+        int val = Base64CharToVal(code[i]);
+        if (val < 0) continue;
+        // 6 bits per char, LSB first
+        for (int b = 0; b < 6; b++) {
+            bits[totalBits++] = (val >> b) & 1;
+        }
+    }
+
+    int pos = 0;
+    auto readBits = [&](int count) -> uint32_t {
+        uint32_t val = 0;
+        for (int i = 0; i < count && pos < totalBits; i++) {
+            val |= (bits[pos++] << i);
+        }
+        return val;
+    };
+
+    // Header
+    uint32_t header = readBits(4);
+    if (header == 14) {
+        readBits(4); // version, skip
+    } else if (header != 0) {
+        return false; // unknown template type
+    }
+
+    // Professions
+    uint32_t profBits = readBits(2) * 2 + 4;
+    readBits(profBits); // primary prof (skip)
+    readBits(profBits); // secondary prof (skip)
+
+    // Attributes (skip)
+    uint32_t attrCount = readBits(4);
+    uint32_t attrBits = readBits(4) + 4;
+    for (uint32_t i = 0; i < attrCount; i++) {
+        readBits(attrBits); // attr ID
+        readBits(4);        // attr value
+    }
+
+    // Skills
+    uint32_t skillBits = readBits(4) + 8;
+    for (int i = 0; i < 8; i++) {
+        skillIds[i] = readBits(skillBits);
+    }
+
+    return true;
+}
+
+// Load hero configs from a file. Format: "HeroID,TemplateCode ; comment"
+// Returns number of heroes loaded.
+static int LoadHeroConfigFile(const char* filename, BotConfig& cfg) {
+    // Build path relative to DLL location
+    char dllDir[MAX_PATH] = {};
+    HMODULE hSelf = nullptr;
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCSTR>(&LoadHeroConfigFile), &hSelf);
+    GetModuleFileNameA(hSelf, dllDir, MAX_PATH);
+    char* slash = strrchr(dllDir, '\\');
+    if (slash) *(slash + 1) = '\0';
+
+    char path[MAX_PATH] = {};
+    snprintf(path, sizeof(path), "%s..\\..\\GWA Censured\\hero_configs\\%s", dllDir, filename);
+
+    FILE* f = nullptr;
+    fopen_s(&f, path, "r");
+    if (!f) {
+        LogBot("Hero config file not found: %s", path);
+        return 0;
+    }
+
+    char line[512];
+    int heroIdx = 0;
+    while (fgets(line, sizeof(line), f) && heroIdx < 7) {
+        // Strip comment
+        char* semi = strchr(line, ';');
+        if (semi) *semi = '\0';
+        // Strip whitespace
+        char* p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0' || *p == '\n' || *p == '\r') continue;
+
+        // Parse "HeroID,TemplateCode"
+        char* comma = strchr(p, ',');
+        if (!comma) continue;
+        *comma = '\0';
+        uint32_t heroId = static_cast<uint32_t>(atoi(p));
+        char* tmpl = comma + 1;
+        // Trim trailing whitespace
+        char* end = tmpl + strlen(tmpl) - 1;
+        while (end > tmpl && (*end == '\n' || *end == '\r' || *end == ' ')) *end-- = '\0';
+
+        if (heroId == 0 || tmpl[0] == '\0') continue;
+
+        cfg.hero_ids[heroIdx] = heroId;
+
+        // Decode template and load skillbar
+        uint32_t skillIds[8] = {};
+        if (DecodeSkillTemplate(tmpl, skillIds)) {
+            LogBot("Hero %d (id=%u): skills=%u,%u,%u,%u,%u,%u,%u,%u",
+                   heroIdx + 1, heroId,
+                   skillIds[0], skillIds[1], skillIds[2], skillIds[3],
+                   skillIds[4], skillIds[5], skillIds[6], skillIds[7]);
+            SkillMgr::LoadSkillbar(skillIds, heroIdx + 1);
+            WaitMs(500); // rate limit between skillbar loads
+        } else {
+            LogBot("Hero %d (id=%u): failed to decode template '%s'", heroIdx + 1, heroId, tmpl);
+        }
+
+        heroIdx++;
+    }
+    fclose(f);
+    LogBot("Loaded %d heroes from %s", heroIdx, filename);
+    return heroIdx;
+}
 
 // ===== Skill System (GWA3-097) =====
 
@@ -1132,11 +1264,30 @@ BotState HandleTownSetup(BotConfig& cfg) {
         return BotState::InTown;
     }
 
-    // Add heroes
-    for (int i = 0; i < 7; i++) {
-        if (cfg.hero_ids[i] > 0) {
-            PartyMgr::AddHero(cfg.hero_ids[i]);
-            WaitMs(300);
+    // Load hero config from file (adds heroes + loads their skillbars)
+    if (!cfg.hero_config_file.empty()) {
+        // Kick existing heroes first so we get a clean slate
+        PartyMgr::KickAllHeroes();
+        WaitMs(500);
+
+        int loaded = LoadHeroConfigFile(cfg.hero_config_file.c_str(), cfg);
+        if (loaded == 0) {
+            // Fallback: add heroes from hardcoded config without skillbar loading
+            LogBot("Config file failed — using hardcoded hero IDs");
+            for (int i = 0; i < 7; i++) {
+                if (cfg.hero_ids[i] > 0) {
+                    PartyMgr::AddHero(cfg.hero_ids[i]);
+                    WaitMs(300);
+                }
+            }
+        }
+    } else {
+        // No config file — use hardcoded hero IDs
+        for (int i = 0; i < 7; i++) {
+            if (cfg.hero_ids[i] > 0) {
+                PartyMgr::AddHero(cfg.hero_ids[i]);
+                WaitMs(300);
+            }
         }
     }
 
@@ -1364,9 +1515,10 @@ void Register() {
     Bot::RegisterStateHandler(BotState::Maintenance, HandleMaintenance);
     Bot::RegisterStateHandler(BotState::Error, HandleError);
 
-    // Default hero config for the BEASTRIT account ("Mercs" profile in GWA Censured/hero_configs/Mercs.txt)
+    // Default config — hero IDs are fallback if config file fails to load
     auto& cfg = Bot::GetConfig();
-    cfg.hero_ids[0] = 30; // Mercenary 3
+    cfg.hero_config_file = "Mercs.txt";  // Default: load from hero_configs/Mercs.txt
+    cfg.hero_ids[0] = 30; // Mercenary 3 (fallback)
     cfg.hero_ids[1] = 14; // Olias
     cfg.hero_ids[2] = 21; // Livia
     cfg.hero_ids[3] = 4;  // Master of Whispers
