@@ -211,6 +211,19 @@ class ObservationWindow:
                 if sk_summary:
                     lines.append(f"    {sk_summary}")
 
+        # Quest state (from tier 2+)
+        quests = snap.get("quests", {})
+        if quests and quests.get("active_quest_id", 0) != 0:
+            aq = quests.get("active_quest", {})
+            qname = aq.get("name", f"Quest#{quests['active_quest_id']}")
+            completed = "COMPLETED" if aq.get("is_completed") else "in progress"
+            obj = aq.get("objectives", "")
+            obj_str = f" — {obj[:150]}" if obj else ""
+            lines.append(f"Active Quest: {qname} ({completed}){obj_str}")
+            log_size = quests.get("quest_log_size", 0)
+            if log_size > 1:
+                lines.append(f"  Quest log: {log_size} quests total")
+
         # Dialog state (from tier 2+)
         dialog = snap.get("dialog", {})
         if dialog.get("is_open"):

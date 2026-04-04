@@ -2482,7 +2482,7 @@ Test the ActionExecutor's validation and error paths: rate limiting, unknown act
 
 | **Epic 11: LLM Bridge Gaps** | | | | |
 | GWA3-055 | MoraleMgr — Read Party Morale | M | 005, 006 | `done` |
-| GWA3-056 | Quest State Reader — Active Quest + Objectives | L | 005, 006 | `backlog` |
+| GWA3-056 | Quest State Reader — Active Quest + Objectives | L | 005, 006 | `done` |
 | GWA3-057 | Vanquish Progress — Foes Killed / Foes To Kill | M | 005, 006 | `done` |
 | GWA3-058 | Title Progression Snapshot — EotN + Core Titles | S | 049 | `done` |
 | GWA3-059 | Map Loading 3-State — Not Loaded / Loaded / Disconnected | S | 005 | `done` |
