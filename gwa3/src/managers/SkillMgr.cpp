@@ -93,7 +93,7 @@ void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
     const uint32_t zeroBasedSlot = slot - 1;
 
     if (!RenderHook::IsInitialized() || !EnsureUseSkillShellcode()) {
-        GameThread::Enqueue([myId, zeroBasedSlot, targetAgentId, callTarget]() {
+        GameThread::EnqueuePost([myId, zeroBasedSlot, targetAgentId, callTarget]() {
             s_useSkillFn(myId, zeroBasedSlot, targetAgentId, callTarget);
         });
         return;
@@ -120,7 +120,7 @@ void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
 
     if (!RenderHook::EnqueueCommand(scSlot)) {
         Log::Warn("SkillMgr: RenderHook queue full, falling back to GameThread");
-        GameThread::Enqueue([myId, zeroBasedSlot, targetAgentId, callTarget]() {
+        GameThread::EnqueuePost([myId, zeroBasedSlot, targetAgentId, callTarget]() {
             s_useSkillFn(myId, zeroBasedSlot, targetAgentId, callTarget);
         });
     }
