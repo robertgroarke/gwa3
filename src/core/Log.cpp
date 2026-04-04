@@ -19,6 +19,8 @@ static void GetTimestamp(char* buf, size_t len) {
     strftime(buf, len, "%Y-%m-%d %H:%M:%S", &tm_buf);
 }
 
+static bool g_consoleAttached = false;
+
 static void LogMessage(const char* level, const char* fmt, va_list args) {
     std::lock_guard<std::mutex> lock(g_mutex);
 
@@ -34,6 +36,12 @@ static void LogMessage(const char* level, const char* fmt, va_list args) {
     if (g_logFile) {
         fputs(line, g_logFile);
         fflush(g_logFile);
+    }
+
+    // Write to console (GW.exe console window)
+    if (g_consoleAttached) {
+        fputs(line, stdout);
+        fflush(stdout);
     }
 
     OutputDebugStringA(line);
@@ -60,10 +68,13 @@ void Initialize() {
 
     fopen_s(&g_logFile, dllPath, "a");
 
-    // Allocate debug console
-    AllocConsole();
-    FILE* dummy = nullptr;
-    freopen_s(&dummy, "CONOUT$", "w", stdout);
+    // Attach to existing console (GW.exe console window) or allocate one
+    if (AttachConsole(ATTACH_PARENT_PROCESS) || GetConsoleWindow() != nullptr || AllocConsole()) {
+        FILE* dummy = nullptr;
+        freopen_s(&dummy, "CONOUT$", "w", stdout);
+        freopen_s(&dummy, "CONOUT$", "w", stderr);
+        g_consoleAttached = true;
+    }
 
     g_initialized = true;
 }
@@ -74,7 +85,7 @@ void Shutdown() {
         fclose(g_logFile);
         g_logFile = nullptr;
     }
-    FreeConsole();
+    g_consoleAttached = false;
     g_initialized = false;
 }
 
