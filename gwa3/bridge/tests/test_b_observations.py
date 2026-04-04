@@ -578,3 +578,56 @@ async def test_bot_state_valid_name(tc: BridgeTestCase):
         snap["bot"]["state"] in valid_states,
         f"Unknown bot state: '{snap['bot']['state']}'",
     )
+
+
+# ============================================================
+# B21: Chest identification (GWA3-091)
+# ============================================================
+
+async def test_gadget_has_gadget_id(tc: BridgeTestCase):
+    """Gadget agents should have gadget_id and is_chest fields."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    gadgets = [a for a in snap.get("agents", []) if a.get("agent_type") == "gadget"]
+    if not gadgets:
+        tc.skip("No gadget agents nearby")
+    for g in gadgets[:5]:
+        assert_keys_present(g, ["gadget_id", "is_chest"], f"gadget {g.get('id')}")
+        assert_type(g["is_chest"], bool, f"gadget {g['id']}.is_chest")
+        assert_type(g["gadget_id"], int, f"gadget {g['id']}.gadget_id")
+
+
+async def test_gadget_extra_type(tc: BridgeTestCase):
+    """Gadgets should have extra_type field."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    gadgets = [a for a in snap.get("agents", []) if a.get("agent_type") == "gadget"]
+    if not gadgets:
+        tc.skip("No gadget agents nearby")
+    for g in gadgets[:5]:
+        assert_keys_present(g, ["extra_type"], f"gadget {g.get('id')}")
+
+
+# ============================================================
+# B22: Agent names (GWA3-091)
+# ============================================================
+
+async def test_player_agent_has_name(tc: BridgeTestCase):
+    """Player agents (login_number > 0) should have a name field."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    players = [a for a in snap.get("agents", [])
+               if a.get("agent_type") == "living" and a.get("player_number", 0) > 0]
+    if not players:
+        tc.skip("No other player agents nearby")
+    for p in players[:3]:
+        assert_keys_present(p, ["name"], f"player agent {p.get('id')}")
+        assert_type(p["name"], str, f"player agent {p['id']}.name")
+        assert_true(len(p["name"]) > 0, f"Player agent {p['id']} name should not be empty")
+
+
+async def test_living_agents_have_player_number(tc: BridgeTestCase):
+    """All living agents should have player_number field."""
+    snap = await tc.wait_for_snapshot(tier=2)
+    living = [a for a in snap.get("agents", []) if a.get("agent_type") == "living"]
+    if not living:
+        tc.skip("No living agents nearby")
+    for a in living[:5]:
+        assert_keys_present(a, ["player_number"], f"agent {a.get('id')}")

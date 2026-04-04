@@ -2521,12 +2521,12 @@ Test the ActionExecutor's validation and error paths: rate limiting, unknown act
 | GWA3-088 | Test: Morale, Vanquish, Map Loading 3-State (B-obs) | S | 068 | `done` |
 | GWA3-089 | Test: Quest State, Titles (B-obs) | S | 068 | `done` |
 | GWA3-090 | Test: Dialog Decoding, Chat Log Channels (B-obs) | M | 068 | `done` |
-| GWA3-091 | Test: Chest Identification, Agent Names (B-obs) | S | 068 | `backlog` |
-| GWA3-092 | Test: Merchant Items, Craft Item Action (C-act) | M | 068, 075 | `backlog` |
-| GWA3-093 | Test: Resign, Set Bot State Actions (C-act) | S | 068 | `backlog` |
-| GWA3-094 | Test: StoC Event Push (event messages on pipe) | M | 068 | `backlog` |
-| GWA3-095 | Test: Advisory Mode (Froggy + LLM coexistence) | L | 068 | `backlog` |
-| GWA3-096 | Test: Bot State in Snapshot + State Override (C-act) | M | 068 | `backlog` |
+| GWA3-091 | Test: Chest Identification, Agent Names (B-obs) | S | 068 | `done` |
+| GWA3-092 | Test: Merchant Items, Craft Item Action (C-act) | M | 068, 075 | `done` |
+| GWA3-093 | Test: Resign, Set Bot State Actions (C-act) | S | 068 | `done` |
+| GWA3-094 | Test: StoC Event Push (event messages on pipe) | M | 068 | `done` |
+| GWA3-095 | Test: Advisory Mode (Froggy + LLM coexistence) | L | 068 | `done` |
+| GWA3-096 | Test: Bot State in Snapshot + State Override (C-act) | M | 068 | `done` |
 
 **Total: 96 tickets across 13 epics.**
 
