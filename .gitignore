@@ -35,3 +35,4 @@ gwa3_smoke_report.txt
 Thumbs.db
 Desktop.ini
 .DS_Store
+__pycache__/
