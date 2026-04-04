@@ -1,6 +1,37 @@
+# Build outputs
 build/
 out/
+cmake-build-*/
+
+# Visual Studio
 .vs/
 *.user
+*.suo
+*.sln.docstates
+
+# CMake
 CMakeCache.txt
 CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Compiled objects
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+
+# Test artifacts
+gwa3_integration_report.txt
+gwa3_smoke_report.txt
+*.flag
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
