@@ -35,7 +35,7 @@ namespace GWA3::DialogMgr {
     // Get the dialog body text as a wide string.
     // Returns empty string if no dialog is open.
     // Note: this is the raw encoded string from the server.
-    const wchar_t* GetDialogBodyRaw();
+    void GetDialogBodyRaw(wchar_t* out, uint32_t outSize);
 
     // Get the number of dialog buttons currently available.
     uint32_t GetButtonCount();

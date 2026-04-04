@@ -117,10 +117,9 @@ namespace GWA3::DialogMgr {
         return g_senderAgentId;
     }
 
-    const wchar_t* GetDialogBodyRaw() {
-        // Note: caller should hold awareness that this may change.
-        // For snapshot serialization this is fine (single reader).
-        return g_bodyRaw;
+    void GetDialogBodyRaw(wchar_t* out, uint32_t outSize) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        wcsncpy_s(out, outSize, g_bodyRaw, _TRUNCATE);
     }
 
     uint32_t GetButtonCount() {

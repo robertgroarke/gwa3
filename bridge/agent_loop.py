@@ -101,15 +101,31 @@ class AgentLoop:
         self._cycle_count = 0
         self._last_action_time = 0.0
         self._consecutive_no_action = 0
+        self._read_queue: asyncio.Queue = asyncio.Queue()
+        self._reader_task: asyncio.Task | None = None
 
     async def inject_user_message(self, message: str):
         """Inject a user chat message into the agent loop."""
         await self._user_message_queue.put(message)
 
+    async def _pipe_reader(self):
+        """Background task: continuously reads from pipe into a queue."""
+        try:
+            while self._running:
+                msg = await self.ipc.read_message()
+                await self._read_queue.put(msg)
+                if msg is None:
+                    break
+        except Exception:
+            pass
+
     async def _collect_observations(self):
         """Read all pending messages from the pipe and update observation state."""
         while True:
-            msg = await asyncio.wait_for(self.ipc.read_message(), timeout=0.05)
+            try:
+                msg = await asyncio.wait_for(self._read_queue.get(), timeout=0.05)
+            except asyncio.TimeoutError:
+                break
             if msg is None:
                 break
 
@@ -122,6 +138,17 @@ class AgentLoop:
                 pass  # logged but not blocking
             elif msg_type == "heartbeat":
                 pass
+
+    async def _pipe_reader(self):
+        """Background task: continuously reads from pipe into a queue."""
+        try:
+            while self._running:
+                msg = await self.ipc.read_message()
+                await self._read_queue.put(msg)
+                if msg is None:
+                    break
+        except Exception:
+            pass
 
     async def _collect_observations_safe(self):
         """Collect observations, swallowing timeouts."""
@@ -203,6 +230,7 @@ class AgentLoop:
     async def run(self):
         """Main autonomous agent loop."""
         self._running = True
+        self._reader_task = asyncio.create_task(self._pipe_reader())
         print(f"[Agent] Starting autonomous agent loop")
         print(f"[Agent] Objective: {self.objective}")
 

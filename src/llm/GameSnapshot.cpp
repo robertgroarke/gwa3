@@ -428,7 +428,7 @@ namespace GWA3::LLM::GameSnapshot {
         d["sender_agent_id"] = DialogMgr::GetDialogSenderAgentId();
 
         // Dialog body text (raw encoded — may contain <a=ID>label</a> tags)
-        const wchar_t* bodyRaw = DialogMgr::GetDialogBodyRaw();
+        wchar_t bodyRaw[256] = {}; DialogMgr::GetDialogBodyRaw(bodyRaw, 256);
         if (bodyRaw && bodyRaw[0]) {
             // Convert wchar_t to UTF-8 for JSON
             char bodyUtf8[512] = {};
