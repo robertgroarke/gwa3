@@ -67,6 +67,7 @@ add_library(gwa3_core OBJECT
     src/tests/BotFrameworkTest.cpp
     src/tests/BehavioralTest.cpp
     src/tests/IntegrationTest.cpp
+    src/tests/IntegrationTestAdvanced.cpp
     src/tests/IntegrationTestGameplay.cpp
     src/tests/IntegrationTestIntrospection.cpp
     src/tests/IntegrationTestOffsets.cpp
