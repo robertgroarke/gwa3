@@ -145,23 +145,47 @@ namespace GWA3::LLM::GameSnapshot {
         return heroes;
     }
 
-    // SEH-safe vanquish counter reader
+    // SEH-safe WorldContext field reader.
+    // WorldContext: BasePointer → deref → +0x18 → +0x2C
+    static uintptr_t ResolveWorldContextSafe() {
+        if (Offsets::BasePointer <= 0x10000) return 0;
+        __try {
+            uintptr_t p0 = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+            if (p0 <= 0x10000) return 0;
+            uintptr_t p1 = *reinterpret_cast<uintptr_t*>(p0 + 0x18);
+            if (p1 <= 0x10000) return 0;
+            uintptr_t p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x2C);
+            if (p2 <= 0x10000) return 0;
+            return p2;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
+        }
+    }
+
     static bool ReadVanquishCounters(uint32_t& killed, uint32_t& toKill) {
         killed = 0;
         toKill = 0;
-        if (Offsets::BasePointer <= 0x10000) return false;
+        uintptr_t wc = ResolveWorldContextSafe();
+        if (!wc) return false;
         __try {
-            uintptr_t p0 = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
-            if (p0 <= 0x10000) return false;
-            uintptr_t p1 = *reinterpret_cast<uintptr_t*>(p0 + 0x18);
-            if (p1 <= 0x10000) return false;
-            uintptr_t p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x2C);
-            if (p2 <= 0x10000) return false;
-            killed = *reinterpret_cast<uint32_t*>(p2 + 0x84C);
-            toKill = *reinterpret_cast<uint32_t*>(p2 + 0x850);
+            killed = *reinterpret_cast<uint32_t*>(wc + 0x84C);
+            toKill = *reinterpret_cast<uint32_t*>(wc + 0x850);
             return true;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             return false;
+        }
+    }
+
+    // Morale: WorldContext + 0x790. Range 40-110 (40=-60%, 100=0%, 110=+10%)
+    static int32_t ReadMorale() {
+        uintptr_t wc = ResolveWorldContextSafe();
+        if (!wc) return 0;
+        __try {
+            uint32_t raw = *reinterpret_cast<uint32_t*>(wc + 0x790);
+            // Convert from GW format (40-110) to percentage (-60 to +10)
+            return static_cast<int32_t>(raw) - 100;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
         }
     }
 
@@ -197,6 +221,7 @@ namespace GWA3::LLM::GameSnapshot {
     static json BuildPartyBasicsJson() {
         json p;
         p["is_defeated"] = PartyMgr::GetIsPartyDefeated();
+        p["morale"] = ReadMorale();  // -60 to +10 (0 = no DP/boost)
 
         // Build party member list from agent array (allies near us)
         auto* me = AgentMgr::GetMyAgent();
