@@ -101,6 +101,7 @@ class AgentLoop:
         self._cycle_count = 0
         self._last_action_time = 0.0
         self._consecutive_no_action = 0
+        self._action_results: dict[str, dict] = {}
         self._read_queue: asyncio.Queue = asyncio.Queue()
         self._reader_task: asyncio.Task | None = None
 
@@ -135,7 +136,8 @@ class AgentLoop:
             elif msg_type == "event":
                 self.observations.add_event(msg)
             elif msg_type == "action_result":
-                pass  # logged but not blocking
+                rid = msg.get("request_id", "")
+                self._action_results[rid] = msg
             elif msg_type == "heartbeat":
                 pass
 
@@ -213,7 +215,7 @@ class AgentLoop:
             self.history.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "content": json.dumps({"success": True, "action": tc.name}),
+                "content": json.dumps(self._action_results.pop(tc.id, {"success": True, "action": tc.name})),
             })
 
     def _trim_history(self):
@@ -273,6 +275,7 @@ class AgentLoop:
                     tc_names = [tc.name for tc in response.tool_calls]
                     print(f"[Gemma -> GW] {', '.join(tc_names)}")
                     self._consecutive_no_action = 0
+        self._action_results: dict[str, dict] = {}
 
                     self.history.append({
                         "role": "assistant",
@@ -297,6 +300,7 @@ class AgentLoop:
                     if self._consecutive_no_action >= 10:
                         # Gemma has been idle too long, nudge it
                         self._consecutive_no_action = 0
+        self._action_results: dict[str, dict] = {}
                         self.history.append({
                             "role": "user",
                             "content": "[SYSTEM] You have been idle for 10 cycles. "

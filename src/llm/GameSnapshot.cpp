@@ -178,6 +178,7 @@ namespace GWA3::LLM::GameSnapshot {
                 if (!agent || agent->type != 0xDB) continue;
                 auto* living = reinterpret_cast<AgentLiving*>(agent);
                 if (living->allegiance != 1) continue; // allies only
+                if (living->agent_id == me->agent_id) continue; // skip self (appended separately)
 
                 json m;
                 m["agent_id"] = living->agent_id;

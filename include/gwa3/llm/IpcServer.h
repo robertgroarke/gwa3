@@ -29,6 +29,8 @@ namespace GWA3::LLM::IpcServer {
     // with FreeMsgBuf(). Returns nullptr if queue is empty.
     // outLength receives the JSON payload length (excluding null terminator).
     char* Dequeue(uint32_t* outLength);
+n    // Drain all pending inbound messages (used on client disconnect).
+    void DrainInbound();
 
     // Free a buffer returned by Dequeue().
     void FreeMsgBuf(char* buf);
