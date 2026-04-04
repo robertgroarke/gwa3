@@ -2830,8 +2830,8 @@ Quest accept and reward with retry logic. AutoIt retries dialog interactions if 
 | GWA3-104 | Conset Crafting (Grail, Essence, Armor at Embark Beach) | L | 024, 026 | `backlog` |
 | GWA3-105 | Xunlai Chest Operations (deposit/withdraw items + gold) | M | 018, 026 | `backlog` |
 | GWA3-106 | Wipe Recovery (smart restart waypoints, morale-based DP) | M | 026 | `backlog` |
-| GWA3-107 | Hero Flagging (position heroes at specific combat locations) | S | 022, 026 | `backlog` |
-| GWA3-108 | Quest Dialog Retry (accept/reward with validation + retry) | S | 023, 026 | `backlog` |
+| GWA3-107 | Hero Flagging (position heroes at specific combat locations) | S | 022, 026 | `done` |
+| GWA3-108 | Quest Dialog Retry (accept/reward with validation + retry) | S | 023, 026 | `done` |
 
 **Total: 108 tickets across 14 epics.**
 

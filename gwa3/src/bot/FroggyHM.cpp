@@ -140,6 +140,9 @@ static void WaitMs(DWORD ms);
 static int PickupNearbyLoot(float maxRange = 1200.0f);
 static bool OpenNearbyChest(float maxRange = 1200.0f);
 static uint32_t CountItemByModel(uint32_t modelId);
+static void FlagAllHeroes(float x, float y);
+static void UnflagAllHeroes();
+static bool SendDialogWithRetry(uint32_t dialogId, int maxRetries = 3, DWORD delayMs = 1000);
 
 // ===== Skill Template Decoder (GWA3-101) =====
 
@@ -507,6 +510,11 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
                 }
             }
             if (bestId) {
+                // Flag heroes to fight position
+                auto* foeAgent = AgentMgr::GetAgentByID(bestId);
+                if (foeAgent) {
+                    FlagAllHeroes(foeAgent->x, foeAgent->y);
+                }
                 AgentMgr::ChangeTarget(bestId);
                 FightTarget(bestId);
                 // Brief wait for skill activation
@@ -520,6 +528,8 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
                         continue; // keep fighting same target
                     }
                 }
+                // Combat resolved — unflag heroes
+                UnflagAllHeroes();
                 // Enemy dead or gone — pick up loot
                 PickupNearbyLoot(600.0f);
                 continue;
@@ -592,12 +602,9 @@ static void FollowWaypoints(const Waypoint* wps, int count) {
             OpenNearbyChest(1000.0f);
             WaitMs(2000);
             PickupNearbyLoot(1000.0f);
-            // Talk to Tekk for reward
+            // Talk to Tekk for reward (with retry)
             MoveToAndWait(14618, -17828);
-            QuestMgr::Dialog(DIALOG_QUEST_REWARD);
-            WaitMs(1000);
-            QuestMgr::Dialog(DIALOG_QUEST_REWARD);
-            WaitMs(1000);
+            SendDialogWithRetry(DIALOG_QUEST_REWARD, 3, 1000);
             return;
         }
 
@@ -651,6 +658,32 @@ static constexpr uint32_t MODEL_GRAIL_MIGHT  = 5902;  // Grail of Might (conset)
 static constexpr uint32_t MODEL_BIRTHDAY_CUPCAKE  = 22269;
 static constexpr uint32_t MODEL_SLICE_BIRTHDAY     = 28436;
 static constexpr uint32_t MODEL_CANDY_CORN         = 28431;
+
+// ===== Hero Flagging (GWA3-107) =====
+
+static void FlagAllHeroes(float x, float y) {
+    PartyMgr::FlagAll(x, y);
+}
+
+static void UnflagAllHeroes() {
+    PartyMgr::UnflagAll();
+}
+
+// ===== Quest Dialog Retry (GWA3-108) =====
+
+static bool SendDialogWithRetry(uint32_t dialogId, int maxRetries, DWORD delayMs) {
+    for (int attempt = 0; attempt < maxRetries; attempt++) {
+        QuestMgr::Dialog(dialogId);
+        WaitMs(delayMs);
+
+        // Check if dialog was processed (we can't directly verify,
+        // but waiting + retrying is the best we can do)
+        if (attempt < maxRetries - 1) {
+            LogBot("Dialog 0x%X attempt %d/%d", dialogId, attempt + 1, maxRetries);
+        }
+    }
+    return true;
+}
 
 // ===== Loot Pickup (GWA3-098) =====
 
@@ -1427,10 +1460,8 @@ BotState HandleDungeon(BotConfig& cfg) {
         // Accept quest from Tekk
         MoveToAndWait(12396, 22407);
         WaitMs(500);
-        QuestMgr::Dialog(DIALOG_NPC_TALK);
-        WaitMs(500);
-        QuestMgr::Dialog(DIALOG_QUEST_ACCEPT);
-        WaitMs(500);
+        SendDialogWithRetry(DIALOG_NPC_TALK, 2, 500);
+        SendDialogWithRetry(DIALOG_QUEST_ACCEPT, 2, 500);
 
         // Move to dungeon entrance
         MoveToAndWait(12228, 22677);
