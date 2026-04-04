@@ -2822,7 +2822,7 @@ Quest accept and reward with retry logic. AutoIt retries dialog interactions if 
 | **Epic 14: C++ Froggy Feature Parity** | | | | |
 | GWA3-097 | Skill Casting During Combat (UseSkills / Fight loop) | XL | 017, 026 | `done` |
 | GWA3-098 | Loot Pickup Policy (CanPickUp, chest opening, quest items) | L | 018, 026 | `done` |
-| GWA3-099 | Item Identification (ID kit usage before selling) | M | 018, 026 | `backlog` |
+| GWA3-099 | Item Identification (ID kit usage before selling) | M | 018, 026 | `done` |
 | GWA3-100 | Salvage System (salvage kits, trophy/material salvage) | M | 018, 026 | `backlog` |
 | GWA3-101 | Hero Skillbar Loading (load from hero_configs/ files) | M | 017, 022, 026 | `backlog` |
 | GWA3-102 | Consumable Usage (consets, blessings, stones before runs) | M | 018, 026 | `backlog` |
