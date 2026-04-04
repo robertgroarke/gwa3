@@ -104,8 +104,14 @@ class ObservationWindow:
             size = party.get("size", "?")
             dead = party.get("dead_count", 0)
             defeated = party.get("is_defeated", False)
+            morale = party.get("morale", 0)
+            morale_str = ""
+            if morale < 0:
+                morale_str = f" DP={morale}%"
+            elif morale > 0:
+                morale_str = f" morale=+{morale}%"
             lines.append(
-                f"Party: size={size} dead={dead} defeated={defeated}"
+                f"Party: size={size} dead={dead} defeated={defeated}{morale_str}"
             )
             members = party.get("members", [])
             if members:
