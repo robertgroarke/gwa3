@@ -77,7 +77,7 @@ target_include_directories(gwa3_core PUBLIC
 )
 
 # Crash investigation test selector (0=normal, 1=remove JMP after bootstrap, 2=disable GameThread)
-set(CRASH_TEST 1 CACHE STRING "Crash test mode")
+set(CRASH_TEST 0 CACHE STRING "Crash test mode")
 target_compile_definitions(gwa3_core PUBLIC CRASH_TEST=${CRASH_TEST})
 
 # gwa3_core needs MinHook headers (for GameThread.cpp), version.lib (for MemoryMgr),

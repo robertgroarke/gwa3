@@ -106,15 +106,15 @@ namespace GWA3::LLM::GameSnapshot {
     // Build hero skillbars array (one entry per hero in party)
     static json BuildHeroSkillbarsJson() {
         json heroes = json::array();
-        auto* agentArray = AgentMgr::GetAgentArray();
-        if (!agentArray || !agentArray->buffer) return heroes;
+        uint32_t maxAgents = AgentMgr::GetMaxAgents();
+        if (maxAgents == 0) return heroes;
 
         uint32_t myId = AgentMgr::GetMyId();
-        uint32_t count = agentArray->size;
+        uint32_t count = maxAgents;
 
         for (uint32_t i = 0; i < count; i++) {
-            auto* agent = agentArray->buffer[i];
-            if (!agent || agent->agent_id == myId) continue;
+            auto* agent = AgentMgr::GetAgentByID(i);
+            if (!agent || agent->agent_id == myId || agent->agent_id == 0) continue;
             if (agent->type != 0xDB) continue;
 
             auto* living = reinterpret_cast<AgentLiving*>(agent);
@@ -168,13 +168,13 @@ namespace GWA3::LLM::GameSnapshot {
 
         // Build party member list from agent array (allies near us)
         auto* me = AgentMgr::GetMyAgent();
-        auto* agentArray = AgentMgr::GetAgentArray();
-        if (me && agentArray && agentArray->buffer) {
+        uint32_t maxAgents = AgentMgr::GetMaxAgents();
+        if (me && maxAgents > 0) {
             json members = json::array();
             uint32_t partySize = 0;
             uint32_t deadCount = 0;
-            for (uint32_t i = 0; i < agentArray->size; i++) {
-                auto* agent = agentArray->buffer[i];
+            for (uint32_t i = 0; i < maxAgents; i++) {
+                auto* agent = AgentMgr::GetAgentByID(i);
                 if (!agent || agent->type != 0xDB) continue;
                 auto* living = reinterpret_cast<AgentLiving*>(agent);
                 if (living->allegiance != 1) continue; // allies only
@@ -226,12 +226,12 @@ namespace GWA3::LLM::GameSnapshot {
         float myX = me->x;
         float myY = me->y;
 
-        auto* agentArray = AgentMgr::GetAgentArray();
-        if (!agentArray || !agentArray->buffer) return agents;
+        uint32_t maxAgents = AgentMgr::GetMaxAgents();
+        if (maxAgents == 0) return agents;
 
-        uint32_t count = agentArray->size;
+        uint32_t count = maxAgents;
         for (uint32_t i = 0; i < count; i++) {
-            auto* agent = agentArray->buffer[i];
+            auto* agent = AgentMgr::GetAgentByID(i);
             if (!agent || agent->agent_id == me->agent_id) continue;
 
             float dist = AgentMgr::GetDistance(myX, myY, agent->x, agent->y);
