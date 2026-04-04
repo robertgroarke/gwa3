@@ -652,6 +652,62 @@ static bool OpenNearbyChest(float maxRange) {
     return false;
 }
 
+// ===== Item Identification (GWA3-099) =====
+
+static int IdentifyGoldItems() {
+    auto* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    // Find an ID kit
+    uint32_t kitId = 0;
+    for (int b = 1; b <= 4 && !kitId; b++) {
+        auto* bag = ItemMgr::GetBag(b);
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t s = 0; s < bag->items.size; s++) {
+            auto* item = bag->items.buffer[s];
+            if (!item) continue;
+            if (item->model_id == MODEL_ID_KIT || item->model_id == MODEL_SUP_ID_KIT) {
+                kitId = item->item_id;
+                break;
+            }
+        }
+    }
+    if (!kitId) {
+        LogBot("No ID kit found — skipping identification");
+        return 0;
+    }
+
+    int identified = 0;
+    for (int b = 1; b <= 4; b++) {
+        auto* bag = ItemMgr::GetBag(b);
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t s = 0; s < bag->items.size; s++) {
+            auto* item = bag->items.buffer[s];
+            if (!item || item->item_id == 0) continue;
+            if (IsIdentified(item)) continue;
+
+            uint16_t rarity = GetItemRarity(item);
+            if (rarity != RARITY_GOLD && rarity != RARITY_PURPLE) continue;
+
+            LogBot("Identifying item %u (model=%u rarity=%u)", item->item_id, item->model_id, rarity);
+            ItemMgr::IdentifyItem(item->item_id, kitId);
+            WaitMs(500);
+            identified++;
+
+            // Re-check kit still exists (charges deplete)
+            auto* kit = ItemMgr::GetItemById(kitId);
+            if (!kit) {
+                LogBot("ID kit depleted after %d identifications", identified);
+                return identified;
+            }
+        }
+    }
+    if (identified > 0) {
+        LogBot("Identified %d items", identified);
+    }
+    return identified;
+}
+
 static bool ShouldSellItem(const Item* item) {
     if (!item || item->item_id == 0 || item->model_id == 0) return false;
     if (item->equipped) return false;
@@ -1131,6 +1187,9 @@ BotState HandleMerchant(BotConfig& cfg) {
 
     // Deposit excess gold before selling (avoid "too rich" merchant cap)
     DepositExcessGold();
+
+    // Identify gold/purple items before selling (maximizes value)
+    IdentifyGoldItems();
 
     // Sell junk items to merchant
     SellJunkToMerchant();
