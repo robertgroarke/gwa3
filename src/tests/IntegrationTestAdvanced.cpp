@@ -103,34 +103,46 @@ bool TestItemMove() {
     IntReport("  Moving item %u (model=%u) from bag %u slot %u...",
               itemId, item->model_id, srcBagIdx, srcSlot);
 
-    // Find a free slot in same bag
-    Bag* bag = inv->bags[srcBagIdx];
+    // Find any free slot across all backpack bags (1-4)
+    uint32_t dstBagIdx = UINT32_MAX;
     uint32_t freeSlot = UINT32_MAX;
-    if (bag && bag->items.buffer) {
+    for (uint32_t bIdx = 1; bIdx <= 4 && freeSlot == UINT32_MAX; ++bIdx) {
+        Bag* bag = inv->bags[bIdx];
+        if (!bag || !bag->items.buffer) continue;
         for (uint32_t i = 0; i < bag->items.size; ++i) {
-            if (!bag->items.buffer[i] && i != srcSlot) { freeSlot = i; break; }
+            // Skip the source slot itself
+            if (bIdx == srcBagIdx && i == srcSlot) continue;
+            if (!bag->items.buffer[i]) {
+                dstBagIdx = bIdx;
+                freeSlot = i;
+                break;
+            }
         }
     }
 
     if (freeSlot == UINT32_MAX) {
-        IntSkip("ItemMove", "No free slot in same bag to move to");
+        IntSkip("ItemMove", "No free slot in any backpack bag");
         IntReport("");
         return true;
     }
 
-    ItemMgr::MoveItem(itemId, srcBagIdx, freeSlot);
+    IntReport("  Target: bag %u slot %u", dstBagIdx, freeSlot);
+    ItemMgr::MoveItem(itemId, dstBagIdx, freeSlot);
     Sleep(500 + ChatMgr::GetPing());
 
     // Verify item moved
     Item* movedItem = ItemMgr::GetItemById(itemId);
     if (movedItem) {
-        IntReport("  After move: bag=%u slot=%u", movedItem->bag ? movedItem->bag->index : 0, movedItem->slot);
-        IntCheck("Item slot changed after move", movedItem->slot == static_cast<uint8_t>(freeSlot));
+        IntReport("  After move: bag=%u slot=%u",
+                  movedItem->bag ? movedItem->bag->index : 0, movedItem->slot);
+        bool moved = (movedItem->bag && movedItem->bag->index == dstBagIdx &&
+                      movedItem->slot == static_cast<uint8_t>(freeSlot));
+        IntCheck("Item moved to target slot", moved);
     } else {
         IntCheck("Item still exists after move", false);
     }
 
-    // Move back
+    // Move back to original position
     ItemMgr::MoveItem(itemId, srcBagIdx, srcSlot);
     Sleep(300);
 
