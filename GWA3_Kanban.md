@@ -2284,6 +2284,131 @@ Implement advisory autonomy mode where the LLM handles high-level strategy (when
 
 ---
 
+### Epic 12: LLM Bridge Integration Tests
+
+> End-to-end tests that validate the LLM bridge through the named pipe — the same path Gemma uses.
+> Python test script connects to `\\.\pipe\gwa3_llm`, reads snapshots, sends actions, verifies results.
+> Run via: `python -m bridge.tests` (requires gwa3 injected with `--llm`)
+
+#### GWA3-067 — Bridge Test Infrastructure
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | — |
+| **Blocks** | GWA3-068 through GWA3-087 |
+| **Parallel Group** | — |
+
+**Description:**
+Create the Python test framework: runner with discovery/execution/timeouts/reporting, `BridgeTestCase` base class with pipe helpers (`wait_for_snapshot`, `send_action`, `wait_for_state_change`), and shared assertion utilities.
+
+**Acceptance Criteria:**
+- [ ] `python -m bridge.tests` runs and produces pass/fail summary
+- [ ] Base class connects to pipe, receives at least one snapshot
+- [ ] Per-test timeout (30s default) prevents hangs
+- [ ] `--filter` flag runs subset of tests
+- [ ] `send_action` correlates `action_result` by `request_id`
+- [ ] `wait_for_snapshot(tier=N)` drains pipe until correct tier arrives
+
+**Files:** `bridge/tests/__init__.py`, `__main__.py`, `runner.py`, `base.py`, `helpers.py`
+
+---
+
+#### GWA3-068 — IPC Protocol Tests (Category A)
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-067 |
+| **Blocks** | GWA3-069 through GWA3-087 |
+| **Parallel Group** | — |
+
+**Description:**
+Validate the named pipe transport layer: connection, message framing, heartbeat, snapshot delivery, and rate limiting.
+
+**Acceptance Criteria:**
+- [ ] `test_pipe_connect` — connect succeeds
+- [ ] `test_pipe_disconnect_reconnect` — reconnect works after disconnect
+- [ ] `test_message_framing` — messages have 4-byte length prefix + valid JSON
+- [ ] `test_heartbeat_reception` — heartbeat arrives within 10s
+- [ ] `test_snapshot_reception` — snapshot arrives within 3s
+- [ ] `test_rapid_send_rate_limiter` — 15 actions in <1s, at least one returns `rate_limited`
+
+**File:** `bridge/tests/test_a_ipc.py`
+
+---
+
+#### GWA3-069 through GWA3-077 — Observation Tests (Categories B1-B12)
+
+| ID | Section | Est | Tests |
+|----|---------|-----|-------|
+| GWA3-069 | B1: Player state (`me`) | S | agent_id > 0, pos non-zero, HP 0-1, professions 0-10, level 1-20, state booleans |
+| GWA3-070 | B2: Skillbar | S | 8 slots, slot indices 0-7, constant data on non-zero skills, recharge ≥ 0 |
+| GWA3-071 | B3: Map state | S | map_id > 0, is_loaded bool, instance_time ≥ 0, region integer |
+| GWA3-072 | B4: Party state | S | size ≥ 1, members array, self present, is_defeated bool, dead_count |
+| GWA3-073 | B5: Nearby agents | M | Array, core fields, living fields (hp/allegiance/casting/hex/enchant), item fields (model_id), gadget type |
+| GWA3-074 | B6: Hero skillbars | S | Array, each has agent_id + 8-slot skillbar + casting state |
+| GWA3-075 | B7-B9: Dialog, merchant, chat | M | Dialog closed state, merchant closed state, chat array with channel/sender/message |
+| GWA3-076 | B10-B11: Inventory & storage | M | Gold ≥ 0, bags 1-4, items with rarity, free_slots_total, storage panes |
+| GWA3-077 | B12: Effects & tier progression | S | Effects with skill_id/time_remaining/type. Tier 1→2→3 progressive field addition. All snapshots have type/tier/tick. |
+
+All depend on GWA3-068. All read-only. All in **PG-BRIDGE-OBS** parallel group.
+
+**File:** `bridge/tests/test_b_observations.py`
+
+---
+
+#### GWA3-078 through GWA3-086 — Action Tests (Categories C1-C12)
+
+| ID | Actions | Est | Deps | Tests |
+|----|---------|-----|------|-------|
+| GWA3-078 | C1-2: move_to, change_target, cancel_action | M | 068, 069 | Valid/invalid params, position/target state changes |
+| GWA3-079 | C3: attack, use_skill, use_hero_skill, call_target | M | 068, 069 | Valid/invalid, skill_on_recharge, combat state (requires explorable) |
+| GWA3-080 | C4: add/kick hero, set_hero_behavior, flag/unflag | M | 068, 072 | Party size changes, invalid_behavior error, restore party after |
+| GWA3-081 | C5: travel, set_hard_mode, return_to_outpost, enter_mission, skip_cinematic | L | 068, 071 | Map ID changes (15s each), invalid_map_id, restore location after |
+| GWA3-082 | C6: pick_up_item, use/equip/drop/move_item, drop_gold | M | 068, 076 | Missing params, item_not_found, agent_not_found |
+| GWA3-083 | C7: salvage_start, salvage_materials, salvage_done, identify_item | M | 068, 076 | Missing params, item/kit_not_found |
+| GWA3-084 | C8: buy_materials, request_quote, transact_items | M | 068, 075 | Missing params, quote state in merchant snapshot |
+| GWA3-085 | C9: interact_npc, dialog | M | 068, 073 | NPC interaction → dialog opens, buttons appear, dialog send |
+| GWA3-086 | C10-12: load_skillbar, send_chat, wait, drop_gold | M | 068, 070 | Wrong array size, empty_message, skillbar/chat state changes |
+
+All in **PG-BRIDGE-ACT** parallel group.
+
+**File:** `bridge/tests/test_c_actions.py`
+
+---
+
+#### GWA3-087 — Validation & Error Handling (Category D)
+
+| Field | Value |
+|-------|-------|
+| **Assignee** | |
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-068 |
+| **Blocks** | — |
+| **Parallel Group** | PG-BRIDGE-ACT |
+
+**Description:**
+Test the ActionExecutor's validation and error paths: rate limiting, unknown actions, empty names, missing/malformed params.
+
+**Acceptance Criteria:**
+- [ ] `test_rate_limiter` — 15 rapid actions → at least one `rate_limited` error
+- [ ] `test_unknown_action` — `nonexistent_action` → `unknown_action` error
+- [ ] `test_empty_action_name` — empty name → `empty_action_name` error
+- [ ] `test_agent_not_found` — `change_target(99999999)` → `agent_not_found`
+- [ ] `test_skill_on_recharge` — use skill, immediately re-use → `skill_on_recharge`
+- [ ] `test_invalid_slot` — `use_skill(slot=8)` → `invalid_slot`
+- [ ] `test_coordinates_out_of_range` — `move_to(999999, 999999)` → `coordinates_out_of_range`
+
+**File:** `bridge/tests/test_d_validation.py`
+
+---
+
 ## Ticket Summary
 
 | ID | Title | Est | Depends On | Status |
@@ -2369,7 +2494,30 @@ Implement advisory autonomy mode where the LLM handles high-level strategy (when
 | GWA3-065 | StoC Event Push — Map Change / Kill / Loot / Chat Events to Bridge | L | 053, LLM IPC | `backlog` |
 | GWA3-066 | Advisory Mode — LLM Overrides FroggyHM State Machine | L | 025, 026, LLM Bridge | `backlog` |
 
-**Total: 66 tickets across 11 epics.**
+| **Epic 12: LLM Bridge Integration Tests** | | | | |
+| GWA3-067 | Bridge Test Infrastructure (runner, base, helpers) | L | — | `backlog` |
+| GWA3-068 | IPC Protocol Tests (Category A) | M | 067 | `backlog` |
+| GWA3-069 | Observation: Player State (B1) | S | 068 | `backlog` |
+| GWA3-070 | Observation: Skillbar (B2) | S | 068 | `backlog` |
+| GWA3-071 | Observation: Map State (B3) | S | 068 | `backlog` |
+| GWA3-072 | Observation: Party State (B4) | S | 068 | `backlog` |
+| GWA3-073 | Observation: Nearby Agents (B5) | M | 068 | `backlog` |
+| GWA3-074 | Observation: Hero Skillbars (B6) | S | 068 | `backlog` |
+| GWA3-075 | Observation: Dialog, Merchant, Chat (B7-B9) | M | 068 | `backlog` |
+| GWA3-076 | Observation: Inventory & Storage (B10-B11) | M | 068 | `backlog` |
+| GWA3-077 | Observation: Effects & Tier Progression (B12) | S | 068 | `backlog` |
+| GWA3-078 | Action: Movement & Targeting (C1-C2) | M | 068, 069 | `backlog` |
+| GWA3-079 | Action: Combat (C3) | M | 068, 069 | `backlog` |
+| GWA3-080 | Action: Party & Hero (C4) | M | 068, 072 | `backlog` |
+| GWA3-081 | Action: Travel (C5) | L | 068, 071 | `backlog` |
+| GWA3-082 | Action: Items (C6) | M | 068, 076 | `backlog` |
+| GWA3-083 | Action: Salvage & Identify (C7) | M | 068, 076 | `backlog` |
+| GWA3-084 | Action: Trade (C8) | M | 068, 075 | `backlog` |
+| GWA3-085 | Action: Dialog & NPC Interaction (C9) | M | 068, 073 | `backlog` |
+| GWA3-086 | Action: Skillbar, Chat, Utility (C10-C12) | M | 068, 070 | `backlog` |
+| GWA3-087 | Validation & Error Handling (Category D) | M | 068 | `backlog` |
+
+**Total: 87 tickets across 12 epics.**
 
 ---
 
