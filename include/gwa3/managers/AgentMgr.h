@@ -23,6 +23,7 @@ namespace GWA3::AgentMgr {
     void CallTarget(uint32_t agentId);
 
     // Interaction
+    void InteractItem(uint32_t agentId, bool callTarget = false);
     void InteractNPC(uint32_t agentId);
     void InteractPlayer(uint32_t agentId);
     void InteractSignpost(uint32_t agentId);
@@ -31,6 +32,9 @@ namespace GWA3::AgentMgr {
     Agent* GetAgentByID(uint32_t agentId);
     AgentLiving* GetMyAgent();
     AgentLiving* GetTargetAsLiving();
+    uint32_t GetMaxAgents();
+
+    // Deprecated — returns null. Use GetAgentByID + GetMaxAgents instead.
     GWArray<Agent*>* GetAgentArray();
 
     // Utility

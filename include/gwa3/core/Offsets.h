@@ -111,9 +111,52 @@ namespace GWA3::Offsets {
     extern uintptr_t PostMessage;
     extern uintptr_t ChatLog;            // hook
 
+    // ===== Titles =====
+    extern uintptr_t TitleClientDataBase; // ptr — static TitleClientData[] in .rdata
+
     // ===== Camera =====
     extern uintptr_t CameraClass;        // ptr — Camera struct global
     extern uintptr_t FogPatch;           // ptr — fog render instruction to patch
+
+    // ===== Effects =====
+    extern uintptr_t PostProcessEffect;  // func — visual post-process effect
+    extern uintptr_t DropBuff;           // func — drop maintained enchantment
+
+    // ===== Render =====
+    extern uintptr_t GwEndScene;         // func — GW render end-scene entry
+
+    // ===== Items =====
+    extern uintptr_t ItemClick;          // func — item interaction dispatch
+
+    // ===== Memory Patches =====
+    extern uintptr_t CameraUpdateBypass; // ptr — camera interpolation copy-back instruction
+    extern uintptr_t LevelDataBypass;    // ptr — JZ instruction for level-data validation
+    extern uintptr_t MapPortBypass;      // ptr — JNZ instruction for map/port validation
+
+    // ===== Trade (GWCA) =====
+    extern uintptr_t OfferTradeItem;     // func — __fastcall offer item in trade window
+    extern uintptr_t UpdateTradeCart;    // func — trade cart update (captures window context)
+
+    // ===== Chat (GWCA) =====
+    extern uintptr_t SendChatFunc;       // func — native chat send
+    extern uintptr_t AddToChatLog;       // func — native chat log write
+
+    // ===== Map (GWCA) =====
+    extern uintptr_t SkipCinematicFunc;  // func — native cinematic skip
+
+    // ===== Quest (GWCA) =====
+    extern uintptr_t RequestQuestInfo;   // func — quest info request
+
+    // ===== FriendList (GWCA) =====
+    extern uintptr_t FriendListAddr;     // ptr — FriendList struct base
+    extern uintptr_t FriendEventHandler; // func — friend status event handler
+
+    // ===== Compass (GWCA) =====
+    extern uintptr_t DrawOnCompass;      // func — compass drawing callback
+
+    // ===== Chat Colors (GWCA) =====
+    extern uintptr_t GetSenderColor;     // func — chat sender name color
+    extern uintptr_t GetMessageColor;    // func — chat message body color
 
     // ===== Frame UI (GWA3-new) =====
     extern uintptr_t SendFrameUIMsg;     // func — scanned via pattern 83 C1 DC E8

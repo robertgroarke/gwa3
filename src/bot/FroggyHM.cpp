@@ -6,10 +6,13 @@
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/PartyMgr.h>
 #include <gwa3/managers/QuestMgr.h>
+#include <gwa3/managers/TradeMgr.h>
+#include <gwa3/managers/EffectMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/managers/ChatMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
+#include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
 
 #include <Windows.h>
@@ -185,14 +188,14 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
         if (!IsMapLoaded()) return;
 
         // Check for enemies in fight range — auto-attack nearest
-        auto* agents = AgentMgr::GetAgentArray();
-        if (agents && agents->buffer) {
+        {
             float bestDist = fightRange * fightRange;
             uint32_t bestId = 0;
             auto* me = AgentMgr::GetMyAgent();
-            if (me) {
-                for (uint32_t i = 0; i < agents->size; i++) {
-                    auto* a = agents->buffer[i];
+            uint32_t maxAgents = AgentMgr::GetMaxAgents();
+            if (me && maxAgents > 0) {
+                for (uint32_t i = 1; i < maxAgents; i++) {
+                    auto* a = AgentMgr::GetAgentByID(i);
                     if (!a || a->type != 0xDB) continue;
                     auto* living = static_cast<AgentLiving*>(a);
                     if (living->allegiance != 3) continue; // not foe
@@ -289,6 +292,340 @@ static void FollowWaypoints(const Waypoint* wps, int count) {
             AggroMoveToEx(wps[i].x, wps[i].y, wps[i].fightRange);
         } else {
             MoveToAndWait(wps[i].x, wps[i].y);
+        }
+    }
+}
+
+// ===== Item Rarity (from name_enc first ushort) =====
+
+static constexpr uint16_t RARITY_WHITE  = 2621;
+static constexpr uint16_t RARITY_BLUE   = 2623;
+static constexpr uint16_t RARITY_GOLD   = 2624;
+static constexpr uint16_t RARITY_PURPLE = 2626;
+static constexpr uint16_t RARITY_GREEN  = 2627;
+
+static uint16_t GetItemRarity(const Item* item) {
+    if (!item || !item->name_enc) return 0;
+    __try {
+        return *reinterpret_cast<const uint16_t*>(item->name_enc);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static bool IsIdentified(const Item* item) {
+    return item && (item->interaction & 0x1) != 0;
+}
+
+// Item types (from GWA2_ID)
+static constexpr uint8_t ITEM_TYPE_SALVAGE = 11;
+static constexpr uint8_t ITEM_TYPE_WEAPON  = 0;
+static constexpr uint8_t ITEM_TYPE_OFFHAND = 2;
+static constexpr uint8_t ITEM_TYPE_SHIELD  = 4;
+
+// Consumable model IDs (ID kits, salvage kits, consets, DP removal)
+static constexpr uint32_t MODEL_ID_KIT       = 2992;  // Identification Kit
+static constexpr uint32_t MODEL_SUP_ID_KIT   = 5899;  // Superior ID Kit
+static constexpr uint32_t MODEL_SALV_KIT     = 2993;  // Salvage Kit
+static constexpr uint32_t MODEL_EXP_SALV_KIT = 2991;  // Expert Salvage Kit
+static constexpr uint32_t MODEL_ARMOR_SALV   = 5900;  // Armor of Salvation (conset)
+static constexpr uint32_t MODEL_ESSENCE_CEL  = 5901;  // Essence of Celerity (conset)
+static constexpr uint32_t MODEL_GRAIL_MIGHT  = 5902;  // Grail of Might (conset)
+
+// DP removal sweets
+static constexpr uint32_t MODEL_BIRTHDAY_CUPCAKE  = 22269;
+static constexpr uint32_t MODEL_SLICE_BIRTHDAY     = 28436;
+static constexpr uint32_t MODEL_CANDY_CORN         = 28431;
+
+static bool ShouldSellItem(const Item* item) {
+    if (!item || item->item_id == 0 || item->model_id == 0) return false;
+    if (item->equipped) return false;
+    if (item->customized) return false;
+
+    const uint16_t rarity = GetItemRarity(item);
+
+    // Never sell green items
+    if (rarity == RARITY_GREEN) return false;
+
+    // Never sell unidentified golds/purples — they might be valuable
+    if ((rarity == RARITY_GOLD || rarity == RARITY_PURPLE) && !IsIdentified(item)) return false;
+
+    // Never sell kits, consets, or DP removal items
+    switch (item->model_id) {
+    case MODEL_ID_KIT: case MODEL_SUP_ID_KIT:
+    case MODEL_SALV_KIT: case MODEL_EXP_SALV_KIT:
+    case MODEL_ARMOR_SALV: case MODEL_ESSENCE_CEL: case MODEL_GRAIL_MIGHT:
+    case MODEL_BIRTHDAY_CUPCAKE: case MODEL_SLICE_BIRTHDAY: case MODEL_CANDY_CORN:
+        return false;
+    }
+
+    // Sell white items
+    if (rarity == RARITY_WHITE) return true;
+
+    // Sell identified blue items (low value)
+    if (rarity == RARITY_BLUE && IsIdentified(item)) return true;
+
+    // Sell identified purple/gold if value is low (< 100g each)
+    if (IsIdentified(item) && item->value < 100) return true;
+
+    return false;
+}
+
+static uint32_t FindNearestNpcByAllegiance(float x, float y, float maxDist) {
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    if (maxAgents == 0) return 0;
+
+    float bestDist = maxDist * maxDist;
+    uint32_t bestId = 0;
+
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (living->allegiance != 6) continue; // not NPC
+        if (living->hp <= 0.0f) continue;
+        float d = AgentMgr::GetSquaredDistance(x, y, living->x, living->y);
+        if (d < bestDist) {
+            bestDist = d;
+            bestId = living->agent_id;
+        }
+    }
+    return bestId;
+}
+
+static void SellJunkToMerchant() {
+    // Gadd's Encampment merchant coordinates
+    static constexpr float kGaddsMerchantX = -8374.0f;
+    static constexpr float kGaddsMerchantY = -22491.0f;
+
+    LogBot("Moving to merchant...");
+    MoveToAndWait(kGaddsMerchantX, kGaddsMerchantY, 350.0f);
+    WaitMs(500);
+
+    // Find and interact with merchant NPC
+    uint32_t merchantId = FindNearestNpcByAllegiance(kGaddsMerchantX, kGaddsMerchantY, 900.0f);
+    if (!merchantId) {
+        LogBot("No merchant NPC found near target coords");
+        return;
+    }
+
+    LogBot("Interacting with merchant %u...", merchantId);
+    AgentMgr::ChangeTarget(merchantId);
+    WaitMs(250);
+
+    // Approach and interact
+    auto* npc = AgentMgr::GetAgentByID(merchantId);
+    if (npc) {
+        MoveToAndWait(npc->x, npc->y, 120.0f);
+    }
+
+    CtoS::SendPacket(2, 0x38u, merchantId); // INTERACT_NPC
+    WaitMs(750);
+    CtoS::SendPacket(2, 0x3Bu, merchantId); // Dialog to open merchant
+    WaitMs(1000);
+
+    // Check if merchant window opened
+    if (TradeMgr::GetMerchantItemCount() == 0) {
+        LogBot("Merchant window did not open, retrying...");
+        CtoS::SendPacket(2, 0x38u, merchantId);
+        WaitMs(500);
+        CtoS::SendPacket(2, 0x3Bu, merchantId);
+        WaitMs(1000);
+    }
+
+    if (TradeMgr::GetMerchantItemCount() == 0) {
+        LogBot("Merchant window failed to open, skipping sell");
+        return;
+    }
+
+    // Sell items from backpack bags (1-4)
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return;
+
+    uint32_t itemsSold = 0;
+    uint32_t goldEarned = 0;
+
+    for (uint32_t bagIdx = 1; bagIdx <= 4; bagIdx++) {
+        Bag* bag = inv->bags[bagIdx];
+        if (!bag || !bag->items.buffer) continue;
+
+        for (uint32_t slot = 0; slot < bag->items.size; slot++) {
+            Item* item = bag->items.buffer[slot];
+            if (!item) continue;
+
+            if (ShouldSellItem(item)) {
+                uint32_t totalValue = item->value * item->quantity;
+                LogBot("  Selling item %u (model=%u qty=%u value=%u)",
+                       item->item_id, item->model_id, item->quantity, totalValue);
+
+                // Sell via TransactItems: type=0xB (MerchantSell)
+                TradeMgr::TransactItems(0xB, item->quantity, item->item_id);
+                WaitMs(200 + ChatMgr::GetPing());
+
+                itemsSold++;
+                goldEarned += totalValue;
+            }
+        }
+    }
+
+    LogBot("Sold %u items for ~%u gold", itemsSold, goldEarned);
+}
+
+static uint32_t CountFreeSlots() {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    uint32_t freeSlots = 0;
+    for (uint32_t bagIdx = 1; bagIdx <= 4; bagIdx++) {
+        Bag* bag = inv->bags[bagIdx];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t i = 0; i < bag->items.size; i++) {
+            if (!bag->items.buffer[i]) freeSlots++;
+        }
+    }
+    return freeSlots;
+}
+
+static uint32_t CountItemByModel(uint32_t modelId) {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    uint32_t total = 0;
+    for (uint32_t bagIdx = 1; bagIdx <= 4; bagIdx++) {
+        Bag* bag = inv->bags[bagIdx];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t i = 0; i < bag->items.size; i++) {
+            Item* item = bag->items.buffer[i];
+            if (item && item->model_id == modelId) {
+                total += item->quantity;
+            }
+        }
+    }
+    return total;
+}
+
+static Item* FindItemByModel(uint32_t modelId) {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return nullptr;
+
+    for (uint32_t bagIdx = 1; bagIdx <= 4; bagIdx++) {
+        Bag* bag = inv->bags[bagIdx];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t i = 0; i < bag->items.size; i++) {
+            Item* item = bag->items.buffer[i];
+            if (item && item->model_id == modelId) return item;
+        }
+    }
+    return nullptr;
+}
+
+// Known buff/effect skill IDs for maintenance detection
+static constexpr uint32_t SKILL_DWARVEN_BLESSING  = 2049;
+static constexpr uint32_t SKILL_ASURAN_BLESSING   = 2050;
+static constexpr uint32_t SKILL_NORN_BLESSING     = 2051;
+static constexpr uint32_t SKILL_VANGUARD_BLESSING = 2052;
+static constexpr uint32_t SKILL_ARMOR_OF_SALVATION = 2053; // conset
+static constexpr uint32_t SKILL_ESSENCE_CELERITY  = 2054; // conset
+static constexpr uint32_t SKILL_GRAIL_OF_MIGHT    = 2055; // conset
+
+static uint32_t GetPlayerEffectCount() {
+    auto* ae = EffectMgr::GetPlayerEffects();
+    if (!ae) return 0;
+    return ae->effects.size;
+}
+
+static bool HasBlessing() {
+    if (Offsets::MyID <= 0x10000) return false;
+    uint32_t myId = *reinterpret_cast<uint32_t*>(Offsets::MyID);
+    return EffectMgr::HasEffect(myId, SKILL_DWARVEN_BLESSING) ||
+           EffectMgr::HasEffect(myId, SKILL_ASURAN_BLESSING) ||
+           EffectMgr::HasEffect(myId, SKILL_NORN_BLESSING) ||
+           EffectMgr::HasEffect(myId, SKILL_VANGUARD_BLESSING);
+}
+
+static bool HasConset() {
+    if (Offsets::MyID <= 0x10000) return false;
+    uint32_t myId = *reinterpret_cast<uint32_t*>(Offsets::MyID);
+    return EffectMgr::HasEffect(myId, SKILL_ARMOR_OF_SALVATION) &&
+           EffectMgr::HasEffect(myId, SKILL_ESSENCE_CELERITY) &&
+           EffectMgr::HasEffect(myId, SKILL_GRAIL_OF_MIGHT);
+}
+
+static bool NeedsMaintenance() {
+    static constexpr uint32_t MIN_FREE_SLOTS   = 7;
+    static constexpr uint32_t MIN_ID_KITS      = 1;
+    static constexpr uint32_t MIN_SALVAGE_KITS = 1;
+    static constexpr uint32_t MAX_CHAR_GOLD    = 90000;
+
+    if (CountFreeSlots() < MIN_FREE_SLOTS) {
+        LogBot("Maintenance needed: free slots = %u (min %u)", CountFreeSlots(), MIN_FREE_SLOTS);
+        return true;
+    }
+
+    uint32_t idKits = CountItemByModel(MODEL_ID_KIT) + CountItemByModel(MODEL_SUP_ID_KIT);
+    if (idKits < MIN_ID_KITS) {
+        LogBot("Maintenance needed: ID kits = %u (min %u)", idKits, MIN_ID_KITS);
+        return true;
+    }
+
+    uint32_t salvKits = CountItemByModel(MODEL_SALV_KIT) + CountItemByModel(MODEL_EXP_SALV_KIT);
+    if (salvKits < MIN_SALVAGE_KITS) {
+        LogBot("Maintenance needed: salvage kits = %u (min %u)", salvKits, MIN_SALVAGE_KITS);
+        return true;
+    }
+
+    uint32_t gold = ItemMgr::GetGoldCharacter();
+    if (gold >= MAX_CHAR_GOLD) {
+        LogBot("Maintenance needed: character gold = %u (max %u)", gold, MAX_CHAR_GOLD);
+        return true;
+    }
+
+    return false;
+}
+
+static void DepositExcessGold() {
+    uint32_t charGold = ItemMgr::GetGoldCharacter();
+    uint32_t storageGold = ItemMgr::GetGoldStorage();
+
+    if (charGold > 10000 && storageGold < 950000) {
+        uint32_t deposit = charGold - 10000;
+        if (deposit + storageGold > 1000000) {
+            deposit = 1000000 - storageGold;
+        }
+        if (deposit > 0) {
+            LogBot("Depositing %u gold to storage", deposit);
+            ItemMgr::ChangeGold(charGold - deposit, storageGold + deposit);
+            WaitMs(500);
+        }
+    }
+}
+
+static void UseItemByModel(uint32_t modelId) {
+    Item* item = FindItemByModel(modelId);
+    if (item) {
+        ItemMgr::UseItem(item->item_id);
+        WaitMs(500);
+    }
+}
+
+static void UseDpRemovalIfNeeded() {
+    // DP removal sweets — use if we have any and morale is bad
+    // Since we can't read morale accurately yet, use a simple heuristic:
+    // if we had wipes this session, use a sweet
+    if (s_wipeCount == 0) return;
+
+    static constexpr uint32_t dpSweets[] = {
+        MODEL_BIRTHDAY_CUPCAKE, MODEL_SLICE_BIRTHDAY, MODEL_CANDY_CORN
+    };
+
+    for (uint32_t modelId : dpSweets) {
+        Item* sweet = FindItemByModel(modelId);
+        if (sweet) {
+            LogBot("Using DP removal sweet (model=%u) after %u wipes", modelId, s_wipeCount);
+            ItemMgr::UseItem(sweet->item_id);
+            WaitMs(5000); // Sweet has casting time
+            s_wipeCount = 0; // Reset wipe counter after using sweet
+            return;
         }
     }
 }
@@ -457,19 +794,77 @@ BotState HandleMerchant(BotConfig& cfg) {
     (void)cfg;
     LogBot("State: Merchant (return to outpost)");
 
-    // Return to Gadd's Encampment
-    MapMgr::Travel(MAP_GADDS_ENCAMPMENT);
-    WaitMs(10000);
+    uint32_t mapId = MapMgr::GetMapId();
 
-    // TODO: sell junk, craft consumables, storage management
-    // For now, just proceed to next run
+    // Return to Gadd's Encampment if not already there
+    if (mapId != MAP_GADDS_ENCAMPMENT) {
+        MapMgr::Travel(MAP_GADDS_ENCAMPMENT);
+        DWORD travelStart = GetTickCount();
+        while (MapMgr::GetMapId() != MAP_GADDS_ENCAMPMENT && (GetTickCount() - travelStart) < 60000) {
+            WaitMs(1000);
+        }
+        if (MapMgr::GetMapId() != MAP_GADDS_ENCAMPMENT) {
+            LogBot("Failed to travel to Gadd's Encampment");
+            return BotState::Error;
+        }
+        // Wait for full map load
+        WaitMs(3000);
+    }
+
+    // Deposit excess gold before selling (avoid "too rich" merchant cap)
+    DepositExcessGold();
+
+    // Sell junk items to merchant
+    SellJunkToMerchant();
+    WaitMs(500);
+
+    // Deposit gold earned from selling
+    DepositExcessGold();
+
+    // Check if maintenance is needed before next run
+    if (NeedsMaintenance()) {
+        return BotState::Maintenance;
+    }
+
     return BotState::InTown;
 }
 
 BotState HandleMaintenance(BotConfig& cfg) {
     (void)cfg;
     LogBot("State: Maintenance");
-    // TODO: check consumables, blessings, morale
+
+    // Ensure we're in an outpost
+    uint32_t mapId = MapMgr::GetMapId();
+    if (mapId != MAP_GADDS_ENCAMPMENT) {
+        MapMgr::Travel(MAP_GADDS_ENCAMPMENT);
+        DWORD travelStart = GetTickCount();
+        while (MapMgr::GetMapId() != MAP_GADDS_ENCAMPMENT && (GetTickCount() - travelStart) < 60000) {
+            WaitMs(1000);
+        }
+        WaitMs(3000);
+    }
+
+    // Use DP removal sweets if we had wipes
+    UseDpRemovalIfNeeded();
+
+    // Report inventory and buff status
+    uint32_t freeSlots = CountFreeSlots();
+    uint32_t idKits = CountItemByModel(MODEL_ID_KIT) + CountItemByModel(MODEL_SUP_ID_KIT);
+    uint32_t salvKits = CountItemByModel(MODEL_SALV_KIT) + CountItemByModel(MODEL_EXP_SALV_KIT);
+    uint32_t charGold = ItemMgr::GetGoldCharacter();
+    uint32_t effectCount = GetPlayerEffectCount();
+    bool hasBless = HasBlessing();
+    bool hasCon = HasConset();
+    LogBot("Inventory: %u free slots, %u ID kits, %u salvage kits, %u gold",
+           freeSlots, idKits, salvKits, charGold);
+    LogBot("Buffs: %u effects, blessing=%s, conset=%s",
+           effectCount, hasBless ? "yes" : "no", hasCon ? "yes" : "no");
+
+    // If still critically low on slots after selling, log warning
+    if (freeSlots < 3) {
+        LogBot("WARNING: Critically low inventory space (%u slots). Consider manual cleanup.", freeSlots);
+    }
+
     return BotState::Traveling;
 }
 

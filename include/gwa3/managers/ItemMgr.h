@@ -32,6 +32,9 @@ namespace GWA3::ItemMgr {
     void ChangeGold(uint32_t charGold, uint32_t storageGold);
     void DropGold(uint32_t amount);
 
+    // Item interaction (uses native ItemClick function when resolved)
+    bool ClickItem(uint32_t itemId);
+
     // Data access
     Item* GetItemById(uint32_t itemId);
     Bag* GetBag(uint32_t bagIndex);

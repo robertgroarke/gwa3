@@ -30,6 +30,9 @@ struct CallbackRecord {
 };
 static std::vector<CallbackRecord> s_registry;
 
+// Post-callback queue — for commands that must run AFTER the game's frame callback
+static std::vector<Callback> s_postQueue;
+
 // --- Dispatcher (runs before original game callback each frame) ---
 static void Dispatch() {
     EnterCriticalSection(&s_cs);
@@ -58,12 +61,26 @@ static void Dispatch() {
     }
 }
 
+static void DispatchPost() {
+    EnterCriticalSection(&s_cs);
+    std::vector<Callback> local;
+    if (!s_postQueue.empty()) {
+        local.swap(s_postQueue);
+    }
+    LeaveCriticalSection(&s_cs);
+
+    for (auto& task : local) {
+        task();
+    }
+}
+
 // --- MinHook detour ---
 static void __cdecl DetourCallback(float elapsed, int unknown) {
     Dispatch();
     if (s_originalCallback) {
         s_originalCallback(elapsed, unknown);
     }
+    DispatchPost();
 
     EnterCriticalSection(&s_cs);
     s_onGameThread = false;
@@ -98,6 +115,11 @@ static uintptr_t FindFunctionStart(uintptr_t assertionSite) {
 
 bool Initialize() {
     if (s_initialized) return true;
+
+#if CRASH_TEST == 2
+    Log::Info("GameThread: [CRASH_TEST=2] SKIPPED — testing MinHook conflict");
+    return false;
+#endif
 
     InitializeCriticalSection(&s_cs);
 
@@ -195,6 +217,15 @@ void Enqueue(Callback task) {
     }
 
     s_queue.push_back(std::move(task));
+    LeaveCriticalSection(&s_cs);
+}
+
+void EnqueuePost(Callback task) {
+    if (!s_initialized) return;
+    // Always queue — never fast-path. EnqueuePost must run AFTER the original
+    // game callback, but s_onGameThread is true during pre-callback Dispatch too.
+    EnterCriticalSection(&s_cs);
+    s_postQueue.push_back(std::move(task));
     LeaveCriticalSection(&s_cs);
 }
 

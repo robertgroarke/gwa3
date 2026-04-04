@@ -83,3 +83,6 @@ struct Skillbar { // total: 0xBC / 188 bytes
 };
 
 } // namespace GWA3
+
+// Effect/Buff structs moved to Effect.h — include after closing namespace
+#include <gwa3/game/Effect.h>

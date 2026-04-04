@@ -93,7 +93,7 @@ void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
     const uint32_t zeroBasedSlot = slot - 1;
 
     if (!RenderHook::IsInitialized() || !EnsureUseSkillShellcode()) {
-        GameThread::Enqueue([myId, zeroBasedSlot, targetAgentId, callTarget]() {
+        GameThread::EnqueuePost([myId, zeroBasedSlot, targetAgentId, callTarget]() {
             s_useSkillFn(myId, zeroBasedSlot, targetAgentId, callTarget);
         });
         return;
@@ -120,7 +120,7 @@ void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
 
     if (!RenderHook::EnqueueCommand(scSlot)) {
         Log::Warn("SkillMgr: RenderHook queue full, falling back to GameThread");
-        GameThread::Enqueue([myId, zeroBasedSlot, targetAgentId, callTarget]() {
+        GameThread::EnqueuePost([myId, zeroBasedSlot, targetAgentId, callTarget]() {
             s_useSkillFn(myId, zeroBasedSlot, targetAgentId, callTarget);
         });
     }
@@ -180,6 +180,21 @@ Skillbar* GetPlayerSkillbar() {
         return nullptr;
     }
 
+    return nullptr;
+}
+
+Skillbar* GetSkillbarByAgentId(uint32_t agentId) {
+    if (!agentId) return nullptr;
+    const uintptr_t base = GetSkillbarArrayBase();
+    if (base <= 0x10000) return nullptr;
+    __try {
+        for (size_t i = 0; i < 32; ++i) {
+            auto* bar = reinterpret_cast<Skillbar*>(base + i * sizeof(Skillbar));
+            if (bar->agent_id == agentId) return bar;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
     return nullptr;
 }
 

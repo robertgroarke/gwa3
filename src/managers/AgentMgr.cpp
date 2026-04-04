@@ -4,6 +4,7 @@
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/RenderHook.h>
+#include <gwa3/core/Scanner.h>
 #include <gwa3/core/TargetLogHook.h>
 #include <gwa3/core/Log.h>
 
@@ -15,6 +16,7 @@ namespace GWA3::AgentMgr {
 
 using MoveFn = void(__cdecl*)(const void*);
 using ChangeTargetFn = void(__cdecl*)(uint32_t, uint32_t);
+using InteractItemFn = void(__cdecl*)(uint32_t, uint32_t);
 
 struct MoveData {
     float x;
@@ -33,6 +35,7 @@ static volatile LONG s_targetSlotIndex = 0;
 
 static MoveFn s_moveFn = nullptr;
 static ChangeTargetFn s_changeTargetFn = nullptr;
+static InteractItemFn s_interactItemFn = nullptr;
 static bool s_initialized = false;
 static bool s_loggedCurrentTargetRead = false;
 static bool s_loggedCurrentTargetFault = false;
@@ -77,49 +80,84 @@ static uintptr_t NextTargetSlot() {
     return s_targetShellcodeBase + idx * kTargetSlotSize;
 }
 
+static uintptr_t FindNearCallTarget(uintptr_t center, int backward, int forward) {
+    if (!center) return 0;
+    uintptr_t start = center > static_cast<uintptr_t>(backward) ? center - backward : center;
+    uintptr_t end = center + forward;
+    for (uintptr_t p = start; p <= end; ++p) {
+        __try {
+            if (*reinterpret_cast<uint8_t*>(p) != 0xE8) continue;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            continue;
+        }
+        uintptr_t fn = Scanner::FunctionFromNearCall(p);
+        if (fn > 0x10000) return fn;
+    }
+    return 0;
+}
+
 bool Initialize() {
     if (s_initialized) return true;
 
     if (Offsets::Move) s_moveFn = reinterpret_cast<MoveFn>(Offsets::Move);
     if (Offsets::ChangeTarget) s_changeTargetFn = reinterpret_cast<ChangeTargetFn>(Offsets::ChangeTarget);
+    uintptr_t interactAgentCall = Scanner::Find("\xC7\x45\xF0\x98\x3A\x00\x00", "xxxxxxx", 0x41);
+    if (interactAgentCall) {
+        uintptr_t interactAgentFn = FindNearCallTarget(interactAgentCall, 8, 8);
+        if (interactAgentFn) {
+            uintptr_t interactItemFn = FindNearCallTarget(interactAgentFn + 0xF8, 8, 8);
+            if (!interactItemFn) {
+                interactItemFn = FindNearCallTarget(interactAgentFn + 0xF0, 24, 24);
+            }
+            if (interactItemFn) {
+                s_interactItemFn = reinterpret_cast<InteractItemFn>(interactItemFn);
+            }
+            Log::Info("AgentMgr: Interact scan anchor=0x%08X agentFn=0x%08X itemFn=0x%08X",
+                      static_cast<unsigned>(interactAgentCall),
+                      static_cast<unsigned>(interactAgentFn),
+                      static_cast<unsigned>(interactItemFn));
+        }
+    }
 
     s_initialized = true;
-    Log::Info("AgentMgr: Initialized (Move=0x%08X, ChangeTarget=0x%08X)",
-              Offsets::Move, Offsets::ChangeTarget);
+    Log::Info("AgentMgr: Initialized (Move=0x%08X, ChangeTarget=0x%08X, InteractItem=0x%08X)",
+              Offsets::Move, Offsets::ChangeTarget, static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_interactItemFn)));
     return true;
 }
 
+static bool s_loggedMoveOnce = false;
+
 void Move(float x, float y) {
     if (!s_moveFn) {
+        if (!s_loggedMoveOnce) {
+            Log::Info("AgentMgr: Move via CtoS (no scanned fn)");
+            s_loggedMoveOnce = true;
+        }
         CtoS::MoveToCoord(x, y);
         return;
     }
-    if (!RenderHook::IsInitialized() || !EnsureMoveShellcode()) {
-        Log::Warn("AgentMgr: Move falling back to packet path");
+    if (!GameThread::IsInitialized()) {
+        Log::Warn("AgentMgr: Move falling back to packet path (GameThread not ready)");
         CtoS::MoveToCoord(x, y);
         return;
     }
 
-    uintptr_t slot = NextMoveSlot();
-    // Layout: [0..15] shellcode, [32..43] MoveData
-    uintptr_t dataAddr = slot + 32;
-
-    MoveData move{x, y, 0};
-    memcpy(reinterpret_cast<void*>(dataAddr), &move, sizeof(move));
-
-    auto* sc = reinterpret_cast<uint8_t*>(slot);
-    sc[0] = 0xB8; // mov eax, imm32
-    uint32_t dataAddr32 = static_cast<uint32_t>(dataAddr);
-    memcpy(sc + 1, &dataAddr32, sizeof(uint32_t));
-    sc[5] = 0x50; // push eax
-    sc[6] = 0xE8; // call rel32
-    int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(s_moveFn) - (slot + 11));
-    memcpy(sc + 7, &rel, sizeof(rel));
-    sc[11] = 0x58; // pop eax
-    sc[12] = 0xC3; // ret
-    FlushInstructionCache(GetCurrentProcess(), sc, 13);
-
-    RenderHook::EnqueueCommand(slot);
+    // If already on game thread, call directly. Otherwise marshal via EnqueuePost
+    // so that Move executes after the game's frame callback (safe timing).
+    if (GameThread::IsOnGameThread()) {
+        static MoveData s_moveData;
+        s_moveData.x = x;
+        s_moveData.y = y;
+        s_moveData.plane = 0;
+        s_moveFn(&s_moveData);
+    } else {
+        auto fn = s_moveFn;
+        GameThread::EnqueuePost([fn, x, y]() {
+            static MoveData s_md;
+            s_md.x = x; s_md.y = y; s_md.plane = 0;
+            fn(&s_md);
+        });
+    }
 }
 
 void ChangeTarget(uint32_t agentId) {
@@ -127,30 +165,16 @@ void ChangeTarget(uint32_t agentId) {
         CtoS::ChangeTarget(agentId);
         return;
     }
-    if (!RenderHook::IsInitialized() || !EnsureTargetShellcode()) {
+    if (!GameThread::IsInitialized()) {
         Log::Warn("AgentMgr: ChangeTarget falling back to packet path");
         CtoS::ChangeTarget(agentId);
         return;
     }
 
-    uintptr_t slot = NextTargetSlot();
-    auto* sc = reinterpret_cast<uint8_t*>(slot);
-    sc[0] = 0x33; // xor edx, edx
-    sc[1] = 0xD2;
-    sc[2] = 0x52; // push edx
-    sc[3] = 0xB8; // mov eax, imm32
-    memcpy(sc + 4, &agentId, sizeof(agentId));
-    sc[8] = 0x50; // push eax
-    sc[9] = 0xE8; // call rel32
-    int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(s_changeTargetFn) - (slot + 14));
-    memcpy(sc + 10, &rel, sizeof(rel));
-    sc[14] = 0x83; // add esp, 8
-    sc[15] = 0xC4;
-    sc[16] = 0x08;
-    sc[17] = 0xC3; // ret
-    FlushInstructionCache(GetCurrentProcess(), sc, 18);
-
-    RenderHook::EnqueueCommand(slot);
+    auto fn = s_changeTargetFn;
+    GameThread::EnqueuePost([fn, agentId]() {
+        fn(agentId, 0);
+    });
 }
 
 uint32_t GetTargetId() {
@@ -211,6 +235,24 @@ void CallTarget(uint32_t agentId) {
     CtoS::SendPacket(2, Packets::CALL_TARGET, agentId);
 }
 
+void InteractItem(uint32_t agentId, bool callTarget) {
+    if (!s_interactItemFn) {
+        CtoS::PickUpItem(agentId);
+        return;
+    }
+    if (!GameThread::IsInitialized()) {
+        Log::Warn("AgentMgr: InteractItem falling back to packet path (GameThread not ready)");
+        CtoS::PickUpItem(agentId);
+        return;
+    }
+
+    auto fn = s_interactItemFn;
+    const uint32_t ct = callTarget ? 1u : 0u;
+    GameThread::Enqueue([fn, agentId, ct]() {
+        fn(agentId, ct);
+    });
+}
+
 void InteractNPC(uint32_t agentId) {
     CtoS::SendPacket(2, Packets::INTERACT_NPC, agentId);
 }
@@ -258,9 +300,16 @@ AgentLiving* GetTargetAsLiving() {
     return static_cast<AgentLiving*>(agent);
 }
 
+uint32_t GetMaxAgents() {
+    if (!Offsets::AgentBase) return 0;
+    __try {
+        return *reinterpret_cast<uint32_t*>(Offsets::AgentBase + 0x8);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
 GWArray<Agent*>* GetAgentArray() {
     // Legacy API — returns null because agent array is not a GWArray
-    // Use GetAgentByID directly instead
+    // Use GetAgentByID + GetMaxAgents instead
     return nullptr;
 }
 

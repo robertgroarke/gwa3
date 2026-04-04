@@ -1,4 +1,5 @@
 #include <gwa3/managers/ItemMgr.h>
+#include <gwa3/managers/AgentMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
@@ -20,7 +21,7 @@ bool Initialize() {
 void UseItem(uint32_t itemId)       { CtoS::UseItem(itemId); }
 void EquipItem(uint32_t itemId)     { CtoS::EquipItem(itemId); }
 void DropItem(uint32_t itemId)      { CtoS::DropItem(itemId); }
-void PickUpItem(uint32_t agentId)   { CtoS::PickUpItem(agentId); }
+void PickUpItem(uint32_t agentId)   { AgentMgr::InteractItem(agentId, false); }
 
 void DestroyItem(uint32_t itemId) {
     CtoS::SendPacket(2, Packets::ITEM_DESTROY, itemId);
@@ -72,6 +73,36 @@ void ChangeGold(uint32_t charGold, uint32_t storageGold) {
 
 void DropGold(uint32_t amount) {
     CtoS::SendPacket(2, Packets::DROP_GOLD, amount);
+}
+
+// ItemClick: __fastcall(uint32_t* bag_id_ptr, void* edx, ItemClickParam* param)
+// ItemClickParam layout: { uint32_t call_id, uint32_t item_id, ... }
+struct ItemClickParam {
+    uint32_t call_id;
+    uint32_t item_id;
+    uint32_t h0008;
+};
+
+typedef void(__fastcall* ItemClickFn)(uint32_t*, void*, ItemClickParam*);
+
+bool ClickItem(uint32_t itemId) {
+    if (!Offsets::ItemClick || Offsets::ItemClick <= 0x10000) return false;
+
+    Item* item = GetItemById(itemId);
+    if (!item || !item->bag) return false;
+
+    auto fn = reinterpret_cast<ItemClickFn>(Offsets::ItemClick);
+    uint32_t bagIndex = item->bag->index;
+    ItemClickParam param = {};
+    param.call_id = 15; // standard item click call ID
+    param.item_id = itemId;
+
+    __try {
+        fn(&bagIndex, nullptr, &param);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 Item* GetItemById(uint32_t itemId) {

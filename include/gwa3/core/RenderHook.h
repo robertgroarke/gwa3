@@ -19,4 +19,17 @@ namespace GWA3::RenderHook {
 
     bool IsInitialized();
 
+    // Diagnostic: queue counter and pending entry count
+    uint32_t GetQueueCounter();
+    uint32_t GetPendingCount();
+
+    // Heartbeat: incremented every render frame (~60fps)
+    uint32_t GetHeartbeat();
+
+    // Check if the JMP patch is still intact at the hook site
+    bool IsHookIntact();
+
+    // Crash detection helper (not used directly — watchdog thread compares heartbeats)
+    bool IsCrashDetected();
+
 } // namespace GWA3::RenderHook

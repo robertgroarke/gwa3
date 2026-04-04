@@ -8,22 +8,39 @@ namespace GWA3::RenderHook {
 
 static constexpr uint32_t kQueueSize = 256;
 static constexpr uint32_t kPatchSize = 5;
+static constexpr uint32_t kReplaySize = 10; // full instruction group to replay
 
 static volatile LONG s_queueCounter = 0;
 static volatile LONG s_savedCommand = 0;
 static volatile LONG s_mapLoaded = 0;
 static volatile LONG s_disableRendering = 0;
+static volatile LONG s_heartbeat = 0;
+
+// Full FP/SSE/MXCSR save area — fxsave needs 512 bytes, 16-byte aligned
+__declspec(align(16)) static uint8_t s_fxState[512] = {};
 static uintptr_t s_queue[kQueueSize] = {};
 static bool s_initialized = false;
 static uintptr_t s_returnAddr = 0;
+static uintptr_t s_trampoline = 0;  // executable stub: original 10 bytes + JMP return
 static uint8_t s_savedBytes[kPatchSize] = {};
 
 // Naked detour — called via JMP from mid-function patch.
 // Mirrors the AutoIt RenderingModProc path:
 // process one queued command during pre-game, then replay the original
 // overwritten instructions before jumping back to Render+0xA.
+static volatile LONG s_savedESP = 0;
+
+// Two-phase detour: full dispatch pre-game, minimal in-game.
+// CRASH_TEST=1 removes the hook entirely on map load (via SetMapLoaded).
+// CRASH_TEST=2 keeps the hook but disables GameThread MinHook.
 static __declspec(naked) void RenderDetourNaked() {
     __asm {
+        // After map load: minimal (just heartbeat + trampoline)
+        cmp dword ptr [s_mapLoaded], 1
+        jz ingame_minimal
+
+        // PRE-GAME: full dispatch for bootstrap ButtonClick
+        mov dword ptr [s_savedESP], esp
         pushad
         pushfd
 
@@ -46,11 +63,16 @@ no_reset:
         call dword ptr [s_savedCommand]
 
 skip_queue:
+        inc dword ptr [s_heartbeat]
         popfd
         popad
-        add esp, 4
-        cmp dword ptr [s_disableRendering], 1
-        jmp [s_returnAddr]
+        mov esp, dword ptr [s_savedESP]
+        jmp [s_trampoline]
+
+ingame_minimal:
+        inc dword ptr [s_heartbeat]
+        // Jump to trampoline: original 10 bytes + JMP to hookAddr+0xA
+        jmp [s_trampoline]
     }
 }
 
@@ -69,9 +91,40 @@ bool Initialize() {
     s_disableRendering = 0;
     ZeroMemory(s_queue, sizeof(s_queue));
 
+    // Dump the original bytes at the hook site for debugging
+    {
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(hookAddr);
+        Log::Info("RenderHook: Original bytes at 0x%08X: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                  hookAddr, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11], p[12], p[13], p[14]);
+        // Also dump 10 bytes BEFORE hook site for context
+        const uint8_t* before = p - 10;
+        Log::Info("RenderHook: 10 bytes before: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                  before[0], before[1], before[2], before[3], before[4],
+                  before[5], before[6], before[7], before[8], before[9]);
+    }
+
     // AutoIt's WriteDetour writes a 5-byte JMP at the hook site and returns
     // to Render+0xA from the detour body. Keep bytes +5..+9 intact.
     memcpy(s_savedBytes, reinterpret_cast<void*>(hookAddr), kPatchSize);
+
+    // Build trampoline: copy original 10 bytes + JMP to hookAddr+0xA
+    {
+        void* tramMem = VirtualAlloc(nullptr, 32, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+        if (!tramMem) {
+            Log::Error("RenderHook: VirtualAlloc failed for trampoline");
+            return false;
+        }
+        auto* t = reinterpret_cast<uint8_t*>(tramMem);
+        // Copy original 10 bytes
+        memcpy(t, reinterpret_cast<void*>(hookAddr), kReplaySize);
+        // Append JMP to hookAddr+0xA
+        t[10] = 0xE9; // JMP rel32
+        int32_t tramRel = static_cast<int32_t>(s_returnAddr - (reinterpret_cast<uintptr_t>(tramMem) + 15));
+        memcpy(t + 11, &tramRel, 4);
+        FlushInstructionCache(GetCurrentProcess(), tramMem, 15);
+        s_trampoline = reinterpret_cast<uintptr_t>(tramMem);
+        Log::Info("RenderHook: Trampoline at 0x%08X", s_trampoline);
+    }
 
     // Write only the 5-byte JMP detour, matching AutoIt's behavior.
     DWORD oldProtect;
@@ -129,10 +182,44 @@ bool EnqueueCommand(uintptr_t command) {
 void SetMapLoaded(bool loaded) {
     s_mapLoaded = loaded ? 1 : 0;
     Log::Info("RenderHook: MapLoaded=%d", loaded ? 1 : 0);
+#if CRASH_TEST == 1
+    if (loaded) {
+        Log::Info("RenderHook: [CRASH_TEST=1] Removing JMP patch — restoring original bytes");
+        Shutdown();
+    }
+#endif
 }
 
 bool IsInitialized() {
     return s_initialized;
+}
+
+uint32_t GetQueueCounter() {
+    return static_cast<uint32_t>(s_queueCounter);
+}
+
+uint32_t GetPendingCount() {
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < kQueueSize; i++) {
+        if (s_queue[i] != 0) count++;
+    }
+    return count;
+}
+
+uint32_t GetHeartbeat() {
+    return static_cast<uint32_t>(s_heartbeat);
+}
+
+bool IsCrashDetected() {
+    return false;
+}
+
+bool IsHookIntact() {
+    if (!s_initialized) return false;
+    uintptr_t hookAddr = Offsets::Render;
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(hookAddr);
+    // Check if our E9 JMP is still the first byte
+    return (p[0] == 0xE9);
 }
 
 } // namespace GWA3::RenderHook

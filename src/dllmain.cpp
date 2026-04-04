@@ -6,6 +6,7 @@
 #include <gwa3/core/RenderHook.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/TargetLogHook.h>
+#include <gwa3/core/Memory.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/SkillMgr.h>
 #include <gwa3/managers/ItemMgr.h>
@@ -21,9 +22,12 @@
 #include <gwa3/managers/CameraMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/managers/StoCMgr.h>
+#include <gwa3/managers/EffectMgr.h>
+#include <gwa3/managers/DialogMgr.h>
 #include <gwa3/bot/BotFramework.h>
 #include <gwa3/bot/FroggyHM.h>
 #include <gwa3/core/SmokeTest.h>
+#include <gwa3/llm/LlmBridge.h>
 
 static HMODULE g_hModule = nullptr;
 
@@ -80,14 +84,15 @@ static bool RunCharSelectBootstrap(DWORD timeoutMs) {
         if (now - lastLog >= 3000) {
             const uintptr_t playFrame = GWA3::UIMgr::GetFrameByHash(GWA3::UIMgr::Hashes::PlayButton);
             const uint32_t playState = playFrame ? GWA3::UIMgr::GetFrameState(playFrame) : 0;
-            GWA3::Log::Info("Bootstrap: waiting (MapID=%u MyID=%u PlayFrame=0x%08X state=0x%X)",
-                            mapId, myId, playFrame, playState);
+            GWA3::Log::Info("Bootstrap: waiting (MapID=%u MyID=%u PlayFrame=0x%08X state=0x%X hb=%u)",
+                            mapId, myId, playFrame, playState,
+                            GWA3::RenderHook::GetHeartbeat());
             lastLog = now;
         }
 
         if (GWA3::UIMgr::IsFrameVisible(GWA3::UIMgr::Hashes::ReconnectYes)) {
-            GWA3::Log::Info("Bootstrap: reconnect dialog visible, clicking YES");
-            GWA3::UIMgr::ButtonClickByHash(GWA3::UIMgr::Hashes::ReconnectYes);
+            GWA3::Log::Info("Bootstrap: reconnect dialog visible, clicking NO (return to outpost)");
+            GWA3::UIMgr::ButtonClickByHash(GWA3::UIMgr::Hashes::ReconnectNo);
             Sleep(1000);
             continue;
         }
@@ -175,9 +180,10 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     bool npcDialogTest = CheckFlag("GWA3_TEST_NPC_DIALOG", "gwa3_test_npc_dialog.flag");
     bool merchantQuoteTest = CheckFlag("GWA3_TEST_MERCHANT_QUOTE", "gwa3_test_merchant_quote.flag");
     bool advancedTest = CheckFlag("GWA3_TEST_ADVANCED", "gwa3_test_advanced.flag");
+    bool llmMode = CheckFlag("GWA3_LLM_MODE", "gwa3_llm_mode.flag");
     bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || advancedTest;
-    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d advanced=%d",
-                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, advancedTest);
+    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d advanced=%d llm=%d",
+                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, advancedTest, llmMode);
 
     HMODULE gwModule = GetModuleHandleA(nullptr);
     if (!GWA3::Scanner::Initialize(gwModule)) {
@@ -187,6 +193,23 @@ DWORD WINAPI InitThread(LPVOID hModule) {
 
     if (!GWA3::Offsets::ResolveAll()) {
         GWA3::Log::Warn("Some offsets failed to resolve - continuing with partial coverage");
+    }
+
+    // Stage memory patches using resolved offsets
+    if (GWA3::Offsets::CameraUpdateBypass > 0x10000) {
+        const uint8_t patch[2] = {0xEB, 0x0C}; // JMP +12 (skip float copy-back)
+        GWA3::Memory::GetCameraUnlockPatch().SetPatch(GWA3::Offsets::CameraUpdateBypass, patch, 2);
+        GWA3::Log::Info("CameraUpdateBypass patch staged at 0x%08X", GWA3::Offsets::CameraUpdateBypass);
+    }
+    if (GWA3::Offsets::LevelDataBypass > 0x10000) {
+        const uint8_t patch = 0xEB; // JMP (unconditional)
+        GWA3::Memory::GetLevelDataBypassPatch().SetPatch(GWA3::Offsets::LevelDataBypass, &patch, 1);
+        GWA3::Log::Info("LevelDataBypass patch staged at 0x%08X", GWA3::Offsets::LevelDataBypass);
+    }
+    if (GWA3::Offsets::MapPortBypass > 0x10000) {
+        const uint8_t patch[2] = {0x90, 0x90}; // NOP NOP
+        GWA3::Memory::GetMapPortBypassPatch().SetPatch(GWA3::Offsets::MapPortBypass, patch, 2);
+        GWA3::Log::Info("MapPortBypass patch staged at 0x%08X", GWA3::Offsets::MapPortBypass);
     }
 
     GWA3::CtoS::Initialize();
@@ -203,6 +226,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     GWA3::MemoryMgr::Initialize();
     GWA3::PlayerMgr::Initialize();
     GWA3::CameraMgr::Initialize();
+    GWA3::EffectMgr::Initialize();
 
     if (smokeTest) {
         GWA3::Log::Info("=== SMOKE TEST MODE ===");
@@ -218,10 +242,21 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
+    // Initialize GameThread FIRST — its MinHook at the render function prologue
+    // is used for both pre-game (ButtonClick) and in-game dispatch.
+    // The old mid-function JMP render hook is no longer used (conflicts with MinHook).
+    bool gameThreadOk = GWA3::GameThread::Initialize();
+    if (!gameThreadOk) {
+        GWA3::Log::Warn("GameThread initialization failed — trying RenderHook fallback");
+    }
+
     if (integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || !anyTest) {
-        if (!GWA3::RenderHook::Initialize()) {
-            GWA3::Log::Error("RenderHook initialization failed - aborting startup");
-            return 1;
+        if (!gameThreadOk) {
+            // Fallback: use old render hook if GameThread failed
+            if (!GWA3::RenderHook::Initialize()) {
+                GWA3::Log::Error("Both GameThread and RenderHook failed - aborting");
+                return 1;
+            }
         }
         if (!RunCharSelectBootstrap(90000)) {
             GWA3::Log::Error("Bootstrap failed - aborting startup");
@@ -234,7 +269,6 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::TargetLogHook::Initialize();
     }
 
-    bool gameThreadOk = GWA3::GameThread::Initialize();
     if (!gameThreadOk) {
         GWA3::Log::Warn("GameThread initialization failed");
         if (!anyTest) {
@@ -246,6 +280,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
             GWA3::Log::Info("Hello from game thread! Hook is working.");
         });
         GWA3::StoC::Initialize();
+        GWA3::DialogMgr::Initialize();
     }
 
     if (cmdTest) {
@@ -259,6 +294,18 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::Log::Info("=== INTEGRATION TEST MODE ===");
         int failures = GWA3::SmokeTest::RunIntegrationTest();
         GWA3::Log::Info("Integration test complete: %d failures", failures);
+#if CRASH_TEST > 0
+        // In crash test modes, wait 60s after test to observe render hook stability
+        GWA3::Log::Info("Test finished — CRASH_TEST=%d: waiting 60s before termination (hb=%u)...",
+                        CRASH_TEST, GWA3::RenderHook::GetHeartbeat());
+        Sleep(60000);
+        GWA3::Log::Info("Post-test wait done (hb=%u)", GWA3::RenderHook::GetHeartbeat());
+#endif
+        // Terminate immediately — don't unhook (race condition with render thread)
+        GWA3::Log::Info("Test finished — terminating GW process");
+        GWA3::Log::Shutdown();
+        Sleep(100);
+        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
         return static_cast<DWORD>(failures);
     }
 
@@ -283,6 +330,20 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
+    if (llmMode) {
+        GWA3::Log::Info("=== LLM AGENT MODE ===");
+        if (!GWA3::LLM::Initialize()) {
+            GWA3::Log::Error("LLM bridge initialization failed");
+            return 1;
+        }
+        GWA3::Log::Info("gwa3.dll initialization complete - LLM bridge active");
+        // LLM bridge runs on its own threads; keep InitThread alive to hold the DLL
+        while (GWA3::LLM::IsRunning()) {
+            Sleep(1000);
+        }
+        return 0;
+    }
+
     GWA3::Bot::Froggy::Register();
     GWA3::Bot::Start();
 
@@ -297,7 +358,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
         DisableThreadLibraryCalls(hModule);
         CreateThread(nullptr, 0, &InitThread, hModule, 0, nullptr);
     } else if (reason == DLL_PROCESS_DETACH) {
+        GWA3::LLM::Shutdown();
         GWA3::Bot::Stop();
+        GWA3::DialogMgr::Shutdown();
         GWA3::StoC::Shutdown();
         GWA3::TraderHook::Shutdown();
         GWA3::TargetLogHook::Shutdown();

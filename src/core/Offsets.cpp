@@ -83,8 +83,39 @@ uintptr_t ValidateAsyncDecodeStr = 0;
 uintptr_t PostMessage = 0;
 uintptr_t ChatLog = 0;
 
+uintptr_t TitleClientDataBase = 0;
+
 uintptr_t CameraClass = 0;
 uintptr_t FogPatch = 0;
+
+uintptr_t PostProcessEffect = 0;
+uintptr_t DropBuff = 0;
+
+uintptr_t GwEndScene = 0;
+
+uintptr_t ItemClick = 0;
+
+uintptr_t CameraUpdateBypass = 0;
+uintptr_t LevelDataBypass = 0;
+uintptr_t MapPortBypass = 0;
+
+uintptr_t OfferTradeItem = 0;
+uintptr_t UpdateTradeCart = 0;
+
+uintptr_t SendChatFunc = 0;
+uintptr_t AddToChatLog = 0;
+
+uintptr_t SkipCinematicFunc = 0;
+
+uintptr_t RequestQuestInfo = 0;
+
+uintptr_t FriendListAddr = 0;
+uintptr_t FriendEventHandler = 0;
+
+uintptr_t DrawOnCompass = 0;
+
+uintptr_t GetSenderColor = 0;
+uintptr_t GetMessageColor = 0;
 
 uintptr_t SendFrameUIMsg = 0;
 
@@ -223,6 +254,49 @@ static const PatternDef s_patterns[] = {
     PAT("CameraClass",    CameraClass,    "\xD9\xEE\xB9\x00\x00\x00\x00\xD9\x55\xFC", "xxx????xxx", 0x3, Priority::P2, PatternType::Ptr),
     PAT("FogPatch",       FogPatch,       "\x83\xE0\x01\x8B\x09\x50\x6A\x1C",         "xxxxxxxx",   0x2, Priority::P2, PatternType::Ptr),
 
+    // ===== Effects (P2) =====
+    PAT("PostProcessEffect", PostProcessEffect, "\xD9\x5D\x0C\xD9\x45\x0C\x8D\x45\xF8", "xxxxxxxxx", -0x1C, Priority::P2, PatternType::Func),
+    PAT("DropBuff",          DropBuff,          "\xf6\x40\x04\x01\x74\x10",               "xxxxxx",    0x9,   Priority::P2, PatternType::Func),
+
+    // ===== Render (P2) =====
+    PAT("GwEndScene",    GwEndScene,    "\x89\x45\xFC\x57\x8B\x7D\x08\x8B\x8F",        "xxxxxxxxx",  -0xD,  Priority::P2, PatternType::Func),
+
+    // ===== Items (P1) =====
+    PAT("ItemClick",     ItemClick,     "\x8B\x48\x08\x83\xEA\x00\x0F\x84",             "xxxxxxxx",   -0x1C, Priority::P1, PatternType::Func),
+
+    // ===== Trade GWCA (P2) =====
+    PAT("OfferTradeItem",  OfferTradeItem,  "\x68\x49\x04\x00\x00\x89\x5D\xE4\xE8",       "xxxxxxxxx",  -0x6B, Priority::P2, PatternType::Func),
+    PAT("UpdateTradeCart",  UpdateTradeCart, "\x57\x8B\x7D\x0C\x3D\xEF\x00\x00\x10",       "xxxxxxxxx",  -0x24, Priority::P2, PatternType::Func),
+
+    // ===== Chat GWCA (P2) =====
+    PAT("SendChatFunc",  SendChatFunc,  "\x8D\x85\xE0\xFE\xFF\xFF\x50\x68\x1C\x01",     "xxxxxxxxx",  -0x3E, Priority::P2, PatternType::Func),
+    PAT("AddToChatLog",  AddToChatLog,  "\x40\x25\xFF\x01\x00\x00",                      "xxxxxx",     -0x97, Priority::P2, PatternType::Func),
+
+    // ===== Map GWCA (P2) =====
+    PAT("SkipCinematicFunc", SkipCinematicFunc, "\x8B\x40\x30\x83\x78\x04\x00",          "xxxxxxx",    -0x5,  Priority::P2, PatternType::Func),
+
+    // ===== Quest GWCA (P2) =====
+    PAT("RequestQuestInfo", RequestQuestInfo, "\x68\x4A\x01\x00\x10\xFF\x77\x04",           "xxxxxxxx",   0x7A, Priority::P2, PatternType::Func),
+
+    // ===== FriendList GWCA (P2) =====
+    PAT("FriendListAddr",    FriendListAddr,    "\x74\x30\x8D\x47\xFF\x83\xF8\x01",          "xxxxxxxx",   -0xB, Priority::P2, PatternType::Ptr),
+    PAT("FriendEventHandler", FriendEventHandler, "\x83\xC0\xDA\x83\xF8\x06",                "xxxxxx",     -0xC, Priority::P2, PatternType::Func),
+
+    // ===== Compass GWCA (P2) =====
+    ASSERT_PAT("DrawOnCompass", DrawOnCompass, -0x2E, Priority::P2, PatternType::Func, "p:\\code\\gw\\char\\charmsg.cpp", "knotCount <= arrsize(message.knotData)"),
+
+    // ===== Chat Colors GWCA (P2) =====
+    PAT("GetSenderColor",  GetSenderColor,  "\xC7\x00\x60\xC0\xFF\xFF\x5D\xC3",             "xxxxxxxx",   -0x1C, Priority::P2, PatternType::Func),
+    PAT("GetMessageColor", GetMessageColor, "\xC7\x00\xB0\xB0\xB0\xFF\x5D\xC3",             "xxxxxxxx",   -0x27, Priority::P2, PatternType::Func),
+
+    // ===== Memory Patches (P2) =====
+    // Camera update bypass: MOV [ESI],ECX / FSTP ST(1) / MOV [ESI+4],EDX — patch to JMP +0xC
+    PAT("CameraUpdateBypass", CameraUpdateBypass, "\x89\x0E\xDD\xD9\x89\x56\x04\xDD",    "xxxxxxxx",   0x0, Priority::P2, PatternType::Ptr),
+    // Level-data bypass: TEST AH,1 / JZ 0x1D / PUSH 0x1A9 — patch JZ to JMP
+    PAT("LevelDataBypass", LevelDataBypass, "\xF6\xC4\x01\x74\x1D\x68\xA9\x01\x00\x00", "xxxxxxxxxx", 0x3, Priority::P2, PatternType::Ptr),
+    // Map/port bypass: ADD ESP,0xC / TEST EAX,EAX / JNZ 0xC / PUSH 1 — patch JNZ to NOP NOP
+    PAT("MapPortBypass",   MapPortBypass,   "\x83\xC4\x0C\x85\xC0\x75\x0C\x6A\x01",      "xxxxxxxxx",  0x5, Priority::P2, PatternType::Ptr),
+
     // ===== Frame UI (P0 — new for GWA3, NOT from AutoIt ASM scanner) =====
     PAT("SendFrameUIMsg", SendFrameUIMsg, "\x83\xC1\xDC\xE8",                   "xxxx",     0x3,    Priority::P0, PatternType::Func),
 };
@@ -358,6 +432,32 @@ static void PostProcessOffsets() {
 
     // Camera: scan+3 points at embedded pointer to Camera struct
     if (CameraClass)    CameraClass    = Deref(CameraClass);
+
+    // Effects: DropBuff scan result contains E8 near call
+    if (DropBuff)       DropBuff       = Scanner::FunctionFromNearCall(DropBuff);
+
+    // Quest: RequestQuestInfo scan result contains E8 near call
+    if (RequestQuestInfo) RequestQuestInfo = Scanner::FunctionFromNearCall(RequestQuestInfo);
+
+    // FriendList: scan result contains embedded pointer, deref to get FriendList struct
+    if (FriendListAddr) FriendListAddr = Deref(FriendListAddr);
+
+    // TitleClientData: scan .rdata for the first entry pattern (00 00 00 00 23 40 00 00)
+    // Result - 4 bytes = array base (from GWCA gwca.dll binary analysis)
+    {
+        auto rdata = Scanner::GetRdataSection();
+        if (rdata.start && rdata.size) {
+            uintptr_t found = Scanner::FindInRange(
+                "\x00\x00\x00\x00\x23\x40\x00\x00",
+                "xxxxxxxx", -4, rdata.start, rdata.size);
+            if (found > 0x10000) {
+                TitleClientDataBase = found;
+                Log::Info("Offsets: TitleClientDataBase = 0x%08X (rdata scan)", found);
+            } else {
+                Log::Warn("Offsets: TitleClientData rdata scan failed");
+            }
+        }
+    }
 
     // FriendList: complex post-processing (FindInRange + deref) — skip for now
     // RemoveFriend: complex post-processing (FindInRange + ResolveBranch) — skip for now
