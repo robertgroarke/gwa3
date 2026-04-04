@@ -128,6 +128,9 @@ class AgentLoop:
             except asyncio.TimeoutError:
                 break
             if msg is None:
+                print("[Bridge] Pipe disconnected — stopping agent loop.")
+                self._running = False
+                self.observations.latest = None
                 break
 
             msg_type = msg.get("type", "")

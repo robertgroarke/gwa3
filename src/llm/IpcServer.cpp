@@ -82,7 +82,7 @@ namespace GWA3::LLM::IpcServer {
             // Create a new pipe instance for each client connection
             g_pipe = CreateNamedPipeA(
                 PIPE_NAME,
-                PIPE_ACCESS_DUPLEX,
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
                 1,                    // max instances
                 PIPE_BUFFER_SIZE,
