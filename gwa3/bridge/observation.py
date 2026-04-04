@@ -244,6 +244,16 @@ class ObservationWindow:
             total_stored = sum(b.get("item_count", 0) for b in storage)
             lines.append(f"Xunlai Storage: {total_stored} items across {len(storage)} panes")
 
+        # Chat log (from tier 2+)
+        chat = snap.get("chat", [])
+        if chat:
+            lines.append(f"Chat ({len(chat)} new):")
+            for msg in chat:
+                ch = msg.get("channel", "?")
+                sender = msg.get("sender", "")
+                text = msg.get("message", "")
+                lines.append(f"  [{ch}] {sender}: {text[:200]}")
+
         # Recent events
         events = self.get_recent_events(5)
         if events:

@@ -59,6 +59,7 @@ add_library(gwa3_core OBJECT
     src/managers/StoCMgr.cpp
     src/managers/EffectMgr.cpp
     src/managers/DialogMgr.cpp
+    src/managers/ChatLogMgr.cpp
     src/utils/EncStrCodec.cpp
     src/bot/BotFramework.cpp
     src/bot/FroggyHM.cpp
@@ -66,6 +67,13 @@ add_library(gwa3_core OBJECT
     src/tests/BotFrameworkTest.cpp
     src/tests/BehavioralTest.cpp
     src/tests/IntegrationTest.cpp
+    src/tests/IntegrationTestGameplay.cpp
+    src/tests/IntegrationTestIntrospection.cpp
+    src/tests/IntegrationTestOffsets.cpp
+    src/tests/IntegrationTestSession.cpp
+    src/tests/IntegrationTestSystems.cpp
+    src/tests/IntegrationTestSupport.cpp
+    src/tests/IntegrationTestWorld.cpp
     src/llm/IpcServer.cpp
     src/llm/GameSnapshot.cpp
     src/llm/ActionExecutor.cpp
