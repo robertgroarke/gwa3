@@ -220,12 +220,12 @@ void Enqueue(Callback task) {
     LeaveCriticalSection(&s_cs);
 }
 
+void EnqueuePost(Callback task) {
+    if (!s_initialized) return;
     // Always queue — never fast-path. EnqueuePost must run AFTER the original
     // game callback, but s_onGameThread is true during pre-callback Dispatch too.
     EnterCriticalSection(&s_cs);
     s_postQueue.push_back(std::move(task));
-    LeaveCriticalSection(&s_cs);
-}
     LeaveCriticalSection(&s_cs);
 }
 

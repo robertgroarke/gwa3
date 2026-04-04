@@ -127,6 +127,7 @@ namespace GWA3::LLM {
             } else {
                 // Client disconnected — drain stale queued actions
                 IpcServer::DrainInbound();
+            }
 
             Sleep(ACTION_POLL_MS);
         }

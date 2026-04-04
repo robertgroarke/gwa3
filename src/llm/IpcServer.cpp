@@ -232,7 +232,7 @@ namespace GWA3::LLM::IpcServer {
     void FreeMsgBuf(char* buf) {
         delete[] buf;
     }
-n    void DrainInbound() {
+    void DrainInbound() {
         while (HasPending()) {
             uint32_t len = 0;
             char* msg = Dequeue(&len);

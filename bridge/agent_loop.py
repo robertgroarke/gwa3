@@ -101,9 +101,9 @@ class AgentLoop:
         self._cycle_count = 0
         self._last_action_time = 0.0
         self._consecutive_no_action = 0
-        self._action_results: dict[str, dict] = {}
         self._read_queue: asyncio.Queue = asyncio.Queue()
         self._reader_task: asyncio.Task | None = None
+        self._action_results: dict[str, dict] = {}
 
     async def inject_user_message(self, message: str):
         """Inject a user chat message into the agent loop."""
@@ -278,7 +278,6 @@ class AgentLoop:
                     tc_names = [tc.name for tc in response.tool_calls]
                     print(f"[Gemma -> GW] {', '.join(tc_names)}")
                     self._consecutive_no_action = 0
-        self._action_results: dict[str, dict] = {}
 
                     self.history.append({
                         "role": "assistant",
@@ -303,7 +302,6 @@ class AgentLoop:
                     if self._consecutive_no_action >= 10:
                         # Gemma has been idle too long, nudge it
                         self._consecutive_no_action = 0
-        self._action_results: dict[str, dict] = {}
                         self.history.append({
                             "role": "user",
                             "content": "[SYSTEM] You have been idle for 10 cycles. "
