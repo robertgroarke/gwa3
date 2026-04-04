@@ -708,6 +708,97 @@ static int IdentifyGoldItems() {
     return identified;
 }
 
+// ===== Salvage System (GWA3-100) =====
+
+static bool ShouldSalvage(const Item* item) {
+    if (!item || item->item_id == 0 || item->model_id == 0) return false;
+    if (item->equipped) return false;
+    if (item->customized) return false;
+
+    uint16_t rarity = GetItemRarity(item);
+
+    // Only salvage white and blue items
+    if (rarity != RARITY_WHITE && rarity != RARITY_BLUE) return false;
+
+    // Never salvage kits, consumables, quest items
+    switch (item->model_id) {
+    case MODEL_ID_KIT: case MODEL_SUP_ID_KIT:
+    case MODEL_SALV_KIT: case MODEL_EXP_SALV_KIT:
+    case MODEL_ARMOR_SALV: case MODEL_ESSENCE_CEL: case MODEL_GRAIL_MIGHT:
+    case MODEL_BIRTHDAY_CUPCAKE: case MODEL_SLICE_BIRTHDAY: case MODEL_CANDY_CORN:
+        return false;
+    }
+
+    // Don't salvage materials (type 11) — they already ARE materials
+    if (item->type == 11) return false;
+
+    // Don't salvage keys (type 18)
+    if (item->type == 18) return false;
+
+    // Don't salvage usable items (type 9) — scrolls, tonics, etc.
+    if (item->type == 9) return false;
+
+    // Don't salvage kits (type 29)
+    if (item->type == 29) return false;
+
+    return true;
+}
+
+static int SalvageJunkItems() {
+    auto* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    // Find a salvage kit
+    uint32_t kitId = 0;
+    for (int b = 1; b <= 4 && !kitId; b++) {
+        auto* bag = ItemMgr::GetBag(b);
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t s = 0; s < bag->items.size; s++) {
+            auto* item = bag->items.buffer[s];
+            if (!item) continue;
+            if (item->model_id == MODEL_SALV_KIT || item->model_id == MODEL_EXP_SALV_KIT) {
+                kitId = item->item_id;
+                break;
+            }
+        }
+    }
+    if (!kitId) {
+        LogBot("No salvage kit found — skipping salvage");
+        return 0;
+    }
+
+    int salvaged = 0;
+    for (int b = 1; b <= 4; b++) {
+        auto* bag = ItemMgr::GetBag(b);
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t s = 0; s < bag->items.size; s++) {
+            auto* item = bag->items.buffer[s];
+            if (!item || item->item_id == 0) continue;
+            if (!ShouldSalvage(item)) continue;
+
+            LogBot("Salvaging item %u (model=%u type=%u)", item->item_id, item->model_id, item->type);
+            ItemMgr::SalvageSessionOpen(kitId, item->item_id);
+            WaitMs(800);
+            ItemMgr::SalvageMaterials();
+            WaitMs(800);
+            ItemMgr::SalvageSessionDone();
+            WaitMs(300);
+            salvaged++;
+
+            // Re-check kit still exists
+            auto* kit = ItemMgr::GetItemById(kitId);
+            if (!kit) {
+                LogBot("Salvage kit depleted after %d salvages", salvaged);
+                return salvaged;
+            }
+        }
+    }
+    if (salvaged > 0) {
+        LogBot("Salvaged %d items for materials", salvaged);
+    }
+    return salvaged;
+}
+
 static bool ShouldSellItem(const Item* item) {
     if (!item || item->item_id == 0 || item->model_id == 0) return false;
     if (item->equipped) return false;
@@ -1190,6 +1281,9 @@ BotState HandleMerchant(BotConfig& cfg) {
 
     // Identify gold/purple items before selling (maximizes value)
     IdentifyGoldItems();
+
+    // Salvage white/blue items for materials (before selling remaining junk)
+    SalvageJunkItems();
 
     // Sell junk items to merchant
     SellJunkToMerchant();
