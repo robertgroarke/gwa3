@@ -72,8 +72,10 @@ class ObservationWindow:
         # Map
         m = snap.get("map", {})
         if m.get("map_id"):
+            loading = m.get("loading_state", "?")
+            load_str = {0: "loading", 1: "loaded", 2: "disconnected"}.get(loading, f"state={loading}")
             lines.append(
-                f"Map: id={m['map_id']} loaded={m.get('is_loaded')} "
+                f"Map: id={m['map_id']} {load_str} "
                 f"time={m.get('instance_time', 0)}ms"
             )
 
@@ -243,6 +245,17 @@ class ObservationWindow:
         if storage:
             total_stored = sum(b.get("item_count", 0) for b in storage)
             lines.append(f"Xunlai Storage: {total_stored} items across {len(storage)} panes")
+
+        # Title progression (from tier 3)
+        titles = snap.get("titles", {})
+        if titles:
+            title_parts = []
+            for name, data in titles.items():
+                pts = data.get("current_points", 0)
+                rank = data.get("current_rank", 0)
+                nxt = data.get("points_needed_next", 0)
+                title_parts.append(f"{name}={pts}pts(rank {rank}, next@{nxt})")
+            lines.append("Titles: " + ", ".join(title_parts))
 
         # Chat log (from tier 2+)
         chat = snap.get("chat", [])

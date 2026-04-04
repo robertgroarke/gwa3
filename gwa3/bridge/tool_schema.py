@@ -480,6 +480,13 @@ SEND_CHAT = _tool(
     },
 )
 
+RESIGN = _tool(
+    "resign",
+    "Resign from the current mission/explorable area. Sends /resign in chat. "
+    "If all party members resign, the party returns to the outpost.",
+    {"properties": {}, "required": []},
+)
+
 WAIT = _tool(
     "wait",
     "Wait for a specified number of milliseconds before the next action.",
@@ -546,5 +553,6 @@ ALL_TOOLS = [
     # Utility
     SEND_CHAT,
     DROP_GOLD,
+    RESIGN,
     WAIT,
 ]

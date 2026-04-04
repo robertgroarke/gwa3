@@ -2484,11 +2484,11 @@ Test the ActionExecutor's validation and error paths: rate limiting, unknown act
 | GWA3-055 | MoraleMgr — Read Party Morale | M | 005, 006 | `backlog` |
 | GWA3-056 | Quest State Reader — Active Quest + Objectives | L | 005, 006 | `backlog` |
 | GWA3-057 | Vanquish Progress — Foes Killed / Foes To Kill | M | 005, 006 | `backlog` |
-| GWA3-058 | Title Progression Snapshot — EotN + Core Titles | S | 049 | `backlog` |
-| GWA3-059 | Map Loading 3-State — Not Loaded / Loaded / Disconnected | S | 005 | `backlog` |
+| GWA3-058 | Title Progression Snapshot — EotN + Core Titles | S | 049 | `done` |
+| GWA3-059 | Map Loading 3-State — Not Loaded / Loaded / Disconnected | S | 005 | `done` |
 | GWA3-060 | Agent Name Decoding — Decode Encoded NPC/Player Names | M | 051, 005 | `backlog` |
 | GWA3-061 | Dialog Body Decoding — AsyncDecodeStr for Dialog Text | M | 051, 053 | `backlog` |
-| GWA3-062 | Resign Action — Resign + Return to Outpost Combo | S | 010 | `backlog` |
+| GWA3-062 | Resign Action — Resign + Return to Outpost Combo | S | 010 | `done` |
 | GWA3-063 | Chest Interaction — Open Chest + Lockpick Support | S | 010, 016 | `backlog` |
 | GWA3-064 | Craft Item Action — Crafter NPC Transaction Flow | M | 010, 053 | `backlog` |
 | GWA3-065 | StoC Event Push — Map Change / Kill / Loot / Chat Events to Bridge | L | 053, LLM IPC | `backlog` |
