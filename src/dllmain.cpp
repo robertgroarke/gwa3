@@ -337,6 +337,10 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::Log::Info("=== ADVANCED WORKFLOW TEST MODE ===");
         int failures = GWA3::SmokeTest::RunAdvancedWorkflowTest();
         GWA3::Log::Info("Workflow test complete: %d failures", failures);
+        GWA3::Log::Info("Terminating GW process");
+        GWA3::Log::Shutdown();
+        Sleep(100);
+        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
         return static_cast<DWORD>(failures);
     }
 
