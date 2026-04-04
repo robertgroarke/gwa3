@@ -2,6 +2,7 @@
 #include <gwa3/llm/IpcServer.h>
 #include <gwa3/llm/GameSnapshot.h>
 #include <gwa3/llm/ActionExecutor.h>
+#include <gwa3/llm/EventPush.h>
 #include <gwa3/core/Log.h>
 
 #include <Windows.h>
@@ -152,11 +153,17 @@ namespace GWA3::LLM {
             return false;
         }
 
+        // EventPush is optional — don't fail bridge init if it can't hook
+        if (!EventPush::Initialize()) {
+            GWA3::Log::Warn("[LLM-Bridge] EventPush initialization failed — events won't stream");
+        }
+
         g_running.store(true);
         g_bridgeThread = CreateThread(nullptr, 0, BridgeThread, nullptr, 0, nullptr);
         if (!g_bridgeThread) {
             GWA3::Log::Error("[LLM-Bridge] Failed to create bridge thread");
             g_running.store(false);
+            EventPush::Shutdown();
             ActionExecutor::Shutdown();
             IpcServer::Shutdown();
             return false;
@@ -176,6 +183,7 @@ namespace GWA3::LLM {
             g_bridgeThread = nullptr;
         }
 
+        EventPush::Shutdown();
         ActionExecutor::Shutdown();
         IpcServer::Shutdown();
 
