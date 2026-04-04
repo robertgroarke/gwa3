@@ -78,6 +78,7 @@ add_library(gwa3_core OBJECT
     src/llm/IpcServer.cpp
     src/llm/GameSnapshot.cpp
     src/llm/ActionExecutor.cpp
+    src/llm/EventPush.cpp
     src/llm/LlmBridge.cpp
 )
 
