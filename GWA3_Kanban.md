@@ -2495,27 +2495,27 @@ Test the ActionExecutor's validation and error paths: rate limiting, unknown act
 | GWA3-066 | Advisory Mode — LLM Overrides FroggyHM State Machine | L | 025, 026, LLM Bridge | `backlog` |
 
 | **Epic 12: LLM Bridge Integration Tests** | | | | |
-| GWA3-067 | Bridge Test Infrastructure (runner, base, helpers) | L | — | `backlog` |
-| GWA3-068 | IPC Protocol Tests (Category A) | M | 067 | `backlog` |
-| GWA3-069 | Observation: Player State (B1) | S | 068 | `backlog` |
-| GWA3-070 | Observation: Skillbar (B2) | S | 068 | `backlog` |
-| GWA3-071 | Observation: Map State (B3) | S | 068 | `backlog` |
-| GWA3-072 | Observation: Party State (B4) | S | 068 | `backlog` |
-| GWA3-073 | Observation: Nearby Agents (B5) | M | 068 | `backlog` |
-| GWA3-074 | Observation: Hero Skillbars (B6) | S | 068 | `backlog` |
-| GWA3-075 | Observation: Dialog, Merchant, Chat (B7-B9) | M | 068 | `backlog` |
-| GWA3-076 | Observation: Inventory & Storage (B10-B11) | M | 068 | `backlog` |
-| GWA3-077 | Observation: Effects & Tier Progression (B12) | S | 068 | `backlog` |
-| GWA3-078 | Action: Movement & Targeting (C1-C2) | M | 068, 069 | `backlog` |
-| GWA3-079 | Action: Combat (C3) | M | 068, 069 | `backlog` |
-| GWA3-080 | Action: Party & Hero (C4) | M | 068, 072 | `backlog` |
-| GWA3-081 | Action: Travel (C5) | L | 068, 071 | `backlog` |
-| GWA3-082 | Action: Items (C6) | M | 068, 076 | `backlog` |
-| GWA3-083 | Action: Salvage & Identify (C7) | M | 068, 076 | `backlog` |
-| GWA3-084 | Action: Trade (C8) | M | 068, 075 | `backlog` |
-| GWA3-085 | Action: Dialog & NPC Interaction (C9) | M | 068, 073 | `backlog` |
-| GWA3-086 | Action: Skillbar, Chat, Utility (C10-C12) | M | 068, 070 | `backlog` |
-| GWA3-087 | Validation & Error Handling (Category D) | M | 068 | `backlog` |
+| GWA3-067 | Bridge Test Infrastructure (runner, base, helpers) | L | — | `done` |
+| GWA3-068 | IPC Protocol Tests (Category A) | M | 067 | `done` |
+| GWA3-069 | Observation: Player State (B1) | S | 068 | `done` |
+| GWA3-070 | Observation: Skillbar (B2) | S | 068 | `done` |
+| GWA3-071 | Observation: Map State (B3) | S | 068 | `done` |
+| GWA3-072 | Observation: Party State (B4) | S | 068 | `done` |
+| GWA3-073 | Observation: Nearby Agents (B5) | M | 068 | `done` |
+| GWA3-074 | Observation: Hero Skillbars (B6) | S | 068 | `done` |
+| GWA3-075 | Observation: Dialog, Merchant, Chat (B7-B9) | M | 068 | `done` |
+| GWA3-076 | Observation: Inventory & Storage (B10-B11) | M | 068 | `done` |
+| GWA3-077 | Observation: Effects & Tier Progression (B12) | S | 068 | `done` |
+| GWA3-078 | Action: Movement & Targeting (C1-C2) | M | 068, 069 | `done` |
+| GWA3-079 | Action: Combat (C3) | M | 068, 069 | `done` |
+| GWA3-080 | Action: Party & Hero (C4) | M | 068, 072 | `done` |
+| GWA3-081 | Action: Travel (C5) | L | 068, 071 | `done` |
+| GWA3-082 | Action: Items (C6) | M | 068, 076 | `done` |
+| GWA3-083 | Action: Salvage & Identify (C7) | M | 068, 076 | `done` |
+| GWA3-084 | Action: Trade (C8) | M | 068, 075 | `done` |
+| GWA3-085 | Action: Dialog & NPC Interaction (C9) | M | 068, 073 | `done` |
+| GWA3-086 | Action: Skillbar, Chat, Utility (C10-C12) | M | 068, 070 | `done` |
+| GWA3-087 | Validation & Error Handling (Category D) | M | 068 | `done` |
 
 **Total: 87 tickets across 12 epics.**
 
