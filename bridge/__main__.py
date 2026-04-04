@@ -47,23 +47,23 @@ async def main():
     # Create agent loop with objective
     agent = AgentLoop(ipc, llm, autonomy=args.autonomy, objective=args.objective)
 
-    # Run agent loop and optional chat interface concurrently
+    # Run agent loop and optional chat interface concurrently.
+    # Agent task is primary — chat ending (e.g. stdin EOF) should not stop the bot.
     try:
         agent_task = asyncio.create_task(agent.run())
         chat_task = asyncio.create_task(chat_input_loop(agent))
 
-        done, pending = await asyncio.wait(
-            [agent_task, chat_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-
-        for task in pending:
-            task.cancel()
+        # Wait for the agent task (primary). Chat is background/optional.
+        try:
+            await agent_task
+        except Exception as e:
+            print(f"[Bridge] Agent loop error: {e}")
+        finally:
+            chat_task.cancel()
             try:
-                await task
+                await chat_task
             except asyncio.CancelledError:
                 pass
-
     except KeyboardInterrupt:
         print("\n[Bridge] Shutting down...")
     finally:
