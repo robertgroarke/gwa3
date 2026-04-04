@@ -369,6 +369,17 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
+    static ActionResult HandleCraftItem(const json& p) {
+        if (!p.contains("item_id")) return MakeError("missing item_id");
+        uint32_t itemId = p["item_id"].get<uint32_t>();
+        uint32_t qty = p.value("quantity", 1u);
+        // CrafterBuy = transaction type 3
+        GWA3::GameThread::Enqueue([itemId, qty]() {
+            TradeMgr::TransactItems(3, qty, itemId);
+        });
+        return MakeOk();
+    }
+
     static ActionResult HandleIdentifyItem(const json& p) {
         if (!p.contains("item_id") || !p.contains("kit_id"))
             return MakeError("missing item_id or kit_id");
@@ -489,10 +500,11 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["salvage_materials"] = HandleSalvageMaterials;
         g_dispatch["salvage_done"] = HandleSalvageDone;
 
-        // Trade
+        // Trade & Crafting
         g_dispatch["buy_materials"] = HandleBuyMaterials;
         g_dispatch["request_quote"] = HandleRequestQuote;
         g_dispatch["transact_items"] = HandleTransactItems;
+        g_dispatch["craft_item"] = HandleCraftItem;
 
         // Skillbar
         g_dispatch["load_skillbar"] = HandleLoadSkillbar;
