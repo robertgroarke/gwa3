@@ -20,7 +20,7 @@ bool Initialize() {
 
 void AddHero(uint32_t heroId)    { CtoS::HeroAdd(heroId); }
 void KickHero(uint32_t heroId)   { CtoS::HeroKick(heroId); }
-void KickAllHeroes()             { CtoS::SendPacket(2, Packets::HERO_KICK, 0u); }
+void KickAllHeroes()             { CtoS::SendPacket(2, Packets::HERO_KICK, 0x26u); } // 0x26 = kick-all sentinel
 
 void AddHenchman(uint32_t id)    { CtoS::SendPacket(2, Packets::PARTY_INVITE_NPC, id); }
 void KickHenchman(uint32_t id)   { CtoS::SendPacket(2, Packets::PARTY_KICK_NPC, id); }

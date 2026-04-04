@@ -33,11 +33,18 @@ static volatile bool s_watchdogRunning = false;
 static volatile bool s_crashDetected = false;
 static HANDLE s_watchdogThread = nullptr;
 
+static volatile bool s_disconnectDetected = false;
+static uint32_t s_watchdogLastMapId = 0;
+
 static DWORD WINAPI WatchdogThread(LPVOID) {
     uint32_t lastHeartbeat = RenderHook::GetHeartbeat();
     int stallCount = 0;
+    s_watchdogLastMapId = MapMgr::GetMapId();
+
     while (s_watchdogRunning) {
         Sleep(1000);
+
+        // --- Crash detection: render heartbeat stall ---
         uint32_t hb = RenderHook::GetHeartbeat();
         if (hb == lastHeartbeat && hb > 0) {
             stallCount++;
@@ -47,17 +54,13 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
                 Log::Error("[WATCHDOG] Hook JMP intact: %s", hookIntact ? "YES" : "NO — OVERWRITTEN!");
                 Log::Error("[WATCHDOG] Last known test state: %d passed, %d failed, %d skipped",
                            s_intPassed, s_intFailed, s_intSkipped);
-                Log::Error("[WATCHDOG] RenderHook qCtr=%u pending=%u",
-                           RenderHook::GetQueueCounter(), RenderHook::GetPendingCount());
                 s_crashDetected = true;
 #if CRASH_TEST == 0
-                // Only auto-kill in normal mode — crash tests need GW to stay alive
                 if (s_intReport) { fflush(s_intReport); }
                 Log::Error("[WATCHDOG] Terminating GW process...");
                 TerminateProcess(GetCurrentProcess(), 0xDEAD);
 #else
                 Log::Error("[WATCHDOG] (CRASH_TEST mode — NOT killing, continuing observation)");
-                // Reset stall count to keep logging if heartbeat resumes
                 stallCount = 0;
 #endif
             }
@@ -65,6 +68,25 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
             stallCount = 0;
         }
         lastHeartbeat = hb;
+
+        // --- Disconnect detection: MapID drops to 0 or charselect appears ---
+        uint32_t currentMapId = MapMgr::GetMapId();
+        if (s_watchdogLastMapId > 0 && currentMapId == 0) {
+            Log::Error("[WATCHDOG] !!! DISCONNECT DETECTED — MapID dropped from %u to 0 !!!",
+                       s_watchdogLastMapId);
+            Log::Error("[WATCHDOG] Test state at disconnect: %d passed, %d failed, %d skipped",
+                       s_intPassed, s_intFailed, s_intSkipped);
+            s_disconnectDetected = true;
+
+            if (s_intReport) { fflush(s_intReport); }
+            Log::Error("[WATCHDOG] Terminating GW process after disconnect...");
+            Log::Shutdown();
+            Sleep(100);
+            TerminateProcess(GetCurrentProcess(), 0xDC);
+        }
+        if (currentMapId > 0) {
+            s_watchdogLastMapId = currentMapId;
+        }
     }
     return 0;
 }
@@ -1084,6 +1106,7 @@ int RunAdvancedWorkflowTest() {
     s_intPassed = 0;
     s_intFailed = 0;
     s_intSkipped = 0;
+    StartWatchdog();
 
     s_intReport = OpenIntReport();
 
@@ -1152,6 +1175,7 @@ int RunAdvancedWorkflowTest() {
         s_intReport = nullptr;
     }
 
+    StopWatchdog();
     Log::Info("[INTG] Advanced workflow complete: %d passed, %d failed, %d skipped",
               s_intPassed, s_intFailed, s_intSkipped);
     return s_intFailed;
