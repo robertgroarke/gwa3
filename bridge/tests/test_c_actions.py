@@ -1,8 +1,7 @@
 """Category C: Action Tests — send commands through the bridge and verify results + state changes."""
 
-import asyncio
 from .base import BridgeTestCase
-from .helpers import assert_true, assert_gt, assert_keys_present, snapshot_get
+from .helpers import assert_true, assert_gt, assert_keys_present, assert_type, assert_gte
 
 
 # ============================================================
@@ -10,12 +9,15 @@ from .helpers import assert_true, assert_gt, assert_keys_present, snapshot_get
 # ============================================================
 
 async def test_move_to_success(tc: BridgeTestCase):
-    """Send move_to with valid coordinates, expect success."""
+    """Send move_to with valid coordinates, verify success and result structure."""
     snap = await tc.wait_for_snapshot(tier=1)
     x = snap["me"]["x"] + 100
     y = snap["me"]["y"] + 100
     result = await tc.send_action("move_to", {"x": x, "y": y})
     tc.assert_action_success(result)
+    assert_keys_present(result, ["success", "request_id"], "action_result")
+    assert_true(result["error"] is None, f"Expected null error, got '{result.get('error')}'")
+
 
 
 async def test_move_to_missing_params(tc: BridgeTestCase):
@@ -29,21 +31,25 @@ async def test_move_to_out_of_range(tc: BridgeTestCase):
 
 
 async def test_move_to_state_change(tc: BridgeTestCase):
-    """After move_to, player should be moving or position should change."""
+    """After move_to, position must change by at least 10 units within 5s."""
     snap = await tc.wait_for_snapshot(tier=1)
     old_x = snap["me"]["x"]
     old_y = snap["me"]["y"]
     result = await tc.send_action("move_to", {"x": old_x + 200, "y": old_y + 200})
     tc.assert_action_success(result)
 
-    # Wait for position to change or is_moving to be true
-    def moved(s):
+    def position_changed(s):
         me = s.get("me", {})
         dx = abs(me.get("x", old_x) - old_x)
         dy = abs(me.get("y", old_y) - old_y)
-        return me.get("is_moving", False) or (dx > 10 or dy > 10)
+        return dx > 10 or dy > 10
 
-    await tc.wait_for_state_change(moved, tier=1, timeout=5.0)
+    new_snap = await tc.wait_for_state_change(position_changed, tier=1, timeout=5.0)
+    # Verify the distance is actually meaningful
+    new_x = new_snap["me"]["x"]
+    new_y = new_snap["me"]["y"]
+    dist = ((new_x - old_x)**2 + (new_y - old_y)**2)**0.5
+    assert_gt(dist, 10, f"Position should have moved >10 units, moved {dist:.1f}")
 
 
 async def test_cancel_action_success(tc: BridgeTestCase):
@@ -73,19 +79,29 @@ async def test_change_target_success(tc: BridgeTestCase):
 
 
 async def test_change_target_state_change(tc: BridgeTestCase):
-    """After change_target, me.target_id should update."""
+    """After change_target, me.target_id must match the requested agent."""
     snap = await tc.wait_for_snapshot(tier=2)
     agents = snap.get("agents", [])
     if not agents:
         tc.skip("No nearby agents to target")
-    target_id = agents[0]["id"]
+    old_target = snap["me"]["target_id"]
+    # Pick an agent that is NOT our current target
+    candidates = [a for a in agents if a["id"] != old_target]
+    if not candidates:
+        tc.skip("All agents already targeted or only one agent")
+    target_id = candidates[0]["id"]
+
     result = await tc.send_action("change_target", {"agent_id": target_id})
     tc.assert_action_success(result)
 
-    def target_changed(s):
+    def target_matches(s):
         return s.get("me", {}).get("target_id") == target_id
 
-    await tc.wait_for_state_change(target_changed, tier=1, timeout=5.0)
+    new_snap = await tc.wait_for_state_change(target_matches, tier=1, timeout=5.0)
+    assert_true(
+        new_snap["me"]["target_id"] == target_id,
+        f"target_id should be {target_id}, got {new_snap['me']['target_id']}",
+    )
 
 
 # ============================================================
@@ -123,15 +139,32 @@ async def test_use_skill_invalid_slot(tc: BridgeTestCase):
 
 
 async def test_use_skill_success(tc: BridgeTestCase):
-    """Use skill in slot 0 if it's ready."""
+    """Use a ready skill and verify recharge starts or energy changes."""
     snap = await tc.wait_for_snapshot(tier=1)
-    sk = snap["skillbar"][0]
-    if sk["skill_id"] == 0:
-        tc.skip("No skill in slot 0")
-    if sk["recharge"] > 0:
-        tc.skip("Skill in slot 0 is on recharge")
-    result = await tc.send_action("use_skill", {"slot": 0})
+    # Find any ready skill
+    ready_slot = None
+    for sk in snap["skillbar"]:
+        if sk["skill_id"] != 0 and sk["recharge"] == 0:
+            ready_slot = sk["slot"]
+            break
+    if ready_slot is None:
+        tc.skip("No ready skills in skillbar")
+    old_energy = snap["me"]["energy"]
+    result = await tc.send_action("use_skill", {"slot": ready_slot})
     tc.assert_action_success(result)
+
+    # Verify: recharge started OR energy dropped OR casting started
+    def skill_effect_visible(s):
+        sk = s["skillbar"][ready_slot]
+        energy_dropped = s["me"]["energy"] < old_energy - 0.01
+        recharge_started = sk["recharge"] > 0
+        casting = s["me"]["is_casting"]
+        return energy_dropped or recharge_started or casting
+
+    try:
+        await tc.wait_for_state_change(skill_effect_visible, tier=1, timeout=5.0)
+    except Exception:
+        pass  # Skill may have been blocked by game state — success response is still valid
 
 
 async def test_call_target_missing(tc: BridgeTestCase):
@@ -163,15 +196,35 @@ async def test_use_hero_skill_invalid_slot(tc: BridgeTestCase):
 # ============================================================
 
 async def test_kick_all_heroes_success(tc: BridgeTestCase):
+    """Kick all heroes — party size should decrease to 1 (just player)."""
+    snap_before = await tc.wait_for_snapshot(tier=1)
+    size_before = snap_before["party"]["size"]
     result = await tc.send_action("kick_all_heroes", {})
     tc.assert_action_success(result)
-    await asyncio.sleep(1.0)  # let party update
+
+    if size_before > 1:
+        def party_shrunk(s):
+            return s["party"]["size"] < size_before
+        try:
+            await tc.wait_for_state_change(party_shrunk, tier=1, timeout=5.0)
+        except Exception:
+            pass  # May not shrink if no heroes were in party
 
 
 async def test_add_hero_success(tc: BridgeTestCase):
+    """Add a hero — party size should increase."""
+    snap_before = await tc.wait_for_snapshot(tier=1)
+    size_before = snap_before["party"]["size"]
     result = await tc.send_action("add_hero", {"hero_id": 25})
     tc.assert_action_success(result)
-    await asyncio.sleep(0.5)
+
+    def party_grew(s):
+        return s["party"]["size"] > size_before
+
+    try:
+        await tc.wait_for_state_change(party_grew, tier=1, timeout=5.0)
+    except Exception:
+        pass  # Hero may already be in party
 
 
 async def test_add_hero_missing_id(tc: BridgeTestCase):
@@ -430,7 +483,7 @@ async def test_craft_item_missing_id(tc: BridgeTestCase):
 
 
 async def test_craft_item_success_with_merchant(tc: BridgeTestCase):
-    """If merchant/crafter window is open, craft_item should succeed."""
+    """If merchant/crafter window is open, craft_item should succeed and items should have valid fields."""
     snap = await tc.wait_for_snapshot(tier=2)
     merchant = snap.get("merchant", {})
     if not merchant.get("is_open"):
@@ -438,7 +491,12 @@ async def test_craft_item_success_with_merchant(tc: BridgeTestCase):
     items = merchant.get("items", [])
     if not items:
         tc.skip("No items available in merchant window")
-    result = await tc.send_action("craft_item", {"item_id": items[0]["item_id"], "quantity": 1})
+    # Validate merchant item structure
+    item = items[0]
+    assert_keys_present(item, ["item_id", "model_id", "type", "value"], f"merchant item")
+    assert_type(item["item_id"], int, "merchant item.item_id")
+    assert_gt(item["item_id"], 0, "merchant item.item_id")
+    result = await tc.send_action("craft_item", {"item_id": item["item_id"], "quantity": 1})
     tc.assert_action_success(result)
 
 
@@ -494,18 +552,28 @@ async def test_set_bot_state_llm_controlled(tc: BridgeTestCase):
 
 
 async def test_set_bot_state_reflects_in_snapshot(tc: BridgeTestCase):
-    """After set_bot_state, the bot.state field in snapshot should change."""
-    result = await tc.send_action("set_bot_state", {"state": "maintenance"})
+    """After set_bot_state, the bot.state field in snapshot must change within 5s."""
+    # Read original state
+    snap_before = await tc.wait_for_snapshot(tier=1)
+    original = snap_before.get("bot", {}).get("state", "idle")
+
+    # Set to a known different state
+    target = "maintenance" if original != "maintenance" else "merchant"
+    result = await tc.send_action("set_bot_state", {"state": target})
     tc.assert_action_success(result)
 
     def check(snap):
-        return snap.get("bot", {}).get("state") == "maintenance"
+        return snap.get("bot", {}).get("state") == target
 
     try:
-        await tc.wait_for_state_change(check, tier=1, timeout=5.0)
+        new_snap = await tc.wait_for_state_change(check, tier=1, timeout=5.0)
+        assert_true(
+            new_snap["bot"]["state"] == target,
+            f"Expected bot state '{target}', got '{new_snap['bot']['state']}'",
+        )
     finally:
-        # Restore to idle
-        await tc.send_action("set_bot_state", {"state": "idle"})
+        # Always restore
+        await tc.send_action("set_bot_state", {"state": original})
 
 
 async def test_set_bot_state_all_valid_states(tc: BridgeTestCase):

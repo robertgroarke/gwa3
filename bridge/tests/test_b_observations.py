@@ -3,7 +3,6 @@
 from .base import BridgeTestCase
 from .helpers import (
     assert_true, assert_type, assert_keys_present, assert_in_range, assert_gte, assert_gt,
-    snapshot_get,
 )
 
 
@@ -25,6 +24,8 @@ async def test_me_agent_id_nonzero(tc: BridgeTestCase):
 async def test_me_position_plausible(tc: BridgeTestCase):
     snap = await tc.wait_for_snapshot(tier=1)
     me = snap["me"]
+    assert_type(me["x"], (int, float), "me.x")
+    assert_type(me["y"], (int, float), "me.y")
     assert_true(me["x"] != 0.0 or me["y"] != 0.0, "Player position should not be (0, 0)")
 
 
@@ -38,9 +39,16 @@ async def test_me_energy_in_range(tc: BridgeTestCase):
     assert_in_range(snap["me"]["energy"], 0.0, 1.0, "me.energy")
 
 
+async def test_me_max_hp_and_energy(tc: BridgeTestCase):
+    """max_hp and max_energy should be positive integers."""
+    snap = await tc.wait_for_snapshot(tier=1)
+    assert_gt(snap["me"]["max_hp"], 0, "me.max_hp")
+    assert_gt(snap["me"]["max_energy"], 0, "me.max_energy")
+
+
 async def test_me_professions_valid(tc: BridgeTestCase):
     snap = await tc.wait_for_snapshot(tier=1)
-    assert_in_range(snap["me"]["primary"], 0, 10, "me.primary")
+    assert_in_range(snap["me"]["primary"], 1, 10, "me.primary")  # primary must be 1-10 (not 0)
     assert_in_range(snap["me"]["secondary"], 0, 10, "me.secondary")
 
 
@@ -75,13 +83,26 @@ async def test_skillbar_slot_indices(tc: BridgeTestCase):
         assert_true(sk["slot"] == i, f"Slot {i} has slot={sk['slot']}")
 
 
-async def test_skillbar_skill_data(tc: BridgeTestCase):
-    """Non-zero skill_id entries should have constant data (type, energy_cost)."""
+async def test_skillbar_skill_id_is_int(tc: BridgeTestCase):
     snap = await tc.wait_for_snapshot(tier=1)
     for sk in snap["skillbar"]:
+        assert_type(sk["skill_id"], int, f"slot {sk['slot']}.skill_id")
+
+
+async def test_skillbar_skill_data(tc: BridgeTestCase):
+    """Non-zero skill_id entries should have constant data with valid types."""
+    snap = await tc.wait_for_snapshot(tier=1)
+    found_skill = False
+    for sk in snap["skillbar"]:
         if sk["skill_id"] != 0:
-            assert_keys_present(sk, ["type", "energy_cost", "activation", "recharge_time"],
+            found_skill = True
+            assert_keys_present(sk, ["type", "energy_cost", "activation", "recharge_time", "profession", "attribute"],
                                 f"skill slot {sk['slot']}")
+            assert_type(sk["energy_cost"], (int, float), f"slot {sk['slot']}.energy_cost")
+            assert_type(sk["activation"], (int, float), f"slot {sk['slot']}.activation")
+            assert_gte(sk["recharge_time"], 0, f"slot {sk['slot']}.recharge_time")
+    if not found_skill:
+        tc.skip("No skills loaded in skillbar")
 
 
 async def test_skillbar_recharge_nonneg(tc: BridgeTestCase):
@@ -96,7 +117,8 @@ async def test_skillbar_recharge_nonneg(tc: BridgeTestCase):
 
 async def test_map_id_positive(tc: BridgeTestCase):
     snap = await tc.wait_for_snapshot(tier=1)
-    assert_gt(snap["map"]["map_id"], 0, "map.map_id")
+    assert_type(snap["map"]["map_id"], int, "map.map_id")
+    assert_in_range(snap["map"]["map_id"], 1, 999, "map.map_id")
 
 
 async def test_map_is_loaded(tc: BridgeTestCase):
@@ -113,6 +135,7 @@ async def test_map_instance_time(tc: BridgeTestCase):
 async def test_map_has_region(tc: BridgeTestCase):
     snap = await tc.wait_for_snapshot(tier=1)
     assert_type(snap["map"]["region"], int, "map.region")
+    assert_in_range(snap["map"]["region"], 0, 20, "map.region")
 
 
 # ============================================================
@@ -133,7 +156,15 @@ async def test_party_has_members(tc: BridgeTestCase):
 async def test_party_member_fields(tc: BridgeTestCase):
     snap = await tc.wait_for_snapshot(tier=1)
     for m in snap["party"]["members"]:
-        assert_keys_present(m, ["agent_id", "hp", "is_alive", "is_player"], "party member")
+        assert_keys_present(m, ["agent_id", "hp", "energy", "is_alive", "is_player", "is_hero", "primary", "level"],
+                            f"party member {m.get('agent_id')}")
+        assert_type(m["agent_id"], int, "member.agent_id")
+        assert_gt(m["agent_id"], 0, "member.agent_id")
+        assert_in_range(m["hp"], 0.0, 1.0, "member.hp")
+        assert_in_range(m["energy"], 0.0, 1.0, "member.energy")
+        assert_type(m["is_alive"], bool, "member.is_alive")
+        assert_type(m["is_player"], bool, "member.is_player")
+        assert_type(m["is_hero"], bool, "member.is_hero")
 
 
 async def test_party_self_present(tc: BridgeTestCase):
@@ -149,7 +180,14 @@ async def test_party_defeated_flag(tc: BridgeTestCase):
 
 async def test_party_dead_count(tc: BridgeTestCase):
     snap = await tc.wait_for_snapshot(tier=1)
-    assert_gte(snap["party"]["dead_count"], 0, "party.dead_count")
+    dead_count = snap["party"]["dead_count"]
+    size = snap["party"]["size"]
+    assert_gte(dead_count, 0, "party.dead_count")
+    assert_true(dead_count <= size, f"dead_count ({dead_count}) should not exceed party size ({size})")
+    # Cross-validate: count members with is_alive=false
+    actual_dead = sum(1 for m in snap["party"]["members"] if not m.get("is_alive", True))
+    assert_true(dead_count == actual_dead,
+                f"dead_count ({dead_count}) should match actual dead members ({actual_dead})")
 
 
 # ============================================================
@@ -163,8 +201,18 @@ async def test_agents_is_array(tc: BridgeTestCase):
 
 async def test_agent_core_fields(tc: BridgeTestCase):
     snap = await tc.wait_for_snapshot(tier=2)
-    for a in snap["agents"][:10]:  # check first 10
+    if not snap["agents"]:
+        tc.skip("No agents nearby")
+    for a in snap["agents"][:10]:
         assert_keys_present(a, ["id", "x", "y", "distance", "agent_type"], f"agent {a.get('id')}")
+        assert_type(a["id"], int, f"agent.id")
+        assert_gt(a["id"], 0, f"agent.id")
+        assert_type(a["distance"], (int, float), f"agent {a['id']}.distance")
+        assert_gte(a["distance"], 0, f"agent {a['id']}.distance")
+        assert_true(
+            a["agent_type"] in ("living", "item", "gadget", "unknown"),
+            f"agent {a['id']} has unknown agent_type: '{a['agent_type']}'",
+        )
 
 
 async def test_living_agent_fields(tc: BridgeTestCase):
@@ -173,7 +221,17 @@ async def test_living_agent_fields(tc: BridgeTestCase):
     if not living:
         tc.skip("No living agents nearby")
     for a in living[:5]:
-        assert_keys_present(a, ["hp", "allegiance", "primary", "level", "is_alive"], f"living agent {a['id']}")
+        assert_keys_present(a, ["hp", "max_hp", "energy", "max_energy", "allegiance", "primary",
+                                "secondary", "level", "is_alive", "is_casting", "casting_skill_id",
+                                "has_hex", "has_enchantment"],
+                            f"living agent {a['id']}")
+        assert_in_range(a["hp"], 0.0, 1.0, f"agent {a['id']}.hp")
+        assert_in_range(a["energy"], 0.0, 1.0, f"agent {a['id']}.energy")
+        assert_in_range(a["allegiance"], 0, 255, f"agent {a['id']}.allegiance")
+        assert_in_range(a["primary"], 0, 10, f"agent {a['id']}.primary")
+        assert_in_range(a["level"], 0, 30, f"agent {a['id']}.level")
+        assert_type(a["is_alive"], bool, f"agent {a['id']}.is_alive")
+        assert_type(a["is_casting"], bool, f"agent {a['id']}.is_casting")
 
 
 async def test_item_agent_fields(tc: BridgeTestCase):
@@ -182,7 +240,11 @@ async def test_item_agent_fields(tc: BridgeTestCase):
     if not items:
         tc.skip("No item agents nearby")
     for a in items[:5]:
-        assert_keys_present(a, ["item_id", "model_id"], f"item agent {a['id']}")
+        assert_keys_present(a, ["item_id", "owner", "model_id", "item_type", "quantity", "value"],
+                            f"item agent {a['id']}")
+        assert_type(a["item_id"], int, f"item {a['id']}.item_id")
+        assert_gt(a["item_id"], 0, f"item {a['id']}.item_id")
+        assert_type(a["model_id"], int, f"item {a['id']}.model_id")
 
 
 async def test_foe_casting_fields(tc: BridgeTestCase):
@@ -221,7 +283,11 @@ async def test_hero_has_agent_id(tc: BridgeTestCase):
     if not snap["heroes"]:
         tc.skip("No heroes in party")
     for h in snap["heroes"]:
+        assert_type(h["agent_id"], int, "hero.agent_id")
         assert_gt(h["agent_id"], 0, "hero.agent_id")
+        assert_in_range(h["hp"], 0.0, 1.0, f"hero {h['agent_id']}.hp")
+        assert_in_range(h["energy"], 0.0, 1.0, f"hero {h['agent_id']}.energy")
+        assert_in_range(h["primary"], 1, 10, f"hero {h['agent_id']}.primary")
 
 
 async def test_hero_has_skillbar(tc: BridgeTestCase):
@@ -229,7 +295,11 @@ async def test_hero_has_skillbar(tc: BridgeTestCase):
     if not snap["heroes"]:
         tc.skip("No heroes in party")
     for h in snap["heroes"]:
-        assert_true(len(h["skillbar"]) == 8, f"Hero {h['agent_id']} skillbar should have 8 slots")
+        assert_type(h["skillbar"], list, f"hero {h['agent_id']}.skillbar")
+        assert_true(len(h["skillbar"]) == 8,
+                    f"Hero {h['agent_id']} skillbar should have 8 slots, got {len(h['skillbar'])}")
+        for sk in h["skillbar"]:
+            assert_keys_present(sk, ["slot", "skill_id", "recharge"], f"hero {h['agent_id']} skill")
 
 
 async def test_hero_casting_state(tc: BridgeTestCase):
@@ -238,6 +308,11 @@ async def test_hero_casting_state(tc: BridgeTestCase):
         tc.skip("No heroes in party")
     for h in snap["heroes"]:
         assert_keys_present(h, ["is_casting", "casting_skill_id"], f"hero {h['agent_id']}")
+        assert_type(h["is_casting"], bool, f"hero {h['agent_id']}.is_casting")
+        assert_type(h["casting_skill_id"], int, f"hero {h['agent_id']}.casting_skill_id")
+        if h["is_casting"]:
+            assert_gt(h["casting_skill_id"], 0,
+                      f"hero {h['agent_id']} is_casting=true but casting_skill_id=0")
 
 
 # ============================================================
@@ -281,8 +356,10 @@ async def test_inventory_present(tc: BridgeTestCase):
 
 async def test_inventory_gold(tc: BridgeTestCase):
     snap = await tc.wait_for_snapshot(tier=3)
-    assert_gte(snap["inventory"]["gold_character"], 0, "gold_character")
-    assert_gte(snap["inventory"]["gold_storage"], 0, "gold_storage")
+    assert_type(snap["inventory"]["gold_character"], int, "gold_character")
+    assert_type(snap["inventory"]["gold_storage"], int, "gold_storage")
+    assert_in_range(snap["inventory"]["gold_character"], 0, 1000000, "gold_character")
+    assert_in_range(snap["inventory"]["gold_storage"], 0, 10000000, "gold_storage")
 
 
 async def test_inventory_bags(tc: BridgeTestCase):
@@ -335,7 +412,12 @@ async def test_effect_fields(tc: BridgeTestCase):
     if not snap["effects"]:
         tc.skip("No active effects on player")
     for eff in snap["effects"][:5]:
-        assert_keys_present(eff, ["skill_id", "time_remaining"], f"effect")
+        assert_keys_present(eff, ["skill_id", "time_remaining", "duration", "type", "caster_agent_id"],
+                            f"effect skill_id={eff.get('skill_id')}")
+        assert_type(eff["skill_id"], int, "effect.skill_id")
+        assert_gt(eff["skill_id"], 0, "effect.skill_id")
+        assert_type(eff["time_remaining"], (int, float), "effect.time_remaining")
+        assert_gte(eff["time_remaining"], 0, "effect.time_remaining")
 
 
 async def test_tier_1_fields(tc: BridgeTestCase):
