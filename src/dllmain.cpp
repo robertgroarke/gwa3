@@ -24,6 +24,7 @@
 #include <gwa3/managers/StoCMgr.h>
 #include <gwa3/managers/EffectMgr.h>
 #include <gwa3/managers/DialogMgr.h>
+#include <gwa3/managers/ChatLogMgr.h>
 #include <gwa3/bot/BotFramework.h>
 #include <gwa3/bot/FroggyHM.h>
 #include <gwa3/core/SmokeTest.h>
@@ -281,6 +282,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         });
         GWA3::StoC::Initialize();
         GWA3::DialogMgr::Initialize();
+        GWA3::ChatLogMgr::Initialize();
     }
 
     if (cmdTest) {
@@ -360,6 +362,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
     } else if (reason == DLL_PROCESS_DETACH) {
         GWA3::LLM::Shutdown();
         GWA3::Bot::Stop();
+        GWA3::ChatLogMgr::Shutdown();
         GWA3::DialogMgr::Shutdown();
         GWA3::StoC::Shutdown();
         GWA3::TraderHook::Shutdown();

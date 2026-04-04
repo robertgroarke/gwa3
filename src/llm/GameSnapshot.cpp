@@ -8,6 +8,7 @@
 #include <gwa3/managers/MemoryMgr.h>
 #include <gwa3/managers/TradeMgr.h>
 #include <gwa3/managers/DialogMgr.h>
+#include <gwa3/managers/ChatLogMgr.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/game/Agent.h>
@@ -24,6 +25,7 @@ using json = nlohmann::json;
 namespace GWA3::LLM::GameSnapshot {
 
     static uint32_t g_tick = 0;
+    static uint32_t g_lastChatTimestamp = 0;  // track which chat messages we've already sent
 
     // Helper: convert json to heap-allocated char*
     static char* JsonToHeap(const json& j, uint32_t* outLength) {
@@ -557,6 +559,47 @@ namespace GWA3::LLM::GameSnapshot {
         return effs;
     }
 
+    // Build recent chat messages (only new ones since last call)
+    static json BuildChatLogJson() {
+        json chatLog = json::array();
+        uint32_t count = ChatLogMgr::GetMessageCount();
+        if (count == 0) return chatLog;
+
+        // Get messages newer than our last read timestamp
+        const ChatLogMgr::ChatEntry* entries[50] = {};
+        uint32_t newCount = ChatLogMgr::GetMessagesSince(g_lastChatTimestamp, entries, 50);
+
+        for (uint32_t i = 0; i < newCount; i++) {
+            const auto* e = entries[i];
+            if (!e) continue;
+
+            json msg;
+            msg["channel"] = e->channel_name;
+
+            // Convert sender wchar to UTF-8
+            if (e->sender[0]) {
+                char senderUtf8[128] = {};
+                WideCharToMultiByte(CP_UTF8, 0, e->sender, -1, senderUtf8, sizeof(senderUtf8) - 1, nullptr, nullptr);
+                msg["sender"] = senderUtf8;
+            }
+
+            // Convert message wchar to UTF-8
+            if (e->message[0]) {
+                char msgUtf8[512] = {};
+                WideCharToMultiByte(CP_UTF8, 0, e->message, -1, msgUtf8, sizeof(msgUtf8) - 1, nullptr, nullptr);
+                msg["message"] = msgUtf8;
+            }
+
+            if (e->sender_agent_id) {
+                msg["sender_agent_id"] = e->sender_agent_id;
+            }
+
+            chatLog.push_back(msg);
+            g_lastChatTimestamp = e->timestamp_ms;
+        }
+        return chatLog;
+    }
+
     char* SerializeTier1(uint32_t* outLength) {
         g_tick++;
         json j;
@@ -584,6 +627,7 @@ namespace GWA3::LLM::GameSnapshot {
         j["heroes"] = BuildHeroSkillbarsJson();
         j["dialog"] = BuildDialogJson();
         j["merchant"] = BuildMerchantJson();
+        j["chat"] = BuildChatLogJson();
         return JsonToHeap(j, outLength);
     }
 
