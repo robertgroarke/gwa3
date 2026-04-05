@@ -226,10 +226,15 @@ int RunFroggyFeatureTest() {
     }
 
     if (merchantId) {
-        IntReport("  Found merchant NPC (agent=%u), approaching...", merchantId);
         auto* npc = AgentMgr::GetAgentByID(merchantId);
+        auto* living = npc ? static_cast<AgentLiving*>(npc) : nullptr;
+        IntReport("  Found NPC agent=%u allegiance=%u player_number=%u npc_id=%u at (%.0f, %.0f)",
+                  merchantId,
+                  living ? living->allegiance : 0,
+                  living ? living->player_number : 0,
+                  living ? living->transmog_npc_id : 0,
+                  npc ? npc->x : 0.0f, npc ? npc->y : 0.0f);
         if (npc) {
-            IntReport("  Merchant at (%.0f, %.0f)", npc->x, npc->y);
             MovePlayerNear(npc->x, npc->y, 100.0f, 10000);
         }
 
@@ -274,15 +279,25 @@ int RunFroggyFeatureTest() {
 
     // Walk to exit portal (must use MovePlayerNear / EnqueuePost)
     IntReport("  Walking to exit waypoint 1 (-10018, -21892)...");
-    MovePlayerNear(-10018.0f, -21892.0f, 350.0f, 25000);
+    MovePlayerNear(-10018.0f, -21892.0f, 350.0f, 20000);
+    {
+        float px = 0, py = 0;
+        TryReadAgentPosition(ReadMyId(), px, py);
+        IntReport("  After wp1: (%.0f, %.0f)", px, py);
+    }
     IntReport("  Walking to exit waypoint 2 (-9550, -20400)...");
-    MovePlayerNear(-9550.0f, -20400.0f, 350.0f, 25000);
+    MovePlayerNear(-9550.0f, -20400.0f, 350.0f, 20000);
+    {
+        float px = 0, py = 0;
+        TryReadAgentPosition(ReadMyId(), px, py);
+        IntReport("  After wp2: (%.0f, %.0f)", px, py);
+    }
 
     // Push toward explorable zone exit
     IntReport("  Pushing toward Sparkfly...");
     DWORD zoneStart = GetTickCount();
     bool leftOutpost = false;
-    while ((GetTickCount() - zoneStart) < 30000) {
+    while ((GetTickCount() - zoneStart) < 45000) {
         if (MapMgr::GetMapId() != MAP_GADDS) { leftOutpost = true; break; }
         GameThread::EnqueuePost([]() {
             AgentMgr::Move(-9451.0f, -19766.0f);
