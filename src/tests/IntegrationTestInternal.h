@@ -171,4 +171,8 @@ bool TestCameraFOV();
 bool TestPersonalDir();
 bool TestExplorableCallTarget();
 
+// Watchdog (crash/disconnect detection)
+void StartWatchdog();
+void StopWatchdog();
+
 } // namespace GWA3::SmokeTest

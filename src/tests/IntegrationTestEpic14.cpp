@@ -103,6 +103,7 @@ int RunFroggyFeatureTest() {
     s_passed = 0;
     s_failed = 0;
     s_skipped = 0;
+    StartWatchdog();
 
     // ===== PHASE 0: Pure logic unit tests =====
     IntReport("=== PHASE 0: Pure Logic Unit Tests ===");
@@ -370,6 +371,7 @@ int RunFroggyFeatureTest() {
         IntSkip("Return to outpost", "Never left outpost");
     }
 
+    StopWatchdog();
     IntReport("=== FROGGY FEATURE TESTS COMPLETE ===");
     IntReport("Passed: %d / Failed: %d / Skipped: %d", s_passed, s_failed, s_skipped);
     return s_failed;
