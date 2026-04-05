@@ -11,6 +11,7 @@
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/SkillMgr.h>
 #include <gwa3/managers/ItemMgr.h>
+#include <gwa3/managers/MemoryMgr.h>
 #include "IntegrationTestInternal.h"
 
 #include <Windows.h>
@@ -74,6 +75,28 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
             stallCount = 0;
         }
         lastHeartbeat = hb;
+
+        // --- Crash dialog detection: GW window stops responding ---
+        {
+            HWND gwHwnd = static_cast<HWND>(MemoryMgr::GetGWWindowHandle());
+            if (gwHwnd) {
+                DWORD_PTR result = 0;
+                LRESULT lr = SendMessageTimeoutA(gwHwnd, WM_NULL, 0, 0,
+                                                  SMTO_ABORTIFHUNG, 2000, &result);
+                if (lr == 0 && GetLastError() != 0) {
+                    // Window is hung — likely crash dialog
+                    Log::Error("[WATCHDOG] !!! GW WINDOW NOT RESPONDING — crash dialog likely visible !!!");
+                    Log::Error("[WATCHDOG] Test state: %d passed, %d failed, %d skipped",
+                               s_intPassed, s_intFailed, s_intSkipped);
+                    s_crashDetected = true;
+                    if (s_intReport) { fflush(s_intReport); }
+                    Log::Error("[WATCHDOG] Terminating hung GW process...");
+                    Log::Shutdown();
+                    Sleep(100);
+                    TerminateProcess(GetCurrentProcess(), 0xDEAD);
+                }
+            }
+        }
 
         // --- Disconnect detection: MapID drops to 0 or charselect appears ---
         uint32_t currentMapId = MapMgr::GetMapId();

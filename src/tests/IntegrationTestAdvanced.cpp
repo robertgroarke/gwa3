@@ -878,12 +878,14 @@ bool TestExplorableCallTarget() {
         IntReport("  Moving to exit waypoint (-9550, -20400)...");
         MovePlayerNear(-9550.0f, -20400.0f, 350.0f, 20000);
 
-        // Push into zone boundary
+        // Push into zone boundary (must use EnqueuePost like TestExplorableEntry)
         IntReport("  Entering Sparkfly Swamp...");
         DWORD zoneStart = GetTickCount();
         bool enteredSparkfly = false;
         while ((GetTickCount() - zoneStart) < 30000) {
-            AgentMgr::Move(-9451.0f, -19766.0f);
+            GameThread::EnqueuePost([]() {
+                AgentMgr::Move(-9451.0f, -19766.0f);
+            });
             Sleep(500);
             if (ReadMapId() == MAP_SPARKFLY_SWAMP) {
                 enteredSparkfly = true;
