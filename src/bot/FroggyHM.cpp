@@ -145,6 +145,7 @@ static void UnflagAllHeroes();
 static bool SendDialogWithRetry(uint32_t dialogId, int maxRetries = 3, DWORD delayMs = 1000);
 static void UseDpRemovalIfNeeded();
 static bool IsDead();
+static uint32_t CountFreeSlots();
 
 // ===== Skill Template Decoder (GWA3-101) =====
 
@@ -847,6 +848,37 @@ static bool CanUseSkill(const CachedSkill& skill, uint32_t targetId) {
         if (remaining > 3.0f) return false; // already active
     }
 
+    // GWA3-137: Quickening Zephyr energy cost multiplier
+    // When Essence of Celerity (skill 2054) is active, energy costs are +30%
+    float energyCost = static_cast<float>(skill.energy_cost);
+    if (EffectMgr::HasEffect(me->agent_id, 2054u)) { // Essence of Celerity
+        energyCost *= 1.3f;
+    }
+    float myEnergy = me->energy * static_cast<float>(me->max_energy);
+    if (energyCost > 0 && myEnergy < energyCost) return false;
+
+    // GWA3-137: Adrenaline check — adrenaline skills need adrenaline, not energy
+    const auto* skillData = SkillMgr::GetSkillConstantData(skill.skill_id);
+    if (skillData && skillData->adrenaline > 0) {
+        auto* bar = SkillMgr::GetPlayerSkillbar();
+        if (bar) {
+            uint32_t currentAdrenaline = bar->skills[skill.slot].adrenaline_a;
+            if (currentAdrenaline < skillData->adrenaline) return false;
+        }
+    }
+
+    // GWA3-137: Pressure gate — Finish Him (and similar) require low target HP
+    // Finish Him: only if target HP < 45%
+    if (skill.hasRole(ROLE_PRESSURE) && targetId > 0) {
+        auto* target = AgentMgr::GetAgentByID(targetId);
+        if (target && target->type == 0xDB) {
+            auto* targetLiving = static_cast<AgentLiving*>(target);
+            // For pressure skills with known HP gates, check target HP
+            // Finish Him (skill 2249): requires < 45%
+            if (skill.skill_id == 2249 && targetLiving->hp > 0.45f) return false;
+        }
+    }
+
     return true;
 }
 
@@ -1131,39 +1163,64 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
     }
 }
 
+// GWA3-140: Wipe recovery checkpoint — back up 2 waypoints from nearest
+static int GetWipeRestartWaypoint(const Waypoint* wps, int count) {
+    int nearest = GetNearestWaypointIndex(wps, count);
+    int restart = nearest - 2;
+    if (restart < 0) restart = 0;
+    return restart;
+}
+
 static void FollowWaypoints(const Waypoint* wps, int count) {
     int startIdx = GetNearestWaypointIndex(wps, count);
     uint32_t mapId = MapMgr::GetMapId();
+    // GWA3-140: Stuck detection — track nearest waypoint progress
+    int lastNearestWp = startIdx;
+    int sameWpCount = 0;
 
     for (int i = startIdx; i < count; i++) {
         if (!Bot::IsRunning()) return;
         if (MapMgr::GetMapId() != mapId) return;
+
+        // GWA3-140: Stuck backtrack — if nearest waypoint unchanged 5 iterations
+        int currentNearest = GetNearestWaypointIndex(wps, count);
+        if (currentNearest == lastNearestWp) {
+            sameWpCount++;
+            if (sameWpCount >= 5) {
+                int backtrack = (currentNearest > 0) ? currentNearest - 1 : 0;
+                LogBot("Waypoint stuck (nearest=%d unchanged 5x) — backtracking to %d",
+                       currentNearest, backtrack);
+                i = backtrack;
+                sameWpCount = 0;
+            }
+        } else {
+            lastNearestWp = currentNearest;
+            sameWpCount = 0;
+        }
+
         if (IsDead()) {
             s_wipeCount++;
             LogBot("WIPE detected at waypoint %d (%s) — wipe #%u", i, wps[i].label, s_wipeCount);
 
-            // Wait for resurrection (up to 2 minutes)
             DWORD wipeStart = GetTickCount();
             while (IsDead() && (GetTickCount() - wipeStart) < 120000) {
                 WaitMs(500);
             }
             if (IsDead()) {
-                // Party fully defeated — return to outpost
                 LogBot("Party defeated — returning to outpost");
                 MapMgr::ReturnToOutpost();
                 return;
             }
 
-            // Alive again — use DP removal if we've wiped multiple times
             if (s_wipeCount >= 2) {
                 LogBot("Multiple wipes (%u) — using DP removal", s_wipeCount);
                 UseDpRemovalIfNeeded();
                 WaitMs(500);
             }
 
-            // Resume from nearest waypoint
-            int restartIdx = GetNearestWaypointIndex(wps, count);
-            LogBot("Resuming from waypoint %d after wipe (was at %d)", restartIdx, i);
+            // GWA3-140: Checkpoint-based restart
+            int restartIdx = GetWipeRestartWaypoint(wps, count);
+            LogBot("Resuming from checkpoint %d after wipe (was at %d)", restartIdx, i);
             i = restartIdx;
         }
 
@@ -1307,6 +1364,33 @@ static bool IsAlwaysPickupModel(uint32_t modelId) {
     return false;
 }
 
+// GWA3-138: Froggy-specific quest/trophy items (ported from CanPickUpEx)
+static bool IsQuestPickupModel(uint32_t modelId) {
+    switch (modelId) {
+    // Bogroot Growths quest items
+    case 22342: case 24350:   // Unlit Torch, Asura Flame Staff
+    // General dungeon items
+    case 22751:               // Lockpick
+    // Tomes (all professions)
+    case 21796: case 21797: case 21798: case 21799: case 21800:
+    case 21801: case 21802: case 21803: case 21804: case 21805:
+    // Alcohol / sweets / party items (for title tracking)
+    case 28435: case 28436: case 28431: case 22269:  // Party/birthday/candy
+        return true;
+    }
+    return false;
+}
+
+// Item type constants
+static constexpr uint8_t TYPE_TROPHY   = 30;
+static constexpr uint8_t TYPE_SCROLL   = 31;
+static constexpr uint8_t TYPE_DYE      = 10;
+static constexpr uint8_t TYPE_USABLE   = 9;
+static constexpr uint8_t TYPE_KEY      = 18;
+static constexpr uint8_t TYPE_BUNDLE   = 6;
+static constexpr uint8_t TYPE_MATERIAL = 11;
+static constexpr uint8_t TYPE_GOLD     = 20;
+
 static bool ShouldPickUp(const Agent* agent, uint32_t myAgentId) {
     if (!agent || agent->type != 0x400) return false;
     auto* itemAgent = static_cast<const AgentItem*>(agent);
@@ -1318,19 +1402,38 @@ static bool ShouldPickUp(const Agent* agent, uint32_t myAgentId) {
     auto* item = ItemMgr::GetItemById(itemAgent->item_id);
     if (!item) return true; // Can't read item data — pick up anyway
 
-    // Always pick up whitelisted models
+    // GWA3-138: Inventory guard — if < 2 free slots, only pick gold coins and bundles
+    uint32_t freeSlots = CountFreeSlots();
+    if (freeSlots < 2) {
+        if (item->type == TYPE_GOLD) return true;  // gold coins always
+        if (item->type == TYPE_BUNDLE) return true; // quest bundles always
+        return false; // skip everything else when nearly full
+    }
+
+    // Always pick up whitelisted models (ectos, gems, etc.)
     if (IsAlwaysPickupModel(item->model_id)) return true;
+
+    // GWA3-138: Quest-specific items
+    if (IsQuestPickupModel(item->model_id)) return true;
+
+    // GWA3-138: Type-based rules
+    switch (item->type) {
+    case TYPE_TROPHY:  return false;  // trophies — never (vendor trash)
+    case TYPE_SCROLL:  return false;  // scrolls — never
+    case TYPE_KEY:     return true;   // keys — always (dungeon keys, lockpicks)
+    case TYPE_MATERIAL: return true;  // materials — always
+    case TYPE_GOLD:                   // gold coins — only if < 100k
+        return ItemMgr::GetGoldCharacter() < 100000;
+    case TYPE_DYE:     return false;  // dye — skip (not worth inventory space)
+    }
 
     uint16_t rarity = GetItemRarity(item);
 
     // Always pick up gold and green rarity
     if (rarity == RARITY_GOLD || rarity == RARITY_GREEN) return true;
 
-    // Pick up purple if we have space
+    // Pick up purple
     if (rarity == RARITY_PURPLE) return true;
-
-    // Skip white and blue (not worth the time unless it's a material)
-    if (item->type == 11) return true; // Materials always
 
     return false;
 }
@@ -1406,9 +1509,35 @@ static bool IsChestGadgetId(uint32_t gadgetId) {
            gadgetId == 8141 || gadgetId == 74 || gadgetId == 68 || gadgetId == 9157;
 }
 
+// GWA3-139: Track opened chests to avoid re-interaction
+static constexpr int MAX_OPENED_CHESTS = 64;
+static uint32_t s_openedChests[MAX_OPENED_CHESTS] = {};
+static int s_openedChestCount = 0;
+static uint32_t s_openedChestMapId = 0; // clear on map change
+
+static bool IsChestOpened(uint32_t agentId) {
+    for (int i = 0; i < s_openedChestCount; i++) {
+        if (s_openedChests[i] == agentId) return true;
+    }
+    return false;
+}
+
+static void MarkChestOpened(uint32_t agentId) {
+    if (s_openedChestCount < MAX_OPENED_CHESTS) {
+        s_openedChests[s_openedChestCount++] = agentId;
+    }
+}
+
 static bool OpenNearbyChest(float maxRange) {
     auto* me = AgentMgr::GetMyAgent();
     if (!me) return false;
+
+    // Clear tracking on map change
+    uint32_t currentMap = MapMgr::GetMapId();
+    if (currentMap != s_openedChestMapId) {
+        s_openedChestCount = 0;
+        s_openedChestMapId = currentMap;
+    }
 
     uint32_t maxAgents = AgentMgr::GetMaxAgents();
     for (uint32_t i = 1; i < maxAgents; i++) {
@@ -1419,8 +1548,10 @@ static bool OpenNearbyChest(float maxRange) {
 
         auto* gadget = static_cast<const AgentGadget*>(a);
         if (!IsChestGadgetId(gadget->gadget_id)) continue;
+        if (IsChestOpened(a->agent_id)) continue; // GWA3-139: skip already opened
 
         LogBot("Opening chest (agent=%u gadget=%u dist=%.0f)", a->agent_id, gadget->gadget_id, dist);
+        MarkChestOpened(a->agent_id);
 
         // Move to chest
         if (dist > 200.0f) {
