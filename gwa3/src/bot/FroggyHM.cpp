@@ -276,28 +276,122 @@ static int LoadHeroConfigFile(const char* filename, BotConfig& cfg) {
     return heroIdx;
 }
 
-// ===== Skill System (GWA3-097) =====
+// ===== Skill System (GWA3-097, GWA3-122) =====
 
-// Skill type classification (from Skill::type)
-enum SkillCategory {
-    CAT_UNKNOWN     = 0,
-    CAT_OFFENSIVE   = 1,  // Hexes, damage spells, attacks
-    CAT_DEFENSIVE   = 2,  // Heals, prots, enchants on self
-    CAT_UTILITY     = 3,  // Stances, shouts, preparations
-    CAT_INTERRUPT   = 4,  // Fast-cast skills usable as interrupts
-};
+// Role bitmask — a skill can have multiple roles
+static constexpr uint32_t ROLE_NONE           = 0;
+static constexpr uint32_t ROLE_HEAL_SINGLE    = (1 << 0);   // Single-target heal
+static constexpr uint32_t ROLE_HEAL_PARTY     = (1 << 1);   // Party-wide heal
+static constexpr uint32_t ROLE_HEAL_SELF      = (1 << 2);   // Self-only heal
+static constexpr uint32_t ROLE_PROT           = (1 << 3);   // Protection spell
+static constexpr uint32_t ROLE_BOND           = (1 << 4);   // Maintained enchantment
+static constexpr uint32_t ROLE_COND_REMOVE    = (1 << 5);   // Condition removal
+static constexpr uint32_t ROLE_HEX_REMOVE     = (1 << 6);   // Hex removal
+static constexpr uint32_t ROLE_ENCHANT_REMOVE = (1 << 7);   // Enchant removal on foe
+static constexpr uint32_t ROLE_HEX            = (1 << 8);   // Hex spell (offensive)
+static constexpr uint32_t ROLE_PRESSURE       = (1 << 9);   // Condition/hex pressure
+static constexpr uint32_t ROLE_ATTACK         = (1 << 10);  // Melee/ranged attack
+static constexpr uint32_t ROLE_INTERRUPT_HARD = (1 << 11);  // Hard interrupt
+static constexpr uint32_t ROLE_INTERRUPT_SOFT = (1 << 12);  // Soft interrupt
+static constexpr uint32_t ROLE_PRECAST        = (1 << 13);  // Pre-combat setup
+static constexpr uint32_t ROLE_BINDING        = (1 << 14);  // Spirit/ritual
+static constexpr uint32_t ROLE_SPEED_BOOST    = (1 << 15);  // Movement speed
+static constexpr uint32_t ROLE_SURVIVAL       = (1 << 16);  // Defensive survival
+static constexpr uint32_t ROLE_SHOUT          = (1 << 17);  // Shout/chant
+static constexpr uint32_t ROLE_RESURRECT      = (1 << 18);  // Resurrection
+static constexpr uint32_t ROLE_OFFENSIVE      = (1 << 19);  // Generic offensive
+static constexpr uint32_t ROLE_DEFENSIVE      = (1 << 20);  // Generic defensive
+
+// Combined masks for legacy compatibility
+static constexpr uint32_t ROLE_ANY_HEAL = ROLE_HEAL_SINGLE | ROLE_HEAL_PARTY | ROLE_HEAL_SELF;
+static constexpr uint32_t ROLE_ANY_INTERRUPT = ROLE_INTERRUPT_HARD | ROLE_INTERRUPT_SOFT;
+static constexpr uint32_t ROLE_ANY_REMOVAL = ROLE_COND_REMOVE | ROLE_HEX_REMOVE | ROLE_ENCHANT_REMOVE;
 
 struct CachedSkill {
     uint32_t skill_id;
+    uint32_t roles;        // bitmask of ROLE_* flags
     uint8_t  slot;         // 0-7
     uint8_t  target_type;  // from Skill::target (0=self, 3=ally, 5=foe, 6=dead)
     uint8_t  energy_cost;
+    uint8_t  skill_type;   // from Skill::type
     float    activation;
-    SkillCategory category;
+    float    recharge_time;
+    bool hasRole(uint32_t r) const { return (roles & r) != 0; }
 };
 
 static CachedSkill s_skillCache[8] = {};
 static bool s_skillsCached = false;
+
+// ===== Skill Classifiers (ported from BotCore-SkillRules.au3) =====
+
+// Hardcoded interrupt skill IDs (from AutoIt IsHardRuptSkill)
+static bool IsHardInterruptId(uint32_t id) {
+    switch (id) {
+    case 5: case 64: case 99: case 116: case 170:   // Power Block, Power Drain, etc.
+    case 218: case 312: case 332: case 782: case 783:
+    case 838: case 950: case 1041: case 1338: case 1489:
+    case 2013: case 2162: case 2370:
+        return true;
+    }
+    return false;
+}
+
+// Condition removal skills
+static bool IsCondRemovalId(uint32_t id) {
+    switch (id) {
+    case 25: case 31: case 53: case 222: case 270:  // Cure Hex, Dismiss Condition, etc.
+    case 280: case 289: case 291: case 331: case 838:
+    case 951: case 1258: case 2054: case 2059: case 2145:
+    case 2179: case 2286: case 2362: case 2451:
+        return true;
+    }
+    return false;
+}
+
+// Hex removal skills
+static bool IsHexRemovalId(uint32_t id) {
+    switch (id) {
+    case 24: case 25: case 156: case 270: case 280:  // Cure Hex, Holy Veil, etc.
+    case 304: case 331: case 838: case 944: case 1258:
+    case 2145: case 2179: case 2451:
+        return true;
+    }
+    return false;
+}
+
+// Survival/shadow skills
+static bool IsSurvivalId(uint32_t id) {
+    switch (id) {
+    case 2358: case 312: case 826: case 828: case 867:  // Shadow Form, Shroud of Distress, etc.
+    case 878: case 1338: case 2370: case 2371:
+        return true;
+    }
+    return false;
+}
+
+// Speed boost skills (40+ from AutoIt IsSpeedBoost)
+static bool IsSpeedBoostId(uint32_t id) {
+    switch (id) {
+    case 312: case 452: case 826: case 828: case 856:
+    case 867: case 878: case 947: case 1003: case 1338:
+    case 2370: case 2371: case 2051: case 2052:
+        return true;
+    }
+    return false;
+}
+
+// Binding ritual skill IDs
+static bool IsBindingId(uint32_t id) {
+    switch (id) {
+    case 786: case 787: case 788: case 789: case 790:  // Spirits
+    case 791: case 792: case 793: case 794: case 795:
+    case 960: case 961: case 962: case 963: case 964:
+    case 965: case 966: case 967: case 2083: case 2084:
+    case 2085: case 2087: case 2088: case 2089:
+        return true;
+    }
+    return false;
+}
 
 static void CacheSkillBar() {
     s_skillsCached = false;
@@ -308,10 +402,12 @@ static void CacheSkillBar() {
         auto& c = s_skillCache[i];
         c.skill_id = bar->skills[i].skill_id;
         c.slot = static_cast<uint8_t>(i);
-        c.category = CAT_UNKNOWN;
+        c.roles = ROLE_NONE;
         c.target_type = 0;
         c.energy_cost = 0;
+        c.skill_type = 0;
         c.activation = 0;
+        c.recharge_time = 0;
 
         if (c.skill_id == 0) continue;
 
@@ -320,57 +416,95 @@ static void CacheSkillBar() {
 
         c.target_type = data->target;
         c.energy_cost = data->energy_cost;
+        c.skill_type = static_cast<uint8_t>(data->type);
         c.activation = data->activation;
+        c.recharge_time = static_cast<float>(data->recharge);
 
-        // Categorize by type
+        // === Role assignment ===
+
+        // Resurrection (target type 6 = dead ally)
+        if (data->target == 6) {
+            c.roles |= ROLE_RESURRECT;
+        }
+
+        // Hardcoded role overrides by skill ID
+        if (IsHardInterruptId(c.skill_id))  c.roles |= ROLE_INTERRUPT_HARD;
+        if (IsCondRemovalId(c.skill_id))    c.roles |= ROLE_COND_REMOVE;
+        if (IsHexRemovalId(c.skill_id))     c.roles |= ROLE_HEX_REMOVE;
+        if (IsSurvivalId(c.skill_id))       c.roles |= ROLE_SURVIVAL;
+        if (IsSpeedBoostId(c.skill_id))     c.roles |= ROLE_SPEED_BOOST;
+        if (IsBindingId(c.skill_id))        c.roles |= ROLE_BINDING;
+
+        // Type-based classification
         switch (data->type) {
         case 1:  // Hex
-        case 2:  // Spell (damage)
-        case 5:  // Well
-        case 7:  // Ward
-            c.category = (data->target == 5 || data->target == 0) ? CAT_OFFENSIVE : CAT_DEFENSIVE;
+            c.roles |= ROLE_HEX | ROLE_PRESSURE;
+            if (data->target == 5) c.roles |= ROLE_OFFENSIVE;
+            break;
+        case 2:  // Spell
+            if (data->target == 3 || data->target == 4) {
+                c.roles |= ROLE_HEAL_SINGLE;
+            } else if (data->target == 5) {
+                c.roles |= ROLE_OFFENSIVE;
+            } else if (data->target == 0) {
+                c.roles |= ROLE_HEAL_SELF;
+            }
+            // Soft interrupt: any fast spell targeting foe
+            if (data->activation <= 0.5f && data->target == 5 && !(c.roles & ROLE_INTERRUPT_HARD)) {
+                c.roles |= ROLE_INTERRUPT_SOFT;
+            }
             break;
         case 3:  // Enchantment
         case 16: // Flash Enchantment
-            c.category = (data->target == 5) ? CAT_OFFENSIVE : CAT_DEFENSIVE;
+            if (data->target == 0 || data->target == 3) {
+                c.roles |= ROLE_DEFENSIVE | ROLE_PROT;
+            }
+            if (data->target == 5) c.roles |= ROLE_OFFENSIVE;
             break;
         case 0:  // Stance
-        case 8:  // Glyph
-        case 10: // Shout
-        case 11: // Preparation
-        case 20: // Chant
-            c.category = CAT_UTILITY;
+            c.roles |= ROLE_PRECAST | ROLE_DEFENSIVE;
             break;
         case 4:  // Signet
-            c.category = (data->target == 5) ? CAT_OFFENSIVE : CAT_DEFENSIVE;
+            if (data->target == 5) c.roles |= ROLE_OFFENSIVE;
+            else c.roles |= ROLE_DEFENSIVE;
+            break;
+        case 5:  // Well
+        case 7:  // Ward
+            c.roles |= ROLE_PRECAST | ROLE_DEFENSIVE;
+            break;
+        case 6:  // Skill (generic)
+            if (data->target == 5) c.roles |= ROLE_OFFENSIVE;
+            else c.roles |= ROLE_DEFENSIVE;
+            break;
+        case 8:  // Glyph
+            c.roles |= ROLE_PRECAST;
             break;
         case 9:  // Attack skill
         case 17: // Double Attack
-            c.category = CAT_OFFENSIVE;
+            c.roles |= ROLE_ATTACK | ROLE_OFFENSIVE;
             break;
-        case 6:  // Skill (generic)
-            // Fast activation + targets foe = potential interrupt
-            if (data->activation <= 0.25f && data->target == 5) {
-                c.category = CAT_INTERRUPT;
-            } else if (data->target == 5) {
-                c.category = CAT_OFFENSIVE;
-            } else {
-                c.category = CAT_UTILITY;
-            }
+        case 10: // Shout
+        case 20: // Chant
+            c.roles |= ROLE_SHOUT | ROLE_PRECAST;
+            break;
+        case 11: // Preparation
+            c.roles |= ROLE_PRECAST;
             break;
         case 12: // Trap
+            c.roles |= ROLE_PRECAST;
+            break;
         case 13: // Ritual
+            c.roles |= ROLE_BINDING | ROLE_PRECAST;
+            break;
         case 14: // Item Spell
         case 15: // Weapon Spell
-            c.category = (data->target == 5) ? CAT_OFFENSIVE : CAT_DEFENSIVE;
-            break;
-        default:
-            c.category = CAT_UTILITY;
+            if (data->target == 3) c.roles |= ROLE_DEFENSIVE;
+            else if (data->target == 5) c.roles |= ROLE_OFFENSIVE;
             break;
         }
     }
     s_skillsCached = true;
-    LogBot("Skillbar cached: %u/%u/%u/%u/%u/%u/%u/%u",
+    LogBot("Skillbar cached (bitmask roles): %u/%u/%u/%u/%u/%u/%u/%u",
            s_skillCache[0].skill_id, s_skillCache[1].skill_id,
            s_skillCache[2].skill_id, s_skillCache[3].skill_id,
            s_skillCache[4].skill_id, s_skillCache[5].skill_id,
@@ -378,7 +512,8 @@ static void CacheSkillBar() {
 }
 
 // Try to use a skill from the cache. Returns true if a skill was used.
-static bool TryUseSkill(uint32_t targetId, SkillCategory preferredCat) {
+// Try to use a skill matching the given role bitmask. Returns true if a skill was used.
+static bool TryUseSkillWithRole(uint32_t targetId, uint32_t roleMask) {
     auto* bar = SkillMgr::GetPlayerSkillbar();
     auto* me = AgentMgr::GetMyAgent();
     if (!bar || !me) return false;
@@ -388,7 +523,7 @@ static bool TryUseSkill(uint32_t targetId, SkillCategory preferredCat) {
     for (int i = 0; i < 8; i++) {
         auto& c = s_skillCache[i];
         if (c.skill_id == 0) continue;
-        if (c.category != preferredCat) continue;
+        if (!(c.roles & roleMask)) continue; // no matching role
         if (bar->skills[i].recharge > 0) continue; // still recharging
         if (c.energy_cost > static_cast<uint8_t>(myEnergy)) continue; // not enough energy
 
@@ -396,8 +531,11 @@ static bool TryUseSkill(uint32_t targetId, SkillCategory preferredCat) {
         uint32_t skillTarget = 0;
         if (c.target_type == 5) {
             skillTarget = targetId; // targets foe
-        } else if (c.target_type == 3) {
-            skillTarget = me->agent_id; // targets ally (self)
+        } else if (c.target_type == 3 || c.target_type == 4) {
+            skillTarget = me->agent_id; // targets ally (self for now — GWA3-123 adds smart targeting)
+        } else if (c.target_type == 6) {
+            // Dead ally targeting — skip for now, needs GWA3-123
+            continue;
         }
         // target_type 0 = no target needed
 
@@ -422,26 +560,38 @@ static void FightTarget(uint32_t targetId) {
     auto* me = AgentMgr::GetMyAgent();
     if (!me) return;
 
-    // Priority 1: If HP low, use defensive skill
+    // Priority 1: Emergency survival — if HP critically low
     if (me->hp < 0.3f) {
-        TryUseSkill(targetId, CAT_DEFENSIVE);
+        if (TryUseSkillWithRole(targetId, ROLE_SURVIVAL)) return;
+        if (TryUseSkillWithRole(targetId, ROLE_ANY_HEAL)) return;
+        if (TryUseSkillWithRole(targetId, ROLE_PROT | ROLE_DEFENSIVE)) return;
     }
 
-    // Priority 2: Use utility (stances, shouts, buffs) if not already buffed
-    TryUseSkill(targetId, CAT_UTILITY);
+    // Priority 2: Condition/hex removal on self if afflicted
+    if (me->hex != 0) {
+        TryUseSkillWithRole(targetId, ROLE_HEX_REMOVE);
+    }
 
-    // Priority 3: Check if target is casting — try interrupt
+    // Priority 3: Interrupt casting enemies
     auto* target = AgentMgr::GetAgentByID(targetId);
     if (target && target->type == 0xDB) {
         auto* living = static_cast<AgentLiving*>(target);
         if (living->skill != 0) {
-            TryUseSkill(targetId, CAT_INTERRUPT);
+            if (!TryUseSkillWithRole(targetId, ROLE_INTERRUPT_HARD)) {
+                TryUseSkillWithRole(targetId, ROLE_INTERRUPT_SOFT);
+            }
         }
     }
 
-    // Priority 4: Offensive skills
-    if (!TryUseSkill(targetId, CAT_OFFENSIVE)) {
-        // No offensive skills ready — auto-attack
+    // Priority 4: Pre-combat buffs (stances, shouts, preparations)
+    TryUseSkillWithRole(targetId, ROLE_PRECAST | ROLE_SHOUT);
+
+    // Priority 5: Hex pressure on target
+    TryUseSkillWithRole(targetId, ROLE_HEX | ROLE_PRESSURE);
+
+    // Priority 6: Offensive skills (attacks, damage spells)
+    if (!TryUseSkillWithRole(targetId, ROLE_OFFENSIVE | ROLE_ATTACK)) {
+        // No skills ready — auto-attack
         AgentMgr::Attack(targetId);
     }
 }
