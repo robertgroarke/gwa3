@@ -3213,11 +3213,11 @@ Port CanCast() from AutoIt — 22 debuff checks that prevent skill use when dang
 | GWA3-125 | Combat Decision Engine (FightTarget v2) | XL | 122, 123, 124 | `done` |
 | GWA3-126 | Debuff Blocking (22 checks via CanCast) | L | 122 | `done` |
 | **Epic 17: Combat System Tests** | | | | |
-| GWA3-127 | Test: Combat Mode Toggle | S | 121 | `backlog` |
-| GWA3-128 | Test: Skill Classification (15+ roles) | M | 122 | `backlog` |
-| GWA3-129 | Test: Target Selection Strategies | M | 123 | `backlog` |
-| GWA3-130 | Test: HP Gating & Debuff Blocking | M | 124, 126 | `backlog` |
-| GWA3-131 | Test: Full Combat Decision Engine | L | 125 | `backlog` |
+| GWA3-127 | Test: Combat Mode Toggle | S | 121 | `done` |
+| GWA3-128 | Test: Skill Classification (15+ roles) | M | 122 | `done` |
+| GWA3-129 | Test: Target Selection Strategies | M | 123 | `done` |
+| GWA3-130 | Test: HP Gating & Debuff Blocking | M | 124, 126 | `done` |
+| GWA3-131 | Test: Full Combat Decision Engine | L | 125 | `done` |
 
 **Total: 131 tickets across 17 epics.**
 
