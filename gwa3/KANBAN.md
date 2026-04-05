@@ -78,18 +78,22 @@
 
 ## Backlog — Bugs / Investigation
 
-### GWA3-090: Debug CallTarget UIMessage dispatch path
-**Priority**: Low — packet fallback works, UIMessage path is broken
-**Context**: `AgentMgr::CallTarget` had a UIMessage path using `SendUIMessage(0x30000013, &CallTargetPacket, nullptr)` that silently failed — no chat message, no party state update. The packet path (`CtoS::SendPacket(3, CALL_TARGET, 0xA, agentId)`) works correctly and matches AutoIt GWA2.au3.
+### GWA3-090: Debug CallTarget native function resolution
+**Priority**: Low — packet fallback works, native path resolves but calls wrong function
+**Context**: Three approaches were tried:
+1. **UIMessage** `SendUIMessage(0x30000013, ...)` — silently fails, no effect
+2. **Native function** via GWCA InteractAgent pattern — resolves but wrong sub-function
+3. **Packet** `CtoS::SendPacket(3, CALL_TARGET, 0xA, agentId)` — **works** (matches AutoIt)
 
-**Investigation needed**:
-- [ ] Is `0x30000013` (`kSendCallTargetUiMessage`) the correct UIMessage ID for call target?
-- [ ] Is the `CallTargetPacket` struct `{CallTargetType, uint32_t agent_id}` the correct wParam layout?
-- [ ] Does `SendUIMessage` for call target need to run on game thread specifically (not just EnqueuePost)?
-- [ ] Check GWCA source for how they dispatch call target via UIMessage vs packet
+**Native function investigation findings**:
+- InteractAgent scan `C7 45 F0 98 3A 00 00` at +0x41 resolves but E8 CALL is at offset -10 (not +0x41 exactly)
+- Fuzzy ±16 search finds dispatcher OK
+- GWCA says CallTarget is at dispatcher+0xD6, but in this GW build the E8 is at +0xC7
+- The function at dispatcher+0xC7 doesn't produce call target effect — likely InteractNPC or another sub-function
+- Need Ghidra disassembly of the dispatcher to map all sub-function offsets for this build
 
-**Current workaround**: Using `CtoS::SendPacket` directly (proven working). UIMessage path removed from `CallTarget()`.
-**Commit that fixed it**: `8c1cbef`
+**Current workaround**: Packet path only. Native resolution in Offsets but not used by AgentMgr.
+**Commits**: `8c1cbef` (packet fix), `d3c33f5` (native investigation)
 
 ---
 
