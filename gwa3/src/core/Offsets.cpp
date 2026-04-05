@@ -99,6 +99,9 @@ uintptr_t CameraUpdateBypass = 0;
 uintptr_t LevelDataBypass = 0;
 uintptr_t MapPortBypass = 0;
 
+uintptr_t InteractAgent = 0;
+uintptr_t CallTargetFunc = 0;
+
 uintptr_t OfferTradeItem = 0;
 uintptr_t UpdateTradeCart = 0;
 
@@ -263,6 +266,10 @@ static const PatternDef s_patterns[] = {
 
     // ===== Items (P1) =====
     PAT("ItemClick",     ItemClick,     "\x8B\x48\x08\x83\xEA\x00\x0F\x84",             "xxxxxxxx",   -0x1C, Priority::P1, PatternType::Func),
+
+    // ===== Agent Interaction GWCA (P1) =====
+    // InteractAgent dispatcher — resolves CallTarget at +0xD6 via FunctionFromNearCall
+    PAT("InteractAgent", InteractAgent, "\xC7\x45\xF0\x98\x3A\x00\x00",                  "xxxxxxx",    0x41, Priority::P1, PatternType::Func),
 
     // ===== Trade GWCA (P2) =====
     PAT("OfferTradeItem",  OfferTradeItem,  "\x68\x49\x04\x00\x00\x89\x5D\xE4\xE8",       "xxxxxxxxx",  -0x6B, Priority::P2, PatternType::Func),
@@ -435,6 +442,17 @@ static void PostProcessOffsets() {
 
     // Effects: DropBuff scan result contains E8 near call
     if (DropBuff)       DropBuff       = Scanner::FunctionFromNearCall(DropBuff);
+
+    // Agent interaction: InteractAgent scan+0x41 contains E8 near call to dispatcher.
+    // CallTarget is at dispatcher + 0xD6 (also a near call).
+    if (InteractAgent) {
+        InteractAgent = Scanner::FunctionFromNearCall(InteractAgent);
+        if (InteractAgent > 0x10000) {
+            CallTargetFunc = Scanner::FunctionFromNearCall(InteractAgent + 0xD6);
+            Log::Info("Offsets: InteractAgent=0x%08X CallTargetFunc=0x%08X",
+                      InteractAgent, CallTargetFunc);
+        }
+    }
 
     // Quest: RequestQuestInfo scan result contains E8 near call
     if (RequestQuestInfo) RequestQuestInfo = Scanner::FunctionFromNearCall(RequestQuestInfo);

@@ -133,6 +133,10 @@ namespace GWA3::Offsets {
     extern uintptr_t LevelDataBypass;    // ptr — JZ instruction for level-data validation
     extern uintptr_t MapPortBypass;      // ptr — JNZ instruction for map/port validation
 
+    // ===== Agent Interaction (GWCA) =====
+    extern uintptr_t InteractAgent;      // func — interaction dispatcher (resolves CallTarget at +0xD6)
+    extern uintptr_t CallTargetFunc;     // func — native CallTarget(type, agent_id)
+
     // ===== Trade (GWCA) =====
     extern uintptr_t OfferTradeItem;     // func — __fastcall offer item in trade window
     extern uintptr_t UpdateTradeCart;    // func — trade cart update (captures window context)
