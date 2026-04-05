@@ -7,6 +7,7 @@
 #include <gwa3/core/Scanner.h>
 #include <gwa3/core/TargetLogHook.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/managers/UIMgr.h>
 
 #include <Windows.h>
 #include <cmath>
@@ -14,9 +15,24 @@
 
 namespace GWA3::AgentMgr {
 
+static constexpr uint32_t kSendCallTargetUiMessage = 0x30000013u;
+
+enum class CallTargetType : uint32_t {
+    Following = 0x3,
+    Morale = 0x7,
+    AttackingOrTargetting = 0xA,
+    None = 0xFF
+};
+
+struct CallTargetPacket {
+    CallTargetType call_type;
+    uint32_t agent_id;
+};
+
 using MoveFn = void(__cdecl*)(const void*);
 using ChangeTargetFn = void(__cdecl*)(uint32_t, uint32_t);
 using InteractItemFn = void(__cdecl*)(uint32_t, uint32_t);
+using CallTargetFn = void(__cdecl*)(CallTargetType, uint32_t);
 
 struct MoveData {
     float x;
@@ -24,61 +40,15 @@ struct MoveData {
     uint32_t plane;
 };
 
-// Ring buffers to prevent shellcode overwrite during rapid commands
-static constexpr int kShellcodeSlots = 16;
-static constexpr int kMoveSlotSize = 64; // shellcode + data in one slot
-static constexpr int kTargetSlotSize = 32;
-static uintptr_t s_moveShellcodeBase = 0;
-static uintptr_t s_targetShellcodeBase = 0;
-static volatile LONG s_moveSlotIndex = 0;
-static volatile LONG s_targetSlotIndex = 0;
-
 static MoveFn s_moveFn = nullptr;
 static ChangeTargetFn s_changeTargetFn = nullptr;
 static InteractItemFn s_interactItemFn = nullptr;
+static CallTargetFn s_callTargetFn = nullptr;
 static bool s_initialized = false;
 static bool s_loggedCurrentTargetRead = false;
 static bool s_loggedCurrentTargetFault = false;
 static bool s_loggedTargetLogRead = false;
 static bool s_loggedTargetLogStats = false;
-
-static bool EnsureMoveShellcode() {
-    if (s_moveShellcodeBase) return true;
-
-    void* mem = VirtualAlloc(nullptr, kShellcodeSlots * kMoveSlotSize,
-                             MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-    if (!mem) {
-        Log::Error("AgentMgr: VirtualAlloc failed for move shellcode pool");
-        return false;
-    }
-
-    s_moveShellcodeBase = reinterpret_cast<uintptr_t>(mem);
-    return true;
-}
-
-static bool EnsureTargetShellcode() {
-    if (s_targetShellcodeBase) return true;
-
-    void* mem = VirtualAlloc(nullptr, kShellcodeSlots * kTargetSlotSize,
-                             MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-    if (!mem) {
-        Log::Error("AgentMgr: VirtualAlloc failed for target shellcode pool");
-        return false;
-    }
-
-    s_targetShellcodeBase = reinterpret_cast<uintptr_t>(mem);
-    return true;
-}
-
-static uintptr_t NextMoveSlot() {
-    LONG idx = InterlockedIncrement(&s_moveSlotIndex) % kShellcodeSlots;
-    return s_moveShellcodeBase + idx * kMoveSlotSize;
-}
-
-static uintptr_t NextTargetSlot() {
-    LONG idx = InterlockedIncrement(&s_targetSlotIndex) % kShellcodeSlots;
-    return s_targetShellcodeBase + idx * kTargetSlotSize;
-}
 
 static uintptr_t FindNearCallTarget(uintptr_t center, int backward, int forward) {
     if (!center) return 0;
@@ -105,6 +75,10 @@ bool Initialize() {
     if (interactAgentCall) {
         uintptr_t interactAgentFn = FindNearCallTarget(interactAgentCall, 8, 8);
         if (interactAgentFn) {
+            uintptr_t callTargetFn = FindNearCallTarget(interactAgentFn + 0xD6, 8, 8);
+            if (callTargetFn) {
+                s_callTargetFn = reinterpret_cast<CallTargetFn>(callTargetFn);
+            }
             uintptr_t interactItemFn = FindNearCallTarget(interactAgentFn + 0xF8, 8, 8);
             if (!interactItemFn) {
                 interactItemFn = FindNearCallTarget(interactAgentFn + 0xF0, 24, 24);
@@ -120,8 +94,10 @@ bool Initialize() {
     }
 
     s_initialized = true;
-    Log::Info("AgentMgr: Initialized (Move=0x%08X, ChangeTarget=0x%08X, InteractItem=0x%08X)",
-              Offsets::Move, Offsets::ChangeTarget, static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_interactItemFn)));
+    Log::Info("AgentMgr: Initialized (Move=0x%08X, ChangeTarget=0x%08X, CallTarget=0x%08X, InteractItem=0x%08X)",
+              Offsets::Move, Offsets::ChangeTarget,
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_callTargetFn)),
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_interactItemFn)));
     return true;
 }
 
@@ -232,7 +208,20 @@ void CancelAction() {
 }
 
 void CallTarget(uint32_t agentId) {
-    CtoS::SendPacket(2, Packets::CALL_TARGET, agentId);
+    // Native function path (if resolved)
+    if (s_callTargetFn && GameThread::IsInitialized()) {
+        auto fn = s_callTargetFn;
+        GameThread::EnqueuePost([fn, agentId]() {
+            fn(CallTargetType::AttackingOrTargetting, agentId);
+        });
+        return;
+    }
+
+    // Packet path — matches AutoIt: SendPacket(0xC, CALL_TARGET, 0xA, agentId)
+    // This is the proven working approach from GWA2.au3 line 787.
+    CtoS::SendPacket(3, Packets::CALL_TARGET,
+                     static_cast<uint32_t>(CallTargetType::AttackingOrTargetting),
+                     agentId);
 }
 
 void InteractItem(uint32_t agentId, bool callTarget) {
