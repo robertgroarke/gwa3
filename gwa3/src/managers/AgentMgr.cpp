@@ -6,6 +6,7 @@
 #include <gwa3/core/RenderHook.h>
 #include <gwa3/core/Scanner.h>
 #include <gwa3/core/TargetLogHook.h>
+#include <gwa3/managers/MapMgr.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/managers/UIMgr.h>
 
@@ -122,6 +123,12 @@ void Move(float x, float y) {
         Log::Warn("AgentMgr: Move falling back to packet path (GameThread not ready)");
         CtoS::MoveToCoord(x, y);
         return;
+    }
+
+    // Safety: don't call native move during zone transitions or when agent is invalid.
+    // The native fn crashes if called while the world state is being torn down/rebuilt.
+    if (!MapMgr::GetIsMapLoaded() || GetMyId() == 0) {
+        return;  // silently skip — caller will retry on next tick
     }
 
     // Direct function call on the game thread. IMPORTANT: the caller must

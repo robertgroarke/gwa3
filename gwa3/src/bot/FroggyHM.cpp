@@ -14,6 +14,7 @@
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
+#include <gwa3/core/Log.h>
 
 #include <Windows.h>
 #include <cmath>
@@ -160,6 +161,8 @@ static int Base64CharToVal(char c) {
 // Decode a GW skill template code into 8 skill IDs.
 // Returns true on success, fills skillIds[8].
 static bool DecodeSkillTemplate(const char* code, uint32_t skillIds[8]) {
+    if (!code || code[0] == '\0') return false;
+
     // Convert base64 to bit stream
     uint8_t bits[256] = {};
     int totalBits = 0;
@@ -2593,6 +2596,7 @@ static void FroggyCheck(const char* name, bool condition) {
     } else {
         s_testFailed++;
         LogBot("[FAIL] %s", name);
+        Log::Info("[FROGGY-UT] [FAIL] %s", name);
     }
 }
 
