@@ -17,4 +17,8 @@ namespace GWA3::Bot::Froggy {
     BotState HandleMaintenance(BotConfig& cfg);
     BotState HandleError(BotConfig& cfg);
 
+    // Run unit tests for Froggy's internal pure-logic functions.
+    // Returns number of failures.
+    int RunFroggyUnitTests();
+
 } // namespace GWA3::Bot::Froggy

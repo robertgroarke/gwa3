@@ -183,11 +183,12 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     bool merchantQuoteTest = CheckFlag("GWA3_TEST_MERCHANT_QUOTE", "gwa3_test_merchant_quote.flag");
     bool advancedTest = CheckFlag("GWA3_TEST_ADVANCED", "gwa3_test_advanced.flag");
     bool workflowTest = CheckFlag("GWA3_TEST_WORKFLOW", "gwa3_test_workflow.flag");
+    bool froggyTest = CheckFlag("GWA3_TEST_FROGGY", "gwa3_test_froggy.flag");
     bool llmMode = CheckFlag("GWA3_LLM_MODE", "gwa3_llm_mode.flag");
     bool llmAdvisory = CheckFlag("GWA3_LLM_ADVISORY", "gwa3_llm_advisory.flag");
-    bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || workflowTest;
-    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d advanced=%d workflow=%d llm=%d advisory=%d",
-                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, advancedTest, workflowTest, llmMode, llmAdvisory);
+    bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || workflowTest || froggyTest;
+    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d advanced=%d workflow=%d froggy=%d llm=%d advisory=%d",
+                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, advancedTest, workflowTest, froggyTest, llmMode, llmAdvisory);
 
     HMODULE gwModule = GetModuleHandleA(nullptr);
     if (!GWA3::Scanner::Initialize(gwModule)) {
@@ -340,6 +341,21 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::Log::Info("=== ADVANCED WORKFLOW TEST MODE ===");
         int failures = GWA3::SmokeTest::RunAdvancedWorkflowTest();
         GWA3::Log::Info("Workflow test complete: %d failures", failures);
+        GWA3::Log::Info("Workflow test finished — terminating GW process");
+        GWA3::Log::Shutdown();
+        Sleep(100);
+        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
+        return static_cast<DWORD>(failures);
+    }
+
+    if (froggyTest) {
+        GWA3::Log::Info("=== FROGGY FEATURE TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunFroggyFeatureTest();
+        GWA3::Log::Info("Froggy feature test complete: %d failures", failures);
+        GWA3::Log::Info("Froggy test finished — terminating GW process");
+        GWA3::Log::Shutdown();
+        Sleep(100);
+        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
         return static_cast<DWORD>(failures);
     }
 
