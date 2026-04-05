@@ -214,17 +214,9 @@ void CancelAction() {
 }
 
 void CallTarget(uint32_t agentId) {
-    // Native function path (if resolved)
-    if (s_callTargetFn && GameThread::IsInitialized()) {
-        auto fn = s_callTargetFn;
-        GameThread::EnqueuePost([fn, agentId]() {
-            fn(CallTargetType::AttackingOrTargetting, agentId);
-        });
-        return;
-    }
-
-    // Packet path — matches AutoIt: SendPacket(0xC, CALL_TARGET, 0xA, agentId)
-    // This is the proven working approach from GWA2.au3 line 787.
+    // Packet path — proven working, matches AutoIt: SendPacket(0xC, CALL_TARGET, 0xA, agentId)
+    // Native function path is resolved but the dispatcher+offset may not point to the
+    // correct CallTarget sub-function in all GW builds. See GWA3-090 kanban ticket.
     CtoS::SendPacket(3, Packets::CALL_TARGET,
                      static_cast<uint32_t>(CallTargetType::AttackingOrTargetting),
                      agentId);
