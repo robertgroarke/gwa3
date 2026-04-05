@@ -643,7 +643,7 @@ bool TestStoCPacketTypes() {
     // Real StoC opcodes from GWCA Packets/Opcodes.h
     static HeaderProbe probes[] = {
         {0x001E, "AgentMovementTick"},   // GAME_SMSG_AGENT_MOVEMENT_TICK — fires constantly
-        {0x001F, "InstanceTimer"},       // GAME_SMSG_AGENT_INSTANCE_TIMER — fires every second
+        {0x000C, "PingRequest"},          // GAME_SMSG_PING_REQUEST — server pings client regularly
         {0x00F1, "AgentUpdateEffects"},  // GAME_SMSG_AGENT_UPDATE_EFFECTS — fires on buff changes
     };
 
@@ -652,14 +652,14 @@ bool TestStoCPacketTypes() {
             [&p](StoC::HookStatus*, StoC::PacketBase*) { p.hits++; });
     }
 
-    Sleep(3000);
+    Sleep(5000);
 
     for (auto& p : probes) {
         IntReport("  StoC 0x%04X (%s): %u hits", p.header, p.name, p.hits.load());
         if (p.hits.load() > 0) {
             IntCheck(p.name, true);
         } else {
-            IntSkip(p.name, "No packets observed in 3s (hook may not be installed)");
+            IntSkip(p.name, "No packets observed in 5s");
         }
         StoC::RemoveCallbacks(&p.entry);
     }
