@@ -650,6 +650,19 @@ async def test_bot_state_fields(tc: BridgeTestCase):
     assert_type(bot["is_running"], bool, "bot.is_running")
 
 
+async def test_bot_combat_mode(tc: BridgeTestCase):
+    """Bot state includes combat_mode field."""
+    snap = await tc.wait_for_snapshot(tier=1)
+    bot = snap.get("bot", {})
+    if not bot:
+        tc.skip("No bot state in snapshot")
+    assert_keys_present(bot, ["combat_mode"], "bot")
+    assert_true(
+        bot["combat_mode"] in ("builtin", "llm"),
+        f"combat_mode should be 'builtin' or 'llm', got '{bot.get('combat_mode')}'",
+    )
+
+
 async def test_bot_state_valid_name(tc: BridgeTestCase):
     """Bot state name is one of the known states."""
     snap = await tc.wait_for_snapshot(tier=1)

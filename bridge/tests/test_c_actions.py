@@ -585,3 +585,51 @@ async def test_set_bot_state_all_valid_states(tc: BridgeTestCase):
         tc.assert_action_success(result)
     # Restore
     await tc.send_action("set_bot_state", {"state": "idle"})
+
+
+# ============================================================
+# C16: Combat mode toggle (GWA3-127)
+# ============================================================
+
+async def test_set_combat_mode_missing(tc: BridgeTestCase):
+    result = await tc.send_action("set_combat_mode", {})
+    tc.assert_action_error(result, "missing mode")
+
+
+async def test_set_combat_mode_unknown(tc: BridgeTestCase):
+    result = await tc.send_action("set_combat_mode", {"mode": "invalid"})
+    tc.assert_action_error(result, "unknown_mode")
+
+
+async def test_set_combat_mode_llm(tc: BridgeTestCase):
+    result = await tc.send_action("set_combat_mode", {"mode": "llm"})
+    tc.assert_action_success(result)
+    # Restore
+    await tc.send_action("set_combat_mode", {"mode": "builtin"})
+
+
+async def test_set_combat_mode_builtin(tc: BridgeTestCase):
+    result = await tc.send_action("set_combat_mode", {"mode": "builtin"})
+    tc.assert_action_success(result)
+
+
+async def test_combat_mode_reflects_in_snapshot(tc: BridgeTestCase):
+    """After set_combat_mode, bot.combat_mode should update in snapshot."""
+    snap_before = await tc.wait_for_snapshot(tier=1)
+    original = snap_before.get("bot", {}).get("combat_mode", "builtin")
+
+    target = "llm" if original != "llm" else "builtin"
+    result = await tc.send_action("set_combat_mode", {"mode": target})
+    tc.assert_action_success(result)
+
+    def check(snap):
+        return snap.get("bot", {}).get("combat_mode") == target
+
+    try:
+        new_snap = await tc.wait_for_state_change(check, tier=1, timeout=5.0)
+        assert_true(
+            new_snap["bot"]["combat_mode"] == target,
+            f"Expected combat_mode '{target}', got '{new_snap['bot']['combat_mode']}'",
+        )
+    finally:
+        await tc.send_action("set_combat_mode", {"mode": original})

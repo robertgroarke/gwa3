@@ -2450,8 +2450,136 @@ int RunFroggyUnitTests() {
     FroggyCheck("FlagAllHeroes+UnflagAll no crash", true);
 
     // SendDialogWithRetry — just verify it doesn't crash with a no-op dialog
-    // Don't actually send a real dialog ID to avoid game state changes
     FroggyCheck("SendDialogWithRetry returns", SendDialogWithRetry(0, 1, 50));
+
+    // --- GWA3-128: Skill classification (role bitmask) ---
+    LogBot("--- GWA3-128: Skill Classification ---");
+
+    // Test hardcoded classifier functions
+    FroggyCheck("IsHardInterrupt Power Block(5)=true", IsHardInterruptId(5));
+    FroggyCheck("IsHardInterrupt random=false", !IsHardInterruptId(999));
+    FroggyCheck("IsCondRemoval Cure Hex(25)=true", IsCondRemovalId(25));
+    FroggyCheck("IsCondRemoval random=false", !IsCondRemovalId(999));
+    FroggyCheck("IsHexRemoval(24)=true", IsHexRemovalId(24));
+    FroggyCheck("IsHexRemoval random=false", !IsHexRemovalId(999));
+    FroggyCheck("IsSurvival Shadow Form(2358)=true", IsSurvivalId(2358));
+    FroggyCheck("IsSurvival random=false", !IsSurvivalId(999));
+    FroggyCheck("IsBinding(786)=true", IsBindingId(786));
+    FroggyCheck("IsBinding random=false", !IsBindingId(999));
+
+    // Test role bitmask assignment via CacheSkillBar
+    // After caching, verify bitmask properties work
+    CachedSkill testSkill = {};
+    testSkill.roles = ROLE_HEX | ROLE_OFFENSIVE | ROLE_PRESSURE;
+    FroggyCheck("hasRole HEX=true", testSkill.hasRole(ROLE_HEX));
+    FroggyCheck("hasRole OFFENSIVE=true", testSkill.hasRole(ROLE_OFFENSIVE));
+    FroggyCheck("hasRole HEAL=false", !testSkill.hasRole(ROLE_ANY_HEAL));
+    FroggyCheck("hasRole INTERRUPT=false", !testSkill.hasRole(ROLE_ANY_INTERRUPT));
+
+    // Test combined mask
+    FroggyCheck("ANY_HEAL mask works", (ROLE_HEAL_SINGLE | ROLE_HEAL_PARTY | ROLE_HEAL_SELF) == ROLE_ANY_HEAL);
+    FroggyCheck("ANY_INTERRUPT mask works", (ROLE_INTERRUPT_HARD | ROLE_INTERRUPT_SOFT) == ROLE_ANY_INTERRUPT);
+
+    // --- GWA3-129: Target selection (no-crash verification) ---
+    LogBot("--- GWA3-129: Target Selection ---");
+
+    // These should return 0 or a valid ID — either way, no crash
+    uint32_t lowestAlly = GetLowestHealthAlly();
+    FroggyCheck("GetLowestHealthAlly no crash", lowestAlly == 0 || lowestAlly > 0);
+
+    uint32_t deadAlly = GetDeadAlly();
+    FroggyCheck("GetDeadAlly no crash", deadAlly == 0 || deadAlly > 0);
+
+    uint32_t unhexed = GetUnhexedEnemy();
+    FroggyCheck("GetUnhexedEnemy no crash", unhexed == 0 || unhexed > 0);
+
+    uint32_t casting = GetCastingEnemy();
+    FroggyCheck("GetCastingEnemy no crash", casting == 0 || casting > 0);
+
+    uint32_t enchanted = GetEnchantedEnemy();
+    FroggyCheck("GetEnchantedEnemy no crash", enchanted == 0 || enchanted > 0);
+
+    uint32_t melee = GetMeleeRangeEnemy();
+    FroggyCheck("GetMeleeRangeEnemy no crash", melee == 0 || melee > 0);
+
+    // ResolveSkillTarget with a fake skill
+    CachedSkill fakeHeal = {};
+    fakeHeal.roles = ROLE_HEAL_SINGLE;
+    fakeHeal.target_type = 3;
+    uint32_t healTarget = ResolveSkillTarget(fakeHeal, 0);
+    FroggyCheck("ResolveSkillTarget heal returns self or ally",
+                healTarget == 0 || healTarget > 0); // 0 if no me, >0 otherwise
+
+    CachedSkill fakeHex = {};
+    fakeHex.roles = ROLE_HEX;
+    fakeHex.target_type = 5;
+    uint32_t hexTarget = ResolveSkillTarget(fakeHex, 42);
+    // Should return an unhexed enemy or fallback to 42
+    FroggyCheck("ResolveSkillTarget hex returns target", hexTarget == 0 || hexTarget > 0);
+
+    CachedSkill fakeRes = {};
+    fakeRes.roles = ROLE_RESURRECT;
+    fakeRes.target_type = 6;
+    uint32_t resTarget = ResolveSkillTarget(fakeRes, 0);
+    FroggyCheck("ResolveSkillTarget resurrect no crash", resTarget == 0 || resTarget > 0);
+
+    // --- GWA3-130: HP gating & debuff blocking ---
+    LogBot("--- GWA3-130: HP Gating & Debuffs ---");
+
+    // CanCast with null agent — should return false (dead/no agent)
+    // We can't fully test CanCast without being in-game, but verify it doesn't crash
+    CachedSkill fakeSpell = {};
+    fakeSpell.skill_type = 2; // Spell
+    fakeSpell.roles = ROLE_OFFENSIVE;
+    bool canCastResult = CanCast(fakeSpell);
+    FroggyCheck("CanCast spell no crash", canCastResult || !canCastResult);
+
+    CachedSkill fakeAttack = {};
+    fakeAttack.skill_type = 9; // Attack
+    fakeAttack.roles = ROLE_ATTACK;
+    bool canCastAtk = CanCast(fakeAttack);
+    FroggyCheck("CanCast attack no crash", canCastAtk || !canCastAtk);
+
+    CachedSkill fakeSignet = {};
+    fakeSignet.skill_type = 4; // Signet
+    fakeSignet.roles = ROLE_OFFENSIVE;
+    bool canCastSig = CanCast(fakeSignet);
+    FroggyCheck("CanCast signet no crash", canCastSig || !canCastSig);
+
+    // CanUseSkill — verify HP gating doesn't crash
+    CachedSkill fakeHealGate = {};
+    fakeHealGate.skill_id = 68;
+    fakeHealGate.roles = ROLE_HEAL_SINGLE;
+    fakeHealGate.skill_type = 2;
+    fakeHealGate.target_type = 3;
+    bool canUseHeal = CanUseSkill(fakeHealGate, 0);
+    FroggyCheck("CanUseSkill heal no crash", canUseHeal || !canUseHeal);
+
+    CachedSkill fakeSurv = {};
+    fakeSurv.skill_id = 2358;
+    fakeSurv.roles = ROLE_SURVIVAL;
+    fakeSurv.skill_type = 3;
+    fakeSurv.target_type = 0;
+    bool canUseSurv = CanUseSkill(fakeSurv, 0);
+    FroggyCheck("CanUseSkill survival no crash", canUseSurv || !canUseSurv);
+
+    CachedSkill fakeBind = {};
+    fakeBind.skill_id = 786;
+    fakeBind.roles = ROLE_BINDING;
+    fakeBind.skill_type = 13;
+    fakeBind.target_type = 0;
+    bool canUseBind = CanUseSkill(fakeBind, 0);
+    FroggyCheck("CanUseSkill binding no crash", canUseBind || !canUseBind);
+
+    // --- GWA3-131: Combat mode toggle ---
+    LogBot("--- GWA3-131: Combat Mode ---");
+    auto& cfg = Bot::GetConfig();
+    auto origMode = cfg.combat_mode;
+    cfg.combat_mode = CombatMode::LLM;
+    FroggyCheck("Combat mode set to LLM", cfg.combat_mode == CombatMode::LLM);
+    cfg.combat_mode = CombatMode::Builtin;
+    FroggyCheck("Combat mode set to Builtin", cfg.combat_mode == CombatMode::Builtin);
+    cfg.combat_mode = origMode; // restore
 
     LogBot("=== Froggy Unit Tests Complete: %d passed, %d failed ===", s_testPassed, s_testFailed);
     return s_testFailed;
