@@ -2754,6 +2754,310 @@ Extend `test_b_observations.py` and `test_c_actions.py` to verify Froggy feature
 
 ---
 
+### Epic 16: Combat System Parity (AutoIt → C++)
+
+> Port the full AutoIt combat decision engine to C++. The current C++ system has 5 skill
+> categories and fixed priority. AutoIt has 15+ categories, 7 targeting strategies, HP gates,
+> debuff blocking, effect overlap prevention, and energy management. Also adds a combat mode
+> toggle so Gemma can optionally take over combat decisions via the LLM bridge.
+
+#### GWA3-121 — Combat Mode Toggle (Gemma vs Built-in)
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-097 |
+| **Blocks** | — |
+
+**Description:**
+Add a `combat_mode` setting to BotConfig: `builtin` (Froggy handles combat) or `llm` (Gemma handles combat via bridge actions). When `llm`, FightTarget() becomes a no-op and Gemma issues use_skill/attack/change_target directly. Expose combat_mode in the snapshot bot object. Add `set_combat_mode` bridge action.
+
+**Acceptance Criteria:**
+- [ ] `BotConfig::combat_mode` field (enum: Builtin, LLM)
+- [ ] FightTarget() checks mode — no-op when LLM
+- [ ] AggroMoveToEx still detects enemies and flags heroes, but doesn't cast
+- [ ] Snapshot `bot.combat_mode` field ("builtin" or "llm")
+- [ ] Bridge action `set_combat_mode(mode)` to switch at runtime
+- [ ] Tool schema + observation summary updated
+
+---
+
+#### GWA3-122 — Expanded Skill Categories (15+ types)
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-097 |
+| **Blocks** | GWA3-123, GWA3-124, GWA3-125, GWA3-126 |
+
+**Description:**
+Replace the 5-category `SkillCategory` enum with a bitmask supporting 15+ roles. Port the 50+ classifier functions from BotCore-SkillRules.au3. Each skill can have multiple roles (e.g., a skill can be both a heal AND a condition removal).
+
+**Categories to add:**
+- `ROLE_HEAL_SINGLE` — single-target heal
+- `ROLE_HEAL_PARTY` — party-wide heal
+- `ROLE_HEAL_SELF` — self-only heal
+- `ROLE_PROT` — protection spell
+- `ROLE_BOND` — maintained enchantment
+- `ROLE_COND_REMOVE` — condition removal
+- `ROLE_HEX_REMOVE` — hex removal
+- `ROLE_ENCHANT_REMOVE` — enchant removal (on foe)
+- `ROLE_HEX` — hex spell (offensive)
+- `ROLE_PRESSURE` — condition/hex application
+- `ROLE_ATTACK` — melee/ranged attack skill
+- `ROLE_INTERRUPT_HARD` — hard interrupt (Power Block, etc.)
+- `ROLE_INTERRUPT_SOFT` — soft interrupt (Power Drain, etc.)
+- `ROLE_PRECAST` — pre-combat setup (stances, wards, spirits)
+- `ROLE_BINDING` — binding ritual / spirit
+- `ROLE_SPEED_BOOST` — movement speed buff
+- `ROLE_SURVIVAL` — defensive survival (Shadow Form, Shroud, etc.)
+- `ROLE_SHOUT` — shout/chant
+- `ROLE_ECHO` — echo/refrain skill
+- `ROLE_RESURRECT` — resurrection skill
+
+**Acceptance Criteria:**
+- [ ] `uint32_t roles` bitmask on CachedSkill instead of single SkillCategory
+- [ ] Port hardcoded skill ID lists from BotCore-SkillRules.au3 (IsHexSpell, IsHealSkill, IsSpeedBoost, etc.)
+- [ ] CacheSkillBar() assigns multiple roles per skill
+- [ ] Skills with `data->target == 6` get ROLE_RESURRECT
+- [ ] 40+ speed boost skill IDs from AutoIt ported
+- [ ] 35+ binding ritual skill IDs from AutoIt ported
+
+**Reference:** `BotCore-SkillRules.au3` — all `Is*Skill()` functions
+
+---
+
+#### GWA3-123 — Intelligent Target Selection (7 strategies)
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | XL |
+| **Depends On** | GWA3-122 |
+| **Blocks** | GWA3-125 |
+
+**Description:**
+Port the 7 targeting strategies from AutoIt. Each skill role uses a different target finder:
+
+| Role | Target Strategy | Scans |
+|------|----------------|-------|
+| HEAL | `GetLowestHealthAlly()` | All allies, return lowest HP |
+| COND_REMOVE | `GetMostConditionedAlly()` | All allies, return most conditions |
+| HEX_REMOVE | `GetMostHexedAlly()` | All allies, return most hexes |
+| HEX (offensive) | `GetUnhexedEnemy()` | All foes, return nearest without hex |
+| ENCHANT_REMOVE | `GetEnchantedEnemy()` | All foes, return nearest with enchant |
+| INTERRUPT | `GetCastingEnemy()` | All foes, return nearest currently casting |
+| RESURRECT | `GetDeadAlly()` | All allies, return nearest dead |
+| ATTACK | `GetMeleeRangeEnemy()` | All foes within 250 range |
+| Default | `GetNearestEnemy()` | All foes, nearest by distance |
+
+**Acceptance Criteria:**
+- [ ] 9 targeting functions implemented
+- [ ] Each scans agent array, filters by allegiance + conditions
+- [ ] Integrated into skill dispatch — role determines which finder to call
+- [ ] GetLowestHealthAlly() returns ally with lowest `hp` fraction
+- [ ] GetMostConditionedAlly() counts active effects with type==hex on each ally
+- [ ] GetUnhexedEnemy() returns nearest foe where `has_hex == false`
+- [ ] GetCastingEnemy() returns nearest foe where `skill != 0`
+
+**Reference:** `BotCore-Combat.au3` — GetBestTargetBySkillSlot(), GetBestTargetPtr(), GetLowestAlly(), etc.
+
+---
+
+#### GWA3-124 — HP Gating & Effect Overlap Prevention
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-122 |
+| **Blocks** | GWA3-125 |
+
+**Description:**
+Port the skill-specific HP gates and effect duration checks from AutoIt's CanUse(). Add metadata to CachedSkill for HP thresholds, effect dependencies, and minimum remaining duration checks.
+
+**Key logic to port:**
+- Shadow Form: only if Glyph of Swiftness active AND Shadow Form not already active
+- Shroud of Distress: only if HP < 90% and not active with >5s remaining
+- Heart of Shadow: only if HP < 50%
+- Finish Him: only if target HP < 45%
+- Heal skills: only if lowest ally HP < 80%
+- Mystic Regeneration: only if remaining < 4s (refresh, don't waste)
+- Binding rituals: only if enemies within aggro range
+- Quickening Zephyr cost multiplier: energy * 1.3 when active
+
+**Acceptance Criteria:**
+- [ ] `CachedSkill` has `float hp_gate_self`, `float hp_gate_target`, `uint32_t requires_effect`
+- [ ] CanUseSkill() function checks these gates before allowing cast
+- [ ] Effect duration checked via EffectMgr::GetEffectTimeRemaining()
+- [ ] Binding ritual check: scan for enemies before summoning
+- [ ] Zephyr energy multiplier applied when effect 2054 is active
+- [ ] At least 10 skill-specific gates ported from AutoIt
+
+**Reference:** `BotCore-Combat.au3` — CanUse() lines 734-794
+
+---
+
+#### GWA3-125 — Combat Decision Engine (FightTarget v2)
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | XL |
+| **Depends On** | GWA3-122, GWA3-123, GWA3-124 |
+| **Blocks** | — |
+
+**Description:**
+Rewrite FightTarget() with the full AutoIt decision engine. Replace the fixed DEF→UTIL→INT→OFF priority with a dynamic priority system based on party state:
+
+**Priority order (dynamic):**
+1. **Emergency heal** — if any ally HP < 30%, heal them immediately
+2. **Resurrection** — if any ally dead, resurrect
+3. **Self-survival** — if self HP < 30%, use survival skills
+4. **Condition removal** — if ally has dangerous conditions
+5. **Hex removal** — if ally has dangerous hexes
+6. **Interrupt** — if high-priority enemy is casting
+7. **Precast/buffs** — if not yet buffed and safe
+8. **Hex pressure** — apply hexes to unhexed enemies
+9. **Offensive** — damage skills on current target
+10. **Auto-attack** — fallback
+
+**Acceptance Criteria:**
+- [ ] FightTarget() iterates priorities dynamically
+- [ ] Each priority calls appropriate target finder + skill matcher
+- [ ] Emergency heal overrides all offensive priorities
+- [ ] Resurrection triggers when dead ally detected
+- [ ] Interrupt fires when casting enemy detected (hard rupt preferred)
+- [ ] Precast skills used at fight start, not mid-combat
+- [ ] Falls back to auto-attack only when all skills recharging/no energy
+- [ ] Test: complete Bogroot run with builds that have heals, interrupts, hexes
+
+---
+
+#### GWA3-126 — Debuff Blocking (22 checks)
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-122 |
+| **Blocks** | — |
+
+**Description:**
+Port CanCast() from AutoIt — 22 debuff checks that prevent skill use when dangerous hexes/conditions are active on the caster. Different checks apply to different skill types.
+
+**Spell-type blocks:** Diversion, Visions of Regret, Backfire, Soul Leech, Mistrust, Mark of Subversion, Spiteful Spirit
+**Attack-type blocks:** Ineptitude, Clumsiness, Wandering Eye, Spiteful Spirit
+**Signet blocks:** Ignorance
+**Shout/Chant blocks:** Well of Silence
+**Universal blocks:** Knockdown, dead, map not loaded, wipe
+
+**Acceptance Criteria:**
+- [ ] `CanCast(slot)` function checks debuffs based on skill type
+- [ ] 22+ debuff skill IDs checked via EffectMgr::HasEffect()
+- [ ] Spell-type skills blocked by spell-blocking hexes
+- [ ] Attack-type skills blocked by attack-blocking hexes
+- [ ] Knocked down check via agent model_state
+- [ ] Integrated into TryUseSkill() — called before each skill attempt
+
+**Reference:** `BotCore-Combat.au3` — CanCast() lines 659-691
+
+---
+
+### Epic 17: Combat System Tests
+
+> Tests for all Epic 16 combat features. Unit tests for classification/gating logic,
+> integration tests for targeting, and Python bridge tests for combat mode toggle.
+
+#### GWA3-127 — Test: Combat Mode Toggle
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-121 |
+
+**Acceptance Criteria:**
+- [ ] set_combat_mode("llm") → snapshot shows combat_mode="llm"
+- [ ] set_combat_mode("builtin") → snapshot shows combat_mode="builtin"
+- [ ] In LLM mode, FightTarget is no-op (verified via logging or state)
+- [ ] Python bridge test for mode toggle
+
+---
+
+#### GWA3-128 — Test: Skill Classification (15+ roles)
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-122 |
+
+**Acceptance Criteria:**
+- [ ] Unit tests with known skill IDs → verify correct roles assigned
+- [ ] Resurrection Signet (ID 2) → ROLE_RESURRECT
+- [ ] Word of Healing (ID 68) → ROLE_HEAL_SINGLE
+- [ ] Panic (ID 731) → ROLE_HEX + ROLE_INTERRUPT_SOFT
+- [ ] Shadow Form (ID 2358) → ROLE_SURVIVAL
+- [ ] At least 20 skill IDs tested against expected roles
+
+---
+
+#### GWA3-129 — Test: Target Selection Strategies
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-123 |
+
+**Acceptance Criteria:**
+- [ ] GetLowestHealthAlly() returns ally with lowest HP (integration test)
+- [ ] GetCastingEnemy() returns foe with skill != 0 (integration test)
+- [ ] GetUnhexedEnemy() returns foe without has_hex (integration test)
+- [ ] Each finder returns 0 when no valid targets (unit test)
+- [ ] Python bridge test: observation shows hex/enchant/casting state enabling targeting
+
+---
+
+#### GWA3-130 — Test: HP Gating & Debuff Blocking
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-124, GWA3-126 |
+
+**Acceptance Criteria:**
+- [ ] CanUseSkill() blocks heal at full HP
+- [ ] CanUseSkill() allows heal when ally HP < threshold
+- [ ] CanCast() blocks spell during Diversion effect (mock via HasEffect)
+- [ ] CanCast() allows attack during spell-only debuffs
+- [ ] CanCast() blocks shout during Well of Silence
+- [ ] Binding ritual blocked when no enemies nearby
+
+---
+
+#### GWA3-131 — Test: Full Combat Decision Engine
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-125 |
+
+**Acceptance Criteria:**
+- [ ] FightTarget v2 prioritizes emergency heal over offense
+- [ ] FightTarget v2 attempts resurrection when dead ally present
+- [ ] FightTarget v2 interrupts casting enemies
+- [ ] FightTarget v2 uses precast before engaging
+- [ ] Full Bogroot HM run test with skill usage logging
+- [ ] Python bridge test: in advisory mode, observe skill_activated events
+
+---
+
 ## Ticket Summary
 
 | ID | Title | Est | Depends On | Status |
@@ -2901,7 +3205,21 @@ Extend `test_b_observations.py` and `test_c_actions.py` to verify Froggy feature
 | GWA3-119 | Test: Loot pickup + chest opening | M | 109 | `done` |
 | GWA3-120 | Python bridge tests for Froggy observable state changes | M | 109 | `done` |
 
-**Total: 120 tickets across 15 epics.**
+| **Epic 16: Combat System Parity** | | | | |
+| GWA3-121 | Combat Mode Toggle (Gemma vs Built-in) | M | 097 | `backlog` |
+| GWA3-122 | Expanded Skill Categories (15+ roles, bitmask) | L | 097 | `backlog` |
+| GWA3-123 | Intelligent Target Selection (7 strategies) | XL | 122 | `backlog` |
+| GWA3-124 | HP Gating & Effect Overlap Prevention | L | 122 | `backlog` |
+| GWA3-125 | Combat Decision Engine (FightTarget v2) | XL | 122, 123, 124 | `backlog` |
+| GWA3-126 | Debuff Blocking (22 checks via CanCast) | L | 122 | `backlog` |
+| **Epic 17: Combat System Tests** | | | | |
+| GWA3-127 | Test: Combat Mode Toggle | S | 121 | `backlog` |
+| GWA3-128 | Test: Skill Classification (15+ roles) | M | 122 | `backlog` |
+| GWA3-129 | Test: Target Selection Strategies | M | 123 | `backlog` |
+| GWA3-130 | Test: HP Gating & Debuff Blocking | M | 124, 126 | `backlog` |
+| GWA3-131 | Test: Full Combat Decision Engine | L | 125 | `backlog` |
+
+**Total: 131 tickets across 17 epics.**
 
 ---
 
