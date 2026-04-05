@@ -255,7 +255,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::Log::Warn("GameThread initialization failed — trying RenderHook fallback");
     }
 
-    if (integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || workflowTest || !anyTest) {
+    if (integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || workflowTest || froggyTest || !anyTest) {
         if (!gameThreadOk) {
             // Fallback: use old render hook if GameThread failed
             if (!GWA3::RenderHook::Initialize()) {
