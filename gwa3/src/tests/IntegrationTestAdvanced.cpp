@@ -640,10 +640,11 @@ bool TestStoCPacketTypes() {
         StoC::HookEntry entry{nullptr};
     };
 
+    // Real StoC opcodes from GWCA Packets/Opcodes.h
     static HeaderProbe probes[] = {
-        {0x00E1, "AgentUpdate"},
-        {0x0089, "InstanceLoad"},
-        {0x0029, "Movement"},
+        {0x001E, "AgentMovementTick"},   // GAME_SMSG_AGENT_MOVEMENT_TICK — fires constantly
+        {0x001F, "InstanceTimer"},       // GAME_SMSG_AGENT_INSTANCE_TIMER — fires every second
+        {0x00F1, "AgentUpdateEffects"},  // GAME_SMSG_AGENT_UPDATE_EFFECTS — fires on buff changes
     };
 
     for (auto& p : probes) {
@@ -753,26 +754,8 @@ bool TestAgentInteraction() {
     IntReport("  AgentExists(99999): %d", bogusExists);
     IntCheck("Bogus agent does not exist", !bogusExists);
 
-    const AreaInfo* area = MapMgr::GetAreaInfo(ReadMapId());
-    if (!area || !IsSkillCastMapType(area->type)) {
-        IntSkip("CallTarget", "Requires explorable map with nearby foes");
-    } else {
-        uint32_t nearbyId = FindNearbyFoeAgent(5000.0f);
-        if (nearbyId) {
-            IntReport("  CallTarget(%u)...", nearbyId);
-            const uint32_t calledTargetBefore = PartyMgr::GetCalledTargetId();
-            IntReport("  Called target before call: %u", calledTargetBefore);
-            AgentMgr::CallTarget(nearbyId);
-            Sleep(500);
-            const uint32_t targetAfterCall = AgentMgr::GetTargetId();
-            const uint32_t calledTargetAfter = PartyMgr::GetCalledTargetId();
-            IntReport("  Target after call: %u", targetAfterCall);
-            IntReport("  Called target after call: %u", calledTargetAfter);
-            IntCheck("CallTarget updated party called target", calledTargetAfter == nearbyId);
-        } else {
-            IntSkip("CallTarget", "No nearby foe in explorable");
-        }
-    }
+    // CallTarget is tested in explorable via TestExplorableCallTarget (086b).
+    // It can't work in outpost — no valid targets to call.
 
     IntReport("");
     return true;
