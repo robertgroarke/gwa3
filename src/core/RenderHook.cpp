@@ -31,8 +31,9 @@ static uint8_t s_savedBytes[kPatchSize] = {};
 static volatile LONG s_savedESP = 0;
 
 // Two-phase detour: full dispatch pre-game, minimal in-game.
-// CRASH_TEST=1 removes the hook entirely on map load (via SetMapLoaded).
-// CRASH_TEST=2 keeps the hook but disables GameThread MinHook.
+// On map load, SetMapLoaded(true) calls Shutdown() to remove the hook entirely —
+// the trampoline (relocated original bytes) crashes GW's in-game render after ~2300 frames.
+// CRASH_TEST=2 disables GameThread MinHook (for bisection testing).
 static __declspec(naked) void RenderDetourNaked() {
     __asm {
         // After map load: minimal (just heartbeat + trampoline)
@@ -157,12 +158,18 @@ void Shutdown() {
     FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hookAddr), kPatchSize);
     VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, oldProtect, &oldProtect);
 
+    // Free trampoline memory
+    if (s_trampoline) {
+        VirtualFree(reinterpret_cast<void*>(s_trampoline), 0, MEM_RELEASE);
+        s_trampoline = 0;
+    }
+
     ZeroMemory(s_queue, sizeof(s_queue));
     s_queueCounter = 0;
     s_savedCommand = 0;
     s_mapLoaded = 0;
     s_initialized = false;
-    Log::Info("RenderHook: Shutdown");
+    Log::Info("RenderHook: Shutdown — original bytes restored, trampoline freed");
 }
 
 bool EnqueueCommand(uintptr_t command) {
@@ -182,12 +189,15 @@ bool EnqueueCommand(uintptr_t command) {
 void SetMapLoaded(bool loaded) {
     s_mapLoaded = loaded ? 1 : 0;
     Log::Info("RenderHook: MapLoaded=%d", loaded ? 1 : 0);
-#if CRASH_TEST == 1
-    if (loaded) {
-        Log::Info("RenderHook: [CRASH_TEST=1] Removing JMP patch — restoring original bytes");
+    if (loaded && s_initialized) {
+        // Remove the mid-function JMP patch entirely on map load.
+        // The trampoline (relocated original bytes from VirtualAlloc'd memory)
+        // crashes GW's in-game render loop after ~2300 frames (~37-43s).
+        // The hook is only needed for pre-game char select ButtonClick;
+        // once in-game, GameThread's MinHook handles all dispatch.
+        Log::Info("RenderHook: Removing mid-function patch (prevents in-game trampoline crash)");
         Shutdown();
     }
-#endif
 }
 
 bool IsInitialized() {
