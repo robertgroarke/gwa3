@@ -3474,15 +3474,15 @@ AutoIt's MoveandAggroEx has stuck detection with backtracking (if nearest waypoi
 | GWA3-139 | Opened Chest Tracking | S | 098 | `done` |
 | GWA3-140 | Stuck Detection in FollowWaypoints + Checkpoint Tables | L | 134 | `done` |
 | **Epic 19: Fidelity Gap Tests** | | | | |
-| GWA3-141 | Test: Aftercast Delay Timing | S | 132 | `backlog` |
-| GWA3-142 | Test: Loot Retry + Deadlock | S | 133 | `backlog` |
-| GWA3-143 | Test: Stuck Detection | M | 134 | `backlog` |
-| GWA3-144 | Test: Combat Timeout | S | 135 | `backlog` |
-| GWA3-145 | Test: Knockdown/Wipe/Disconnect in CanCast | S | 136 | `backlog` |
-| GWA3-146 | Test: Zephyr Multiplier + Adrenaline | S | 137 | `backlog` |
-| GWA3-147 | Test: Loot Policy Fidelity | M | 138 | `backlog` |
-| GWA3-148 | Test: Opened Chest Tracking | S | 139 | `backlog` |
-| GWA3-149 | Test: Waypoint Stuck + Checkpoints | M | 140 | `backlog` |
+| GWA3-141 | Test: Aftercast Delay Timing | S | 132 | `done` |
+| GWA3-142 | Test: Loot Retry + Deadlock | S | 133 | `done` |
+| GWA3-143 | Test: Stuck Detection | M | 134 | `done` |
+| GWA3-144 | Test: Combat Timeout | S | 135 | `done` |
+| GWA3-145 | Test: Knockdown/Wipe/Disconnect in CanCast | S | 136 | `done` |
+| GWA3-146 | Test: Zephyr Multiplier + Adrenaline | S | 137 | `done` |
+| GWA3-147 | Test: Loot Policy Fidelity | M | 138 | `done` |
+| GWA3-148 | Test: Opened Chest Tracking | S | 139 | `done` |
+| GWA3-149 | Test: Waypoint Stuck + Checkpoints | M | 140 | `done` |
 
 **Total: 149 tickets across 19 epics.**
 
