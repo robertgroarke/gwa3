@@ -641,10 +641,10 @@ bool TestStoCPacketTypes() {
     };
 
     // Real StoC opcodes from GWCA Packets/Opcodes.h
+    // AgentUpdateEffects (0x00F1) is tested in explorable via TestExplorableCallTarget.
     static HeaderProbe probes[] = {
         {0x001E, "AgentMovementTick"},   // GAME_SMSG_AGENT_MOVEMENT_TICK — fires constantly
         {0x000C, "PingRequest"},          // GAME_SMSG_PING_REQUEST — server pings client regularly
-        {0x00F1, "AgentUpdateEffects"},  // GAME_SMSG_AGENT_UPDATE_EFFECTS — fires on buff changes
     };
 
     for (auto& p : probes) {
