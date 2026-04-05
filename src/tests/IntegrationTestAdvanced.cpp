@@ -905,22 +905,39 @@ bool TestExplorableCallTarget() {
         WaitForStablePlayerState(5000);
     }
 
-    // Now we're in explorable — walk toward a known enemy area
-    IntReport("  In Sparkfly (map %u), looking for foes...", ReadMapId());
+    // Now we're in explorable — walk deep into Sparkfly to find real enemies.
+    // The spawn point is near (-9500, -20000). First combat waypoint from the
+    // Froggy route is (-4559, -14406) — we MUST walk there before scanning.
+    IntReport("  In Sparkfly (map %u), walking to combat zone...", ReadMapId());
 
-    // Sparkfly spawn area has enemies around these coords
-    static const struct { float x; float y; } kProbeSteps[] = {
-        {-4559.0f, -14406.0f},
-        {-5204.0f, -9831.0f},
+    // Walk through intermediate waypoints toward the first combat area
+    static const struct { float x; float y; float threshold; int timeoutMs; } kWalkSteps[] = {
+        {-7500.0f, -17000.0f, 500.0f, 20000},  // intermediate
+        {-5500.0f, -15000.0f, 500.0f, 20000},  // closer
+        {-4559.0f, -14406.0f, 500.0f, 25000},  // first Froggy combat waypoint
     };
 
-    uint32_t foeId = FindNearbyFoeAgent(5000.0f);
-    for (const auto& step : kProbeSteps) {
-        if (foeId) break;
-        IntReport("  Probing area (%.0f, %.0f) for foes...", step.x, step.y);
-        MovePlayerNear(step.x, step.y, 500.0f, 20000);
+    for (const auto& step : kWalkSteps) {
+        IntReport("  Walking to (%.0f, %.0f)...", step.x, step.y);
+        MovePlayerNear(step.x, step.y, step.threshold, step.timeoutMs);
+        // Check for foes after each step
+        uint32_t earlyFoe = FindNearbyFoeAgent(2000.0f);
+        if (earlyFoe) {
+            IntReport("  Found foe %u early at this waypoint", earlyFoe);
+            break;
+        }
+    }
+
+    // Now scan for foes at the combat area
+    Sleep(1000);
+    uint32_t foeId = FindNearbyFoeAgent(3000.0f);
+
+    // If none found at first waypoint, try the second combat waypoint
+    if (!foeId) {
+        IntReport("  No foes at first waypoint, walking to (-5204, -9831)...");
+        MovePlayerNear(-5204.0f, -9831.0f, 500.0f, 25000);
         Sleep(1000);
-        foeId = FindNearbyFoeAgent(5000.0f);
+        foeId = FindNearbyFoeAgent(3000.0f);
     }
 
     if (!foeId) {
