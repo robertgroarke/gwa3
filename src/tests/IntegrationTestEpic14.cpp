@@ -105,13 +105,10 @@ int RunFroggyFeatureTest() {
     s_skipped = 0;
     StartWatchdog();
 
-    // ===== PHASE 0: Pure logic unit tests =====
-    IntReport("=== PHASE 0: Pure Logic Unit Tests ===");
-    int unitFailures = Bot::Froggy::RunFroggyUnitTests();
-    IntReport("Unit tests: %d failures", unitFailures);
-    s_failed += unitFailures;
-
     // ===== PHASE 1: Travel to Gadd's Encampment =====
+    // NOTE: Unit tests (Phase 0) moved AFTER stabilization because some
+    // "unit" tests send game commands (FlagHeroes, Dialog) that crash
+    // if the game isn't fully loaded yet.
     IntReport("=== PHASE 1: Travel to Gadd's Encampment ===");
 
     // Wait for game to be fully ready after bootstrap
@@ -142,6 +139,17 @@ int RunFroggyFeatureTest() {
     }
     Sleep(3000); // let the map fully hydrate
     IntCheck("Phase 1: In Gadd's Encampment", MapMgr::GetMapId() == MAP_GADDS);
+
+    // Wait for game to fully stabilize — party/dialog commands crash if sent too soon
+    IntReport("  Waiting for game to stabilize...");
+    WaitForStablePlayerState(10000);
+    Sleep(5000);
+
+    // ===== PHASE 0: Pure logic unit tests (run AFTER game is stable) =====
+    IntReport("=== PHASE 0: Unit Tests (deferred until game stable) ===");
+    int unitFailures = Bot::Froggy::RunFroggyUnitTests();
+    IntReport("Unit tests: %d failures", unitFailures);
+    s_failed += unitFailures;
 
     // ===== PHASE 2: Outpost Tests (party, inventory, skillbar) =====
     IntReport("=== PHASE 2: Outpost Tests ===");
