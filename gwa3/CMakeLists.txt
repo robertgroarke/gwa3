@@ -75,6 +75,7 @@ add_library(gwa3_core OBJECT
     src/tests/IntegrationTestSystems.cpp
     src/tests/IntegrationTestSupport.cpp
     src/tests/IntegrationTestWorld.cpp
+    src/tests/IntegrationTestEpic14.cpp
     src/llm/IpcServer.cpp
     src/llm/GameSnapshot.cpp
     src/llm/ActionExecutor.cpp

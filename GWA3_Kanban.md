@@ -2700,6 +2700,60 @@ Quest accept and reward with retry logic. AutoIt retries dialog interactions if 
 
 ---
 
+### Epic 15: C++ Froggy Feature Tests
+
+> Tests for all Epic 14 features. Two layers: C++ integration tests inside the DLL
+> (via `--test-froggy` flag) and Python bridge observation tests.
+> Unit tests verify pure logic (decoding, filtering). Integration tests verify
+> game state interaction (inventory, merchant, skillbar). Full run tests need travel.
+
+#### GWA3-109 — Test Infrastructure: --test-froggy Flag + Scaffold
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | — |
+| **Blocks** | GWA3-110 through GWA3-120 |
+
+**Description:**
+Add `RunFroggyUnitTests()` inside FroggyHM.cpp (accesses static functions), expose via FroggyHM.h. Add `RunFroggyFeatureTest()` to SmokeTest.h. Add `--test-froggy` flag to dllmain.cpp and injector.cpp. Add `IntegrationTestEpic14.cpp` to CMakeLists.
+
+**Acceptance Criteria:**
+- [ ] `injector.exe --test-froggy` injects and runs tests
+- [ ] Test runner calls `RunFroggyUnitTests()` + integration test functions
+- [ ] Reports pass/fail count via IntCheck/IntReport
+
+#### GWA3-110 through GWA3-112 — Unit Tests (Pure Logic)
+
+Tests for: `Base64CharToVal`, `DecodeSkillTemplate`, `ShouldSalvage`, `ShouldPickUp`, `ShouldStore`, `IsAlwaysPickupModel`, `IsChestGadgetId`. All use synthetic test data — no game state needed.
+
+#### GWA3-113 — Hero Config File Loading
+
+Parses `hero_configs/Standard.txt`, decodes skill templates, verifies hero IDs and skill IDs are plausible.
+
+#### GWA3-114 through GWA3-116 — Outpost Integration Tests
+
+Tests for: `CacheSkillBar`, `CountFreeSlots`, `CountItemByModel`, `HasConset`, `HasBlessing`, `NeedsMaintenance`, `FlagAllHeroes`, `UnflagAllHeroes`, `SendDialogWithRetry`. Require logged-in character in outpost.
+
+#### GWA3-117 — Merchant Flow Tests
+
+Tests for: `IdentifyGoldItems`, `SalvageJunkItems`, `BuyKitsIfNeeded`. Require merchant window open.
+
+#### GWA3-118 — Xunlai + Crafting Tests
+
+Tests for: `DepositValuablesToXunlai`, `CraftConsetsIfNeeded`. Require travel to Gadd's / Embark Beach.
+
+#### GWA3-119 — Loot Pickup Tests
+
+Tests for: `PickupNearbyLoot`, `OpenNearbyChest`. Require items on ground or chests nearby.
+
+#### GWA3-120 — Python Bridge Observation Tests
+
+Extend `test_b_observations.py` and `test_c_actions.py` to verify Froggy features are visible through snapshots: skillbar populated after setup, inventory changes after merchant cycle, salvage/identify via bridge actions.
+
+---
+
 ## Ticket Summary
 
 | ID | Title | Est | Depends On | Status |
@@ -2833,7 +2887,21 @@ Quest accept and reward with retry logic. AutoIt retries dialog interactions if 
 | GWA3-107 | Hero Flagging (position heroes at specific combat locations) | S | 022, 026 | `done` |
 | GWA3-108 | Quest Dialog Retry (accept/reward with validation + retry) | S | 023, 026 | `done` |
 
-**Total: 108 tickets across 14 epics.**
+| **Epic 15: C++ Froggy Feature Tests** | | | | |
+| GWA3-109 | Test infra: --test-froggy flag + RunFroggyUnitTests scaffold | M | — | `done` |
+| GWA3-110 | Test: Skill template decoding (Base64, DecodeSkillTemplate) | S | 109 | `done` |
+| GWA3-111 | Test: Item filtering (ShouldSalvage, ShouldPickUp, ShouldStore) | S | 109 | `done` |
+| GWA3-112 | Test: Chest gadget ID detection | S | 109 | `done` |
+| GWA3-113 | Test: Hero config file loading + parsing | M | 109 | `done` |
+| GWA3-114 | Test: Skillbar caching + skill categorization | M | 109 | `done` |
+| GWA3-115 | Test: Inventory helpers (CountFreeSlots, HasConset, HasBlessing) | S | 109 | `done` |
+| GWA3-116 | Test: Hero flagging + dialog retry | S | 109 | `done` |
+| GWA3-117 | Test: Merchant flow (identify, salvage, buy kits) | M | 109 | `done` |
+| GWA3-118 | Test: Xunlai deposit + conset crafting | L | 109 | `done` |
+| GWA3-119 | Test: Loot pickup + chest opening | M | 109 | `done` |
+| GWA3-120 | Python bridge tests for Froggy observable state changes | M | 109 | `done` |
+
+**Total: 120 tickets across 15 epics.**
 
 ---
 

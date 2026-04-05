@@ -334,6 +334,7 @@ static void PrintUsage(const char* argv0) {
     printf("  --test-integ    Inject in integration test mode (char select -> game)\n");
     printf("  --test-advanced Inject in advanced integration test mode\n");
     printf("  --test-workflow Inject in advanced workflow test mode\n");
+    printf("  --test-froggy   Inject in Froggy feature test mode (Epic 14 tests)\n");
     printf("  --test-npc      Inject in isolated NPC/dialog test mode\n");
     printf("  --test-merchant Inject in isolated merchant/trader quote test mode\n");
     printf("  --llm           Inject in LLM agent mode (named pipe bridge for Gemma 4)\n");
@@ -358,6 +359,7 @@ int main(int argc, char* argv[]) {
     bool doTestInteg = false;
     bool doTestAdvanced = false;
     bool doTestWorkflow = false;
+    bool doTestFroggy = false;
     bool doTestNpc = false;
     bool doTestMerchant = false;
     bool doLlm = false;
@@ -386,6 +388,8 @@ int main(int argc, char* argv[]) {
             doTestAdvanced = true;
         } else if (strcmp(argv[i], "--test-workflow") == 0) {
             doTestWorkflow = true;
+        } else if (strcmp(argv[i], "--test-froggy") == 0) {
+            doTestFroggy = true;
         } else if (strcmp(argv[i], "--test-npc") == 0) {
             doTestNpc = true;
         } else if (strcmp(argv[i], "--test-merchant") == 0) {
@@ -498,6 +502,7 @@ int main(int argc, char* argv[]) {
     if (doTestInteg) SetTestModeFlag("gwa3_test_integration.flag");
     if (doTestAdvanced) SetTestModeFlag("gwa3_test_advanced.flag");
     if (doTestWorkflow) SetTestModeFlag("gwa3_test_workflow.flag");
+    if (doTestFroggy) SetTestModeFlag("gwa3_test_froggy.flag");
     if (doTestNpc) SetTestModeFlag("gwa3_test_npc_dialog.flag");
     if (doTestMerchant) SetTestModeFlag("gwa3_test_merchant_quote.flag");
     if (doTestMerchant && merchantVariantFlag) SetTestModeFlag(merchantVariantFlag);

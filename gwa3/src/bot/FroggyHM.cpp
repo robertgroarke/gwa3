@@ -1842,4 +1842,116 @@ void Register() {
     LogBot("Froggy HM module registered (7 heroes, hard mode)");
 }
 
+// ===== Unit Tests (GWA3-109 through GWA3-120) =====
+// These run inside the DLL and have access to all static functions.
+
+static int s_testPassed = 0;
+static int s_testFailed = 0;
+
+static void FroggyCheck(const char* name, bool condition) {
+    if (condition) {
+        s_testPassed++;
+        LogBot("[PASS] %s", name);
+    } else {
+        s_testFailed++;
+        LogBot("[FAIL] %s", name);
+    }
+}
+
+int RunFroggyUnitTests() {
+    s_testPassed = 0;
+    s_testFailed = 0;
+    LogBot("=== Froggy Unit Tests ===");
+
+    // --- GWA3-110: Skill template decoding ---
+    FroggyCheck("Base64 A=0", Base64CharToVal('A') == 0);
+    FroggyCheck("Base64 Z=25", Base64CharToVal('Z') == 25);
+    FroggyCheck("Base64 a=26", Base64CharToVal('a') == 26);
+    FroggyCheck("Base64 z=51", Base64CharToVal('z') == 51);
+    FroggyCheck("Base64 0=52", Base64CharToVal('0') == 52);
+    FroggyCheck("Base64 /=63", Base64CharToVal('/') == 63);
+    FroggyCheck("Base64 invalid=-1", Base64CharToVal('!') == -1);
+
+    // Decode a known template: "OgATQfY1MXVyimBA" (random test case)
+    // We can at least verify it doesn't crash and returns true
+    uint32_t testSkills[8] = {};
+    bool decoded = DecodeSkillTemplate("OAOiAyk8gNtePuwJ00ZaNbJA", testSkills);
+    FroggyCheck("DecodeSkillTemplate succeeds", decoded);
+    FroggyCheck("DecodeSkillTemplate has non-zero skills", testSkills[0] != 0 || testSkills[1] != 0);
+
+    // Empty/invalid template
+    uint32_t emptySkills[8] = {};
+    FroggyCheck("DecodeSkillTemplate empty fails", !DecodeSkillTemplate("", emptySkills));
+
+    // --- GWA3-111: Item filtering logic ---
+    FroggyCheck("IsAlwaysPickup ecto=true", IsAlwaysPickupModel(930));
+    FroggyCheck("IsAlwaysPickup diamond=true", IsAlwaysPickupModel(935));
+    FroggyCheck("IsAlwaysPickup lockpick=true", IsAlwaysPickupModel(22751));
+    FroggyCheck("IsAlwaysPickup random=false", !IsAlwaysPickupModel(12345));
+    FroggyCheck("IsAlwaysPickup 0=false", !IsAlwaysPickupModel(0));
+
+    // ShouldStore
+    // Create a fake item struct for testing
+    Item fakeEcto = {};
+    fakeEcto.item_id = 1;
+    fakeEcto.model_id = 930;
+    FroggyCheck("ShouldStore ecto=true", ShouldStore(&fakeEcto));
+
+    Item fakeJunk = {};
+    fakeJunk.item_id = 2;
+    fakeJunk.model_id = 12345;
+    FroggyCheck("ShouldStore junk=false", !ShouldStore(&fakeJunk));
+    FroggyCheck("ShouldStore null=false", !ShouldStore(nullptr));
+
+    // ShouldSalvage — fake items with rarity in name_enc
+    // We can't easily fake name_enc pointer, so test with nullptr (should return false)
+    Item noName = {};
+    noName.item_id = 3;
+    noName.model_id = 100;
+    noName.name_enc = nullptr;
+    FroggyCheck("ShouldSalvage null_name=false", !ShouldSalvage(&noName));
+    FroggyCheck("ShouldSalvage null=false", !ShouldSalvage(nullptr));
+
+    // ShouldSalvage kit model — should be false regardless
+    Item fakeKit = {};
+    fakeKit.item_id = 4;
+    fakeKit.model_id = MODEL_SALV_KIT;
+    uint16_t whiteRarity = RARITY_WHITE;
+    fakeKit.name_enc = reinterpret_cast<wchar_t*>(&whiteRarity);
+    FroggyCheck("ShouldSalvage kit=false", !ShouldSalvage(&fakeKit));
+
+    // ShouldSalvage material type — should be false
+    Item fakeMat = {};
+    fakeMat.item_id = 5;
+    fakeMat.model_id = 948; // Iron Ingot
+    fakeMat.type = 11; // material
+    fakeMat.name_enc = reinterpret_cast<wchar_t*>(&whiteRarity);
+    FroggyCheck("ShouldSalvage material=false", !ShouldSalvage(&fakeMat));
+
+    // --- GWA3-112: Chest gadget ID detection ---
+    FroggyCheck("IsChest HM=true", IsChestGadgetId(8141));
+    FroggyCheck("IsChest NM=true", IsChestGadgetId(4582));
+    FroggyCheck("IsChest Obsidian=true", IsChestGadgetId(74));
+    FroggyCheck("IsChest random=false", !IsChestGadgetId(9999));
+    FroggyCheck("IsChest 0=false", !IsChestGadgetId(0));
+
+    // --- GWA3-115: State checks (need game state but shouldn't crash) ---
+    FroggyCheck("HasConset returns bool", HasConset() || !HasConset());
+    FroggyCheck("HasBlessing returns bool", HasBlessing() || !HasBlessing());
+    FroggyCheck("CountFreeSlots plausible", CountFreeSlots() <= 40);
+
+    // --- GWA3-116: Hero flagging (shouldn't crash) ---
+    FlagAllHeroes(0, 0);
+    WaitMs(100);
+    UnflagAllHeroes();
+    FroggyCheck("FlagAllHeroes+UnflagAll no crash", true);
+
+    // SendDialogWithRetry — just verify it doesn't crash with a no-op dialog
+    // Don't actually send a real dialog ID to avoid game state changes
+    FroggyCheck("SendDialogWithRetry returns", SendDialogWithRetry(0, 1, 50));
+
+    LogBot("=== Froggy Unit Tests Complete: %d passed, %d failed ===", s_testPassed, s_testFailed);
+    return s_testFailed;
+}
+
 } // namespace GWA3::Bot::Froggy

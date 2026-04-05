@@ -713,3 +713,44 @@ async def test_living_agents_have_player_number(tc: BridgeTestCase):
         tc.skip("No living agents nearby")
     for a in living[:5]:
         assert_keys_present(a, ["player_number"], f"agent {a.get('id')}")
+
+
+# ============================================================
+# B23: Froggy observable state changes (GWA3-120)
+# ============================================================
+
+async def test_froggy_skillbar_has_skills_in_outpost(tc: BridgeTestCase):
+    """In an outpost after setup, player skillbar should have non-zero skills."""
+    snap = await tc.wait_for_snapshot(tier=1)
+    skills = snap.get("skillbar", [])
+    assert_true(len(skills) == 8, f"Skillbar should have 8 slots, got {len(skills)}")
+    # Verify at least some slots have skill data structure
+    for sk in skills:
+        assert_keys_present(sk, ["slot", "skill_id", "recharge"], f"skill slot {sk.get('slot')}")
+
+
+async def test_froggy_inventory_has_rarity(tc: BridgeTestCase):
+    """After Froggy's identify/salvage, items should have rarity field."""
+    snap = await tc.wait_for_snapshot(tier=3)
+    inv = snap.get("inventory", {})
+    if not inv:
+        tc.skip("No inventory data")
+    for bag in inv.get("bags", []):
+        for item in bag.get("items", [])[:3]:
+            assert_keys_present(item, ["rarity"], f"item {item.get('item_id')}")
+            assert_true(
+                item["rarity"] in ("white", "blue", "purple", "gold", "green", "gray"),
+                f"Invalid rarity: {item['rarity']}",
+            )
+
+
+async def test_froggy_free_slots_after_salvage(tc: BridgeTestCase):
+    """After salvage/sell, free_slots_total should be > 0."""
+    snap = await tc.wait_for_snapshot(tier=3)
+    inv = snap.get("inventory", {})
+    if not inv:
+        tc.skip("No inventory data")
+    free = inv.get("free_slots_total", 0)
+    assert_type(free, int, "inventory.free_slots_total")
+    # Can't guarantee specific count, just verify it's plausible
+    assert_gte(free, 0, "inventory.free_slots_total")

@@ -40,4 +40,9 @@ namespace GWA3::SmokeTest {
     // packet coverage, and other previously untested APIs.
     int RunAdvancedWorkflowTest();
 
+    // Run Froggy feature tests. Unit tests for pure logic (decoding,
+    // filtering) plus integration tests for inventory/skillbar/merchant
+    // functions. Requires logged-in character.
+    int RunFroggyFeatureTest();
+
 } // namespace GWA3::SmokeTest
