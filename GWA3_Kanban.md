@@ -3058,6 +3058,250 @@ Port CanCast() from AutoIt — 22 debuff checks that prevent skill use when dang
 
 ---
 
+### Epic 18: AutoIt Fidelity Gaps
+
+> Fixes for functions that were ported at PARTIAL or STUB fidelity. Prioritized by
+> impact on autonomous farming reliability.
+
+#### GWA3-132 — Aftercast Delay + Skill Wait Loop
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-125 |
+
+**Description:**
+UseSkillSmart in AutoIt polls until the skill leaves recharged state, waits for aftercast delay (reads float at skill_ptr+0x40), and handles mid-cast target death/energy depletion. Current C++ just fires UseSkill and immediately returns. Without this, skills get queued faster than the game processes them, leading to wasted casts and energy.
+
+**Acceptance Criteria:**
+- [ ] After UseSkill(), poll SkillbarSkill.event or recharge until skill activates (up to 2s timeout)
+- [ ] Read aftercast from Skill::aftercast field, sleep for that duration
+- [ ] Abort wait if target dies or player dies mid-cast
+- [ ] Return false if skill failed to activate within timeout
+
+---
+
+#### GWA3-133 — Loot Retry Loop + Deadlock Protection
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-098 |
+
+**Description:**
+PickupNearbyLoot currently makes one pick attempt per item with no retry. AutoIt retries up to 10 times with 250ms delay per item, has a 6s per-item timeout, and a 2-minute global deadlock timeout. Items frequently fail to pick up on first try due to pathfinding or animation timing.
+
+**Acceptance Criteria:**
+- [ ] Retry loop: attempt PickUpItem up to 10 times per item
+- [ ] 250ms sleep between retry attempts
+- [ ] 6s per-item timeout — move to next item if not picked
+- [ ] 2-minute global deadlock — abort all loot pickup
+- [ ] Check if item agent still exists between retries (may have been picked by ally)
+
+---
+
+#### GWA3-134 — Stuck Detection in AggroMoveToEx
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-097 |
+
+**Description:**
+AutoIt tracks a "blocked counter" — if position doesn't change between iterations, increment counter. After 30 blocks, try a random sideways move. C++ has no stuck detection and will loop for 4 minutes doing nothing if the character gets stuck on terrain.
+
+**Acceptance Criteria:**
+- [ ] Track position between iterations — if distance moved < 10 units, increment stuck counter
+- [ ] After 15 stuck iterations: try moving to (x + random(-300,300), y + random(-300,300))
+- [ ] After 30 stuck iterations: log warning, attempt different waypoint approach
+- [ ] Reset stuck counter when meaningful progress is made (> 50 units moved)
+
+---
+
+#### GWA3-135 — Combat Timeout (4-min safety limit)
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-125 |
+
+**Description:**
+AutoIt's Fight() has a 240-second (4-minute) timeout that exits the combat loop regardless. Without this, FightTarget can be called indefinitely if an unkillable enemy is in range (e.g., boss with regen faster than DPS). AggroMoveToEx already has a 240s timeout on the outer loop, but individual Fight calls within don't.
+
+**Acceptance Criteria:**
+- [ ] FightTarget tracks cumulative time spent fighting current target
+- [ ] If > 60s on same target, log warning and switch to auto-attack only
+- [ ] If > 120s on same target, disengage and resume waypoint movement
+- [ ] Timer resets when target changes
+
+---
+
+#### GWA3-136 — CanCast: Knockdown + Wipe + Disconnect Checks
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-126 |
+
+**Description:**
+CanCast() is missing 3 checks from AutoIt: IsKnocked (can't cast while knocked down), Wipe (party defeated), and map loading state 2 (disconnected). Without knockdown check, the bot wastes skills while on the ground.
+
+**Acceptance Criteria:**
+- [ ] Check agent model_state for knockdown flag before allowing cast
+- [ ] Check PartyMgr::GetIsPartyDefeated() — block all casts during wipe
+- [ ] Check MapMgr::GetLoadingState() != 1 — block casts during load/disconnect
+- [ ] Return false early if any check fails
+
+---
+
+#### GWA3-137 — CanUseSkill: Zephyr Multiplier + Adrenaline + Pressure Gates
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | M |
+| **Depends On** | GWA3-124 |
+
+**Description:**
+CanUseSkill is missing energy management and pressure logic from AutoIt:
+- Quickening Zephyr (skill 2054) adds +30% energy cost to all skills
+- Adrenaline-based skills need adrenaline check, not energy
+- Finish Him requires target HP < 45%
+- Complex survival skill conditions (Shadow Form requires Glyph active, Mystic Regen refresh at < 4s remaining)
+
+**Acceptance Criteria:**
+- [ ] If HasEffect(2054, Quickening Zephyr), multiply energy cost by 1.3
+- [ ] Check Skill::adrenaline field — skip adrenaline skills if insufficient
+- [ ] Finish Him (skill ID specific): only if target HP < 45%
+- [ ] Shadow Form: require Glyph of Swiftness effect active
+- [ ] Mystic Regeneration: only refresh if remaining < 4s
+
+---
+
+#### GWA3-138 — Loot Policy: Quest Items + Type Rules + Inventory Guard
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-098 |
+
+**Description:**
+ShouldPickUp is a STUB compared to AutoIt's CanPickUpEx. Missing 20+ quest item model IDs, type-based rules (BUNDLE, DYE, GOLD_COINS, TROPHY), gold coin threshold (< 100k), 2-free-slot inventory guard, and dungeon-specific items.
+
+**Acceptance Criteria:**
+- [ ] Add quest/trophy model ID whitelist from AutoIt (Unholy Text, Mysterious Commendations, etc.)
+- [ ] GOLD_COINS: only pick up if character gold < 100,000
+- [ ] DYE: only Black Dye (ExtraID 10)
+- [ ] TROPHY/SCROLL: never pick up
+- [ ] Inventory guard: if < 2 free slots, only pick up BUNDLE and GOLD_COINS
+- [ ] BUNDLE: only Unlit Torch (22342) and Asura Flame Staff (24350)
+
+---
+
+#### GWA3-139 — Opened Chest Tracking
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | S |
+| **Depends On** | GWA3-098 |
+
+**Description:**
+AutoIt tracks opened chests in $g_aOpenedChestAgentIDs array to avoid re-interacting. C++ doesn't track this and may try to open the same chest multiple times.
+
+**Acceptance Criteria:**
+- [ ] Static array/set tracking opened chest agent IDs
+- [ ] Skip chests already in the opened set
+- [ ] Clear the set on map change (new instance = new chests)
+
+---
+
+#### GWA3-140 — Stuck Detection in FollowWaypoints + Checkpoint Tables
+
+| Field | Value |
+|-------|-------|
+| **Status** | `backlog` |
+| **Estimate** | L |
+| **Depends On** | GWA3-134 |
+
+**Description:**
+AutoIt's MoveandAggroEx has stuck detection with backtracking (if nearest waypoint unchanged for 5 iterations, go back 1 waypoint). Also has map-specific checkpoint tables for wipe recovery. C++ just resumes from nearest waypoint which may be the same stuck point.
+
+**Acceptance Criteria:**
+- [ ] Track nearest waypoint between iterations — if unchanged 5x, backtrack (i = nearest - 1)
+- [ ] Add Bogroot Lvl1/Lvl2 checkpoint tables for wipe recovery
+- [ ] Quest Door Checkpoint: fallback to abort route if door doesn't open
+- [ ] Dungeon Door Checkpoint: fallback to i-3 if door interaction fails
+
+---
+
+### Epic 19: Fidelity Gap Tests
+
+> Tests for Epic 18 fixes. Each test verifies the specific behavior that was missing.
+
+#### GWA3-141 — Test: Aftercast Delay Timing
+| **Status** | `backlog` | **Est** | S | **Depends** | 132 |
+
+- [ ] Verify skill wait loop exits within expected aftercast duration
+- [ ] Verify early exit on target death
+
+#### GWA3-142 — Test: Loot Retry + Deadlock
+| **Status** | `backlog` | **Est** | S | **Depends** | 133 |
+
+- [ ] Verify retry count > 1 when item fails first pick
+- [ ] Verify 2-minute deadlock timeout aborts loot loop
+
+#### GWA3-143 — Test: Stuck Detection
+| **Status** | `backlog` | **Est** | M | **Depends** | 134 |
+
+- [ ] Verify stuck counter increments when position unchanged
+- [ ] Verify random move attempted after threshold
+- [ ] Integration test in explorable with known terrain obstruction
+
+#### GWA3-144 — Test: Combat Timeout
+| **Status** | `backlog` | **Est** | S | **Depends** | 135 |
+
+- [ ] Verify disengagement after prolonged fight on same target
+
+#### GWA3-145 — Test: Knockdown/Wipe/Disconnect in CanCast
+| **Status** | `backlog` | **Est** | S | **Depends** | 136 |
+
+- [ ] CanCast returns false when party defeated
+- [ ] CanCast returns false when map loading state != 1
+
+#### GWA3-146 — Test: Zephyr Multiplier + Adrenaline
+| **Status** | `backlog` | **Est** | S | **Depends** | 137 |
+
+- [ ] Energy cost * 1.3 when Zephyr active (unit test with mock effect)
+- [ ] Adrenaline skill skipped when adrenaline insufficient
+
+#### GWA3-147 — Test: Loot Policy Fidelity
+| **Status** | `backlog` | **Est** | M | **Depends** | 138 |
+
+- [ ] Quest item model IDs return true from ShouldPickUp
+- [ ] GOLD_COINS blocked above 100k threshold
+- [ ] Inventory guard blocks when < 2 free slots
+
+#### GWA3-148 — Test: Opened Chest Tracking
+| **Status** | `backlog` | **Est** | S | **Depends** | 139 |
+
+- [ ] Second open attempt on same agent_id is skipped
+- [ ] Tracking cleared on map change
+
+#### GWA3-149 — Test: Waypoint Stuck + Checkpoints
+| **Status** | `backlog` | **Est** | M | **Depends** | 140 |
+
+- [ ] Backtrack triggered after 5 stuck iterations
+- [ ] Checkpoint table returns correct restart waypoint for each map zone
+
+---
+
 ## Ticket Summary
 
 | ID | Title | Est | Depends On | Status |
@@ -3219,7 +3463,28 @@ Port CanCast() from AutoIt — 22 debuff checks that prevent skill use when dang
 | GWA3-130 | Test: HP Gating & Debuff Blocking | M | 124, 126 | `done` |
 | GWA3-131 | Test: Full Combat Decision Engine | L | 125 | `done` |
 
-**Total: 131 tickets across 17 epics.**
+| **Epic 18: AutoIt Fidelity Gaps** | | | | |
+| GWA3-132 | Aftercast Delay + Skill Wait Loop | M | 125 | `backlog` |
+| GWA3-133 | Loot Retry Loop + Deadlock Protection | M | 098 | `backlog` |
+| GWA3-134 | Stuck Detection in AggroMoveToEx | M | 097 | `backlog` |
+| GWA3-135 | Combat Timeout (4-min safety limit) | S | 125 | `backlog` |
+| GWA3-136 | CanCast: Knockdown + Wipe + Disconnect Checks | S | 126 | `backlog` |
+| GWA3-137 | CanUseSkill: Zephyr + Adrenaline + Pressure Gates | M | 124 | `backlog` |
+| GWA3-138 | Loot Policy: Quest Items + Type Rules + Inventory Guard | L | 098 | `backlog` |
+| GWA3-139 | Opened Chest Tracking | S | 098 | `backlog` |
+| GWA3-140 | Stuck Detection in FollowWaypoints + Checkpoint Tables | L | 134 | `backlog` |
+| **Epic 19: Fidelity Gap Tests** | | | | |
+| GWA3-141 | Test: Aftercast Delay Timing | S | 132 | `backlog` |
+| GWA3-142 | Test: Loot Retry + Deadlock | S | 133 | `backlog` |
+| GWA3-143 | Test: Stuck Detection | M | 134 | `backlog` |
+| GWA3-144 | Test: Combat Timeout | S | 135 | `backlog` |
+| GWA3-145 | Test: Knockdown/Wipe/Disconnect in CanCast | S | 136 | `backlog` |
+| GWA3-146 | Test: Zephyr Multiplier + Adrenaline | S | 137 | `backlog` |
+| GWA3-147 | Test: Loot Policy Fidelity | M | 138 | `backlog` |
+| GWA3-148 | Test: Opened Chest Tracking | S | 139 | `backlog` |
+| GWA3-149 | Test: Waypoint Stuck + Checkpoints | M | 140 | `backlog` |
+
+**Total: 149 tickets across 19 epics.**
 
 ---
 
