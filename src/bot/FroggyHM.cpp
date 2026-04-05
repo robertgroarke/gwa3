@@ -512,6 +512,334 @@ static void CacheSkillBar() {
 }
 
 // Try to use a skill from the cache. Returns true if a skill was used.
+// ===== Intelligent Target Selection (GWA3-123) =====
+
+// Find the ally with the lowest HP fraction. Returns 0 if no ally found.
+static uint32_t GetLowestHealthAlly(float maxRange = 2500.0f) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return 0;
+    float bestHp = 1.0f;
+    uint32_t bestId = 0;
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (living->allegiance != 1) continue; // allies only
+        if (living->hp <= 0.0f) continue; // skip dead
+        float dist = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+        if (dist > maxRange * maxRange) continue;
+        if (living->hp < bestHp) {
+            bestHp = living->hp;
+            bestId = living->agent_id;
+        }
+    }
+    return bestId;
+}
+
+// Find the nearest dead ally. Returns 0 if none.
+static uint32_t GetDeadAlly(float maxRange = 2500.0f) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return 0;
+    float bestDist = maxRange * maxRange;
+    uint32_t bestId = 0;
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (living->allegiance != 1) continue;
+        if (living->hp > 0.0f) continue; // alive — skip
+        float dist = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestId = living->agent_id;
+        }
+    }
+    return bestId;
+}
+
+// Find nearest enemy without a hex. Returns 0 if all hexed or none nearby.
+static uint32_t GetUnhexedEnemy(float maxRange = 1500.0f) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return 0;
+    float bestDist = maxRange * maxRange;
+    uint32_t bestId = 0;
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (living->allegiance != 3) continue; // foes only
+        if (living->hp <= 0.0f) continue;
+        if (living->hex != 0) continue; // already hexed — skip
+        float dist = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestId = living->agent_id;
+        }
+    }
+    return bestId;
+}
+
+// Find nearest enemy that is currently casting. Returns 0 if none casting.
+static uint32_t GetCastingEnemy(float maxRange = 1500.0f) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return 0;
+    float bestDist = maxRange * maxRange;
+    uint32_t bestId = 0;
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (living->allegiance != 3) continue;
+        if (living->hp <= 0.0f) continue;
+        if (living->skill == 0) continue; // not casting
+        float dist = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestId = living->agent_id;
+        }
+    }
+    return bestId;
+}
+
+// Find nearest enemy with an enchantment. Returns 0 if none enchanted.
+static uint32_t GetEnchantedEnemy(float maxRange = 1500.0f) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return 0;
+    float bestDist = maxRange * maxRange;
+    uint32_t bestId = 0;
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (living->allegiance != 3) continue;
+        if (living->hp <= 0.0f) continue;
+        // Check for enchantments via effects
+        auto* agentEffects = EffectMgr::GetAgentEffects(living->agent_id);
+        if (!agentEffects) continue;
+        bool hasEnchant = false;
+        if (agentEffects->effects.buffer) {
+            for (uint32_t ei = 0; ei < agentEffects->effects.size; ei++) {
+                auto& eff = agentEffects->effects.buffer[ei];
+                if (eff.skill_id == 0) continue;
+                const auto* sd = SkillMgr::GetSkillConstantData(eff.skill_id);
+                if (sd && (sd->type == 3 || sd->type == 16)) { // Enchantment or Flash Enchantment
+                    hasEnchant = true;
+                    break;
+                }
+            }
+        }
+        if (!hasEnchant) continue;
+        float dist = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestId = living->agent_id;
+        }
+    }
+    return bestId;
+}
+
+// Find nearest enemy in melee range (250 units).
+static uint32_t GetMeleeRangeEnemy() {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return 0;
+    float bestDist = 250.0f * 250.0f;
+    uint32_t bestId = 0;
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (living->allegiance != 3) continue;
+        if (living->hp <= 0.0f) continue;
+        float dist = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestId = living->agent_id;
+        }
+    }
+    return bestId;
+}
+
+// Resolve best target for a skill based on its roles.
+// Returns the target agent ID to use, or 0 if no valid target.
+static uint32_t ResolveSkillTarget(const CachedSkill& skill, uint32_t defaultFoeId) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return 0;
+
+    // Resurrection: target dead ally
+    if (skill.hasRole(ROLE_RESURRECT)) {
+        return GetDeadAlly();
+    }
+
+    // Ally-targeting skills
+    if (skill.target_type == 3 || skill.target_type == 4) {
+        // Heal: target lowest HP ally
+        if (skill.hasRole(ROLE_ANY_HEAL)) {
+            uint32_t target = GetLowestHealthAlly();
+            return target ? target : me->agent_id;
+        }
+        // Condition removal: target most-conditioned (simplified: use self for now)
+        if (skill.hasRole(ROLE_COND_REMOVE)) return me->agent_id;
+        // Hex removal: target most-hexed (simplified: use self for now)
+        if (skill.hasRole(ROLE_HEX_REMOVE)) return me->agent_id;
+        // Default ally: self
+        return me->agent_id;
+    }
+
+    // Foe-targeting skills
+    if (skill.target_type == 5) {
+        // Hex: prefer unhexed enemy
+        if (skill.hasRole(ROLE_HEX)) {
+            uint32_t target = GetUnhexedEnemy();
+            return target ? target : defaultFoeId;
+        }
+        // Interrupt: prefer casting enemy
+        if (skill.hasRole(ROLE_ANY_INTERRUPT)) {
+            uint32_t target = GetCastingEnemy();
+            return target ? target : 0; // don't waste interrupt if nobody casting
+        }
+        // Enchant removal: prefer enchanted enemy
+        if (skill.hasRole(ROLE_ENCHANT_REMOVE)) {
+            uint32_t target = GetEnchantedEnemy();
+            return target ? target : 0;
+        }
+        // Attack: prefer melee range
+        if (skill.hasRole(ROLE_ATTACK)) {
+            uint32_t target = GetMeleeRangeEnemy();
+            return target ? target : defaultFoeId;
+        }
+        return defaultFoeId;
+    }
+
+    // Self-targeting / no target
+    return 0;
+}
+
+// ===== Debuff Blocking (GWA3-126) =====
+
+// Debuff skill IDs that block spell casting
+static constexpr uint32_t DEBUFF_DIVERSION       = 11;
+static constexpr uint32_t DEBUFF_BACKFIRE         = 73;
+static constexpr uint32_t DEBUFF_SOUL_LEECH       = 844;
+static constexpr uint32_t DEBUFF_MISTRUST         = 2065;
+static constexpr uint32_t DEBUFF_VISIONS_OF_REGRET = 2042;
+static constexpr uint32_t DEBUFF_MARK_OF_SUBVERSION = 654;
+static constexpr uint32_t DEBUFF_SPITEFUL_SPIRIT  = 653;
+// Attack-blocking debuffs
+static constexpr uint32_t DEBUFF_INEPTITUDE       = 60;
+static constexpr uint32_t DEBUFF_CLUMSINESS       = 51;
+static constexpr uint32_t DEBUFF_WANDERING_EYE    = 1039;
+// Shout/chant blocking
+static constexpr uint32_t DEBUFF_WELL_OF_SILENCE  = 668;
+// Signet blocking
+static constexpr uint32_t DEBUFF_IGNORANCE        = 56;
+
+static bool CanCast(const CachedSkill& skill) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return false;
+    if (me->hp <= 0.0f) return false; // dead
+    if (!MapMgr::GetIsMapLoaded()) return false;
+
+    uint32_t myId = me->agent_id;
+
+    // Check debuffs based on skill type
+    uint8_t type = skill.skill_type;
+
+    // Spell/Hex/Enchantment/Well/Ward blocking debuffs
+    if (type == 1 || type == 2 || type == 3 || type == 5 || type == 7 ||
+        type == 14 || type == 15 || type == 16) {
+        if (EffectMgr::HasEffect(myId, DEBUFF_DIVERSION)) return false;
+        if (EffectMgr::HasEffect(myId, DEBUFF_BACKFIRE)) return false;
+        if (EffectMgr::HasEffect(myId, DEBUFF_SOUL_LEECH)) return false;
+        if (EffectMgr::HasEffect(myId, DEBUFF_MISTRUST)) return false;
+        if (EffectMgr::HasEffect(myId, DEBUFF_VISIONS_OF_REGRET)) return false;
+        if (EffectMgr::HasEffect(myId, DEBUFF_SPITEFUL_SPIRIT)) return false;
+    }
+
+    // Attack skill blocking debuffs
+    if (type == 9 || type == 17) {
+        if (EffectMgr::HasEffect(myId, DEBUFF_INEPTITUDE)) return false;
+        if (EffectMgr::HasEffect(myId, DEBUFF_CLUMSINESS)) return false;
+        if (EffectMgr::HasEffect(myId, DEBUFF_WANDERING_EYE)) return false;
+        if (EffectMgr::HasEffect(myId, DEBUFF_SPITEFUL_SPIRIT)) return false;
+    }
+
+    // Signet blocking
+    if (type == 4) {
+        if (EffectMgr::HasEffect(myId, DEBUFF_IGNORANCE)) return false;
+        if (EffectMgr::HasEffect(myId, DEBUFF_DIVERSION)) return false;
+    }
+
+    // Shout/Chant blocking
+    if (type == 10 || type == 20) {
+        if (EffectMgr::HasEffect(myId, DEBUFF_WELL_OF_SILENCE)) return false;
+        if (EffectMgr::HasEffect(myId, DEBUFF_DIVERSION)) return false;
+    }
+
+    return true;
+}
+
+// ===== HP Gating & Effect Overlap (GWA3-124) =====
+
+static bool CanUseSkill(const CachedSkill& skill, uint32_t targetId) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return false;
+
+    // Debuff check first
+    if (!CanCast(skill)) return false;
+
+    // Heal skills: only cast if someone actually needs healing
+    if (skill.hasRole(ROLE_ANY_HEAL)) {
+        uint32_t healTarget = GetLowestHealthAlly();
+        if (healTarget) {
+            auto* ally = AgentMgr::GetAgentByID(healTarget);
+            if (ally && ally->type == 0xDB) {
+                auto* living = static_cast<AgentLiving*>(ally);
+                if (living->hp > 0.8f) return false; // nobody below 80% — don't waste
+            }
+        } else {
+            if (me->hp > 0.8f) return false; // self is fine — skip
+        }
+    }
+
+    // Survival skills: only if HP is low
+    if (skill.hasRole(ROLE_SURVIVAL)) {
+        if (me->hp > 0.5f) return false;
+        // Check if already have the effect active
+        float remaining = EffectMgr::GetEffectTimeRemaining(me->agent_id, skill.skill_id);
+        if (remaining > 5.0f) return false; // already active with >5s left
+    }
+
+    // Binding rituals: only if enemies nearby
+    if (skill.hasRole(ROLE_BINDING)) {
+        bool enemyNearby = false;
+        uint32_t maxAgents = AgentMgr::GetMaxAgents();
+        for (uint32_t i = 1; i < maxAgents && !enemyNearby; i++) {
+            auto* a = AgentMgr::GetAgentByID(i);
+            if (!a || a->type != 0xDB) continue;
+            auto* living = static_cast<AgentLiving*>(a);
+            if (living->allegiance == 3 && living->hp > 0.0f) {
+                float dist = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+                if (dist < 1500.0f * 1500.0f) enemyNearby = true;
+            }
+        }
+        if (!enemyNearby) return false;
+    }
+
+    // Precast: check if effect already active (don't re-cast stances/preps)
+    if (skill.hasRole(ROLE_PRECAST) && !skill.hasRole(ROLE_OFFENSIVE)) {
+        float remaining = EffectMgr::GetEffectTimeRemaining(me->agent_id, skill.skill_id);
+        if (remaining > 3.0f) return false; // already active
+    }
+
+    return true;
+}
+
 // Try to use a skill matching the given role bitmask. Returns true if a skill was used.
 static bool TryUseSkillWithRole(uint32_t targetId, uint32_t roleMask) {
     auto* bar = SkillMgr::GetPlayerSkillbar();
@@ -526,18 +854,12 @@ static bool TryUseSkillWithRole(uint32_t targetId, uint32_t roleMask) {
         if (!(c.roles & roleMask)) continue; // no matching role
         if (bar->skills[i].recharge > 0) continue; // still recharging
         if (c.energy_cost > static_cast<uint8_t>(myEnergy)) continue; // not enough energy
+        if (!CanUseSkill(c, targetId)) continue; // HP gates, debuff blocking, overlap prevention
 
-        // Determine target for this skill
-        uint32_t skillTarget = 0;
-        if (c.target_type == 5) {
-            skillTarget = targetId; // targets foe
-        } else if (c.target_type == 3 || c.target_type == 4) {
-            skillTarget = me->agent_id; // targets ally (self for now — GWA3-123 adds smart targeting)
-        } else if (c.target_type == 6) {
-            // Dead ally targeting — skip for now, needs GWA3-123
-            continue;
-        }
-        // target_type 0 = no target needed
+        // Intelligent target selection based on skill role
+        uint32_t skillTarget = ResolveSkillTarget(c, targetId);
+        // If ResolveSkillTarget returns 0 for a foe-targeting skill, skip it
+        if (skillTarget == 0 && (c.target_type == 5 || c.target_type == 6)) continue;
 
         SkillMgr::UseSkill(i + 1, skillTarget, 0);
         return true;
@@ -560,36 +882,59 @@ static void FightTarget(uint32_t targetId) {
     auto* me = AgentMgr::GetMyAgent();
     if (!me) return;
 
-    // Priority 1: Emergency survival — if HP critically low
-    if (me->hp < 0.3f) {
-        if (TryUseSkillWithRole(targetId, ROLE_SURVIVAL)) return;
-        if (TryUseSkillWithRole(targetId, ROLE_ANY_HEAL)) return;
-        if (TryUseSkillWithRole(targetId, ROLE_PROT | ROLE_DEFENSIVE)) return;
-    }
+    // === GWA3-125: Dynamic Priority Combat Engine ===
 
-    // Priority 2: Condition/hex removal on self if afflicted
-    if (me->hex != 0) {
-        TryUseSkillWithRole(targetId, ROLE_HEX_REMOVE);
-    }
-
-    // Priority 3: Interrupt casting enemies
-    auto* target = AgentMgr::GetAgentByID(targetId);
-    if (target && target->type == 0xDB) {
-        auto* living = static_cast<AgentLiving*>(target);
-        if (living->skill != 0) {
-            if (!TryUseSkillWithRole(targetId, ROLE_INTERRUPT_HARD)) {
-                TryUseSkillWithRole(targetId, ROLE_INTERRUPT_SOFT);
+    // Priority 1: Emergency ally heal — if any ally HP < 30%
+    uint32_t lowestAlly = GetLowestHealthAlly();
+    if (lowestAlly) {
+        auto* ally = AgentMgr::GetAgentByID(lowestAlly);
+        if (ally && ally->type == 0xDB) {
+            auto* allyLiving = static_cast<AgentLiving*>(ally);
+            if (allyLiving->hp < 0.3f && allyLiving->hp > 0.0f) {
+                if (TryUseSkillWithRole(lowestAlly, ROLE_ANY_HEAL)) return;
             }
         }
     }
 
-    // Priority 4: Pre-combat buffs (stances, shouts, preparations)
+    // Priority 2: Resurrection — if any ally dead
+    uint32_t deadAlly = GetDeadAlly();
+    if (deadAlly) {
+        if (TryUseSkillWithRole(deadAlly, ROLE_RESURRECT)) return;
+    }
+
+    // Priority 3: Self-survival — if own HP critically low
+    if (me->hp < 0.3f) {
+        if (TryUseSkillWithRole(targetId, ROLE_SURVIVAL)) return;
+        if (TryUseSkillWithRole(me->agent_id, ROLE_ANY_HEAL)) return;
+        if (TryUseSkillWithRole(targetId, ROLE_PROT | ROLE_DEFENSIVE)) return;
+    }
+
+    // Priority 4: Condition/hex removal on self
+    if (me->hex != 0) {
+        TryUseSkillWithRole(me->agent_id, ROLE_HEX_REMOVE | ROLE_COND_REMOVE);
+    }
+
+    // Priority 5: Interrupt casting enemies (prefer hard over soft)
+    uint32_t castingFoe = GetCastingEnemy();
+    if (castingFoe) {
+        if (!TryUseSkillWithRole(castingFoe, ROLE_INTERRUPT_HARD)) {
+            TryUseSkillWithRole(castingFoe, ROLE_INTERRUPT_SOFT);
+        }
+    }
+
+    // Priority 6: Pre-combat buffs (stances, shouts, preparations)
     TryUseSkillWithRole(targetId, ROLE_PRECAST | ROLE_SHOUT);
 
-    // Priority 5: Hex pressure on target
+    // Priority 7: Hex pressure — prefer unhexed enemies
     TryUseSkillWithRole(targetId, ROLE_HEX | ROLE_PRESSURE);
 
-    // Priority 6: Offensive skills (attacks, damage spells)
+    // Priority 8: Enchant removal on enchanted enemies
+    uint32_t enchantedFoe = GetEnchantedEnemy();
+    if (enchantedFoe) {
+        TryUseSkillWithRole(enchantedFoe, ROLE_ENCHANT_REMOVE);
+    }
+
+    // Priority 9: Offensive skills (attacks, damage spells)
     if (!TryUseSkillWithRole(targetId, ROLE_OFFENSIVE | ROLE_ATTACK)) {
         // No skills ready — auto-attack
         AgentMgr::Attack(targetId);
