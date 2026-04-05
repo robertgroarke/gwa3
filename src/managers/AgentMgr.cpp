@@ -93,6 +93,12 @@ bool Initialize() {
         }
     }
 
+    // If local scan didn't find CallTarget, try the Offsets::CallTargetFunc from PostProcessOffsets
+    if (!s_callTargetFn && Offsets::CallTargetFunc > 0x10000) {
+        s_callTargetFn = reinterpret_cast<CallTargetFn>(Offsets::CallTargetFunc);
+        Log::Info("AgentMgr: CallTarget resolved from Offsets::CallTargetFunc=0x%08X", Offsets::CallTargetFunc);
+    }
+
     s_initialized = true;
     Log::Info("AgentMgr: Initialized (Move=0x%08X, ChangeTarget=0x%08X, CallTarget=0x%08X, InteractItem=0x%08X)",
               Offsets::Move, Offsets::ChangeTarget,
