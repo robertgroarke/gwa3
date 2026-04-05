@@ -2438,147 +2438,275 @@ int RunFroggyUnitTests() {
     FroggyCheck("IsChest random=false", !IsChestGadgetId(9999));
     FroggyCheck("IsChest 0=false", !IsChestGadgetId(0));
 
-    // --- GWA3-115: State checks (need game state but shouldn't crash) ---
-    FroggyCheck("HasConset returns bool", HasConset() || !HasConset());
-    FroggyCheck("HasBlessing returns bool", HasBlessing() || !HasBlessing());
-    FroggyCheck("CountFreeSlots plausible", CountFreeSlots() <= 40);
+    // --- GWA3-111 continued: ShouldSalvage positive case ---
+    Item fakeWhiteWeapon = {};
+    fakeWhiteWeapon.item_id = 6;
+    fakeWhiteWeapon.model_id = 15055; // Some weapon
+    fakeWhiteWeapon.type = 27;        // Sword type
+    fakeWhiteWeapon.name_enc = reinterpret_cast<wchar_t*>(&whiteRarity);
+    FroggyCheck("ShouldSalvage white weapon=true", ShouldSalvage(&fakeWhiteWeapon));
 
-    // --- GWA3-116: Hero flagging (shouldn't crash) ---
-    FlagAllHeroes(0, 0);
-    WaitMs(100);
-    UnflagAllHeroes();
-    FroggyCheck("FlagAllHeroes+UnflagAll no crash", true);
+    // --- GWA3-115: State checks (require live game state) ---
+    LogBot("--- GWA3-115: State Checks ---");
+    auto* me115 = AgentMgr::GetMyAgent();
+    if (me115 && me115->hp > 0.0f) {
+        // We're alive in-game — can do real state checks
+        uint32_t freeSlots = CountFreeSlots();
+        FroggyCheck("CountFreeSlots > 0 (have some space)", freeSlots > 0);
+        FroggyCheck("CountFreeSlots <= 40 (max 4 bags * 10)", freeSlots <= 40);
 
-    // SendDialogWithRetry — just verify it doesn't crash with a no-op dialog
-    FroggyCheck("SendDialogWithRetry returns", SendDialogWithRetry(0, 1, 50));
+        uint32_t idKits = CountItemByModel(MODEL_ID_KIT) + CountItemByModel(MODEL_SUP_ID_KIT);
+        FroggyCheck("CountItemByModel(ID_KIT) >= 0", idKits <= 100); // sanity
+
+        // HasConset/HasBlessing return deterministic results based on actual buffs
+        bool conset = HasConset();
+        bool blessing = HasBlessing();
+        LogBot("  HasConset=%s HasBlessing=%s (actual state)", conset ? "yes" : "no", blessing ? "yes" : "no");
+        // We verify these functions ran without crash by reaching this point
+        FroggyCheck("HasConset/HasBlessing executed without crash", true);
+    } else {
+        LogBot("  SKIP: Not in-game (no agent), skipping live state checks");
+    }
+
+    // --- GWA3-116: Hero flagging ---
+    LogBot("--- GWA3-116: Hero Flagging ---");
+    if (me115 && me115->hp > 0.0f) {
+        float origX = me115->x;
+        float origY = me115->y;
+        FlagAllHeroes(origX + 100, origY + 100);
+        WaitMs(200);
+        UnflagAllHeroes();
+        WaitMs(100);
+        // Verify we're still alive and didn't crash
+        auto* meAfterFlag = AgentMgr::GetMyAgent();
+        FroggyCheck("FlagAll+UnflagAll: agent still valid", meAfterFlag != nullptr);
+    } else {
+        LogBot("  SKIP: Not in-game, skipping hero flagging");
+    }
+
+    // SendDialogWithRetry with dialog_id=0 (no-op, won't trigger real dialog)
+    bool dialogResult = SendDialogWithRetry(0, 1, 50);
+    FroggyCheck("SendDialogWithRetry(0) returns true", dialogResult);
 
     // --- GWA3-128: Skill classification (role bitmask) ---
     LogBot("--- GWA3-128: Skill Classification ---");
 
-    // Test hardcoded classifier functions
+    // Test hardcoded classifier functions — these are pure logic, no game state needed
     FroggyCheck("IsHardInterrupt Power Block(5)=true", IsHardInterruptId(5));
-    FroggyCheck("IsHardInterrupt random=false", !IsHardInterruptId(999));
-    FroggyCheck("IsCondRemoval Cure Hex(25)=true", IsCondRemovalId(25));
-    FroggyCheck("IsCondRemoval random=false", !IsCondRemovalId(999));
+    FroggyCheck("IsHardInterrupt Power Drain(64)=true", IsHardInterruptId(64));
+    FroggyCheck("IsHardInterrupt 0=false", !IsHardInterruptId(0));
+    FroggyCheck("IsHardInterrupt 999=false", !IsHardInterruptId(999));
+
+    FroggyCheck("IsCondRemoval(25)=true", IsCondRemovalId(25));
+    FroggyCheck("IsCondRemoval(53)=true", IsCondRemovalId(53));
+    FroggyCheck("IsCondRemoval(0)=false", !IsCondRemovalId(0));
+
     FroggyCheck("IsHexRemoval(24)=true", IsHexRemovalId(24));
-    FroggyCheck("IsHexRemoval random=false", !IsHexRemovalId(999));
+    FroggyCheck("IsHexRemoval(156)=true", IsHexRemovalId(156));
+    FroggyCheck("IsHexRemoval(0)=false", !IsHexRemovalId(0));
+
     FroggyCheck("IsSurvival Shadow Form(2358)=true", IsSurvivalId(2358));
-    FroggyCheck("IsSurvival random=false", !IsSurvivalId(999));
+    FroggyCheck("IsSurvival(312)=true", IsSurvivalId(312));
+    FroggyCheck("IsSurvival(0)=false", !IsSurvivalId(0));
+
     FroggyCheck("IsBinding(786)=true", IsBindingId(786));
-    FroggyCheck("IsBinding random=false", !IsBindingId(999));
+    FroggyCheck("IsBinding(960)=true", IsBindingId(960));
+    FroggyCheck("IsBinding(0)=false", !IsBindingId(0));
 
-    // Test role bitmask assignment via CacheSkillBar
-    // After caching, verify bitmask properties work
-    CachedSkill testSkill = {};
-    testSkill.roles = ROLE_HEX | ROLE_OFFENSIVE | ROLE_PRESSURE;
-    FroggyCheck("hasRole HEX=true", testSkill.hasRole(ROLE_HEX));
-    FroggyCheck("hasRole OFFENSIVE=true", testSkill.hasRole(ROLE_OFFENSIVE));
-    FroggyCheck("hasRole HEAL=false", !testSkill.hasRole(ROLE_ANY_HEAL));
-    FroggyCheck("hasRole INTERRUPT=false", !testSkill.hasRole(ROLE_ANY_INTERRUPT));
+    FroggyCheck("IsSpeedBoost(947)=true", IsSpeedBoostId(947));
+    FroggyCheck("IsSpeedBoost(0)=false", !IsSpeedBoostId(0));
 
-    // Test combined mask
-    FroggyCheck("ANY_HEAL mask works", (ROLE_HEAL_SINGLE | ROLE_HEAL_PARTY | ROLE_HEAL_SELF) == ROLE_ANY_HEAL);
-    FroggyCheck("ANY_INTERRUPT mask works", (ROLE_INTERRUPT_HARD | ROLE_INTERRUPT_SOFT) == ROLE_ANY_INTERRUPT);
+    // Test role bitmask operations — pure logic
+    CachedSkill testSkillBitmask = {};
+    testSkillBitmask.roles = ROLE_HEX | ROLE_OFFENSIVE | ROLE_PRESSURE;
+    FroggyCheck("hasRole HEX=true", testSkillBitmask.hasRole(ROLE_HEX));
+    FroggyCheck("hasRole OFFENSIVE=true", testSkillBitmask.hasRole(ROLE_OFFENSIVE));
+    FroggyCheck("hasRole PRESSURE=true", testSkillBitmask.hasRole(ROLE_PRESSURE));
+    FroggyCheck("hasRole HEAL=false", !testSkillBitmask.hasRole(ROLE_ANY_HEAL));
+    FroggyCheck("hasRole INTERRUPT=false", !testSkillBitmask.hasRole(ROLE_ANY_INTERRUPT));
+    FroggyCheck("hasRole RESURRECT=false", !testSkillBitmask.hasRole(ROLE_RESURRECT));
 
-    // --- GWA3-129: Target selection (no-crash verification) ---
+    // Verify combined masks are correct
+    FroggyCheck("ANY_HEAL = SINGLE|PARTY|SELF",
+                ROLE_ANY_HEAL == (ROLE_HEAL_SINGLE | ROLE_HEAL_PARTY | ROLE_HEAL_SELF));
+    FroggyCheck("ANY_INTERRUPT = HARD|SOFT",
+                ROLE_ANY_INTERRUPT == (ROLE_INTERRUPT_HARD | ROLE_INTERRUPT_SOFT));
+    FroggyCheck("ANY_REMOVAL = COND|HEX|ENCHANT",
+                ROLE_ANY_REMOVAL == (ROLE_COND_REMOVE | ROLE_HEX_REMOVE | ROLE_ENCHANT_REMOVE));
+
+    // Verify all role bits are distinct (no overlap)
+    FroggyCheck("ROLE_HEAL_SINGLE is unique bit", ROLE_HEAL_SINGLE == (1 << 0));
+    FroggyCheck("ROLE_RESURRECT is unique bit", ROLE_RESURRECT == (1 << 18));
+    FroggyCheck("ROLE_OFFENSIVE is unique bit", ROLE_OFFENSIVE == (1 << 19));
+
+    // Test CacheSkillBar with real skillbar (if available)
+    LogBot("--- GWA3-128 continued: CacheSkillBar ---");
+    auto* bar128 = SkillMgr::GetPlayerSkillbar();
+    if (bar128) {
+        CacheSkillBar();
+        FroggyCheck("CacheSkillBar sets s_skillsCached=true", s_skillsCached);
+        // Verify at least one cached skill has non-zero roles
+        bool anyRoles = false;
+        for (int i = 0; i < 8; i++) {
+            if (s_skillCache[i].skill_id != 0 && s_skillCache[i].roles != ROLE_NONE) {
+                anyRoles = true;
+                LogBot("  Slot %d: skill=%u roles=0x%X target=%u energy=%u",
+                       i, s_skillCache[i].skill_id, s_skillCache[i].roles,
+                       s_skillCache[i].target_type, s_skillCache[i].energy_cost);
+            }
+        }
+        FroggyCheck("At least one skill has roles assigned", anyRoles);
+    } else {
+        LogBot("  SKIP: No skillbar available");
+    }
+
+    // --- GWA3-129: Target selection ---
     LogBot("--- GWA3-129: Target Selection ---");
 
-    // These should return 0 or a valid ID — either way, no crash
-    uint32_t lowestAlly = GetLowestHealthAlly();
-    FroggyCheck("GetLowestHealthAlly no crash", lowestAlly == 0 || lowestAlly > 0);
+    // Determine context: outpost (no enemies) vs explorable (may have enemies)
+    bool inExplorable = false;
+    const auto* areaInfo = MapMgr::GetAreaInfo(MapMgr::GetMapId());
+    if (areaInfo && areaInfo->type >= 4) { // type 4+ = explorable/mission/dungeon
+        inExplorable = true;
+    }
 
-    uint32_t deadAlly = GetDeadAlly();
-    FroggyCheck("GetDeadAlly no crash", deadAlly == 0 || deadAlly > 0);
+    // Ally targeting: should work in both outpost and explorable
+    if (me115) {
+        uint32_t lowestAlly = GetLowestHealthAlly();
+        // In any context, we should find at least ourselves or a hero
+        FroggyCheck("GetLowestHealthAlly returns valid ID or 0",
+                    lowestAlly == 0 || AgentMgr::GetAgentExists(lowestAlly));
 
-    uint32_t unhexed = GetUnhexedEnemy();
-    FroggyCheck("GetUnhexedEnemy no crash", unhexed == 0 || unhexed > 0);
+        uint32_t deadAlly = GetDeadAlly();
+        FroggyCheck("GetDeadAlly returns valid ID or 0",
+                    deadAlly == 0 || AgentMgr::GetAgentExists(deadAlly));
 
-    uint32_t casting = GetCastingEnemy();
-    FroggyCheck("GetCastingEnemy no crash", casting == 0 || casting > 0);
+        // ResolveSkillTarget for heals — should return self or ally when in-game
+        CachedSkill fakeHealResolve = {};
+        fakeHealResolve.roles = ROLE_HEAL_SINGLE;
+        fakeHealResolve.target_type = 3;
+        uint32_t healTarget = ResolveSkillTarget(fakeHealResolve, 0);
+        FroggyCheck("ResolveSkillTarget(heal) returns valid agent",
+                    healTarget > 0 && AgentMgr::GetAgentExists(healTarget));
 
-    uint32_t enchanted = GetEnchantedEnemy();
-    FroggyCheck("GetEnchantedEnemy no crash", enchanted == 0 || enchanted > 0);
+        // ResolveSkillTarget for res — should return 0 (nobody dead, hopefully)
+        CachedSkill fakeResResolve = {};
+        fakeResResolve.roles = ROLE_RESURRECT;
+        fakeResResolve.target_type = 6;
+        uint32_t resTarget = ResolveSkillTarget(fakeResResolve, 0);
+        FroggyCheck("ResolveSkillTarget(res) returns 0 or valid dead ally",
+                    resTarget == 0 || AgentMgr::GetAgentExists(resTarget));
+    }
 
-    uint32_t melee = GetMeleeRangeEnemy();
-    FroggyCheck("GetMeleeRangeEnemy no crash", melee == 0 || melee > 0);
+    // Enemy targeting: only meaningful in explorable with enemies
+    if (inExplorable) {
+        uint32_t unhexed = GetUnhexedEnemy();
+        FroggyCheck("GetUnhexedEnemy returns valid enemy or 0",
+                    unhexed == 0 || AgentMgr::GetAgentExists(unhexed));
 
-    // ResolveSkillTarget with a fake skill
-    CachedSkill fakeHeal = {};
-    fakeHeal.roles = ROLE_HEAL_SINGLE;
-    fakeHeal.target_type = 3;
-    uint32_t healTarget = ResolveSkillTarget(fakeHeal, 0);
-    FroggyCheck("ResolveSkillTarget heal returns self or ally",
-                healTarget == 0 || healTarget > 0); // 0 if no me, >0 otherwise
+        uint32_t castingFoe = GetCastingEnemy();
+        FroggyCheck("GetCastingEnemy returns valid enemy or 0",
+                    castingFoe == 0 || AgentMgr::GetAgentExists(castingFoe));
 
-    CachedSkill fakeHex = {};
-    fakeHex.roles = ROLE_HEX;
-    fakeHex.target_type = 5;
-    uint32_t hexTarget = ResolveSkillTarget(fakeHex, 42);
-    // Should return an unhexed enemy or fallback to 42
-    FroggyCheck("ResolveSkillTarget hex returns target", hexTarget == 0 || hexTarget > 0);
+        uint32_t enchFoe = GetEnchantedEnemy();
+        FroggyCheck("GetEnchantedEnemy returns valid enemy or 0",
+                    enchFoe == 0 || AgentMgr::GetAgentExists(enchFoe));
 
-    CachedSkill fakeRes = {};
-    fakeRes.roles = ROLE_RESURRECT;
-    fakeRes.target_type = 6;
-    uint32_t resTarget = ResolveSkillTarget(fakeRes, 0);
-    FroggyCheck("ResolveSkillTarget resurrect no crash", resTarget == 0 || resTarget > 0);
+        uint32_t meleeFoe = GetMeleeRangeEnemy();
+        FroggyCheck("GetMeleeRangeEnemy returns valid or 0",
+                    meleeFoe == 0 || AgentMgr::GetAgentExists(meleeFoe));
+
+        // ResolveSkillTarget for hex — should return unhexed enemy or fallback
+        CachedSkill fakeHexResolve = {};
+        fakeHexResolve.roles = ROLE_HEX;
+        fakeHexResolve.target_type = 5;
+        uint32_t hexTarget = ResolveSkillTarget(fakeHexResolve, 42);
+        FroggyCheck("ResolveSkillTarget(hex) returns valid enemy or fallback 42",
+                    hexTarget == 42 || AgentMgr::GetAgentExists(hexTarget));
+    } else {
+        LogBot("  SKIP: Not in explorable — skipping enemy targeting tests");
+        // In outpost, enemy finders should return 0 (no enemies)
+        FroggyCheck("GetUnhexedEnemy=0 in outpost", GetUnhexedEnemy() == 0);
+        FroggyCheck("GetCastingEnemy=0 in outpost", GetCastingEnemy() == 0);
+        FroggyCheck("GetMeleeRangeEnemy=0 in outpost", GetMeleeRangeEnemy() == 0);
+    }
 
     // --- GWA3-130: HP gating & debuff blocking ---
     LogBot("--- GWA3-130: HP Gating & Debuffs ---");
 
-    // CanCast with null agent — should return false (dead/no agent)
-    // We can't fully test CanCast without being in-game, but verify it doesn't crash
-    CachedSkill fakeSpell = {};
-    fakeSpell.skill_type = 2; // Spell
-    fakeSpell.roles = ROLE_OFFENSIVE;
-    bool canCastResult = CanCast(fakeSpell);
-    FroggyCheck("CanCast spell no crash", canCastResult || !canCastResult);
+    if (me115 && me115->hp > 0.0f && MapMgr::GetIsMapLoaded()) {
+        // CanCast should return true when alive, not debuffed, map loaded
+        CachedSkill fakeSpellCast = {};
+        fakeSpellCast.skill_type = 2; // Spell
+        fakeSpellCast.roles = ROLE_OFFENSIVE;
+        FroggyCheck("CanCast(spell) when alive+loaded = true", CanCast(fakeSpellCast));
 
-    CachedSkill fakeAttack = {};
-    fakeAttack.skill_type = 9; // Attack
-    fakeAttack.roles = ROLE_ATTACK;
-    bool canCastAtk = CanCast(fakeAttack);
-    FroggyCheck("CanCast attack no crash", canCastAtk || !canCastAtk);
+        CachedSkill fakeAtkCast = {};
+        fakeAtkCast.skill_type = 9; // Attack
+        fakeAtkCast.roles = ROLE_ATTACK;
+        FroggyCheck("CanCast(attack) when alive+loaded = true", CanCast(fakeAtkCast));
 
-    CachedSkill fakeSignet = {};
-    fakeSignet.skill_type = 4; // Signet
-    fakeSignet.roles = ROLE_OFFENSIVE;
-    bool canCastSig = CanCast(fakeSignet);
-    FroggyCheck("CanCast signet no crash", canCastSig || !canCastSig);
+        CachedSkill fakeSigCast = {};
+        fakeSigCast.skill_type = 4; // Signet
+        fakeSigCast.roles = ROLE_OFFENSIVE;
+        FroggyCheck("CanCast(signet) when alive+loaded = true", CanCast(fakeSigCast));
 
-    // CanUseSkill — verify HP gating doesn't crash
-    CachedSkill fakeHealGate = {};
-    fakeHealGate.skill_id = 68;
-    fakeHealGate.roles = ROLE_HEAL_SINGLE;
-    fakeHealGate.skill_type = 2;
-    fakeHealGate.target_type = 3;
-    bool canUseHeal = CanUseSkill(fakeHealGate, 0);
-    FroggyCheck("CanUseSkill heal no crash", canUseHeal || !canUseHeal);
+        CachedSkill fakeShoutCast = {};
+        fakeShoutCast.skill_type = 10; // Shout
+        fakeShoutCast.roles = ROLE_SHOUT;
+        FroggyCheck("CanCast(shout) when alive+loaded = true", CanCast(fakeShoutCast));
 
-    CachedSkill fakeSurv = {};
-    fakeSurv.skill_id = 2358;
-    fakeSurv.roles = ROLE_SURVIVAL;
-    fakeSurv.skill_type = 3;
-    fakeSurv.target_type = 0;
-    bool canUseSurv = CanUseSkill(fakeSurv, 0);
-    FroggyCheck("CanUseSkill survival no crash", canUseSurv || !canUseSurv);
+        // HP gating: heal should be BLOCKED when all allies are healthy
+        CachedSkill fakeHealGate = {};
+        fakeHealGate.skill_id = 68;
+        fakeHealGate.roles = ROLE_HEAL_SINGLE;
+        fakeHealGate.skill_type = 2;
+        fakeHealGate.target_type = 3;
+        bool canHealWhenHealthy = CanUseSkill(fakeHealGate, 0);
+        if (me115->hp > 0.8f) {
+            FroggyCheck("CanUseSkill(heal) blocked when self HP > 80%", !canHealWhenHealthy);
+        } else {
+            FroggyCheck("CanUseSkill(heal) allowed when self HP <= 80%", canHealWhenHealthy);
+        }
 
-    CachedSkill fakeBind = {};
-    fakeBind.skill_id = 786;
-    fakeBind.roles = ROLE_BINDING;
-    fakeBind.skill_type = 13;
-    fakeBind.target_type = 0;
-    bool canUseBind = CanUseSkill(fakeBind, 0);
-    FroggyCheck("CanUseSkill binding no crash", canUseBind || !canUseBind);
+        // Survival gating: should be BLOCKED when HP is high
+        CachedSkill fakeSurvGate = {};
+        fakeSurvGate.skill_id = 2358; // Shadow Form
+        fakeSurvGate.roles = ROLE_SURVIVAL;
+        fakeSurvGate.skill_type = 3;
+        fakeSurvGate.target_type = 0;
+        bool canSurvWhenHealthy = CanUseSkill(fakeSurvGate, 0);
+        if (me115->hp > 0.5f) {
+            FroggyCheck("CanUseSkill(survival) blocked when HP > 50%", !canSurvWhenHealthy);
+        }
+
+        // Binding: should be BLOCKED in outpost (no enemies)
+        if (!inExplorable) {
+            CachedSkill fakeBindGate = {};
+            fakeBindGate.skill_id = 786;
+            fakeBindGate.roles = ROLE_BINDING;
+            fakeBindGate.skill_type = 13;
+            fakeBindGate.target_type = 0;
+            FroggyCheck("CanUseSkill(binding) blocked in outpost (no enemies)",
+                        !CanUseSkill(fakeBindGate, 0));
+        }
+    } else {
+        LogBot("  SKIP: Not alive/loaded — skipping HP gating tests");
+    }
 
     // --- GWA3-131: Combat mode toggle ---
     LogBot("--- GWA3-131: Combat Mode ---");
     auto& cfg = Bot::GetConfig();
     auto origMode = cfg.combat_mode;
+
     cfg.combat_mode = CombatMode::LLM;
     FroggyCheck("Combat mode set to LLM", cfg.combat_mode == CombatMode::LLM);
     cfg.combat_mode = CombatMode::Builtin;
     FroggyCheck("Combat mode set to Builtin", cfg.combat_mode == CombatMode::Builtin);
+
+    // Verify the two modes are distinct enum values
+    FroggyCheck("LLM != Builtin", CombatMode::LLM != CombatMode::Builtin);
+
     cfg.combat_mode = origMode; // restore
 
     LogBot("=== Froggy Unit Tests Complete: %d passed, %d failed ===", s_testPassed, s_testFailed);
