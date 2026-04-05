@@ -443,14 +443,46 @@ static void PostProcessOffsets() {
     // Effects: DropBuff scan result contains E8 near call
     if (DropBuff)       DropBuff       = Scanner::FunctionFromNearCall(DropBuff);
 
-    // Agent interaction: InteractAgent scan+0x41 contains E8 near call to dispatcher.
-    // CallTarget is at dispatcher + 0xD6 (also a near call).
+    // Agent interaction: InteractAgent scan+0x41 should contain E8 near call to dispatcher.
+    // GWCA offset may shift between GW builds, so search ±16 bytes for the E8.
+    // Then CallTarget is at dispatcher + 0xD6 (also a near call, also searched ±16).
     if (InteractAgent) {
-        InteractAgent = Scanner::FunctionFromNearCall(InteractAgent);
+        uintptr_t rawScan = InteractAgent;
+
+        // Search ±16 around raw scan result for E8 CALL
+        uintptr_t dispatcherFn = 0;
+        for (int delta = -16; delta <= 16 && !dispatcherFn; delta++) {
+            uintptr_t probe = rawScan + delta;
+            if (probe <= 0x10000) continue;
+            if (*reinterpret_cast<uint8_t*>(probe) == 0xE8) {
+                dispatcherFn = Scanner::FunctionFromNearCall(probe);
+                if (dispatcherFn > 0x10000) {
+                    Log::Info("Offsets: InteractAgent E8 found at raw+%d -> dispatcher=0x%08X", delta, dispatcherFn);
+                } else {
+                    dispatcherFn = 0;
+                }
+            }
+        }
+
+        InteractAgent = dispatcherFn;
+
         if (InteractAgent > 0x10000) {
-            CallTargetFunc = Scanner::FunctionFromNearCall(InteractAgent + 0xD6);
-            Log::Info("Offsets: InteractAgent=0x%08X CallTargetFunc=0x%08X",
-                      InteractAgent, CallTargetFunc);
+            // Search ±24 around dispatcher+0xD6 for CallTarget E8
+            for (int delta = -24; delta <= 24 && CallTargetFunc <= 0x10000; delta++) {
+                uintptr_t probe = InteractAgent + 0xD6 + delta;
+                if (*reinterpret_cast<uint8_t*>(probe) == 0xE8) {
+                    uintptr_t candidate = Scanner::FunctionFromNearCall(probe);
+                    if (candidate > 0x10000) {
+                        CallTargetFunc = candidate;
+                        Log::Info("Offsets: CallTargetFunc E8 at dispatcher+0x%X -> 0x%08X",
+                                  0xD6 + delta, CallTargetFunc);
+                    }
+                }
+            }
+        }
+
+        if (CallTargetFunc <= 0x10000) {
+            Log::Warn("Offsets: CallTargetFunc resolution failed (InteractAgent=0x%08X)", InteractAgent);
         }
     }
 
