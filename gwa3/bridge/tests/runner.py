@@ -34,7 +34,10 @@ def discover_tests(module_names: list[str], filter_pattern: str | None = None) -
     return tests
 
 
-async def run_single_test(name: str, func: callable, timeout: float = DEFAULT_TIMEOUT) -> tuple[str, str, float]:
+async def run_single_test(name: str, func: callable, timeout: float = None) -> tuple[str, str, float]:
+    # Orchestrated tests need longer timeouts (involve map travel)
+    if timeout is None:
+        timeout = 180.0 if "orchestrated" in name else DEFAULT_TIMEOUT
     """Run a single test function. Returns (status, detail, elapsed_seconds).
 
     status: 'PASS', 'FAIL', or 'SKIP'
@@ -76,6 +79,7 @@ async def run_all(filter_pattern: str | None = None):
         "test_b_observations",
         "test_c_actions",
         "test_d_validation",
+        "test_e_orchestrated",
     ]
 
     tests = discover_tests(module_names, filter_pattern)
