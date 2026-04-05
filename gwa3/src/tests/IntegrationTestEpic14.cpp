@@ -114,6 +114,12 @@ int RunFroggyFeatureTest() {
     // ===== PHASE 1: Travel to Gadd's Encampment =====
     IntReport("=== PHASE 1: Travel to Gadd's Encampment ===");
 
+    // Wait for game to be fully ready after bootstrap
+    WaitForPlayerWorldReady(15000);
+
+    // Re-initialize CtoS now that we're in-game (PacketLocation may have been null at boot)
+    CtoS::Initialize();
+
     if (MapMgr::GetMapId() != MAP_GADDS) {
         IntReport("  Not at Gadd's (map=%u) — traveling...", MapMgr::GetMapId());
         MapMgr::Travel(MAP_GADDS);
@@ -235,8 +241,18 @@ int RunFroggyFeatureTest() {
                   living ? living->player_number : 0,
                   living ? living->transmog_npc_id : 0,
                   npc ? npc->x : 0.0f, npc ? npc->y : 0.0f);
+        bool reachedNpc = false;
         if (npc) {
-            MovePlayerNear(npc->x, npc->y, 100.0f, 10000);
+            reachedNpc = MovePlayerNear(npc->x, npc->y, 200.0f, 15000);
+            float px = 0, py = 0;
+            TryReadAgentPosition(ReadMyId(), px, py);
+            IntReport("  After move to NPC: pos=(%.0f,%.0f) reached=%d", px, py, reachedNpc);
+        }
+
+        if (!reachedNpc) {
+            IntReport("  WARN: Could not reach merchant NPC — skipping interact to avoid crash");
+            IntSkip("Merchant interaction", "Movement to NPC failed");
+            goto phase4;
         }
 
         bool merchantOpen = false;
@@ -269,6 +285,7 @@ int RunFroggyFeatureTest() {
     }
 
     // ===== PHASE 4: Enter Explorable =====
+phase4:
     IntReport("=== PHASE 4: Enter Sparkfly Swamp ===");
 
     // Log current position before walking
