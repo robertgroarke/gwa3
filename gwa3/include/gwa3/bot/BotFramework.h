@@ -20,7 +20,10 @@ namespace GWA3::Bot {
         LLMControlled
     };
 
+    enum class CombatMode { Builtin, LLM };
+
     struct BotConfig {
+        CombatMode combat_mode = CombatMode::Builtin;
         bool use_consets = false;
         bool use_stones = false;
         bool hard_mode = true;

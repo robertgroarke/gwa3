@@ -3206,7 +3206,7 @@ Port CanCast() from AutoIt — 22 debuff checks that prevent skill use when dang
 | GWA3-120 | Python bridge tests for Froggy observable state changes | M | 109 | `done` |
 
 | **Epic 16: Combat System Parity** | | | | |
-| GWA3-121 | Combat Mode Toggle (Gemma vs Built-in) | M | 097 | `backlog` |
+| GWA3-121 | Combat Mode Toggle (Gemma vs Built-in) | M | 097 | `done` |
 | GWA3-122 | Expanded Skill Categories (15+ roles, bitmask) | L | 097 | `backlog` |
 | GWA3-123 | Intelligent Target Selection (7 strategies) | XL | 122 | `backlog` |
 | GWA3-124 | HP Gating & Effect Overlap Prevention | L | 122 | `backlog` |

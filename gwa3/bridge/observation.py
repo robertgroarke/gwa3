@@ -72,7 +72,8 @@ class ObservationWindow:
         # Bot state (advisory mode)
         bot = snap.get("bot", {})
         if bot and bot.get("is_running"):
-            lines.append(f"Bot: state={bot.get('state', '?')}")
+            combat = bot.get("combat_mode", "builtin")
+            lines.append(f"Bot: state={bot.get('state', '?')} combat={combat}")
 
         # Map
         m = snap.get("map", {})

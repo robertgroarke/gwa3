@@ -435,6 +435,21 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
+    static ActionResult HandleSetCombatMode(const json& p) {
+        if (!p.contains("mode")) return MakeError("missing mode");
+        std::string mode = p["mode"].get<std::string>();
+        auto& cfg = GWA3::Bot::GetConfig();
+        if (mode == "builtin") {
+            cfg.combat_mode = GWA3::Bot::CombatMode::Builtin;
+        } else if (mode == "llm") {
+            cfg.combat_mode = GWA3::Bot::CombatMode::LLM;
+        } else {
+            return MakeError("unknown_mode");
+        }
+        GWA3::Log::Info("[LLM-Action] Combat mode set to: %s", mode.c_str());
+        return MakeOk();
+    }
+
     static ActionResult HandleSetBotState(const json& p) {
         if (!p.contains("state")) return MakeError("missing state");
         std::string stateName = p["state"].get<std::string>();
@@ -532,6 +547,7 @@ namespace GWA3::LLM::ActionExecutor {
 
         // Bot control (advisory mode)
         g_dispatch["set_bot_state"] = HandleSetBotState;
+        g_dispatch["set_combat_mode"] = HandleSetCombatMode;
 
         // Utility
         g_dispatch["send_chat"] = HandleSendChat;

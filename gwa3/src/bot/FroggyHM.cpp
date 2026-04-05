@@ -409,6 +409,14 @@ static bool TryUseSkill(uint32_t targetId, SkillCategory preferredCat) {
 
 // Full combat routine: use skills then fall back to auto-attack
 static void FightTarget(uint32_t targetId) {
+    // GWA3-121: Combat mode toggle — if LLM mode, just auto-attack
+    // Gemma handles skill decisions via the bridge
+    auto& cfg = Bot::GetConfig();
+    if (cfg.combat_mode == CombatMode::LLM) {
+        AgentMgr::Attack(targetId);
+        return;
+    }
+
     if (!s_skillsCached) CacheSkillBar();
 
     auto* me = AgentMgr::GetMyAgent();
