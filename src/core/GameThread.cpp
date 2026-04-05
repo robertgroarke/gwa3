@@ -27,25 +27,32 @@ static volatile bool s_watchdogRunning = false;
 static volatile LONG s_repatchCount = 0;
 static HANDLE s_drainEvent = nullptr;
 
-// --- Singleshot queue (raw function pointers — no std::function on game thread) ---
-// std::function::operator() crashes GW when called from the render thread
-// (MSVC CRT vtable dispatch corrupts game state after ~11 seconds).
-// Use raw void(*)() pointers with separate void* context.
+// --- Singleshot queue ---
+// Uses raw function pointers with inline context (no heap allocation).
+// CRT heap operations (new/delete/std::function) on the game thread corrupt
+// GW's memory and cause a crash ~11s later.
 static constexpr uint32_t kMaxQueue = 256;
 
-struct RawTask {
-    void (*fn)(void*);
-    void* ctx;
+// Inline callable: stores a function pointer + up to 48 bytes of captured data.
+// Avoids std::function heap allocation entirely.
+struct InlineTask {
+    using Invoker = void(*)(void* storage);
+    Invoker invoke;
+    alignas(8) char storage[48];
+
+    void operator()() { if (invoke) invoke(storage); }
+    explicit operator bool() const { return invoke != nullptr; }
 };
-static RawTask s_rawQueue[kMaxQueue];
+
+static InlineTask s_preQueue[kMaxQueue];
 static uint32_t s_queueHead = 0;
 static uint32_t s_queueTail = 0;
 
-static RawTask s_rawPostQueue[kMaxQueue];
+static InlineTask s_postQueue_ring[kMaxQueue];
 static uint32_t s_postHead = 0;
 static uint32_t s_postTail = 0;
 
-// std::function queue — stored separately, drained from init thread
+// Legacy — kept for API compatibility
 static std::vector<Callback> s_queue;
 static std::vector<Callback> s_postQueue;
 
@@ -59,125 +66,104 @@ static std::vector<CallbackRecord> s_registry;
 
 // Old Dispatch/DispatchPost removed — replaced by DrainPreQueue/DrainPostQueue below
 
-// --- Queue drain helpers (noinline to keep detour stack frame small) ---
-// The game's render callback uses sub esp,0x220 (544 bytes). If the detour's
-// stack frame is too large (e.g. from std::function locals), the combined
-// stack usage overflows the game thread's stack.
-__declspec(noinline) static void DrainPreQueue() {
-    // Called with CS held. Uses raw function pointers — no CRT vtable dispatch.
+// --- Queue drain (called via GameCallback-typed pointer from detour) ---
+// No heap allocation — InlineTask stores callable inline.
+static void __cdecl DrainQueuesOnGameThread(float, int) {
+    EnterCriticalSection(&s_cs);
+    s_onGameThread = true;
+    s_gameThreadId = GetCurrentThreadId();
+
     while (s_queueTail != s_queueHead) {
-        RawTask task = s_rawQueue[s_queueTail];
-        s_rawQueue[s_queueTail] = {nullptr, nullptr};
+        InlineTask task = s_preQueue[s_queueTail];
+        s_preQueue[s_queueTail].invoke = nullptr;
         s_queueTail = (s_queueTail + 1) % kMaxQueue;
         LeaveCriticalSection(&s_cs);
-        if (task.fn) task.fn(task.ctx);
+        task();
         EnterCriticalSection(&s_cs);
     }
+
+    LeaveCriticalSection(&s_cs);
 }
 
-__declspec(noinline) static void DrainPostQueue() {
-    // Called with CS held.
+static void __cdecl DrainPostQueuesOnGameThread(float, int) {
+    EnterCriticalSection(&s_cs);
+
     while (s_postTail != s_postHead) {
-        RawTask task = s_rawPostQueue[s_postTail];
-        s_rawPostQueue[s_postTail] = {nullptr, nullptr};
+        InlineTask task = s_postQueue_ring[s_postTail];
+        s_postQueue_ring[s_postTail].invoke = nullptr;
         s_postTail = (s_postTail + 1) % kMaxQueue;
         LeaveCriticalSection(&s_cs);
-        if (task.fn) task.fn(task.ctx);
+        task();
         EnterCriticalSection(&s_cs);
     }
+
+    s_onGameThread = false;
+    s_gameThreadId = 0;
+    LeaveCriticalSection(&s_cs);
 }
 
-// Wrap a std::function into a heap-allocated raw task.
-// The ctx is a heap-allocated Callback* that gets freed after invocation.
-static void RawCallbackTrampoline(void* ctx) {
-    auto* cb = static_cast<Callback*>(ctx);
-    (*cb)();
-    delete cb;
+// Helper: create InlineTask from a lambda (must fit in 48 bytes)
+template<typename F>
+static InlineTask MakeInlineTask(F&& f) {
+    static_assert(sizeof(F) <= 48, "Lambda too large for InlineTask (max 48 bytes)");
+    InlineTask t;
+    t.invoke = [](void* storage) {
+        auto& fn = *reinterpret_cast<F*>(storage);
+        fn();
+        fn.~F();
+    };
+    new (t.storage) F(std::forward<F>(f));
+    return t;
 }
 
 // --- Watchdog thread: drains queue + monitors hook integrity ---
 static DWORD WINAPI HookWatchdog(LPVOID) {
     while (s_watchdogRunning) {
-        DWORD waitResult = WaitForSingleObject(s_drainEvent, 50);
-        if (!s_initialized) continue;
+        Sleep(100);
+        if (!s_initialized || !s_hookTarget || s_patchSize == 0) continue;
 
-        // Drain queued tasks on watchdog thread (not the game thread)
-        if (waitResult == WAIT_OBJECT_0) {
-            EnterCriticalSection(&s_cs);
-            while (s_queueTail != s_queueHead) {
-                RawTask task = s_rawQueue[s_queueTail];
-                s_rawQueue[s_queueTail] = {nullptr, nullptr};
-                s_queueTail = (s_queueTail + 1) % kMaxQueue;
-                LeaveCriticalSection(&s_cs);
-                if (task.fn) task.fn(task.ctx);
-                EnterCriticalSection(&s_cs);
-            }
-            while (s_postTail != s_postHead) {
-                RawTask task = s_rawPostQueue[s_postTail];
-                s_rawPostQueue[s_postTail] = {nullptr, nullptr};
-                s_postTail = (s_postTail + 1) % kMaxQueue;
-                LeaveCriticalSection(&s_cs);
-                if (task.fn) task.fn(task.ctx);
-                EnterCriticalSection(&s_cs);
-            }
-            LeaveCriticalSection(&s_cs);
-        }
-
-        // Hook integrity check
-        if (s_hookTarget && s_patchSize > 0) {
-            const uint8_t* cur = reinterpret_cast<const uint8_t*>(s_hookTarget);
-            bool intact = (memcmp(cur, s_patchedBytes, s_patchSize) == 0);
-            if (!intact) {
-                DWORD oldProtect;
-                if (VirtualProtect(reinterpret_cast<void*>(s_hookTarget), s_patchSize,
-                                   PAGE_EXECUTE_READWRITE, &oldProtect)) {
-                    memcpy(reinterpret_cast<void*>(s_hookTarget), s_patchedBytes, s_patchSize);
-                    FlushInstructionCache(GetCurrentProcess(),
-                                         reinterpret_cast<void*>(s_hookTarget), s_patchSize);
-                    VirtualProtect(reinterpret_cast<void*>(s_hookTarget), s_patchSize,
-                                   oldProtect, &oldProtect);
-                    InterlockedIncrement(&s_repatchCount);
-                    Log::Info("GameThread: [WATCHDOG] Hook re-patched (count=%d)",
-                              static_cast<int>(s_repatchCount));
-                }
+        // Hook integrity check — re-patch if game overwrites our hook
+        const uint8_t* cur = reinterpret_cast<const uint8_t*>(s_hookTarget);
+        if (memcmp(cur, s_patchedBytes, s_patchSize) != 0) {
+            DWORD oldProtect;
+            if (VirtualProtect(reinterpret_cast<void*>(s_hookTarget), s_patchSize,
+                               PAGE_EXECUTE_READWRITE, &oldProtect)) {
+                memcpy(reinterpret_cast<void*>(s_hookTarget), s_patchedBytes, s_patchSize);
+                FlushInstructionCache(GetCurrentProcess(),
+                                     reinterpret_cast<void*>(s_hookTarget), s_patchSize);
+                VirtualProtect(reinterpret_cast<void*>(s_hookTarget), s_patchSize,
+                               oldProtect, &oldProtect);
+                InterlockedIncrement(&s_repatchCount);
+                Log::Info("GameThread: [WATCHDOG] Hook re-patched (count=%d)",
+                          static_cast<int>(s_repatchCount));
             }
         }
     }
     return 0;
 }
 
-// --- MinHook detour (minimal stack footprint) ---
-// Disable /GS buffer security check — the security cookie prologue/epilogue
-// conflicts with the game's render callback stack expectations.
-#pragma optimize("", off)
-#pragma runtime_checks("", off)
-static volatile uint32_t s_detourTest = 0;
-__declspec(safebuffers) static void __cdecl DetourCallback(float elapsed, int unknown) {
-    EnterCriticalSection(&s_cs);
-    s_onGameThread = true;
-    s_gameThreadId = GetCurrentThreadId();
-    // Signal the watchdog thread to drain the queue if there are pending tasks.
-    // We can't call std::function or indirect function pointers from the detour —
-    // MSVC generates code that crashes GW's render callback (stack/register issue).
-    if (s_queueTail != s_queueHead) {
-        SetEvent(s_drainEvent);
-    }
-    LeaveCriticalSection(&s_cs);
+// --- MinHook detour ---
+// Drain functions use GameCallback signature so MSVC generates identical
+// call-site code as s_originalCallback (which is proven stable).
+static GameCallback s_preDrain = reinterpret_cast<GameCallback>(&DrainQueuesOnGameThread);
+static GameCallback s_postDrain = reinterpret_cast<GameCallback>(&DrainPostQueuesOnGameThread);
 
+static void __cdecl DetourCallback(float elapsed, int unknown) {
+    // Pre-dispatch: drain queued tasks on game thread
+    if (s_queueTail != s_queueHead) {
+        s_preDrain(elapsed, unknown);
+    }
+
+    // Call original game callback
     if (s_originalCallback) {
         s_originalCallback(elapsed, unknown);
     }
 
-    EnterCriticalSection(&s_cs);
+    // Post-dispatch
     if (s_postTail != s_postHead) {
-        SetEvent(s_drainEvent); // signal watchdog to drain post-queue too
+        s_postDrain(elapsed, unknown);
     }
-    s_onGameThread = false;
-    s_gameThreadId = 0;
-    LeaveCriticalSection(&s_cs);
 }
-#pragma runtime_checks("", restore)
-#pragma optimize("", on)
 
 // --- Find hook target by walking backward from assertion site to function prologue ---
 static uintptr_t FindFunctionStart(uintptr_t assertionSite) {
@@ -317,21 +303,12 @@ void Shutdown() {
 
     // Clear all queued work
     EnterCriticalSection(&s_cs);
-    // Free any pending raw tasks
-    while (s_queueTail != s_queueHead) {
-        auto& t = s_rawQueue[s_queueTail];
-        if (t.fn == RawCallbackTrampoline && t.ctx) delete static_cast<Callback*>(t.ctx);
-        t = {nullptr, nullptr};
-        s_queueTail = (s_queueTail + 1) % kMaxQueue;
-    }
-    while (s_postTail != s_postHead) {
-        auto& t = s_rawPostQueue[s_postTail];
-        if (t.fn == RawCallbackTrampoline && t.ctx) delete static_cast<Callback*>(t.ctx);
-        t = {nullptr, nullptr};
-        s_postTail = (s_postTail + 1) % kMaxQueue;
-    }
     s_queueHead = s_queueTail = 0;
     s_postHead = s_postTail = 0;
+    for (uint32_t i = 0; i < kMaxQueue; i++) {
+        s_preQueue[i].invoke = nullptr;
+        s_postQueue_ring[i].invoke = nullptr;
+    }
     s_registry.clear();
     s_onGameThread = false;
     s_gameThreadId = 0;
@@ -363,7 +340,7 @@ void Enqueue(Callback task) {
         Log::Warn("GameThread: Enqueue ring buffer full, dropping task");
         return;
     }
-    s_rawQueue[s_queueHead] = {RawCallbackTrampoline, new Callback(std::move(task))};
+    s_preQueue[s_queueHead] = MakeInlineTask(std::move(task));
     s_queueHead = next;
     LeaveCriticalSection(&s_cs);
 }
@@ -387,7 +364,7 @@ void EnqueuePost(Callback task) {
         Log::Warn("GameThread: EnqueuePost ring buffer full, dropping task");
         return;
     }
-    s_rawPostQueue[s_postHead] = {RawCallbackTrampoline, new Callback(std::move(task))};
+    s_postQueue_ring[s_postHead] = MakeInlineTask(std::move(task));
     s_postHead = next;
     LeaveCriticalSection(&s_cs);
 }
