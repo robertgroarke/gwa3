@@ -498,6 +498,23 @@ SEND_CHAT = _tool(
     },
 )
 
+SET_COMBAT_MODE = _tool(
+    "set_combat_mode",
+    "Switch combat handling between built-in bot logic and LLM control. "
+    "In 'builtin' mode, Froggy's skill rotation handles combat automatically. "
+    "In 'llm' mode, Froggy only auto-attacks and YOU control all skill usage "
+    "via use_skill, use_hero_skill, change_target, etc.",
+    {
+        "properties": {
+            "mode": {
+                "type": "string",
+                "description": "Combat mode: 'builtin' (bot handles skills) or 'llm' (you handle skills)",
+            },
+        },
+        "required": ["mode"],
+    },
+)
+
 SET_BOT_STATE = _tool(
     "set_bot_state",
     "Override the Froggy bot's current state (advisory mode only). "
@@ -586,6 +603,7 @@ ALL_TOOLS = [
     TRANSACT_ITEMS,
     CRAFT_ITEM,
     # Bot control (advisory mode)
+    SET_COMBAT_MODE,
     SET_BOT_STATE,
     # Utility
     SEND_CHAT,

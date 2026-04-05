@@ -799,6 +799,7 @@ namespace GWA3::LLM::GameSnapshot {
         }
         b["state"] = name;
         b["is_running"] = Bot::IsRunning();
+        b["combat_mode"] = (Bot::GetConfig().combat_mode == Bot::CombatMode::LLM) ? "llm" : "builtin";
         return b;
     }
 
