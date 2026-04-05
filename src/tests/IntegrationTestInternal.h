@@ -169,5 +169,6 @@ bool TestUIFrameInteraction();
 bool TestAgentInteraction();
 bool TestCameraFOV();
 bool TestPersonalDir();
+bool TestExplorableCallTarget();
 
 } // namespace GWA3::SmokeTest

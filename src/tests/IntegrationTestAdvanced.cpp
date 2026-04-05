@@ -51,32 +51,103 @@ static Item* FindFirstBackpackItem() {
     return nullptr;
 }
 
-static uint32_t CountBackpackFreeSlots() {
+static uint32_t CountBackpackItems() {
     Inventory* inv = ItemMgr::GetInventory();
     if (!inv) return 0;
-    uint32_t free = 0;
+
+    uint32_t count = 0;
     for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
         Bag* bag = inv->bags[bagIdx];
         if (!bag || !bag->items.buffer) continue;
         for (uint32_t i = 0; i < bag->items.size; ++i) {
-            if (!bag->items.buffer[i]) free++;
+            if (bag->items.buffer[i]) count++;
         }
     }
-    return free;
+    return count;
 }
 
-static Item* FindItemByModel(uint32_t modelId) {
-    Inventory* inv = ItemMgr::GetInventory();
-    if (!inv) return nullptr;
-    for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
-        Bag* bag = inv->bags[bagIdx];
-        if (!bag || !bag->items.buffer) continue;
-        for (uint32_t i = 0; i < bag->items.size; ++i) {
-            Item* item = bag->items.buffer[i];
-            if (item && item->model_id == modelId) return item;
+static uint32_t FindInventoryBagSlot(Inventory* inv, Bag* bagPtr) {
+    if (!inv || !bagPtr) return UINT32_MAX;
+    for (uint32_t bagIdx = 0; bagIdx < 23; ++bagIdx) {
+        if (inv->bags[bagIdx] == bagPtr) return bagIdx;
+    }
+    return UINT32_MAX;
+}
+
+static uint32_t FindUsableTitleId(uint32_t currentTitle) {
+    if (currentTitle > 0) return currentTitle;
+
+    constexpr uint32_t kPreferredTitles[] = {
+        TitleID::Sunspear,
+        TitleID::Lightbringer,
+        TitleID::Vanguard,
+        TitleID::Norn,
+        TitleID::Asura,
+        TitleID::Deldrimor,
+        TitleID::Kurzick,
+        TitleID::Luxon,
+    };
+
+    for (uint32_t titleId : kPreferredTitles) {
+        Title* track = PlayerMgr::GetTitleTrack(titleId);
+        TitleClientData* clientData = PlayerMgr::GetTitleData(titleId);
+        if (!track || !clientData) continue;
+        if (clientData->name_id == 0) continue;
+        if (track->max_title_rank == 0 || track->max_title_rank >= 100) continue;
+        if (track->current_points > 0 || track->current_title_tier_index > 0 || track->next_title_tier_index > 0) {
+            return titleId;
         }
     }
-    return nullptr;
+
+    return 0;
+}
+
+static uint32_t FindAlternateQuestId(uint32_t excludeQuestId) {
+    const uint32_t questCount = QuestMgr::GetQuestLogSize();
+    for (uint32_t i = 0; i < questCount; ++i) {
+        Quest* quest = QuestMgr::GetQuestByIndex(i);
+        if (!quest || quest->quest_id == 0) continue;
+        if (quest->quest_id == excludeQuestId) continue;
+        return quest->quest_id;
+    }
+    return 0;
+}
+
+static uint32_t FindNearbyFoeAgent(float maxDistance) {
+    const uint32_t myId = ReadMyId();
+    float myX = 0.0f;
+    float myY = 0.0f;
+    if (!TryReadAgentPosition(myId, myX, myY)) return 0;
+
+    if (Offsets::AgentBase <= 0x10000) return 0;
+    uintptr_t agentArr = *reinterpret_cast<uintptr_t*>(Offsets::AgentBase);
+    if (agentArr <= 0x10000) return 0;
+
+    const uint32_t maxAgents = *reinterpret_cast<uint32_t*>(Offsets::AgentBase + 0x8);
+    const float maxDistSq = maxDistance * maxDistance;
+    float bestDistSq = maxDistSq;
+    uint32_t bestId = 0;
+
+    for (uint32_t i = 1; i < maxAgents && i < 4096; ++i) {
+        uintptr_t agentPtr = *reinterpret_cast<uintptr_t*>(agentArr + i * 4);
+        if (agentPtr <= 0x10000) continue;
+
+        auto* living = reinterpret_cast<AgentLiving*>(agentPtr);
+        if (living->agent_id == myId) continue;
+        if (living->type != 0xDB) continue;
+        if (living->allegiance != 3) continue;
+        if (living->hp <= 0.0f) continue;
+
+        const float dx = living->x - myX;
+        const float dy = living->y - myY;
+        const float distSq = dx * dx + dy * dy;
+        if (distSq < bestDistSq) {
+            bestDistSq = distSq;
+            bestId = i;
+        }
+    }
+
+    return bestId;
 }
 
 // ===== GWA3-074: Item Workflow Tests =====
@@ -100,8 +171,16 @@ bool TestItemMove() {
     uint32_t srcBagIdx = item->bag->index;
     uint32_t srcSlot = item->slot;
     uint32_t itemId = item->item_id;
+    const uint32_t itemsBefore = CountBackpackItems();
+    Bag* srcBagPtr = item->bag;
+    const uint32_t srcInvBagSlot = FindInventoryBagSlot(inv, srcBagPtr);
     IntReport("  Moving item %u (model=%u) from bag %u slot %u...",
               itemId, item->model_id, srcBagIdx, srcSlot);
+    IntReport("  Source: invBag[%u] runtimeIndex=%u packetBagId=%u slot %u",
+              srcInvBagSlot,
+              srcBagPtr ? srcBagPtr->index : 0,
+              srcBagPtr ? srcBagPtr->h0008 : 0,
+              srcSlot);
 
     // Find any free slot across all backpack bags (1-4)
     uint32_t dstBagIdx = UINT32_MAX;
@@ -126,25 +205,60 @@ bool TestItemMove() {
         return true;
     }
 
-    IntReport("  Target: bag %u slot %u", dstBagIdx, freeSlot);
+    Bag* targetBagPtr = inv->bags[dstBagIdx];
+    IntReport("  Target: invBag[%u] runtimeIndex=%u packetBagId=%u slot %u",
+              dstBagIdx,
+              targetBagPtr ? targetBagPtr->index : 0,
+              targetBagPtr ? targetBagPtr->h0008 : 0,
+              freeSlot);
     ItemMgr::MoveItem(itemId, dstBagIdx, freeSlot);
     Sleep(500 + ChatMgr::GetPing());
 
     // Verify item moved
     Item* movedItem = ItemMgr::GetItemById(itemId);
     if (movedItem) {
-        IntReport("  After move: bag=%u slot=%u",
-                  movedItem->bag ? movedItem->bag->index : 0, movedItem->slot);
-        bool moved = (movedItem->bag && movedItem->bag->index == dstBagIdx &&
-                      movedItem->slot == static_cast<uint8_t>(freeSlot));
+        IntReport("  After move: bagIndex=%u packetBagId=%u slot=%u",
+                  movedItem->bag ? movedItem->bag->index : 0,
+                  movedItem->bag ? movedItem->bag->h0008 : 0,
+                  movedItem->slot);
+        Bag* dstBag = inv->bags[dstBagIdx];
+        Item* dstSlotItem = (dstBag && dstBag->items.buffer && freeSlot < dstBag->items.size)
+            ? dstBag->items.buffer[freeSlot]
+            : nullptr;
+        Item* srcSlotItem = (srcBagPtr && srcBagPtr->items.buffer && srcSlot < srcBagPtr->items.size)
+            ? srcBagPtr->items.buffer[srcSlot]
+            : nullptr;
+        const uint32_t itemsAfterMove = CountBackpackItems();
+        bool moved = (movedItem->bag == targetBagPtr &&
+                      movedItem->slot == static_cast<uint8_t>(freeSlot) &&
+                      dstSlotItem && dstSlotItem->item_id == itemId &&
+                      (!srcSlotItem || srcSlotItem->item_id != itemId) &&
+                      itemsAfterMove == itemsBefore);
         IntCheck("Item moved to target slot", moved);
     } else {
         IntCheck("Item still exists after move", false);
     }
 
     // Move back to original position
-    ItemMgr::MoveItem(itemId, srcBagIdx, srcSlot);
-    Sleep(300);
+    if (srcInvBagSlot == UINT32_MAX) {
+        IntCheck("Original inventory bag slot resolved", false);
+        IntReport("");
+        return true;
+    }
+
+    ItemMgr::MoveItem(itemId, srcInvBagSlot, srcSlot);
+    Sleep(500 + ChatMgr::GetPing());
+    Item* restoredItem = ItemMgr::GetItemById(itemId);
+    if (restoredItem) {
+        IntReport("  After restore: bagIndex=%u packetBagId=%u slot=%u",
+                  restoredItem->bag ? restoredItem->bag->index : 0,
+                  restoredItem->bag ? restoredItem->bag->h0008 : 0,
+                  restoredItem->slot);
+    }
+    bool restored = restoredItem && restoredItem->bag == srcBagPtr &&
+                    restoredItem->slot == static_cast<uint8_t>(srcSlot) &&
+                    CountBackpackItems() == itemsBefore;
+    IntCheck("Item restored to original slot", restored);
 
     IntReport("");
     return true;
@@ -172,12 +286,18 @@ bool TestGoldTransfer() {
     uint32_t charAfter = ItemMgr::GetGoldCharacter();
     uint32_t storeAfter = ItemMgr::GetGoldStorage();
     IntReport("  After transfer: char=%u storage=%u", charAfter, storeAfter);
-    IntCheck("Character gold decreased", charAfter < charGold);
-    IntCheck("Storage gold increased", storeAfter > storeGold);
+    IntCheck("Character gold decreased by exactly 100", charAfter + 100 == charGold);
+    IntCheck("Storage gold increased by exactly 100", storeAfter == storeGold + 100);
 
     // Transfer back
     ItemMgr::ChangeGold(charAfter + 100, storeAfter - 100);
-    Sleep(300);
+    Sleep(500);
+
+    uint32_t charRestored = ItemMgr::GetGoldCharacter();
+    uint32_t storeRestored = ItemMgr::GetGoldStorage();
+    IntReport("  After restore: char=%u storage=%u", charRestored, storeRestored);
+    IntCheck("Character gold restored to original value", charRestored == charGold);
+    IntCheck("Storage gold restored to original value", storeRestored == storeGold);
 
     IntReport("");
     return true;
@@ -197,7 +317,7 @@ bool TestMemAllocFree() {
         IntCheck("Written pattern reads back correctly", bytes[0] == 0xAA && bytes[4095] == 0xAA);
 
         MemoryMgr::MemFree(ptr);
-        IntCheck("MemFree did not crash", true);
+        IntSkip("MemFree semantics", "No reliable post-free validity probe in current harness");
     }
 
     IntReport("");
@@ -214,7 +334,6 @@ bool TestLoadSkillbar() {
     Skillbar* bar = SkillMgr::GetPlayerSkillbar();
     if (!bar) { IntSkip("SkillbarLoad", "Skillbar unavailable"); IntReport(""); return false; }
 
-    // Save current bar
     uint32_t savedSkills[8];
     for (int i = 0; i < 8; ++i) savedSkills[i] = bar->skills[i].skill_id;
 
@@ -222,32 +341,76 @@ bool TestLoadSkillbar() {
               savedSkills[0], savedSkills[1], savedSkills[2], savedSkills[3],
               savedSkills[4], savedSkills[5], savedSkills[6], savedSkills[7]);
 
-    // Check if outpost (can only load skills in town)
     const AreaInfo* area = MapMgr::GetAreaInfo(ReadMapId());
     if (!area || IsSkillCastMapType(area->type)) {
-        IntSkip("SkillbarLoad", "Not in outpost — can only load skills in town");
+        IntSkip("SkillbarLoad", "Not in outpost - can only load skills in town");
         IntReport("");
         return true;
     }
 
-    // NOTE: LoadSkillbar sends LOAD_SKILLBAR packet which crashes the client
-    // in some configurations. Disabled pending packet format investigation.
-    // The skillbar read-back above validates the struct is readable.
-    IntSkip("SkillbarLoad send", "Disabled — LoadSkillbar packet crashes client (needs investigation)");
+    uint32_t modifiedSkills[8];
+    for (int i = 0; i < 8; ++i) modifiedSkills[i] = savedSkills[i];
 
-    if (false) { // Disabled — causes crash
-        SkillMgr::LoadSkillbar(savedSkills, 0);
-        Sleep(1000);
-
-        bar = SkillMgr::GetPlayerSkillbar();
-        if (bar) {
-            bool match = true;
-            for (int i = 0; i < 8; ++i) {
-                if (bar->skills[i].skill_id != savedSkills[i]) match = false;
-            }
-            IntCheck("Skillbar preserved after reload", match);
+    int swapA = -1;
+    int swapB = -1;
+    for (int i = 0; i < 8; ++i) {
+        if (savedSkills[i] == 0) continue;
+        if (swapA == -1) {
+            swapA = i;
+            continue;
+        }
+        if (savedSkills[i] != savedSkills[swapA]) {
+            swapB = i;
+            break;
         }
     }
+    if (swapA == -1 || swapB == -1) {
+        IntSkip("SkillbarLoad", "Need two distinct non-zero skills to verify load");
+        IntReport("");
+        return true;
+    }
+
+    const uint32_t tmp = modifiedSkills[swapA];
+    modifiedSkills[swapA] = modifiedSkills[swapB];
+    modifiedSkills[swapB] = tmp;
+
+    IntReport("  Loading modified skillbar (swap slot %d and %d)...", swapA + 1, swapB + 1);
+    SkillMgr::LoadSkillbar(modifiedSkills, 0);
+    Sleep(1000 + ChatMgr::GetPing());
+
+    bar = SkillMgr::GetPlayerSkillbar();
+    bool modifiedMatches = bar != nullptr;
+    if (bar) {
+        for (int i = 0; i < 8; ++i) {
+            if (bar->skills[i].skill_id != modifiedSkills[i]) {
+                modifiedMatches = false;
+                break;
+            }
+        }
+        IntReport("  After modified load: [%u %u %u %u %u %u %u %u]",
+                  bar->skills[0].skill_id, bar->skills[1].skill_id, bar->skills[2].skill_id, bar->skills[3].skill_id,
+                  bar->skills[4].skill_id, bar->skills[5].skill_id, bar->skills[6].skill_id, bar->skills[7].skill_id);
+    }
+    IntCheck("Skillbar changed after load", modifiedMatches);
+
+    IntReport("  Restoring original skillbar...");
+    SkillMgr::LoadSkillbar(savedSkills, 0);
+    Sleep(1000 + ChatMgr::GetPing());
+
+    bar = SkillMgr::GetPlayerSkillbar();
+    bool restoredMatches = bar != nullptr;
+    if (bar) {
+        for (int i = 0; i < 8; ++i) {
+            if (bar->skills[i].skill_id != savedSkills[i]) {
+                restoredMatches = false;
+                break;
+            }
+        }
+        IntReport("  After restore: [%u %u %u %u %u %u %u %u]",
+                  bar->skills[0].skill_id, bar->skills[1].skill_id, bar->skills[2].skill_id, bar->skills[3].skill_id,
+                  bar->skills[4].skill_id, bar->skills[5].skill_id, bar->skills[6].skill_id, bar->skills[7].skill_id);
+    }
+    IntCheck("Skillbar restored after reload", restoredMatches);
 
     IntReport("");
     return true;
@@ -267,40 +430,43 @@ bool TestPartyManagement() {
         return false;
     }
 
+    const uint32_t heroesBefore = PartyMgr::CountPartyHeroes();
+    IntReport("  Party heroes before kick: %u", heroesBefore);
+    if (heroesBefore == 0) {
+        IntSkip("Party hero assertions", "No heroes present in player party");
+        IntReport("");
+        return true;
+    }
+
     // KickAllHeroes then re-add
     IntReport("  Kicking all heroes...");
     PartyMgr::KickAllHeroes();
     Sleep(2000);
-    IntCheck("KickAllHeroes no crash", true);
+    const uint32_t heroesAfterKick = PartyMgr::CountPartyHeroes();
+    IntReport("  Party heroes after kick: %u", heroesAfterKick);
+    IntCheck("KickAllHeroes removed party heroes", heroesAfterKick == 0);
 
     // Re-add standard heroes
-    uint32_t heroIds[] = {25, 14, 21, 4, 24, 15, 1};
+    // BEASTRIT uses the "Mercs" hero profile from GWA Censured/hero_configs/Mercs.txt.
+    uint32_t heroIds[] = {30, 14, 21, 4, 24, 15, 29};
     IntReport("  Re-adding 7 heroes...");
     for (int i = 0; i < 7; i++) {
+        const uint32_t beforeAddCount = PartyMgr::CountPartyHeroes();
         PartyMgr::AddHero(heroIds[i]);
-        Sleep(300);
+        Sleep(500);
+        uint32_t afterAddCount = PartyMgr::CountPartyHeroes();
+        for (int retry = 0; retry < 4 && afterAddCount == beforeAddCount; ++retry) {
+            Sleep(400);
+            afterAddCount = PartyMgr::CountPartyHeroes();
+        }
+        IntReport("    Hero %u add: before=%u after=%u", heroIds[i], beforeAddCount, afterAddCount);
     }
-    IntCheck("Heroes re-added no crash", true);
+    const uint32_t heroesAfterAdd = PartyMgr::CountPartyHeroes();
+    IntReport("  Party heroes after re-add: %u", heroesAfterAdd);
+    IntCheck("Heroes re-added to party", heroesAfterAdd >= heroesBefore);
 
-    // Test Tick
-    IntReport("  Sending Tick(true)...");
-    PartyMgr::Tick(true);
-    Sleep(500);
-    IntCheck("Tick(true) no crash", true);
-
-    PartyMgr::Tick(false);
-    Sleep(300);
-    IntCheck("Tick(false) no crash", true);
-
-    // Test hero target lock (lock hero 1 to self — harmless)
-    IntReport("  Locking hero 1 target to self...");
-    PartyMgr::LockHeroTarget(1, ReadMyId());
-    Sleep(500);
-    IntCheck("LockHeroTarget no crash", true);
-
-    // Unlock
-    PartyMgr::LockHeroTarget(1, 0);
-    Sleep(300);
+    IntSkip("Tick(true/false)", "No readable ready-state flag exposed yet");
+    IntSkip("LockHeroTarget", "No readable hero target-lock state exposed yet");
 
     IntReport("");
     return true;
@@ -313,32 +479,42 @@ bool TestTitleManagement() {
 
     if (ReadMyId() == 0) { IntSkip("TitleMgmt", "Not in game"); IntReport(""); return false; }
 
-    // Read current title
-    uint32_t currentTitle = PlayerMgr::GetActiveTitleId();
-    IntReport("  Current active title: %u", currentTitle);
+    // GetActiveTitleId() is currently exposing the player's active title tier, not a title id.
+    uint32_t currentActiveTier = PlayerMgr::GetActiveTitleId();
+    const uint32_t candidateTitle = FindUsableTitleId(currentActiveTier);
+    IntReport("  Current active title tier: %u", currentActiveTier);
+    IntReport("  Candidate title for mutation: %u", candidateTitle);
 
-    // Try setting Sunspear title (ID 20) — common EotN title
-    IntReport("  Setting active title to Sunspear (20)...");
-    PlayerMgr::SetActiveTitle(20);
+    if (candidateTitle == 0) {
+        IntSkip("TitleMgmt", "No usable title track with readable data");
+        IntReport("");
+        return true;
+    }
+
+    IntReport("  Setting active title to %u...", candidateTitle);
+    PlayerMgr::SetActiveTitle(candidateTitle);
     Sleep(1000);
 
-    uint32_t afterSet = PlayerMgr::GetActiveTitleId();
-    IntReport("  Active title after set: %u", afterSet);
-    // May or may not change depending on whether the char has the title
-    IntCheck("SetActiveTitle no crash", true);
-
     // Get title track data
-    Title* track = PlayerMgr::GetTitleTrack(20);
-    IntReport("  TitleTrack(20): %p", track);
+    Title* track = PlayerMgr::GetTitleTrack(candidateTitle);
+    IntReport("  TitleTrack(%u): %p", candidateTitle, track);
     if (track) {
         IntReport("    current_points=%u max_rank=%u tier=%u",
                   track->current_points, track->max_title_rank, track->current_title_tier_index);
         IntCheck("Title track has plausible max_rank", track->max_title_rank > 0 && track->max_title_rank < 100);
     }
 
+    uint32_t afterSet = PlayerMgr::GetActiveTitleId();
+    IntReport("  Active title tier after set: %u", afterSet);
+    if (track) {
+        IntCheck("SetActiveTitle updated active title tier", afterSet == track->current_title_tier_index && afterSet != 0);
+    } else {
+        IntSkip("SetActiveTitle tier readback", "No title track available for selected title");
+    }
+
     // Get title client data
-    TitleClientData* clientData = PlayerMgr::GetTitleData(20);
-    IntReport("  TitleClientData(20): %p", clientData);
+    TitleClientData* clientData = PlayerMgr::GetTitleData(candidateTitle);
+    IntReport("  TitleClientData(%u): %p", candidateTitle, clientData);
     if (clientData) {
         IntReport("    flags=%u title_id=%u name_id=%u",
                   clientData->title_flags, clientData->title_id, clientData->name_id);
@@ -351,14 +527,11 @@ bool TestTitleManagement() {
     IntReport("  Removing active title...");
     PlayerMgr::RemoveActiveTitle();
     Sleep(500);
-    IntCheck("RemoveActiveTitle no crash", true);
+    uint32_t afterRemove = PlayerMgr::GetActiveTitleId();
+    IntReport("  Active title after remove: %u", afterRemove);
+    IntCheck("RemoveActiveTitle cleared active title", afterRemove != candidateTitle);
 
     // Restore original
-    if (currentTitle > 0) {
-        PlayerMgr::SetActiveTitle(currentTitle);
-        Sleep(300);
-    }
-
     IntReport("");
     return true;
 }
@@ -413,21 +586,38 @@ bool TestGameThreadCallbacks() {
     }
 
     static std::atomic<uint32_t> frameCount{0};
-    GameThread::HookEntry cbEntry{0};
+    static std::atomic<bool> callbackEnabled{false};
+    static GameThread::HookEntry cbEntry{0};
 
-    GameThread::RegisterCallback(&cbEntry, []() { frameCount++; }, 0x4000);
+    frameCount.store(0);
+    callbackEnabled.store(true);
+    GameThread::RegisterCallback(&cbEntry, []() {
+        if (callbackEnabled.load()) {
+            frameCount++;
+        }
+    }, 0x4000);
     Sleep(500);
 
     uint32_t after500ms = frameCount.load();
     IntReport("  Frame callback hits after 500ms: %u", after500ms);
     IntCheck("Persistent callback fired at least once", after500ms > 0);
 
-    // Remove and verify it stops
-    GameThread::RemoveCallback(&cbEntry);
+    // Disable the body first so even an in-flight copied callback becomes inert.
+    callbackEnabled.store(false);
+    Sleep(100);
+
+    // Remove from the registry on the game thread so mutation is serialized with frame dispatch.
+    std::atomic<bool> removeRan{false};
+    GameThread::Enqueue([&]() {
+        GameThread::RemoveCallback(&cbEntry);
+        removeRan.store(true);
+    });
+    WaitFor("GameThread callback removal barrier", 1000, [&]() { return removeRan.load(); });
+
     uint32_t atRemoval = frameCount.load();
-    Sleep(300);
+    Sleep(500);
     uint32_t afterRemoval = frameCount.load();
-    IntReport("  Hits at removal: %u, 300ms later: %u", atRemoval, afterRemoval);
+    IntReport("  Hits at removal: %u, 500ms later: %u", atRemoval, afterRemoval);
     IntCheck("Callback stopped after removal", afterRemoval == atRemoval);
 
     IntReport("");
@@ -483,16 +673,34 @@ bool TestQuestManagement() {
 
     if (ReadMyId() == 0) { IntSkip("QuestMgmt", "Not in game"); IntReport(""); return false; }
 
-    // Just verify the API calls don't crash — actual quest state requires an active quest
+    const uint32_t activeQuestBefore = QuestMgr::GetActiveQuestId();
+    const uint32_t alternateQuestId = FindAlternateQuestId(activeQuestBefore);
+    IntReport("  Active quest before mutation: %u", activeQuestBefore);
+    IntReport("  Alternate quest candidate: %u", alternateQuestId);
+    if (activeQuestBefore == 0) {
+        IntSkip("SetActiveQuest", "No active quest selected");
+    } else if (alternateQuestId == 0) {
+        IntSkip("SetActiveQuest", "No alternate quest available in quest log");
+    } else {
     IntReport("  SetActiveQuest(0) — deselect...");
-    QuestMgr::SetActiveQuest(0);
-    Sleep(300);
-    IntCheck("SetActiveQuest(0) no crash", true);
+    QuestMgr::SetActiveQuest(alternateQuestId);
+    Sleep(1000);
+    const uint32_t activeQuestAfterSet = QuestMgr::GetActiveQuestId();
+    IntReport("  Active quest after set: %u", activeQuestAfterSet);
+    IntCheck("SetActiveQuest switched active quest", activeQuestAfterSet == alternateQuestId);
+
+    IntReport("  Restoring active quest %u...", activeQuestBefore);
+    QuestMgr::SetActiveQuest(activeQuestBefore);
+    Sleep(1000);
+    const uint32_t activeQuestAfterRestore = QuestMgr::GetActiveQuestId();
+    IntReport("  Active quest after restore: %u", activeQuestAfterRestore);
+    IntCheck("SetActiveQuest restored original active quest", activeQuestAfterRestore == activeQuestBefore);
+    }
 
     IntReport("  SkipCinematic...");
     MapMgr::SkipCinematic();
     Sleep(300);
-    IntCheck("SkipCinematic no crash (non-cinematic context)", true);
+    IntSkip("SkipCinematic", "No observable cinematic state exposed in current harness");
 
     IntReport("");
     return true;
@@ -511,17 +719,14 @@ bool TestUIFrameInteraction() {
     // GetChildOffsetId
     uint32_t childOffset = UIMgr::GetChildOffsetId(root);
     IntReport("  Root GetChildOffsetId: %u", childOffset);
-    IntCheck("GetChildOffsetId no crash", true);
+    IntCheck("GetChildOffsetId returned plausible value", childOffset < 4096);
 
     // GetFrameContext
     uintptr_t ctx = UIMgr::GetFrameContext(root);
     IntReport("  Root GetFrameContext: 0x%08X", static_cast<unsigned>(ctx));
-    IntCheck("GetFrameContext no crash", true);
+    IntCheck("GetFrameContext returned non-null", ctx > 0x10000);
 
-    // SendUIMessage with harmless msg
-    IntReport("  SendUIMessage(0, null, null)...");
-    UIMgr::SendUIMessage(0, nullptr, nullptr);
-    IntCheck("SendUIMessage(0) no crash", true);
+    IntSkip("SendUIMessage(0)", "No observable UI-side effect defined for this message");
 
     IntReport("");
     return true;
@@ -539,19 +744,33 @@ bool TestAgentInteraction() {
     IntReport("  AgentExists(self): %d", selfExists);
     IntCheck("Self agent exists", selfExists);
 
+    AgentLiving* selfAgent = AgentMgr::GetMyAgent();
+    IntReport("  GetMyAgent(): %p", selfAgent);
+    IntCheck("GetMyAgent returned non-null", selfAgent != nullptr);
+
     bool bogusExists = AgentMgr::GetAgentExists(99999);
     IntReport("  AgentExists(99999): %d", bogusExists);
     IntCheck("Bogus agent does not exist", !bogusExists);
 
-    // CallTarget on a nearby ally (harmless — just pings)
-    uint32_t nearbyId = FindNearbyNpcLikeAgent(5000.0f);
-    if (nearbyId) {
-        IntReport("  CallTarget(%u)...", nearbyId);
-        AgentMgr::CallTarget(nearbyId);
-        Sleep(300);
-        IntCheck("CallTarget no crash", true);
+    const AreaInfo* area = MapMgr::GetAreaInfo(ReadMapId());
+    if (!area || !IsSkillCastMapType(area->type)) {
+        IntSkip("CallTarget", "Requires explorable map with nearby foes");
     } else {
-        IntSkip("CallTarget", "No nearby agent");
+        uint32_t nearbyId = FindNearbyFoeAgent(5000.0f);
+        if (nearbyId) {
+            IntReport("  CallTarget(%u)...", nearbyId);
+            const uint32_t calledTargetBefore = PartyMgr::GetCalledTargetId();
+            IntReport("  Called target before call: %u", calledTargetBefore);
+            AgentMgr::CallTarget(nearbyId);
+            Sleep(500);
+            const uint32_t targetAfterCall = AgentMgr::GetTargetId();
+            const uint32_t calledTargetAfter = PartyMgr::GetCalledTargetId();
+            IntReport("  Target after call: %u", targetAfterCall);
+            IntReport("  Called target after call: %u", calledTargetAfter);
+            IntCheck("CallTarget updated party called target", calledTargetAfter == nearbyId);
+        } else {
+            IntSkip("CallTarget", "No nearby foe in explorable");
+        }
     }
 
     IntReport("");
@@ -600,10 +819,136 @@ bool TestPersonalDir() {
         }
         IntReport("  Path: %s", narrow);
         IntCheck("Path starts with drive letter", buf[0] >= L'A' && buf[0] <= L'Z');
+        IntCheck("Path contains Guild Wars directory name", wcsstr(buf, L"Guild Wars") != nullptr);
     }
 
     IntReport("");
     return true;
 }
 
+// ===== GWA3-086b: CallTarget in Explorable (Sparkfly) =====
+
+static constexpr uint32_t MAP_GADDS_ENCAMPMENT = 638;
+static constexpr uint32_t MAP_SPARKFLY_SWAMP   = 558;
+
+bool TestExplorableCallTarget() {
+    IntReport("=== GWA3-086b: CallTarget in Explorable ===");
+
+    if (ReadMyId() == 0) { IntSkip("ExplorableCallTarget", "Not in game"); IntReport(""); return false; }
+
+    uint32_t mapId = ReadMapId();
+
+    // If not at Gadd's, travel there first
+    if (mapId != MAP_GADDS_ENCAMPMENT && !IsSkillCastMapType(MapMgr::GetAreaInfo(mapId)->type)) {
+        IntReport("  Traveling to Gadd's Encampment...");
+        MapMgr::Travel(MAP_GADDS_ENCAMPMENT);
+        bool arrived = WaitFor("MapID = Gadd's", 60000, []() {
+            return ReadMapId() == MAP_GADDS_ENCAMPMENT;
+        });
+        if (!arrived) {
+            IntSkip("ExplorableCallTarget", "Failed to travel to Gadd's");
+            IntReport("");
+            return false;
+        }
+        WaitFor("MyID valid after travel", 30000, []() { return ReadMyId() > 0; });
+        WaitForPlayerWorldReady(10000);
+    }
+
+    // If already in explorable, skip the travel phase
+    if (IsSkillCastMapType(MapMgr::GetAreaInfo(ReadMapId())->type)) {
+        IntReport("  Already in explorable map %u, skipping travel", ReadMapId());
+    } else {
+        // Walk out of Gadd's into Sparkfly Swamp
+        IntReport("  Walking out of Gadd's to Sparkfly Swamp...");
+
+        // Wait for position to be readable
+        bool posReady = WaitFor("player position ready", 10000, []() {
+            float x = 0.0f, y = 0.0f;
+            return ReadMyId() > 0 && TryReadAgentPosition(ReadMyId(), x, y);
+        });
+        if (!posReady) {
+            IntSkip("ExplorableCallTarget", "Player position not ready");
+            IntReport("");
+            return false;
+        }
+
+        // Walk to Gadd's exit (same waypoints as TestExplorableEntry)
+        IntReport("  Moving to exit waypoint (-10018, -21892)...");
+        MovePlayerNear(-10018.0f, -21892.0f, 350.0f, 20000);
+        IntReport("  Moving to exit waypoint (-9550, -20400)...");
+        MovePlayerNear(-9550.0f, -20400.0f, 350.0f, 20000);
+
+        // Push into zone boundary
+        IntReport("  Entering Sparkfly Swamp...");
+        DWORD zoneStart = GetTickCount();
+        bool enteredSparkfly = false;
+        while ((GetTickCount() - zoneStart) < 30000) {
+            AgentMgr::Move(-9451.0f, -19766.0f);
+            Sleep(500);
+            if (ReadMapId() == MAP_SPARKFLY_SWAMP) {
+                enteredSparkfly = true;
+                break;
+            }
+        }
+
+        IntCheck("Entered Sparkfly Swamp", enteredSparkfly);
+        if (!enteredSparkfly) {
+            IntReport("");
+            return false;
+        }
+
+        // Wait for explorable to load
+        WaitFor("MyID valid in Sparkfly", 30000, []() { return ReadMyId() > 0; });
+        WaitForPlayerWorldReady(10000);
+        WaitForStablePlayerState(5000);
+    }
+
+    // Now we're in explorable — walk toward a known enemy area
+    IntReport("  In Sparkfly (map %u), looking for foes...", ReadMapId());
+
+    // Sparkfly spawn area has enemies around these coords
+    static const struct { float x; float y; } kProbeSteps[] = {
+        {-4559.0f, -14406.0f},
+        {-5204.0f, -9831.0f},
+    };
+
+    uint32_t foeId = FindNearbyFoeAgent(5000.0f);
+    for (const auto& step : kProbeSteps) {
+        if (foeId) break;
+        IntReport("  Probing area (%.0f, %.0f) for foes...", step.x, step.y);
+        MovePlayerNear(step.x, step.y, 500.0f, 20000);
+        Sleep(1000);
+        foeId = FindNearbyFoeAgent(5000.0f);
+    }
+
+    if (!foeId) {
+        IntSkip("CallTarget in explorable", "No foes found after probing Sparkfly areas");
+        IntReport("");
+        return false;
+    }
+
+    // Test CallTarget on the foe
+    IntReport("  Found foe agent %u, testing CallTarget...", foeId);
+    const uint32_t calledBefore = PartyMgr::GetCalledTargetId();
+    IntReport("  Called target before: %u", calledBefore);
+
+    AgentMgr::CallTarget(foeId);
+    Sleep(500);
+
+    const uint32_t calledAfter = PartyMgr::GetCalledTargetId();
+    IntReport("  Called target after: %u", calledAfter);
+    IntCheck("CallTarget set party called target to foe", calledAfter == foeId);
+
+    // Also verify ChangeTarget + GetTargetId in explorable
+    AgentMgr::ChangeTarget(foeId);
+    bool targetSet = WaitFor("ChangeTarget updates in explorable", 3000, [foeId]() {
+        return AgentMgr::GetTargetId() == foeId;
+    });
+    IntCheck("ChangeTarget works in explorable", targetSet);
+
+    IntReport("");
+    return true;
+}
+
 } // namespace GWA3::SmokeTest
+

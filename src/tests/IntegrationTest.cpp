@@ -35,6 +35,12 @@ static HANDLE s_watchdogThread = nullptr;
 
 static volatile bool s_disconnectDetected = false;
 static uint32_t s_watchdogLastMapId = 0;
+static constexpr bool kBisectWorkflowStopAfterEarlyPhase = false;
+static constexpr bool kBisectWorkflowStopAfter074c = false;
+static constexpr bool kBisectWorkflowSkipPostStoCTail = false;
+static constexpr bool kBisectWorkflowOnlyQuestTail = false;
+static constexpr bool kBisectWorkflowOnlyUiTail = false;
+static constexpr bool kBisectWorkflowOnlyAgentTail = false;
 
 static DWORD WINAPI WatchdogThread(LPVOID) {
     uint32_t lastHeartbeat = RenderHook::GetHeartbeat();
@@ -94,6 +100,8 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
 static void StartWatchdog() {
     s_watchdogRunning = true;
     s_crashDetected = false;
+    s_disconnectDetected = false;
+    s_watchdogLastMapId = 0;
     s_watchdogThread = CreateThread(nullptr, 0, WatchdogThread, nullptr, 0, nullptr);
 }
 
@@ -104,6 +112,21 @@ static void StopWatchdog() {
         CloseHandle(s_watchdogThread);
         s_watchdogThread = nullptr;
     }
+}
+
+static bool ShouldAbortForRuntimeFailure() {
+    return s_crashDetected || s_disconnectDetected;
+}
+
+static bool AbortWorkflowIfRuntimeFailed(const char* afterStep) {
+    if (!ShouldAbortForRuntimeFailure()) {
+        return false;
+    }
+
+    const char* reason = s_disconnectDetected ? "disconnect detected" : "crash detected";
+    IntReport("[FAIL] Workflow aborted after %s — %s", afterStep, reason);
+    s_intFailed++;
+    return true;
 }
 
 void IntReport(const char* fmt, ...) {
@@ -1124,48 +1147,88 @@ int RunAdvancedWorkflowTest() {
 
     if (inGame) {
         WaitForPlayerWorldReady(10000);
+        if (AbortWorkflowIfRuntimeFailed("bootstrap")) goto workflow_done;
 
         // 074: Item workflows
         TestItemMove();
+        if (AbortWorkflowIfRuntimeFailed("TestItemMove")) goto workflow_done;
         TestGoldTransfer();
+        if (AbortWorkflowIfRuntimeFailed("TestGoldTransfer")) goto workflow_done;
         TestMemAllocFree();
+        if (AbortWorkflowIfRuntimeFailed("TestMemAllocFree")) goto workflow_done;
+        if (kBisectWorkflowStopAfter074c) {
+            IntSkip("Workflow after 074c (076-089)", "Temporarily skipped while bisecting early workflow crash");
+            goto workflow_done;
+        }
 
         // 076: Skillbar management
         TestLoadSkillbar();
+        if (AbortWorkflowIfRuntimeFailed("TestLoadSkillbar")) goto workflow_done;
 
         // 077: Party management
         TestPartyManagement();
+        if (AbortWorkflowIfRuntimeFailed("TestPartyManagement")) goto workflow_done;
 
         // 078: Title management
         TestTitleManagement();
+        if (AbortWorkflowIfRuntimeFailed("TestTitleManagement")) goto workflow_done;
+        if (kBisectWorkflowStopAfterEarlyPhase) {
+            IntSkip("Workflow tail (080-089)", "Temporarily skipped while bisecting late workflow crash");
+            goto workflow_done;
+        }
 
         // 080: Callback registry
         TestCallbackRegistry();
+        if (AbortWorkflowIfRuntimeFailed("TestCallbackRegistry")) goto workflow_done;
 
         // 081: GameThread persistent callbacks
         TestGameThreadCallbacks();
+        if (AbortWorkflowIfRuntimeFailed("TestGameThreadCallbacks")) goto workflow_done;
 
         // 082: StoC packet type coverage
         TestStoCPacketTypes();
+        if (AbortWorkflowIfRuntimeFailed("TestStoCPacketTypes")) goto workflow_done;
+        if (kBisectWorkflowSkipPostStoCTail) {
+            IntSkip("Workflow post-StoC tail (083-089)", "Temporarily skipped while bisecting late workflow crash");
+            goto workflow_done;
+        }
 
         // 083: Quest management
         TestQuestManagement();
+        if (AbortWorkflowIfRuntimeFailed("TestQuestManagement")) goto workflow_done;
+        if (kBisectWorkflowOnlyQuestTail) {
+            IntSkip("Workflow tail after quest (085-089)", "Temporarily skipped while bisecting late workflow crash");
+            goto workflow_done;
+        }
 
         // 085: UI frame interaction
         TestUIFrameInteraction();
+        if (AbortWorkflowIfRuntimeFailed("TestUIFrameInteraction")) goto workflow_done;
+        if (kBisectWorkflowOnlyUiTail) {
+            IntSkip("Workflow tail after UI frame interaction (086-089)", "Temporarily skipped while bisecting late workflow crash");
+            goto workflow_done;
+        }
 
         // 086: Agent interaction
         TestAgentInteraction();
+        if (AbortWorkflowIfRuntimeFailed("TestAgentInteraction")) goto workflow_done;
 
         // 087: Camera FOV
         TestCameraFOV();
+        if (AbortWorkflowIfRuntimeFailed("TestCameraFOV")) goto workflow_done;
 
         // 089: Memory personal dir
         TestPersonalDir();
+        if (AbortWorkflowIfRuntimeFailed("TestPersonalDir")) goto workflow_done;
+
+        // 086b: CallTarget in explorable (walks into Sparkfly Swamp)
+        TestExplorableCallTarget();
+        if (AbortWorkflowIfRuntimeFailed("TestExplorableCallTarget")) goto workflow_done;
     } else {
         IntSkip("All advanced workflow tests", "Login failed");
     }
 
+workflow_done:
     IntReport("");
     IntReport("=== SUMMARY: %d passed, %d failed, %d skipped ===",
               s_intPassed, s_intFailed, s_intSkipped);
@@ -1178,6 +1241,8 @@ int RunAdvancedWorkflowTest() {
     StopWatchdog();
     Log::Info("[INTG] Advanced workflow complete: %d passed, %d failed, %d skipped",
               s_intPassed, s_intFailed, s_intSkipped);
+    Log::Info("[INTG] Advanced workflow exit state: crashDetected=%d disconnectDetected=%d",
+              s_crashDetected ? 1 : 0, s_disconnectDetected ? 1 : 0);
     return s_intFailed;
 }
 
