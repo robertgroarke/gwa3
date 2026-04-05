@@ -247,9 +247,6 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
-    // Initialize GameThread FIRST — its MinHook at the render function prologue
-    // is used for both pre-game (ButtonClick) and in-game dispatch.
-    // The old mid-function JMP render hook is no longer used (conflicts with MinHook).
     bool gameThreadOk = GWA3::GameThread::Initialize();
     if (!gameThreadOk) {
         GWA3::Log::Warn("GameThread initialization failed — trying RenderHook fallback");
@@ -282,7 +279,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         }
     } else {
         GWA3::GameThread::Enqueue([]() {
-            GWA3::Log::Info("Hello from game thread! Hook is working.");
+            // CRASH_BISECT: pure no-op to test if ANY callback causes crash
         });
         GWA3::StoC::Initialize();
         GWA3::DialogMgr::Initialize();
