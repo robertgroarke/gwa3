@@ -76,6 +76,23 @@
 
 ---
 
+## Backlog — Bugs / Investigation
+
+### GWA3-090: Debug CallTarget UIMessage dispatch path
+**Priority**: Low — packet fallback works, UIMessage path is broken
+**Context**: `AgentMgr::CallTarget` had a UIMessage path using `SendUIMessage(0x30000013, &CallTargetPacket, nullptr)` that silently failed — no chat message, no party state update. The packet path (`CtoS::SendPacket(3, CALL_TARGET, 0xA, agentId)`) works correctly and matches AutoIt GWA2.au3.
+
+**Investigation needed**:
+- [ ] Is `0x30000013` (`kSendCallTargetUiMessage`) the correct UIMessage ID for call target?
+- [ ] Is the `CallTargetPacket` struct `{CallTargetType, uint32_t agent_id}` the correct wParam layout?
+- [ ] Does `SendUIMessage` for call target need to run on game thread specifically (not just EnqueuePost)?
+- [ ] Check GWCA source for how they dispatch call target via UIMessage vs packet
+
+**Current workaround**: Using `CtoS::SendPacket` directly (proven working). UIMessage path removed from `CallTarget()`.
+**Commit that fixed it**: `8c1cbef`
+
+---
+
 ## Backlog — Advanced Integration Tests
 
 ### GWA3-074: Item Workflow Tests (Equip, Move, Split, Identify)
