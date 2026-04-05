@@ -3208,10 +3208,10 @@ Port CanCast() from AutoIt — 22 debuff checks that prevent skill use when dang
 | **Epic 16: Combat System Parity** | | | | |
 | GWA3-121 | Combat Mode Toggle (Gemma vs Built-in) | M | 097 | `done` |
 | GWA3-122 | Expanded Skill Categories (15+ roles, bitmask) | L | 097 | `done` |
-| GWA3-123 | Intelligent Target Selection (7 strategies) | XL | 122 | `backlog` |
-| GWA3-124 | HP Gating & Effect Overlap Prevention | L | 122 | `backlog` |
-| GWA3-125 | Combat Decision Engine (FightTarget v2) | XL | 122, 123, 124 | `backlog` |
-| GWA3-126 | Debuff Blocking (22 checks via CanCast) | L | 122 | `backlog` |
+| GWA3-123 | Intelligent Target Selection (7 strategies) | XL | 122 | `done` |
+| GWA3-124 | HP Gating & Effect Overlap Prevention | L | 122 | `done` |
+| GWA3-125 | Combat Decision Engine (FightTarget v2) | XL | 122, 123, 124 | `done` |
+| GWA3-126 | Debuff Blocking (22 checks via CanCast) | L | 122 | `done` |
 | **Epic 17: Combat System Tests** | | | | |
 | GWA3-127 | Test: Combat Mode Toggle | S | 121 | `backlog` |
 | GWA3-128 | Test: Skill Classification (15+ roles) | M | 122 | `backlog` |
