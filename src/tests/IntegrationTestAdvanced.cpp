@@ -1067,6 +1067,56 @@ bool TestExplorableCallTarget() {
     IntCheck("CallTarget produced observable effect (chat or party state)",
              calledAfter == foeId || chatConfirmed);
 
+    // --- UIMessage CallTarget experiment (GWA3-090 investigation) ---
+    // Use UIMessage to call target on SELF with Morale type — produces a different
+    // chat message ("I have X% morale boost/death penalty") so we can distinguish
+    // from the packet-based call that already fired.
+    {
+        IntReport("  --- UIMessage CallTarget experiment ---");
+
+        struct CallTargetUIPacket {
+            uint32_t call_type;
+            uint32_t agent_id;
+        };
+
+        const uint32_t uiChatBefore = ChatLogMgr::GetMessageCount();
+
+        // Call self with Morale type (0x7) — produces a morale chat message
+        CallTargetUIPacket uiPacket;
+        uiPacket.call_type = 0x7; // Morale
+        uiPacket.agent_id = ReadMyId();
+
+        IntReport("  Sending UIMessage kSendCallTarget (Morale, self=%u)...", uiPacket.agent_id);
+        GameThread::EnqueuePost([uiPacket]() mutable {
+            UIMgr::SendUIMessage(0x30000013u, &uiPacket, nullptr);
+        });
+        Sleep(1000);
+
+        const uint32_t uiChatAfter = ChatLogMgr::GetMessageCount();
+        IntReport("  UIMessage Morale CallTarget: chat=%u→%u (delta=%u)",
+                  uiChatBefore, uiChatAfter, uiChatAfter - uiChatBefore);
+
+        if (uiChatAfter > uiChatBefore) {
+            IntCheck("UIMessage CallTarget (Morale) produced chat message", true);
+
+            // Dump the new messages
+            const ChatLogMgr::ChatEntry* msgs[4] = {};
+            uint32_t count = ChatLogMgr::GetMessagesSince(GetTickCount() - 2000, msgs, 4);
+            for (uint32_t i = 0; i < count; ++i) {
+                if (!msgs[i]) continue;
+                char narrow[128] = {};
+                for (int j = 0; j < 127 && msgs[i]->message[j]; ++j) {
+                    narrow[j] = (msgs[i]->message[j] < 128)
+                        ? static_cast<char>(msgs[i]->message[j]) : '?';
+                }
+                IntReport("    [%s] %s", msgs[i]->channel_name, narrow);
+            }
+        } else {
+            IntReport("  UIMessage CallTarget (Morale) DID NOT produce chat message");
+            IntSkip("UIMessage CallTarget", "No observable effect — GWA3-090 still open");
+        }
+    }
+
     // --- StoC AgentUpdateEffects probe in explorable ---
     // In explorable with heroes and foes, buff activity should generate 0x00F1 packets.
     // This validates the StoC hook works for effect packets (skipped in outpost).
