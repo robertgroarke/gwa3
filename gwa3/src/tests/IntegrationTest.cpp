@@ -121,7 +121,7 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
     return 0;
 }
 
-static void StartWatchdog() {
+void StartWatchdog() {
     s_watchdogRunning = true;
     s_crashDetected = false;
     s_disconnectDetected = false;
@@ -129,7 +129,7 @@ static void StartWatchdog() {
     s_watchdogThread = CreateThread(nullptr, 0, WatchdogThread, nullptr, 0, nullptr);
 }
 
-static void StopWatchdog() {
+void StopWatchdog() {
     s_watchdogRunning = false;
     if (s_watchdogThread) {
         WaitForSingleObject(s_watchdogThread, 5000);
@@ -253,14 +253,11 @@ static uint32_t FindNearbyAllyAgent(uint32_t selfId, float maxDistance) {
 bool MovePlayerNear(float x, float y, float threshold, int timeoutMs) {
     const DWORD start = GetTickCount();
     while ((GetTickCount() - start) < static_cast<DWORD>(timeoutMs)) {
-        // Try EnqueuePost first (native function on game thread)
         if (GameThread::IsInitialized()) {
             GameThread::EnqueuePost([x, y]() {
                 AgentMgr::Move(x, y);
             });
         }
-        // Also send packet as fallback — works even if game thread isn't dispatching
-        CtoS::MoveToCoord(x, y);
         Sleep(500);
 
         float px = 0.0f;
