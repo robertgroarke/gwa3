@@ -144,6 +144,7 @@ static void FlagAllHeroes(float x, float y);
 static void UnflagAllHeroes();
 static bool SendDialogWithRetry(uint32_t dialogId, int maxRetries = 3, DWORD delayMs = 1000);
 static void UseDpRemovalIfNeeded();
+static bool IsDead();
 
 // ===== Skill Template Decoder (GWA3-101) =====
 
@@ -743,7 +744,16 @@ static bool CanCast(const CachedSkill& skill) {
     auto* me = AgentMgr::GetMyAgent();
     if (!me) return false;
     if (me->hp <= 0.0f) return false; // dead
-    if (!MapMgr::GetIsMapLoaded()) return false;
+
+    // GWA3-136: Safety checks — knockdown, wipe, disconnect
+    if (MapMgr::GetLoadingState() != 1) return false;  // not loaded or disconnected
+    if (PartyMgr::GetIsPartyDefeated()) return false;   // party wiped
+    // Knockdown check: model_state bit indicates knocked down
+    if (me->model_state == 0 || (me->model_state & 0x400) != 0) {
+        // model_state 0 = dead/inactive, 0x400 = knocked down
+        // Only block if explicitly knocked (not just model_state == 0 which is normal idle)
+        if ((me->model_state & 0x400) != 0) return false;
+    }
 
     uint32_t myId = me->agent_id;
 
@@ -862,6 +872,27 @@ static bool TryUseSkillWithRole(uint32_t targetId, uint32_t roleMask) {
         if (skillTarget == 0 && (c.target_type == 5 || c.target_type == 6)) continue;
 
         SkillMgr::UseSkill(i + 1, skillTarget, 0);
+
+        // GWA3-132: Aftercast delay — wait for skill activation + aftercast
+        // Poll until skill enters recharge (activated) or 2s timeout
+        DWORD castStart = GetTickCount();
+        while ((GetTickCount() - castStart) < 2000) {
+            if (IsDead()) break;
+            if (bar->skills[i].recharge > 0) break; // skill activated (now recharging)
+            auto* meCheck = AgentMgr::GetMyAgent();
+            if (meCheck && meCheck->skill != 0) break; // casting animation started
+            WaitMs(50);
+        }
+        // Wait for aftercast delay
+        float aftercast = c.activation > 0 ? c.activation : 0.0f;
+        const auto* skillData = SkillMgr::GetSkillConstantData(c.skill_id);
+        if (skillData && skillData->aftercast > 0) {
+            aftercast = skillData->aftercast;
+        }
+        if (aftercast > 0) {
+            WaitMs(static_cast<DWORD>(aftercast * 1000));
+        }
+
         return true;
     }
     return false;
@@ -989,9 +1020,46 @@ static void MoveToAndWait(float x, float y, float threshold = 250.0f) {
 static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
     AgentMgr::Move(x, y);
     DWORD start = GetTickCount();
+    // GWA3-135: Per-target combat timeout
+    uint32_t currentTargetId = 0;
+    DWORD targetFightStart = 0;
+    // GWA3-134: Stuck detection
+    float lastX = 0, lastY = 0;
+    int stuckCount = 0;
+    {
+        auto* meInit = AgentMgr::GetMyAgent();
+        if (meInit) { lastX = meInit->x; lastY = meInit->y; }
+    }
     while (DistanceTo(x, y) > 250.0f && (GetTickCount() - start) < 240000) {
         if (IsDead()) return;
         if (!IsMapLoaded()) return;
+
+        // GWA3-134: Check if stuck (position unchanged between iterations)
+        {
+            auto* meStuck = AgentMgr::GetMyAgent();
+            if (meStuck) {
+                float moved = AgentMgr::GetDistance(lastX, lastY, meStuck->x, meStuck->y);
+                if (moved < 10.0f) {
+                    stuckCount++;
+                    if (stuckCount == 15) {
+                        // Try a random sideways move to unstick
+                        float randX = x + static_cast<float>((GetTickCount() % 600) - 300);
+                        float randY = y + static_cast<float>((GetTickCount() % 600) - 300);
+                        LogBot("Stuck detected (%d iterations) — trying random move (%.0f, %.0f)",
+                               stuckCount, randX, randY);
+                        AgentMgr::Move(randX, randY);
+                        WaitMs(500);
+                    } else if (stuckCount >= 30) {
+                        LogBot("Stuck limit reached (%d) — aborting waypoint movement", stuckCount);
+                        return;
+                    }
+                } else {
+                    stuckCount = 0; // meaningful progress — reset
+                }
+                lastX = meStuck->x;
+                lastY = meStuck->y;
+            }
+        }
 
         // Check for enemies in fight range — auto-attack nearest
         {
@@ -1014,6 +1082,23 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
                 }
             }
             if (bestId) {
+                // GWA3-135: Track per-target combat duration
+                if (bestId != currentTargetId) {
+                    currentTargetId = bestId;
+                    targetFightStart = GetTickCount();
+                }
+                DWORD fightDuration = GetTickCount() - targetFightStart;
+                if (fightDuration > 120000) {
+                    // 2 minutes on same target — disengage, skip to next waypoint
+                    LogBot("Combat timeout: 120s on target %u — disengaging", bestId);
+                    UnflagAllHeroes();
+                    currentTargetId = 0;
+                    break;
+                }
+                if (fightDuration > 60000 && fightDuration < 61000) {
+                    LogBot("Combat warning: 60s on target %u", bestId);
+                }
+
                 // Flag heroes to fight position
                 auto* foeAgent = AgentMgr::GetAgentByID(bestId);
                 if (foeAgent) {
@@ -1032,6 +1117,7 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
                         continue; // keep fighting same target
                     }
                 }
+                currentTargetId = 0; // target dead, reset timer
                 // Combat resolved — unflag heroes
                 UnflagAllHeroes();
                 // Enemy dead or gone — pick up loot
@@ -1286,12 +1372,30 @@ static int PickupNearbyLoot(float maxRange) {
             }
         }
 
-        ItemMgr::PickUpItem(a->agent_id);
-        WaitMs(300);
+        // GWA3-133: Retry loop — items may fail first pick attempt
+        uint32_t itemAgentId = a->agent_id;
+        DWORD itemStart = GetTickCount();
+        int retries = 0;
+        while (retries < 10 && (GetTickCount() - itemStart) < 6000) {
+            ItemMgr::PickUpItem(itemAgentId);
+            WaitMs(250);
+            retries++;
+            // Check if item was picked up (agent no longer exists)
+            if (!AgentMgr::GetAgentExists(itemAgentId)) break;
+            if (IsDead()) return picked;
+        }
         picked++;
         freeSlots--;
-        me = AgentMgr::GetMyAgent(); // refresh after pickup
+        me = AgentMgr::GetMyAgent();
         if (!me) return picked;
+
+        // GWA3-133: Global deadlock protection — 2 min total loot time
+        static DWORD s_lootGlobalStart = 0;
+        if (picked == 1) s_lootGlobalStart = GetTickCount();
+        if (s_lootGlobalStart > 0 && (GetTickCount() - s_lootGlobalStart) > 120000) {
+            LogBot("Loot deadlock: 2 minutes exceeded — aborting pickup");
+            return picked;
+        }
     }
     return picked;
 }

@@ -3464,11 +3464,11 @@ AutoIt's MoveandAggroEx has stuck detection with backtracking (if nearest waypoi
 | GWA3-131 | Test: Full Combat Decision Engine | L | 125 | `done` |
 
 | **Epic 18: AutoIt Fidelity Gaps** | | | | |
-| GWA3-132 | Aftercast Delay + Skill Wait Loop | M | 125 | `backlog` |
-| GWA3-133 | Loot Retry Loop + Deadlock Protection | M | 098 | `backlog` |
-| GWA3-134 | Stuck Detection in AggroMoveToEx | M | 097 | `backlog` |
-| GWA3-135 | Combat Timeout (4-min safety limit) | S | 125 | `backlog` |
-| GWA3-136 | CanCast: Knockdown + Wipe + Disconnect Checks | S | 126 | `backlog` |
+| GWA3-132 | Aftercast Delay + Skill Wait Loop | M | 125 | `done` |
+| GWA3-133 | Loot Retry Loop + Deadlock Protection | M | 098 | `done` |
+| GWA3-134 | Stuck Detection in AggroMoveToEx | M | 097 | `done` |
+| GWA3-135 | Combat Timeout (4-min safety limit) | S | 125 | `done` |
+| GWA3-136 | CanCast: Knockdown + Wipe + Disconnect Checks | S | 126 | `done` |
 | GWA3-137 | CanUseSkill: Zephyr + Adrenaline + Pressure Gates | M | 124 | `backlog` |
 | GWA3-138 | Loot Policy: Quest Items + Type Rules + Inventory Guard | L | 098 | `backlog` |
 | GWA3-139 | Opened Chest Tracking | S | 098 | `backlog` |
