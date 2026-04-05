@@ -12,6 +12,7 @@
 #include <gwa3/managers/SkillMgr.h>
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/MemoryMgr.h>
+#include <gwa3/packets/CtoS.h>
 #include "IntegrationTestInternal.h"
 
 #include <Windows.h>
@@ -252,9 +253,14 @@ static uint32_t FindNearbyAllyAgent(uint32_t selfId, float maxDistance) {
 bool MovePlayerNear(float x, float y, float threshold, int timeoutMs) {
     const DWORD start = GetTickCount();
     while ((GetTickCount() - start) < static_cast<DWORD>(timeoutMs)) {
-        GameThread::EnqueuePost([x, y]() {
-            AgentMgr::Move(x, y);
-        });
+        // Try EnqueuePost first (native function on game thread)
+        if (GameThread::IsInitialized()) {
+            GameThread::EnqueuePost([x, y]() {
+                AgentMgr::Move(x, y);
+            });
+        }
+        // Also send packet as fallback — works even if game thread isn't dispatching
+        CtoS::MoveToCoord(x, y);
         Sleep(500);
 
         float px = 0.0f;
