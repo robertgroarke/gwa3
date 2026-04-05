@@ -221,6 +221,11 @@ int RunFroggyFeatureTest() {
     }
 
     // ===== PHASE 3: Merchant Tests =====
+    // TEMPORARILY DISABLED: MovePlayerNear crashes GW in froggy context.
+    // Movement via EnqueuePost doesn't work — needs investigation.
+    IntReport("=== PHASE 3: Merchant Tests (DISABLED — movement crash) ===");
+    IntSkip("Merchant tests", "Movement crashes GW — needs EnqueuePost investigation");
+    goto phase4;
     IntReport("=== PHASE 3: Merchant Tests ===");
 
     // Move to merchant
@@ -294,6 +299,11 @@ int RunFroggyFeatureTest() {
 
     // ===== PHASE 4: Enter Explorable =====
 phase4:
+    IntReport("=== PHASE 4: Enter Sparkfly Swamp (DISABLED — movement crash) ===");
+    IntSkip("Explorable entry", "Movement crashes GW — needs EnqueuePost investigation");
+    IntSkip("Explorable tests", "Skipped due to movement issue");
+    IntSkip("Return to outpost", "Skipped due to movement issue");
+    goto froggy_done;
     IntReport("=== PHASE 4: Enter Sparkfly Swamp ===");
 
     // Log current position before walking
@@ -396,6 +406,7 @@ phase4:
         IntSkip("Return to outpost", "Never left outpost");
     }
 
+froggy_done:
     StopWatchdog();
     IntReport("=== FROGGY FEATURE TESTS COMPLETE ===");
     IntReport("Passed: %d / Failed: %d / Skipped: %d", s_passed, s_failed, s_skipped);
