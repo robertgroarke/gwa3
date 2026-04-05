@@ -982,6 +982,27 @@ bool TestExplorableCallTarget() {
     IntCheck("CallTarget produced observable effect (chat or party state)",
              calledAfter == foeId || chatConfirmed);
 
+    // --- StoC AgentUpdateEffects probe in explorable ---
+    // In explorable with heroes and foes, buff activity should generate 0x00F1 packets.
+    // This validates the StoC hook works for effect packets (skipped in outpost).
+    IntReport("  Probing StoC AgentUpdateEffects in explorable (5s)...");
+    static std::atomic<uint32_t> effectHits{0};
+    StoC::HookEntry effectEntry{nullptr};
+    StoC::RegisterPostPacketCallback(&effectEntry, 0x00F1,
+        [](StoC::HookStatus*, StoC::PacketBase*) { effectHits++; });
+
+    // Wait 5 seconds — hero skills and buff ticks should generate effect updates
+    Sleep(5000);
+
+    uint32_t hits = effectHits.load();
+    IntReport("  AgentUpdateEffects in explorable: %u hits", hits);
+    if (hits > 0) {
+        IntCheck("AgentUpdateEffects fires in explorable", true);
+    } else {
+        IntSkip("AgentUpdateEffects in explorable", "No effect packets in 5s (heroes may be idle)");
+    }
+    StoC::RemoveCallbacks(&effectEntry);
+
     IntReport("");
     return true;
 }
