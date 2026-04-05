@@ -4,6 +4,7 @@
 // Self-setting-up: travels to outpost, adds heroes, opens merchant,
 // enters explorable, finds enemies, then returns. No manual setup needed.
 
+#include "IntegrationTestInternal.h"
 #include <gwa3/core/Log.h>
 #include <gwa3/core/SmokeTest.h>
 #include <gwa3/core/GameThread.h>
@@ -209,16 +210,7 @@ int RunFroggyFeatureTest() {
     static constexpr float kMerchX = -8374.0f;
     static constexpr float kMerchY = -22491.0f;
     IntReport("  Moving to merchant (%.0f, %.0f)...", kMerchX, kMerchY);
-    AgentMgr::Move(kMerchX, kMerchY);
-    {
-        DWORD moveStart = GetTickCount();
-        auto* me = AgentMgr::GetMyAgent();
-        while (me && AgentMgr::GetDistance(me->x, me->y, kMerchX, kMerchY) > 350.0f &&
-               (GetTickCount() - moveStart) < 15000) {
-            Sleep(250);
-            me = AgentMgr::GetMyAgent();
-        }
-    }
+    MovePlayerNear(kMerchX, kMerchY, 350.0f, 15000);
     Sleep(500);
 
     // Find and interact with merchant
@@ -227,8 +219,7 @@ int RunFroggyFeatureTest() {
         IntReport("  Found merchant NPC (agent=%u), interacting...", merchantId);
         auto* npc = AgentMgr::GetAgentByID(merchantId);
         if (npc) {
-            AgentMgr::Move(npc->x, npc->y);
-            Sleep(2000);
+            MovePlayerNear(npc->x, npc->y, 120.0f, 10000);
         }
         AgentMgr::ChangeTarget(merchantId);
         Sleep(250);
@@ -259,28 +250,10 @@ int RunFroggyFeatureTest() {
     // ===== PHASE 4: Enter Explorable =====
     IntReport("=== PHASE 4: Enter Sparkfly Swamp ===");
 
-    // Walk to exit portal
+    // Walk to exit portal (must use MovePlayerNear / EnqueuePost)
     IntReport("  Walking to Gadd's exit...");
-    AgentMgr::Move(-10018.0f, -21892.0f);
-    {
-        DWORD moveStart = GetTickCount();
-        auto* me = AgentMgr::GetMyAgent();
-        while (me && AgentMgr::GetDistance(me->x, me->y, -10018.0f, -21892.0f) > 350.0f &&
-               (GetTickCount() - moveStart) < 30000) {
-            Sleep(500);
-            me = AgentMgr::GetMyAgent();
-        }
-    }
-    AgentMgr::Move(-9550.0f, -20400.0f);
-    {
-        DWORD moveStart = GetTickCount();
-        auto* me = AgentMgr::GetMyAgent();
-        while (me && AgentMgr::GetDistance(me->x, me->y, -9550.0f, -20400.0f) > 350.0f &&
-               (GetTickCount() - moveStart) < 30000) {
-            Sleep(500);
-            me = AgentMgr::GetMyAgent();
-        }
-    }
+    MovePlayerNear(-10018.0f, -21892.0f, 350.0f, 30000);
+    MovePlayerNear(-9550.0f, -20400.0f, 350.0f, 30000);
 
     // Push toward explorable zone exit
     IntReport("  Pushing toward Sparkfly...");
@@ -288,7 +261,9 @@ int RunFroggyFeatureTest() {
     bool leftOutpost = false;
     while ((GetTickCount() - zoneStart) < 30000) {
         if (MapMgr::GetMapId() != MAP_GADDS) { leftOutpost = true; break; }
-        AgentMgr::Move(-9451.0f, -19766.0f);
+        GameThread::EnqueuePost([]() {
+            AgentMgr::Move(-9451.0f, -19766.0f);
+        });
         Sleep(500);
     }
 
@@ -330,8 +305,7 @@ int RunFroggyFeatureTest() {
                 IntSkip("Enemy targeting tests", "No enemies within 5000 range");
                 // Move toward first Sparkfly waypoint to find enemies
                 IntReport("  Moving toward enemies...");
-                AgentMgr::Move(-4559.0f, -14406.0f); // First Sparkfly waypoint
-                Sleep(5000);
+                MovePlayerNear(-4559.0f, -14406.0f, 500.0f, 25000);
                 foeId = FindNearestFoe(5000.0f);
                 if (foeId) {
                     IntCheck("Found enemy after moving", true);
