@@ -279,7 +279,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         }
     } else {
         GWA3::GameThread::Enqueue([]() {
-            // CRASH_BISECT: pure no-op to test if ANY callback causes crash
+            GWA3::Log::Info("Hello from game thread! Hook is working.");
         });
         GWA3::StoC::Initialize();
         GWA3::DialogMgr::Initialize();
