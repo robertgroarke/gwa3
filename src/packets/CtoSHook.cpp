@@ -8,7 +8,7 @@ namespace GWA3::CtoSHook {
 
 static constexpr uint32_t kQueueSize = 256;
 static constexpr uint32_t kPatchSize = 5;
-static constexpr uint32_t kReplaySize = 10; // original instruction group
+static constexpr uint32_t kReplaySize = 10; // add esp,4 (3) + cmp dword ptr [addr],0 (7)
 
 static volatile LONG s_heartbeat = 0;
 static volatile LONG s_queueCounter = 0;
@@ -17,8 +17,8 @@ static volatile LONG s_savedESP = 0;
 
 static uintptr_t s_queue[kQueueSize] = {};
 static bool s_initialized = false;
-static uintptr_t s_returnAddr = 0;
-static uintptr_t s_trampoline = 0;
+static uintptr_t s_returnAddr = 0;   // hookAddr + 10
+static uintptr_t s_cmpAddr = 0;      // operand for replicated cmp instruction
 static uint8_t s_savedBytes[kPatchSize] = {};
 static uint8_t s_patchedBytes[kPatchSize] = {};
 
@@ -27,7 +27,9 @@ static HANDLE s_watchdogThread = nullptr;
 static volatile bool s_watchdogRunning = false;
 
 // Naked detour — processes one CtoS shellcode command per frame, then
-// replays the original overwritten instructions via trampoline.
+// replicates the overwritten instructions inline (no trampoline).
+// Original 10 bytes: 83 C4 04 (add esp,4) + 83 3D [addr] 00 (cmp dword ptr [addr],0)
+// We replicate both instructions, then JMP to hookAddr+10.
 static __declspec(naked) void CtoSDetourNaked() {
     __asm {
         // Save ESP and all registers
@@ -60,8 +62,19 @@ static __declspec(naked) void CtoSDetourNaked() {
         popfd
         popad
         mov esp, dword ptr [s_savedESP]
-        // Jump to trampoline: original 10 bytes + JMP to hookAddr+0xA
-        jmp [s_trampoline]
+
+        // Replicate original instructions (no trampoline):
+        // 1. add esp, 4
+        add esp, 4
+        // 2. cmp dword ptr [addr], 0 — must preserve flags for code after hook
+        //    Use EAX as scratch (save/restore without affecting flags from cmp)
+        push eax
+        mov eax, dword ptr [s_cmpAddr]
+        cmp dword ptr [eax], 0
+        // Now flags are set from the cmp. pop eax doesn't affect flags.
+        pop eax
+        // Jump back to hookAddr+10 (after the replicated instruction group)
+        jmp [s_returnAddr]
     }
 }
 
@@ -105,25 +118,23 @@ bool Initialize() {
     s_savedCommand = 0;
     ZeroMemory(s_queue, sizeof(s_queue));
 
-    // Save original bytes
+    // Save original bytes and extract cmp operand address.
+    // Original 10 bytes: 83 C4 04 83 3D [4-byte addr] 00
+    //   add esp, 4        (bytes 0-2)
+    //   cmp dword ptr [addr], 0  (bytes 3-9, addr at bytes 5-8)
     memcpy(s_savedBytes, reinterpret_cast<void*>(hookAddr), kPatchSize);
 
-    // Build trampoline: copy original 10 bytes + JMP to hookAddr+0xA
-    {
-        void* tramMem = VirtualAlloc(nullptr, 32, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-        if (!tramMem) {
-            Log::Error("CtoSHook: VirtualAlloc failed for trampoline");
-            return false;
-        }
-        auto* t = reinterpret_cast<uint8_t*>(tramMem);
-        memcpy(t, reinterpret_cast<void*>(hookAddr), kReplaySize);
-        t[kReplaySize] = 0xE9; // JMP rel32
-        int32_t tramRel = static_cast<int32_t>(
-            s_returnAddr - (reinterpret_cast<uintptr_t>(tramMem) + kReplaySize + 5));
-        memcpy(t + kReplaySize + 1, &tramRel, 4);
-        FlushInstructionCache(GetCurrentProcess(), tramMem, kReplaySize + 5);
-        s_trampoline = reinterpret_cast<uintptr_t>(tramMem);
+    const uint8_t* orig = reinterpret_cast<const uint8_t*>(hookAddr);
+    // Verify expected instruction pattern
+    if (orig[0] != 0x83 || orig[1] != 0xC4 || orig[2] != 0x04 ||
+        orig[3] != 0x83 || orig[4] != 0x3D) {
+        Log::Error("CtoSHook: Unexpected bytes at hook site: %02X %02X %02X %02X %02X",
+                   orig[0], orig[1], orig[2], orig[3], orig[4]);
+        return false;
     }
+    // Extract the absolute address from the cmp instruction (bytes 5-8)
+    memcpy(&s_cmpAddr, orig + 5, 4);
+    Log::Info("CtoSHook: cmp operand addr=0x%08X", s_cmpAddr);
 
     // Write 5-byte JMP detour
     DWORD oldProtect;
@@ -146,8 +157,7 @@ bool Initialize() {
     s_watchdogThread = CreateThread(nullptr, 0, Watchdog, nullptr, 0, nullptr);
 
     s_initialized = true;
-    Log::Info("CtoSHook: Installed at 0x%08X (trampoline=0x%08X, watchdog active)",
-              hookAddr, s_trampoline);
+    Log::Info("CtoSHook: Installed at 0x%08X (inline replay, watchdog active)", hookAddr);
     return true;
 }
 
@@ -169,12 +179,6 @@ void Shutdown() {
     memcpy(reinterpret_cast<void*>(hookAddr), s_savedBytes, kPatchSize);
     FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hookAddr), kPatchSize);
     VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, oldProtect, &oldProtect);
-
-    // Free trampoline
-    if (s_trampoline) {
-        VirtualFree(reinterpret_cast<void*>(s_trampoline), 0, MEM_RELEASE);
-        s_trampoline = 0;
-    }
 
     ZeroMemory(s_queue, sizeof(s_queue));
     s_queueCounter = 0;
