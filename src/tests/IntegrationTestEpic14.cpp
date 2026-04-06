@@ -154,8 +154,20 @@ int RunFroggyFeatureTest() {
     // ===== PHASE 2: Outpost Tests (party, inventory, skillbar) =====
     IntReport("=== PHASE 2: Outpost Tests ===");
 
-    // BISECT: skip hero operations to test if CtoSHook is stable for outpost tests
-    IntReport("  Skipping hero ops (CtoSHook crash bisect)...");
+    // Add heroes
+    IntReport("  Adding heroes...");
+    PartyMgr::KickAllHeroes();
+    Sleep(2000);
+    uint32_t heroIds[] = {25, 14, 21, 4, 24, 15, 1};
+    for (int i = 0; i < 7; i++) {
+        IntReport("  Adding hero %u (%d/7)...", heroIds[i], i + 1);
+        PartyMgr::AddHero(heroIds[i]);
+        Sleep(1000);
+    }
+    for (int i = 0; i < 7; i++) {
+        PartyMgr::SetHeroBehavior(i + 1, 1);
+        Sleep(300);
+    }
     Sleep(1000);
 
     // Skillbar validation

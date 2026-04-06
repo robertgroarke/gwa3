@@ -45,6 +45,49 @@ static uintptr_t NextPacketSlot() {
     return s_packetShellcodeBase + idx * kPacketSlotSize;
 }
 
+// POD task for packet queue
+struct PacketTask {
+    PacketSendFn fn;
+    uintptr_t location;
+    uint32_t sizeBytes;
+    uint32_t data[12];
+};
+
+// Dedicated packet sender thread — calls PacketSend outside any hook context
+static CRITICAL_SECTION s_packetCS;
+static bool s_packetCSInit = false;
+static HANDLE s_packetEvent = nullptr;
+static HANDLE s_packetThread = nullptr;
+static volatile bool s_packetThreadRunning = false;
+static PacketTask s_packetQueue[64];
+static uint32_t s_packetQueueCount = 0;
+
+static DWORD WINAPI PacketSenderThread(LPVOID) {
+    while (s_packetThreadRunning) {
+        WaitForSingleObject(s_packetEvent, 100);
+        if (!s_packetThreadRunning) break;
+
+        EnterCriticalSection(&s_packetCS);
+        uint32_t count = s_packetQueueCount;
+        if (count > 64) count = 64;
+        for (uint32_t i = 0; i < count; i++) {
+            PacketTask t = s_packetQueue[i]; // copy under lock
+            LeaveCriticalSection(&s_packetCS);
+            // Re-read PacketLocation
+            uintptr_t loc = t.location;
+            if (Offsets::PacketLocation) {
+                uintptr_t fresh = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
+                if (fresh) loc = fresh;
+            }
+            t.fn(reinterpret_cast<void*>(loc), t.sizeBytes, t.data);
+            EnterCriticalSection(&s_packetCS);
+        }
+        s_packetQueueCount = 0;
+        LeaveCriticalSection(&s_packetCS);
+    }
+    return 0;
+}
+
 bool Initialize() {
     if (s_initialized) return true;
 
@@ -62,32 +105,23 @@ bool Initialize() {
         return false;
     }
 
+    // Start dedicated packet sender thread
+    if (!s_packetCSInit) {
+        InitializeCriticalSection(&s_packetCS);
+        s_packetCSInit = true;
+    }
+    if (!s_packetEvent) {
+        s_packetEvent = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    }
+    if (!s_packetThread) {
+        s_packetThreadRunning = true;
+        s_packetThread = CreateThread(nullptr, 0, PacketSenderThread, nullptr, 0, nullptr);
+    }
+
     s_initialized = true;
     Log::Info("CtoS: Initialized (PacketSend=0x%08X, PacketLocation=0x%08X)",
               Offsets::PacketSend, s_packetLocation);
     return true;
-}
-
-// POD task for EnqueueRaw — must be at file scope (not local to SendPacket)
-// to ensure consistent struct layout between the function and the lambda invoker.
-struct PacketTask {
-    PacketSendFn fn;       // offset 0
-    uintptr_t location;    // offset 4
-    uint32_t sizeBytes;    // offset 8
-    uint32_t data[12];     // offset 12
-};
-static_assert(sizeof(PacketTask) <= 64, "PacketTask exceeds InlineTask storage");
-
-static void ExecutePacketTask(void* storage) {
-    auto* t = static_cast<PacketTask*>(storage);
-    uintptr_t loc = t->location;
-    if (Offsets::PacketLocation) {
-        uintptr_t fresh = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
-        if (fresh) loc = fresh;
-    }
-    Log::Info("CtoS: exec h=0x%X sz=%u", t->data[0], t->sizeBytes);
-    t->fn(reinterpret_cast<void*>(loc), t->sizeBytes, t->data);
-    Log::Info("CtoS: exec done h=0x%X", t->data[0]);
 }
 
 // Core send: builds a packet buffer and calls the game's PacketSend.
@@ -118,48 +152,29 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
         s_packetLocation = freshLocation;
     }
 
-    // Fast path: already on game thread
-    if (GameThread::IsOnGameThread()) {
-        s_packetSendFn(reinterpret_cast<void*>(s_packetLocation), sizeBytes, data);
-        return;
-    }
-
-    // Preferred path: CtoSHook shellcode (mid-function hook, fires every frame)
+    // Dispatch via CtoSHook shellcode (mid-function hook on game thread)
     if (CtoSHook::IsInitialized() && EnsurePacketShellcode()) {
         uintptr_t slot = NextPacketSlot();
-        uintptr_t dataAddr = slot + 32; // packet data starts at offset 32
-
-        // Copy packet data into the slot
+        uintptr_t dataAddr = slot + 32;
         memcpy(reinterpret_cast<void*>(dataAddr), data, sizeBytes);
 
-        // Build shellcode:
-        //   push <dataAddr>         ; data pointer
-        //   push <sizeBytes>        ; size in bytes
-        //   push <packetLocation>   ; PacketLocation ptr
-        //   call <PacketSend>       ; __cdecl call
-        //   add esp, 12             ; caller cleanup (3 args)
-        //   ret
         auto* sc = reinterpret_cast<uint8_t*>(slot);
         size_t i = 0;
         auto emit8 = [&](uint8_t v) { sc[i++] = v; };
         auto emit32 = [&](uint32_t v) { memcpy(sc + i, &v, 4); i += 4; };
 
-        emit8(0x68); emit32(static_cast<uint32_t>(dataAddr));          // push dataAddr
-        emit8(0x68); emit32(sizeBytes);                                 // push sizeBytes
-        emit8(0x68); emit32(static_cast<uint32_t>(s_packetLocation));  // push packetLocation
-        emit8(0xE8);                                                    // call rel32
+        emit8(0x68); emit32(static_cast<uint32_t>(dataAddr));
+        emit8(0x68); emit32(sizeBytes);
+        emit8(0x68); emit32(static_cast<uint32_t>(s_packetLocation));
+        emit8(0xE8);
         int32_t rel = static_cast<int32_t>(
             reinterpret_cast<uintptr_t>(s_packetSendFn) - (slot + i + 4));
         emit32(*reinterpret_cast<uint32_t*>(&rel));
-        emit8(0x83); emit8(0xC4); emit8(0x0C);                        // add esp, 12
-        emit8(0xC3);                                                    // ret
+        emit8(0x83); emit8(0xC4); emit8(0x0C);
+        emit8(0xC3);
 
         FlushInstructionCache(GetCurrentProcess(), sc, static_cast<DWORD>(i));
-
-        if (CtoSHook::EnqueueCommand(slot)) {
-            return;
-        }
-        Log::Warn("CtoS: CtoSHook queue full for header=0x%X", header);
+        if (CtoSHook::EnqueueCommand(slot)) return;
     }
 
     Log::Warn("CtoS: SendPacket dropped header=0x%X — no dispatch", header);

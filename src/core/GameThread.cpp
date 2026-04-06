@@ -91,7 +91,10 @@ static void __cdecl DrainQueuesOnGameThread(float, int) {
 static void __cdecl DrainPostQueuesOnGameThread(float, int) {
     EnterCriticalSection(&s_cs);
 
-    while (s_postTail != s_postHead) {
+    // Process at most ONE post-queue task per frame.
+    // PacketSend has internal locks that prevent multiple calls per frame —
+    // calling it twice from post-dispatch deadlocks the game thread.
+    if (s_postTail != s_postHead) {
         uint32_t idx = s_postTail;
         s_postTail = (s_postTail + 1) % kMaxQueue;
         LeaveCriticalSection(&s_cs);
