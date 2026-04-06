@@ -19,6 +19,7 @@ static uintptr_t s_queue[kQueueSize] = {};
 static bool s_initialized = false;
 static uintptr_t s_returnAddr = 0;   // hookAddr + 10
 static uintptr_t s_cmpAddr = 0;      // operand for replicated cmp instruction
+static uintptr_t s_replayCode = 0;   // VirtualAlloc'd: original 10 bytes + JMP return
 static uint8_t s_savedBytes[kPatchSize] = {};
 static uint8_t s_patchedBytes[kPatchSize] = {};
 
@@ -32,48 +33,12 @@ static volatile bool s_watchdogRunning = false;
 // We replicate both instructions, then JMP to hookAddr+10.
 static __declspec(naked) void CtoSDetourNaked() {
     __asm {
-        // Save ESP and all registers
-        mov dword ptr [s_savedESP], esp
-        pushad
-        pushfd
-
-        // Check queue
-        mov eax, dword ptr [s_queueCounter]
-        mov ecx, eax
-        mov ebx, dword ptr [s_queue + eax * 4]
-        test ebx, ebx
-        jz skip_queue
-
-        // Consume and execute one command
-        mov dword ptr [s_queue + eax * 4], 0
-        mov dword ptr [s_savedCommand], ebx
-
-        mov eax, ecx
-        inc eax
-        cmp eax, kQueueSize
-        jnz no_reset
-        xor eax, eax
-    no_reset:
-        mov dword ptr [s_queueCounter], eax
-        call dword ptr [s_savedCommand]
-
-    skip_queue:
-        inc dword ptr [s_heartbeat]
-        popfd
-        popad
-        mov esp, dword ptr [s_savedESP]
-
-        // Replicate original instructions (no trampoline):
-        // 1. add esp, 4
+        // BISECT: absolute minimum — just replay original instructions, no queue
         add esp, 4
-        // 2. cmp dword ptr [addr], 0 — must preserve flags for code after hook
-        //    Use EAX as scratch (save/restore without affecting flags from cmp)
         push eax
         mov eax, dword ptr [s_cmpAddr]
         cmp dword ptr [eax], 0
-        // Now flags are set from the cmp. pop eax doesn't affect flags.
         pop eax
-        // Jump back to hookAddr+10 (after the replicated instruction group)
         jmp [s_returnAddr]
     }
 }
@@ -82,7 +47,7 @@ static __declspec(naked) void CtoSDetourNaked() {
 // checker restores original bytes (~38s cycle).
 static DWORD WINAPI Watchdog(LPVOID) {
     while (s_watchdogRunning) {
-        Sleep(500);
+        Sleep(5); // fast poll — must re-patch before the next render frame
         if (!s_initialized) continue;
 
         uintptr_t hookAddr = Offsets::Render;
