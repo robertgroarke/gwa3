@@ -7,6 +7,7 @@
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/TargetLogHook.h>
 #include <gwa3/core/Memory.h>
+#include <gwa3/packets/CtoSHook.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/SkillMgr.h>
 #include <gwa3/managers/ItemMgr.h>
@@ -267,6 +268,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::RenderHook::SetMapLoaded(true);
         WaitForPlayerHydration(45000);
         GWA3::CtoS::Initialize();
+        GWA3::CtoSHook::Initialize();
         GWA3::TraderHook::Initialize();
         GWA3::TargetLogHook::Initialize();
     }
@@ -281,9 +283,9 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::GameThread::Enqueue([]() {
             GWA3::Log::Info("Hello from game thread! Hook is working.");
         });
-        //GWA3::StoC::Initialize();
-        //GWA3::DialogMgr::Initialize();
-        //GWA3::ChatLogMgr::Initialize();
+        GWA3::StoC::Initialize();
+        GWA3::DialogMgr::Initialize();
+        GWA3::ChatLogMgr::Initialize();
         GWA3::StringEncoding::Initialize();
     }
 
@@ -406,6 +408,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
         GWA3::ChatLogMgr::Shutdown();
         GWA3::DialogMgr::Shutdown();
         GWA3::StoC::Shutdown();
+        GWA3::CtoSHook::Shutdown();
         GWA3::TraderHook::Shutdown();
         GWA3::TargetLogHook::Shutdown();
         GWA3::RenderHook::Shutdown();

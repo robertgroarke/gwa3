@@ -1,4 +1,5 @@
 #include <gwa3/packets/CtoS.h>
+#include <gwa3/packets/CtoSHook.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
@@ -123,8 +124,8 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
         return;
     }
 
-    // Preferred path: RenderHook shellcode (fires every frame, reliable)
-    if (RenderHook::IsInitialized() && EnsurePacketShellcode()) {
+    // Preferred path: CtoSHook shellcode (mid-function hook, fires every frame)
+    if (CtoSHook::IsInitialized() && EnsurePacketShellcode()) {
         uintptr_t slot = NextPacketSlot();
         uintptr_t dataAddr = slot + 32; // packet data starts at offset 32
 
@@ -155,24 +156,13 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
 
         FlushInstructionCache(GetCurrentProcess(), sc, static_cast<DWORD>(i));
 
-        if (RenderHook::EnqueueCommand(slot)) {
+        if (CtoSHook::EnqueueCommand(slot)) {
             return;
         }
-        Log::Warn("CtoS: RenderHook queue full for header=0x%X, falling back to GameThread", header);
+        Log::Warn("CtoS: CtoSHook queue full for header=0x%X", header);
     }
 
-    PacketTask task;
-    task.fn = s_packetSendFn;
-    task.location = s_packetLocation;
-    task.sizeBytes = sizeBytes;
-    memcpy(task.data, data, size * sizeof(uint32_t));
-
-    // Direct call from calling thread with crash guard
-    __try {
-        s_packetSendFn(reinterpret_cast<void*>(s_packetLocation), sizeBytes, data);
-    } __except(EXCEPTION_EXECUTE_HANDLER) {
-        Log::Error("CtoS: PacketSend crashed on header=0x%X (direct call)", header);
-    }
+    Log::Warn("CtoS: SendPacket dropped header=0x%X — no dispatch", header);
 }
 
 // --- Type-safe wrappers ---

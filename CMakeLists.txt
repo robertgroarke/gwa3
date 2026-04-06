@@ -42,6 +42,7 @@ add_library(gwa3_core OBJECT
     src/core/TargetLogHook.cpp
     src/core/CallbackRegistry.cpp
     src/packets/CtoS.cpp
+    src/packets/CtoSHook.cpp
     src/managers/AgentMgr.cpp
     src/managers/SkillMgr.cpp
     src/managers/ItemMgr.cpp
