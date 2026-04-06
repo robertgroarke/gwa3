@@ -24,6 +24,13 @@ namespace GWA3::GameThread {
     // If already on game thread, executes immediately (fast path).
     void Enqueue(Callback task);
 
+    // Enqueue a raw task without std::function overhead.
+    // invoker: function called with data pointer. data: POD struct copied into queue.
+    // Use this for game-thread operations that must avoid CRT heap allocation.
+    using RawInvoker = void(*)(void* storage);
+    void EnqueueRaw(RawInvoker invoker, const void* data, size_t dataSize);
+    void EnqueuePostRaw(RawInvoker invoker, const void* data, size_t dataSize);
+
     // Enqueue a task that runs AFTER the original game callback.
     // Use for game functions (Move, ChangeTarget) that depend on
     // frame state set up by the game's own render callback.
