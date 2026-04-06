@@ -38,7 +38,7 @@ static constexpr uint32_t kMaxQueue = 256;
 struct InlineTask {
     using Invoker = void(*)(void* storage);
     Invoker invoke;
-    alignas(8) char storage[48];
+    alignas(8) char storage[64]; // 64 bytes: fits CtoS packet captures (60 bytes)
 
     void operator()() { if (invoke) invoke(storage); }
     explicit operator bool() const { return invoke != nullptr; }
@@ -74,11 +74,13 @@ static void __cdecl DrainQueuesOnGameThread(float, int) {
     s_gameThreadId = GetCurrentThreadId();
 
     while (s_queueTail != s_queueHead) {
-        InlineTask task = s_preQueue[s_queueTail];
-        s_preQueue[s_queueTail].invoke = nullptr;
+        // Call in-place — do NOT copy InlineTask. std::function stored in
+        // storage[] is not trivially copyable (SBO has self-referencing pointers).
+        uint32_t idx = s_queueTail;
         s_queueTail = (s_queueTail + 1) % kMaxQueue;
         LeaveCriticalSection(&s_cs);
-        task();
+        s_preQueue[idx]();              // call in place
+        s_preQueue[idx].invoke = nullptr; // mark consumed
         EnterCriticalSection(&s_cs);
     }
 
@@ -89,11 +91,11 @@ static void __cdecl DrainPostQueuesOnGameThread(float, int) {
     EnterCriticalSection(&s_cs);
 
     while (s_postTail != s_postHead) {
-        InlineTask task = s_postQueue_ring[s_postTail];
-        s_postQueue_ring[s_postTail].invoke = nullptr;
+        uint32_t idx = s_postTail;
         s_postTail = (s_postTail + 1) % kMaxQueue;
         LeaveCriticalSection(&s_cs);
-        task();
+        s_postQueue_ring[idx]();
+        s_postQueue_ring[idx].invoke = nullptr;
         EnterCriticalSection(&s_cs);
     }
 
@@ -342,6 +344,45 @@ void Enqueue(Callback task) {
     }
     s_preQueue[s_queueHead] = MakeInlineTask(std::move(task));
     s_queueHead = next;
+    Log::Info("GameThread: Enqueue OK (head=%u tail=%u)", s_queueHead, s_queueTail);
+    LeaveCriticalSection(&s_cs);
+}
+
+void EnqueueRaw(InlineTask::Invoker invoker, const void* data, size_t dataSize) {
+    if (!s_initialized || !invoker) return;
+    if (dataSize > sizeof(InlineTask::storage)) return;
+
+    EnterCriticalSection(&s_cs);
+
+    uint32_t next = (s_queueHead + 1) % kMaxQueue;
+    if (next == s_queueTail) {
+        LeaveCriticalSection(&s_cs);
+        Log::Warn("GameThread: EnqueueRaw ring buffer full");
+        return;
+    }
+    auto& slot = s_preQueue[s_queueHead];
+    slot.invoke = invoker;
+    memcpy(slot.storage, data, dataSize);
+    s_queueHead = next;
+    LeaveCriticalSection(&s_cs);
+}
+
+void EnqueuePostRaw(InlineTask::Invoker invoker, const void* data, size_t dataSize) {
+    if (!s_initialized || !invoker) return;
+    if (dataSize > sizeof(InlineTask::storage)) return;
+
+    EnterCriticalSection(&s_cs);
+
+    uint32_t next = (s_postHead + 1) % kMaxQueue;
+    if (next == s_postTail) {
+        LeaveCriticalSection(&s_cs);
+        Log::Warn("GameThread: EnqueuePostRaw ring buffer full");
+        return;
+    }
+    auto& slot = s_postQueue_ring[s_postHead];
+    slot.invoke = invoker;
+    memcpy(slot.storage, data, dataSize);
+    s_postHead = next;
     LeaveCriticalSection(&s_cs);
 }
 

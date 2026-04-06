@@ -140,18 +140,27 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
         Log::Warn("CtoS: RenderHook queue full for header=0x%X, falling back to GameThread", header);
     }
 
-    // Fallback: GameThread::Enqueue (unreliable — fires infrequently)
-    uint32_t capturedSize = sizeBytes;
-    uint32_t capturedData[12];
-    memcpy(capturedData, data, size * sizeof(uint32_t));
-    uintptr_t loc = s_packetLocation;
-    PacketSendFn fn = s_packetSendFn;
+    // GameThread dispatch via raw POD task (no std::function, no CRT heap)
+    struct PacketTask {
+        PacketSendFn fn;
+        uintptr_t location;
+        uint32_t sizeBytes;
+        uint32_t data[12];
+    };
+    static_assert(sizeof(PacketTask) <= 64, "PacketTask exceeds InlineTask storage");
 
-    GameThread::Enqueue([fn, loc, capturedSize, capturedData]() {
+    PacketTask task;
+    task.fn = s_packetSendFn;
+    task.location = s_packetLocation;
+    task.sizeBytes = sizeBytes;
+    memcpy(task.data, data, size * sizeof(uint32_t));
+
+    GameThread::EnqueuePostRaw([](void* storage) {
+        auto* t = static_cast<PacketTask*>(storage);
         uint32_t mutableData[12];
-        memcpy(mutableData, capturedData, capturedSize);
-        fn(reinterpret_cast<void*>(loc), capturedSize, mutableData);
-    });
+        memcpy(mutableData, t->data, t->sizeBytes);
+        t->fn(reinterpret_cast<void*>(t->location), t->sizeBytes, mutableData);
+    }, &task, sizeof(task));
 }
 
 // --- Type-safe wrappers ---

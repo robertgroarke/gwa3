@@ -232,10 +232,9 @@ bool ButtonClick(uintptr_t frame) {
 
     void* thisPtr = reinterpret_cast<void*>(context + 0xA8);
 
-    // Dispatch via GameThread (MinHook at function entry — safe, no mid-function conflict)
+    // Dispatch via GameThread pre-callback.
     if (GameThread::IsInitialized()) {
         GameThread::Enqueue([thisPtr, action]() {
-            // Copy action to persistent storage for the call
             static MouseAction s_action;
             s_action = action;
             CallSendFrameUI(thisPtr, MSG_MOUSE_CLICK2, &s_action, nullptr);
