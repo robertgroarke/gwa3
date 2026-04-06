@@ -204,6 +204,30 @@ struct MouseAction {
     uint32_t lparam;
 };
 
+// POD task for EnqueuePostRaw — no std::function, no heap
+struct ClickTask {
+    uintptr_t sendFn;
+    uintptr_t thisPtr;
+    MouseAction action;
+};
+static_assert(sizeof(ClickTask) <= 64, "ClickTask exceeds InlineTask storage");
+
+static void ExecuteClickTask(void* storage) {
+    auto* t = static_cast<ClickTask*>(storage);
+    static MouseAction s_act;
+    s_act = t->action;
+    void* tp = reinterpret_cast<void*>(t->thisPtr);
+    uintptr_t fn = t->sendFn;
+    void* wParam = &s_act;
+    __asm {
+        push 0
+        push wParam
+        push MSG_MOUSE_CLICK2
+        mov ecx, tp
+        call fn
+    }
+}
+
 bool ButtonClick(uintptr_t frame) {
     if (!s_sendFrameUIAddr || frame < 0x10000) {
         Log::Warn("UIMgr: ButtonClick no sendAddr or invalid frame");
@@ -232,13 +256,15 @@ bool ButtonClick(uintptr_t frame) {
 
     void* thisPtr = reinterpret_cast<void*>(context + 0xA8);
 
-    // Dispatch via GameThread pre-callback.
+    // Use EnqueuePostRaw with a POD struct to dispatch on the game thread
+    // after the render callback completes (avoids re-entrant deadlock).
     if (GameThread::IsInitialized()) {
-        GameThread::Enqueue([thisPtr, action]() {
-            static MouseAction s_action;
-            s_action = action;
-            CallSendFrameUI(thisPtr, MSG_MOUSE_CLICK2, &s_action, nullptr);
-        });
+        ClickTask ct;
+        ct.sendFn = s_sendFrameUIAddr;
+        ct.thisPtr = reinterpret_cast<uintptr_t>(thisPtr);
+        ct.action = action;
+
+        GameThread::EnqueuePostRaw(ExecuteClickTask, &ct, sizeof(ct));
         return true;
     }
 

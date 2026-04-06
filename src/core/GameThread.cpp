@@ -74,13 +74,14 @@ static void __cdecl DrainQueuesOnGameThread(float, int) {
     s_gameThreadId = GetCurrentThreadId();
 
     while (s_queueTail != s_queueHead) {
-        // Call in-place — do NOT copy InlineTask. std::function stored in
-        // storage[] is not trivially copyable (SBO has self-referencing pointers).
         uint32_t idx = s_queueTail;
         s_queueTail = (s_queueTail + 1) % kMaxQueue;
+        Log::Info("GameThread: Drain pre[%u] invoke=0x%08X", idx,
+                  reinterpret_cast<uintptr_t>(s_preQueue[idx].invoke));
         LeaveCriticalSection(&s_cs);
-        s_preQueue[idx]();              // call in place
-        s_preQueue[idx].invoke = nullptr; // mark consumed
+        s_preQueue[idx]();
+        s_preQueue[idx].invoke = nullptr;
+        Log::Info("GameThread: Drain pre[%u] done", idx);
         EnterCriticalSection(&s_cs);
     }
 
@@ -104,18 +105,18 @@ static void __cdecl DrainPostQueuesOnGameThread(float, int) {
     LeaveCriticalSection(&s_cs);
 }
 
-// Helper: create InlineTask from a lambda (must fit in 48 bytes)
-template<typename F>
-static InlineTask MakeInlineTask(F&& f) {
-    static_assert(sizeof(F) <= 48, "Lambda too large for InlineTask (max 48 bytes)");
-    InlineTask t;
-    t.invoke = [](void* storage) {
-        auto& fn = *reinterpret_cast<F*>(storage);
+// Construct a Callback (std::function) directly into an InlineTask slot.
+// MUST be constructed in-place — returning InlineTask by value would bitwise-copy
+// the SBO, creating dangling self-references in the std::function.
+static void EmplaceCallback(InlineTask& slot, Callback&& task) {
+    static_assert(sizeof(Callback) <= sizeof(InlineTask::storage),
+                  "Callback exceeds InlineTask storage");
+    slot.invoke = [](void* storage) {
+        auto& fn = *reinterpret_cast<Callback*>(storage);
         fn();
-        fn.~F();
+        fn.~Callback();
     };
-    new (t.storage) F(std::forward<F>(f));
-    return t;
+    new (slot.storage) Callback(std::move(task));
 }
 
 // --- Watchdog thread: drains queue + monitors hook integrity ---
@@ -342,9 +343,8 @@ void Enqueue(Callback task) {
         Log::Warn("GameThread: Enqueue ring buffer full, dropping task");
         return;
     }
-    s_preQueue[s_queueHead] = MakeInlineTask(std::move(task));
+    EmplaceCallback(s_preQueue[s_queueHead], std::move(task));
     s_queueHead = next;
-    Log::Info("GameThread: Enqueue OK (head=%u tail=%u)", s_queueHead, s_queueTail);
     LeaveCriticalSection(&s_cs);
 }
 
@@ -383,6 +383,7 @@ void EnqueuePostRaw(InlineTask::Invoker invoker, const void* data, size_t dataSi
     slot.invoke = invoker;
     memcpy(slot.storage, data, dataSize);
     s_postHead = next;
+    Log::Info("GameThread: EnqueuePostRaw OK (head=%u tail=%u)", s_postHead, s_postTail);
     LeaveCriticalSection(&s_cs);
 }
 
@@ -405,7 +406,7 @@ void EnqueuePost(Callback task) {
         Log::Warn("GameThread: EnqueuePost ring buffer full, dropping task");
         return;
     }
-    s_postQueue_ring[s_postHead] = MakeInlineTask(std::move(task));
+    EmplaceCallback(s_postQueue_ring[s_postHead], std::move(task));
     s_postHead = next;
     LeaveCriticalSection(&s_cs);
 }
