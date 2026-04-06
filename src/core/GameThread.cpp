@@ -1,4 +1,5 @@
 #include <gwa3/core/GameThread.h>
+#include <gwa3/core/Offsets.h>
 #include <gwa3/core/Scanner.h>
 #include <gwa3/core/Log.h>
 
@@ -26,6 +27,8 @@ static HANDLE s_watchdogThread = nullptr;
 static volatile bool s_watchdogRunning = false;
 static volatile LONG s_repatchCount = 0;
 static HANDLE s_drainEvent = nullptr;
+static volatile bool s_hookSuspended = false;
+static uint8_t s_originalBytes[16] = {};
 
 // --- Singleshot queue ---
 // Uses raw function pointers with inline context (no heap allocation).
@@ -65,6 +68,40 @@ struct CallbackRecord {
 static std::vector<CallbackRecord> s_registry;
 
 // Old Dispatch/DispatchPost removed — replaced by DrainPreQueue/DrainPostQueue below
+
+// Called from the Engine inline hook shellcode (pushad/pushfd context).
+// Must be __stdcall with no args so the shellcode can use a plain `call`.
+void __stdcall DrainQueuesStdcall() {
+    if (!s_initialized) return;
+
+    EnterCriticalSection(&s_cs);
+    s_onGameThread = true;
+    s_gameThreadId = GetCurrentThreadId();
+
+    // Pre-queue: drain all
+    while (s_queueTail != s_queueHead) {
+        uint32_t idx = s_queueTail;
+        s_queueTail = (s_queueTail + 1) % kMaxQueue;
+        LeaveCriticalSection(&s_cs);
+        s_preQueue[idx]();
+        s_preQueue[idx].invoke = nullptr;
+        EnterCriticalSection(&s_cs);
+    }
+
+    // Post-queue: drain at most one per frame
+    if (s_postTail != s_postHead) {
+        uint32_t idx = s_postTail;
+        s_postTail = (s_postTail + 1) % kMaxQueue;
+        LeaveCriticalSection(&s_cs);
+        s_postQueue_ring[idx]();
+        s_postQueue_ring[idx].invoke = nullptr;
+        EnterCriticalSection(&s_cs);
+    }
+
+    s_onGameThread = false;
+    s_gameThreadId = 0;
+    LeaveCriticalSection(&s_cs);
+}
 
 // --- Queue drain (called via GameCallback-typed pointer from detour) ---
 // No heap allocation — InlineTask stores callable inline.
@@ -129,6 +166,8 @@ static DWORD WINAPI HookWatchdog(LPVOID) {
         if (!s_initialized || !s_hookTarget || s_patchSize == 0) continue;
 
         // Hook integrity check — re-patch if game overwrites our hook
+        // Skip re-patching while hook is intentionally suspended for PacketSend
+        if (s_hookSuspended) continue;
         const uint8_t* cur = reinterpret_cast<const uint8_t*>(s_hookTarget);
         if (memcmp(cur, s_patchedBytes, s_patchSize) != 0) {
             DWORD oldProtect;
@@ -154,7 +193,17 @@ static DWORD WINAPI HookWatchdog(LPVOID) {
 static GameCallback s_preDrain = reinterpret_cast<GameCallback>(&DrainQueuesOnGameThread);
 static GameCallback s_postDrain = reinterpret_cast<GameCallback>(&DrainPostQueuesOnGameThread);
 
+static volatile bool s_inDetour = false;
+
 static void __cdecl DetourCallback(float elapsed, int unknown) {
+    // Re-entrancy guard: PacketSend internally reaches this hook site.
+    // On re-entry, just call the trampoline (original code) and return.
+    if (s_inDetour) {
+        if (s_originalCallback) s_originalCallback(elapsed, unknown);
+        return;
+    }
+    s_inDetour = true;
+
     // Pre-dispatch: drain queued tasks on game thread
     if (s_queueTail != s_queueHead) {
         s_preDrain(elapsed, unknown);
@@ -165,10 +214,12 @@ static void __cdecl DetourCallback(float elapsed, int unknown) {
         s_originalCallback(elapsed, unknown);
     }
 
-    // Post-dispatch
+    // Post-dispatch (one packet per frame)
     if (s_postTail != s_postHead) {
         s_postDrain(elapsed, unknown);
     }
+
+    s_inDetour = false;
 }
 
 // --- Find hook target by walking backward from assertion site to function prologue ---
@@ -207,11 +258,9 @@ bool Initialize() {
     InitializeCriticalSection(&s_cs);
 
     // Find the assertion site for the render callback
-    // Try full path first (GW Reforged uses full paths), then short name
     uintptr_t assertSite = Scanner::FindAssertion(
         "P:\\Code\\Engine\\Frame\\FrApi.cpp", "renderElapsed >= 0", 0);
     if (!assertSite) {
-        // Fallback: try short filename (original GWCA convention)
         assertSite = Scanner::FindAssertion("FrApi.cpp", "renderElapsed >= 0", 0);
     }
     if (!assertSite) {
@@ -219,18 +268,19 @@ bool Initialize() {
         DeleteCriticalSection(&s_cs);
         return false;
     }
-    Log::Info("GameThread: Assertion site at 0x%08X", assertSite);
 
-    // Walk backward to function start
     s_hookTarget = FindFunctionStart(assertSite);
     if (!s_hookTarget) {
         Log::Error("GameThread: Could not find function start from assertion site 0x%08X", assertSite);
         DeleteCriticalSection(&s_cs);
         return false;
     }
-    Log::Info("GameThread: Hook target (function start) at 0x%08X", s_hookTarget);
+    Log::Info("GameThread: Hook target at 0x%08X (from assertion at 0x%08X)", s_hookTarget, assertSite);
 
-    // Initialize MinHook (idempotent — safe to call multiple times)
+    // Save original bytes before MinHook patches them
+    memcpy(s_originalBytes, reinterpret_cast<void*>(s_hookTarget), 16);
+
+    // Initialize MinHook
     MH_STATUS mhStatus = MH_Initialize();
     if (mhStatus != MH_OK && mhStatus != MH_ERROR_ALREADY_INITIALIZED) {
         Log::Error("GameThread: MH_Initialize failed: %s", MH_StatusToString(mhStatus));
@@ -238,7 +288,6 @@ bool Initialize() {
         return false;
     }
 
-    // Create the hook
     mhStatus = MH_CreateHook(
         reinterpret_cast<LPVOID>(s_hookTarget),
         reinterpret_cast<LPVOID>(&DetourCallback),
@@ -250,7 +299,6 @@ bool Initialize() {
         return false;
     }
 
-    // Enable the hook
     mhStatus = MH_EnableHook(reinterpret_cast<LPVOID>(s_hookTarget));
     if (mhStatus != MH_OK) {
         Log::Error("GameThread: MH_EnableHook failed: %s", MH_StatusToString(mhStatus));
@@ -259,23 +307,18 @@ bool Initialize() {
         return false;
     }
 
-    // Save the patched bytes so the watchdog can re-apply them if overwritten
-    s_patchSize = 5; // MinHook uses a 5-byte JMP (E9 rel32)
+    s_patchSize = 5;
     memcpy(s_patchedBytes, reinterpret_cast<void*>(s_hookTarget), s_patchSize);
 
-    Log::Info("GameThread: Patched bytes at 0x%08X: %02X %02X %02X %02X %02X",
-              s_hookTarget,
+    // Keep the hook site RWX so SuspendHook/ResumeHook can do fast memcpy
+    // without VirtualProtect calls (avoids races with game thread)
+    DWORD oldProtect;
+    VirtualProtect(reinterpret_cast<void*>(s_hookTarget), s_patchSize,
+                   PAGE_EXECUTE_READWRITE, &oldProtect);
+
+    Log::Info("GameThread: Patched bytes: %02X %02X %02X %02X %02X",
               s_patchedBytes[0], s_patchedBytes[1], s_patchedBytes[2],
               s_patchedBytes[3], s_patchedBytes[4]);
-
-    // Dump the MinHook trampoline (s_originalCallback points to it)
-    if (s_originalCallback) {
-        const uint8_t* t = reinterpret_cast<const uint8_t*>(s_originalCallback);
-        Log::Info("GameThread: Trampoline at 0x%08X: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-                  reinterpret_cast<uintptr_t>(s_originalCallback),
-                  t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7],
-                  t[8], t[9], t[10], t[11], t[12], t[13], t[14], t[15]);
-    }
 
     // Create drain event and start watchdog thread
     s_drainEvent = CreateEventA(nullptr, FALSE, FALSE, nullptr); // auto-reset
@@ -386,7 +429,7 @@ void EnqueuePostRaw(InlineTask::Invoker invoker, const void* data, size_t dataSi
     slot.invoke = invoker;
     memcpy(slot.storage, data, dataSize);
     s_postHead = next;
-    Log::Info("GameThread: EnqueuePostRaw OK (head=%u tail=%u)", s_postHead, s_postTail);
+    // Log::Info("GameThread: EnqueuePostRaw OK (head=%u tail=%u)", s_postHead, s_postTail);
     LeaveCriticalSection(&s_cs);
 }
 
@@ -459,6 +502,25 @@ bool IsOnGameThread() {
 
 bool IsInitialized() {
     return s_initialized;
+}
+
+void SuspendHook() {
+    if (!s_initialized || !s_hookTarget || s_patchSize == 0) return;
+    s_hookSuspended = true;
+    // Raw byte restore — no thread suspension, just fast memcpy.
+    // The page is kept RWX during the entire hook lifetime to avoid
+    // VirtualProtect calls (which are slow and can race).
+    memcpy(reinterpret_cast<void*>(s_hookTarget), s_originalBytes, s_patchSize);
+    FlushInstructionCache(GetCurrentProcess(),
+                          reinterpret_cast<void*>(s_hookTarget), s_patchSize);
+}
+
+void ResumeHook() {
+    if (!s_initialized || !s_hookTarget || s_patchSize == 0) return;
+    memcpy(reinterpret_cast<void*>(s_hookTarget), s_patchedBytes, s_patchSize);
+    FlushInstructionCache(GetCurrentProcess(),
+                          reinterpret_cast<void*>(s_hookTarget), s_patchSize);
+    s_hookSuspended = false;
 }
 
 } // namespace GWA3::GameThread
