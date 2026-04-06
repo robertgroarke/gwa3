@@ -281,9 +281,9 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::GameThread::Enqueue([]() {
             GWA3::Log::Info("Hello from game thread! Hook is working.");
         });
-        GWA3::StoC::Initialize();
-        GWA3::DialogMgr::Initialize();
-        GWA3::ChatLogMgr::Initialize();
+        //GWA3::StoC::Initialize();
+        //GWA3::DialogMgr::Initialize();
+        //GWA3::ChatLogMgr::Initialize();
         GWA3::StringEncoding::Initialize();
     }
 
