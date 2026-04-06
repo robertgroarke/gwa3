@@ -21,30 +21,6 @@ static PacketSendFn s_packetSendFn = nullptr;
 static uintptr_t s_packetLocation = 0;
 static bool s_initialized = false;
 
-// Ring buffer for shellcode packet dispatch via RenderHook
-// Each slot: [0..31] shellcode, [32..79] packet data (up to 12 dwords)
-static constexpr int kPacketSlots = 32;
-static constexpr int kPacketSlotSize = 80;
-static uintptr_t s_packetShellcodeBase = 0;
-static volatile LONG s_packetSlotIndex = 0;
-
-static bool EnsurePacketShellcode() {
-    if (s_packetShellcodeBase) return true;
-    void* mem = VirtualAlloc(nullptr, kPacketSlots * kPacketSlotSize,
-                             MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-    if (!mem) {
-        Log::Error("CtoS: VirtualAlloc failed for packet shellcode pool");
-        return false;
-    }
-    s_packetShellcodeBase = reinterpret_cast<uintptr_t>(mem);
-    return true;
-}
-
-static uintptr_t NextPacketSlot() {
-    LONG idx = InterlockedIncrement(&s_packetSlotIndex) % kPacketSlots;
-    return s_packetShellcodeBase + idx * kPacketSlotSize;
-}
-
 // POD task for packet queue
 struct PacketTask {
     PacketSendFn fn;
@@ -152,29 +128,24 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
         s_packetLocation = freshLocation;
     }
 
-    // Dispatch via CtoSHook shellcode (mid-function hook on game thread)
-    if (CtoSHook::IsInitialized() && EnsurePacketShellcode()) {
-        uintptr_t slot = NextPacketSlot();
-        uintptr_t dataAddr = slot + 32;
-        memcpy(reinterpret_cast<void*>(dataAddr), data, sizeBytes);
-
-        auto* sc = reinterpret_cast<uint8_t*>(slot);
-        size_t i = 0;
-        auto emit8 = [&](uint8_t v) { sc[i++] = v; };
-        auto emit32 = [&](uint32_t v) { memcpy(sc + i, &v, 4); i += 4; };
-
-        emit8(0x68); emit32(static_cast<uint32_t>(dataAddr));
-        emit8(0x68); emit32(sizeBytes);
-        emit8(0x68); emit32(static_cast<uint32_t>(s_packetLocation));
-        emit8(0xE8);
-        int32_t rel = static_cast<int32_t>(
-            reinterpret_cast<uintptr_t>(s_packetSendFn) - (slot + i + 4));
-        emit32(*reinterpret_cast<uint32_t*>(&rel));
-        emit8(0x83); emit8(0xC4); emit8(0x0C);
-        emit8(0xC3);
-
-        FlushInstructionCache(GetCurrentProcess(), sc, static_cast<DWORD>(i));
-        if (CtoSHook::EnqueueCommand(slot)) return;
+    // Dispatch via PacketSenderThread — calls PacketSendFn directly.
+    // (CtoSHook shellcode dispatch was removed: the mid-function detour is a
+    //  bisect stub that never processes the queue, so all packets were silently
+    //  dropped.  The PacketSenderThread calls the native PacketSendFn safely.)
+    if (s_packetCSInit && s_packetEvent) {
+        EnterCriticalSection(&s_packetCS);
+        if (s_packetQueueCount < 64) {
+            PacketTask& t = s_packetQueue[s_packetQueueCount++];
+            t.fn = s_packetSendFn;
+            t.location = s_packetLocation;
+            t.sizeBytes = sizeBytes;
+            memcpy(t.data, data, sizeBytes);
+        } else {
+            Log::Warn("CtoS: PacketSenderThread queue full, dropped header=0x%X", header);
+        }
+        LeaveCriticalSection(&s_packetCS);
+        SetEvent(s_packetEvent);
+        return;
     }
 
     Log::Warn("CtoS: SendPacket dropped header=0x%X — no dispatch", header);
