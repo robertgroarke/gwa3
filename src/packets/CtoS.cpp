@@ -57,15 +57,13 @@ bool Initialize() {
     s_initialized = true;
     Log::Info("CtoS: Initialized (PacketSend=0x%08X, PacketLocation=0x%08X)",
               Offsets::PacketSend, s_packetLocation);
-
     return true;
 }
 
 // Dispatch via GameThread post-queue (one packet per frame).
-// The GameThread hook and the Engine render callback share the same code site.
-// PacketSend calls through this site internally, causing re-entry into our
-// DetourCallback. The post-queue runs AFTER the original callback, and
-// re-entry is handled by GameThread's re-entrancy guard.
+// The VEH INT3 hook's re-entrancy guard makes this safe: if PacketSend
+// internally hits the hook address, the handler just emulates the original
+// instruction without dispatching queues.
 void SendPacket(uint32_t size, uint32_t header, ...) {
     if (!s_initialized && !Initialize()) {
         Log::Warn("CtoS: SendPacket dropped (header=0x%X) — not initialized", header);
@@ -91,86 +89,12 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
         if (fresh) task.location = fresh;
     }
 
-    // Dispatch via dedicated sender thread with hook suspension.
-    // PacketSend works perfectly without the GameThread hook (proven by smoke
-    // test). The hook and Engine share the same address; PacketSend internally
-    // reaches that address, crashing if our 5-byte JMP patch is active.
-    // SuspendHook restores original bytes (proven stable by dry-run test),
-    // PacketSend executes cleanly, then ResumeHook re-patches.
-    static CRITICAL_SECTION s_senderCS;
-    static bool s_senderInit = false;
-    static HANDLE s_senderEvent = nullptr;
-    static HANDLE s_senderThread = nullptr;
-    static volatile bool s_senderRunning = false;
-    static PacketTask s_senderQueue[64];
-    static volatile uint32_t s_sHead = 0, s_sTail = 0;
-
-    if (!s_senderInit) {
-        InitializeCriticalSection(&s_senderCS);
-        s_senderEvent = CreateEventA(nullptr, FALSE, FALSE, nullptr);
-        s_senderRunning = true;
-        s_senderThread = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
-            while (s_senderRunning) {
-                WaitForSingleObject(s_senderEvent, 100);
-                if (s_sTail == s_sHead) continue;
-
-                // Batch: collect all pending packets, then suspend hook ONCE
-                // and send them all before resuming. Minimizes race window.
-                PacketTask batch[64];
-                uint32_t count = 0;
-                EnterCriticalSection(&s_senderCS);
-                while (s_sTail != s_sHead && count < 64) {
-                    batch[count++] = s_senderQueue[s_sTail % 64];
-                    s_sTail++;
-                }
-                LeaveCriticalSection(&s_senderCS);
-
-                if (count == 0) continue;
-
-                // Suspend hook (MH_DisableHook atomically suspends threads +
-                // restores bytes), send all packets, resume
-                GameThread::SuspendHook();
-                for (uint32_t i = 0; i < count; i++) {
-                    uintptr_t loc = batch[i].location;
-                    if (Offsets::PacketLocation) {
-                        uintptr_t fresh = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
-                        if (fresh) loc = fresh;
-                    }
-                    batch[i].fn(reinterpret_cast<void*>(loc), batch[i].sizeBytes, batch[i].data);
-                    Sleep(50); // throttle between packets
-                }
-                // Wait briefly to see if more packets arrive before re-enabling
-                // the hook. This avoids rapid disable/enable cycles.
-                Sleep(300);
-                // Drain any packets that arrived during the sleep
-                EnterCriticalSection(&s_senderCS);
-                uint32_t extra = 0;
-                while (s_sTail != s_sHead && extra < 64) {
-                    batch[extra++] = s_senderQueue[s_sTail % 64];
-                    s_sTail++;
-                }
-                LeaveCriticalSection(&s_senderCS);
-                for (uint32_t i = 0; i < extra; i++) {
-                    uintptr_t loc2 = batch[i].location;
-                    if (Offsets::PacketLocation) {
-                        uintptr_t fresh = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
-                        if (fresh) loc2 = fresh;
-                    }
-                    batch[i].fn(reinterpret_cast<void*>(loc2), batch[i].sizeBytes, batch[i].data);
-                    Sleep(50);
-                }
-                GameThread::ResumeHook();
-            }
-            return 0;
-        }, nullptr, 0, nullptr);
-        s_senderInit = true;
+    if (GameThread::IsInitialized()) {
+        GameThread::EnqueuePostRaw(PacketTaskInvoker, &task, sizeof(task));
+        return;
     }
 
-    EnterCriticalSection(&s_senderCS);
-    s_senderQueue[s_sHead % 64] = task;
-    s_sHead++;
-    LeaveCriticalSection(&s_senderCS);
-    SetEvent(s_senderEvent);
+    Log::Warn("CtoS: SendPacket dropped header=0x%X — GameThread not initialized", header);
 }
 
 // --- Type-safe wrappers ---
