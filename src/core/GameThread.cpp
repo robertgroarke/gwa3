@@ -257,7 +257,10 @@ bool Initialize() {
 
     InitializeCriticalSection(&s_cs);
 
-    // Find the assertion site for the render callback
+    // NOTE: The FrApi assertion and Engine offset resolve to the SAME address.
+    // PacketSend internally reaches this address, so CtoS packets must NOT be
+    // dispatched while this hook is active (use SuspendHook/ResumeHook around
+    // PacketSend calls, or dispatch from a context where the hook is removed).
     uintptr_t assertSite = Scanner::FindAssertion(
         "P:\\Code\\Engine\\Frame\\FrApi.cpp", "renderElapsed >= 0", 0);
     if (!assertSite) {
@@ -268,14 +271,13 @@ bool Initialize() {
         DeleteCriticalSection(&s_cs);
         return false;
     }
-
     s_hookTarget = FindFunctionStart(assertSite);
     if (!s_hookTarget) {
-        Log::Error("GameThread: Could not find function start from assertion site 0x%08X", assertSite);
+        Log::Error("GameThread: Could not find function start from assertion 0x%08X", assertSite);
         DeleteCriticalSection(&s_cs);
         return false;
     }
-    Log::Info("GameThread: Hook target at 0x%08X (from assertion at 0x%08X)", s_hookTarget, assertSite);
+    Log::Info("GameThread: Hook target at 0x%08X (FrApi/Engine shared site)", s_hookTarget);
 
     // Save original bytes before MinHook patches them
     memcpy(s_originalBytes, reinterpret_cast<void*>(s_hookTarget), 16);
@@ -505,21 +507,17 @@ bool IsInitialized() {
 }
 
 void SuspendHook() {
-    if (!s_initialized || !s_hookTarget || s_patchSize == 0) return;
+    if (!s_initialized || !s_hookTarget) return;
     s_hookSuspended = true;
-    // Raw byte restore — no thread suspension, just fast memcpy.
-    // The page is kept RWX during the entire hook lifetime to avoid
-    // VirtualProtect calls (which are slow and can race).
-    memcpy(reinterpret_cast<void*>(s_hookTarget), s_originalBytes, s_patchSize);
-    FlushInstructionCache(GetCurrentProcess(),
-                          reinterpret_cast<void*>(s_hookTarget), s_patchSize);
+    // MH_DisableHook suspends all threads, restores original bytes atomically,
+    // then resumes. This is the only safe way to patch multi-byte instructions
+    // without racing with the game thread.
+    MH_DisableHook(reinterpret_cast<LPVOID>(s_hookTarget));
 }
 
 void ResumeHook() {
-    if (!s_initialized || !s_hookTarget || s_patchSize == 0) return;
-    memcpy(reinterpret_cast<void*>(s_hookTarget), s_patchedBytes, s_patchSize);
-    FlushInstructionCache(GetCurrentProcess(),
-                          reinterpret_cast<void*>(s_hookTarget), s_patchSize);
+    if (!s_initialized || !s_hookTarget) return;
+    MH_EnableHook(reinterpret_cast<LPVOID>(s_hookTarget));
     s_hookSuspended = false;
 }
 
