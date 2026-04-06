@@ -49,4 +49,10 @@ namespace GWA3::GameThread {
     // Returns true if the hook is installed and active.
     bool IsInitialized();
 
+    // Temporarily disable/re-enable the MinHook detour.
+    // Use around calls to game functions (e.g. PacketSend) that
+    // internally execute code at the hook site.
+    void SuspendHook();
+    void ResumeHook();
+
 } // namespace GWA3::GameThread
