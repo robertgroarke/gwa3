@@ -67,8 +67,29 @@ bool Initialize() {
     return true;
 }
 
+// POD task for EnqueueRaw — must be at file scope (not local to SendPacket)
+// to ensure consistent struct layout between the function and the lambda invoker.
+struct PacketTask {
+    PacketSendFn fn;       // offset 0
+    uintptr_t location;    // offset 4
+    uint32_t sizeBytes;    // offset 8
+    uint32_t data[12];     // offset 12
+};
+static_assert(sizeof(PacketTask) <= 64, "PacketTask exceeds InlineTask storage");
+
+static void ExecutePacketTask(void* storage) {
+    auto* t = static_cast<PacketTask*>(storage);
+    uintptr_t loc = t->location;
+    if (Offsets::PacketLocation) {
+        uintptr_t fresh = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
+        if (fresh) loc = fresh;
+    }
+    Log::Info("CtoS: exec h=0x%X sz=%u", t->data[0], t->sizeBytes);
+    t->fn(reinterpret_cast<void*>(loc), t->sizeBytes, t->data);
+    Log::Info("CtoS: exec done h=0x%X", t->data[0]);
+}
+
 // Core send: builds a packet buffer and calls the game's PacketSend.
-// Prefers RenderHook shellcode dispatch; falls back to GameThread::Enqueue.
 void SendPacket(uint32_t size, uint32_t header, ...) {
     if (!s_initialized && !Initialize()) {
         Log::Warn("CtoS: SendPacket dropped (header=0x%X) because transport is not initialized", header);
@@ -140,27 +161,18 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
         Log::Warn("CtoS: RenderHook queue full for header=0x%X, falling back to GameThread", header);
     }
 
-    // GameThread dispatch via raw POD task (no std::function, no CRT heap)
-    struct PacketTask {
-        PacketSendFn fn;
-        uintptr_t location;
-        uint32_t sizeBytes;
-        uint32_t data[12];
-    };
-    static_assert(sizeof(PacketTask) <= 64, "PacketTask exceeds InlineTask storage");
-
     PacketTask task;
     task.fn = s_packetSendFn;
     task.location = s_packetLocation;
     task.sizeBytes = sizeBytes;
     memcpy(task.data, data, size * sizeof(uint32_t));
 
-    GameThread::EnqueuePostRaw([](void* storage) {
-        auto* t = static_cast<PacketTask*>(storage);
-        uint32_t mutableData[12];
-        memcpy(mutableData, t->data, t->sizeBytes);
-        t->fn(reinterpret_cast<void*>(t->location), t->sizeBytes, mutableData);
-    }, &task, sizeof(task));
+    // Direct call from calling thread with crash guard
+    __try {
+        s_packetSendFn(reinterpret_cast<void*>(s_packetLocation), sizeBytes, data);
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        Log::Error("CtoS: PacketSend crashed on header=0x%X (direct call)", header);
+    }
 }
 
 // --- Type-safe wrappers ---
