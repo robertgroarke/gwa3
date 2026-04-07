@@ -170,6 +170,81 @@ function Read-U32([IntPtr]$ProcessHandle, [uint64]$Address) {
     return [BitConverter]::ToUInt32($bytes, 0)
 }
 
+function Read-HookEntries([IntPtr]$ProcessHandle, [uint64]$BaseAddress, [uint64]$TablePtr, [uint32]$Count) {
+    $entries = @()
+    if (-not $TablePtr -or -not $Count) {
+        return $entries
+    }
+    for ($i = 0; $i -lt $Count; $i++) {
+        $entryAddr = $TablePtr + [uint64]($i * 0x2C)
+        $raw = Read-Bytes -ProcessHandle $ProcessHandle -Address $entryAddr -Length 0x2C
+        $target = [BitConverter]::ToUInt32($raw, 0)
+        $detour = [BitConverter]::ToUInt32($raw, 4)
+        $replay = [BitConverter]::ToUInt32($raw, 8)
+        $saved0 = [BitConverter]::ToUInt32($raw, 12)
+        $saved1 = [BitConverter]::ToUInt32($raw, 16)
+        $flags = $raw[20]
+        $relocCount = $raw[24] -band 0x0F
+        $origOffsets = @()
+        $stubOffsets = @()
+        for ($j = 0; $j -lt 8; $j++) {
+            $origOffsets += $raw[28 + $j]
+            $stubOffsets += $raw[36 + $j]
+        }
+        $entries += [pscustomobject]@{
+            Index = $i
+            EntryAddress = $entryAddr
+            Target = [uint64]$target
+            Detour = [uint64]$detour
+            Replay = [uint64]$replay
+            Saved0 = [uint64]$saved0
+            Saved1 = [uint64]$saved1
+            Flags = $flags
+            RelocCount = $relocCount
+            OrigOffsets = ($origOffsets | ForEach-Object { $_.ToString("X2") }) -join " "
+            StubOffsets = ($stubOffsets | ForEach-Object { $_.ToString("X2") }) -join " "
+            TargetRva = if ($target -ge $BaseAddress) { [uint64]($target - $BaseAddress) } else { 0 }
+            DetourRva = if ($detour -ge $BaseAddress) { [uint64]($detour - $BaseAddress) } else { 0 }
+        }
+    }
+    return $entries
+}
+
+function Read-MemoryPatches([IntPtr]$ProcessHandle, [uint64]$BaseAddress, [uint64]$VecStart, [uint64]$VecEnd) {
+    $result = @()
+    if (-not $VecStart -or -not $VecEnd -or $VecEnd -lt $VecStart) {
+        return $result
+    }
+    $count = [int](($VecEnd - $VecStart) / 4)
+    for ($i = 0; $i -lt $count; $i++) {
+        $objPtr = Read-U32 -ProcessHandle $ProcessHandle -Address ($VecStart + [uint64]($i * 4))
+        if (-not $objPtr) { continue }
+        $raw = Read-Bytes -ProcessHandle $ProcessHandle -Address $objPtr -Length 0x14
+        $target = [BitConverter]::ToUInt32($raw, 0)
+        $patchedBuf = [BitConverter]::ToUInt32($raw, 4)
+        $originalBuf = [BitConverter]::ToUInt32($raw, 8)
+        $size = [BitConverter]::ToUInt32($raw, 12)
+        $enabled = [BitConverter]::ToUInt32($raw, 16)
+        $patchedBytes = if ($patchedBuf -and $size) { Read-Bytes -ProcessHandle $ProcessHandle -Address $patchedBuf -Length $size } else { @() }
+        $originalBytes = if ($originalBuf -and $size) { Read-Bytes -ProcessHandle $ProcessHandle -Address $originalBuf -Length $size } else { @() }
+        $liveBytes = if ($target -and $size) { Read-Bytes -ProcessHandle $ProcessHandle -Address $target -Length $size } else { @() }
+        $result += [pscustomobject]@{
+            Index = $i
+            Object = [uint64]$objPtr
+            Target = [uint64]$target
+            PatchedBuf = [uint64]$patchedBuf
+            OriginalBuf = [uint64]$originalBuf
+            Size = $size
+            Enabled = $enabled
+            TargetRva = if ($target -ge $BaseAddress) { [uint64]($target - $BaseAddress) } else { 0 }
+            PatchedBytes = ($patchedBytes | ForEach-Object { $_.ToString("X2") }) -join " "
+            OriginalBytes = ($originalBytes | ForEach-Object { $_.ToString("X2") }) -join " "
+            LiveBytes = ($liveBytes | ForEach-Object { $_.ToString("X2") }) -join " "
+        }
+    }
+    return $result
+}
+
 function Format-HexDump([byte[]]$Bytes, [uint64]$BaseAddress) {
     $lines = @()
     for ($i = 0; $i -lt $Bytes.Length; $i += 16) {
@@ -291,6 +366,14 @@ try {
         "RootFrame" = 0x8A410
         "SetWindowVisible" = 0x8A3D0
         "FrameHashTable" = 0x8A3B0
+        "HookPageList" = 0x8B0B4
+        "HookTablePtr" = 0x8B0C0
+        "HookTableCap" = 0x8B0C4
+        "HookTableCount" = 0x8B0C8
+        "MemPatchVecStart" = 0x8A1F8
+        "MemPatchVecEnd" = 0x8A1FC
+        "MemPatchVecCap" = 0x8A200
+        "MemPatchEnabled" = 0x88144
     }
 
     foreach ($entry in $gwcaOffsets.GetEnumerator()) {
@@ -299,14 +382,63 @@ try {
     }
     $report.Add("")
 
+    $sendFrameHook = Read-U32 -ProcessHandle $hProcess -Address ($gwcaBase + $gwcaOffsets["SendFrameUIMsg_Hook"])
+
     $sendFrameBytes = Read-Bytes -ProcessHandle $hProcess -Address $sendFrame -Length 128
     $report.Add("=== Game SendFrameUIMsg Bytes ===")
     $report.AddRange([string[]](Format-HexDump -Bytes $sendFrameBytes -BaseAddress $sendFrame))
     $report.Add("")
 
+    if ($sendFrameHook) {
+        $hookBytes = Read-Bytes -ProcessHandle $hProcess -Address $sendFrameHook -Length 96
+        $report.Add("=== GWCA Replay Stub Bytes ===")
+        $report.AddRange([string[]](Format-HexDump -Bytes $hookBytes -BaseAddress $sendFrameHook))
+        $report.Add("")
+    }
+
     $gwcaDataBytes = Read-Bytes -ProcessHandle $hProcess -Address ($gwcaBase + 0x8A370) -Length 0xB0
     $report.Add("=== GWCA Data Section 0x8A370.. ===")
     $report.AddRange([string[]](Format-HexDump -Bytes $gwcaDataBytes -BaseAddress ($gwcaBase + 0x8A370)))
+    $report.Add("")
+
+    $hookTablePtr = Read-U32 -ProcessHandle $hProcess -Address ($gwcaBase + $gwcaOffsets["HookTablePtr"])
+    $hookTableCount = Read-U32 -ProcessHandle $hProcess -Address ($gwcaBase + $gwcaOffsets["HookTableCount"])
+    $hookEntries = Read-HookEntries -ProcessHandle $hProcess -BaseAddress $gwcaBase -TablePtr $hookTablePtr -Count $hookTableCount
+    if ($hookEntries.Count -gt 0) {
+        $report.Add("=== GWCA Hook Entries ===")
+        foreach ($entry in $hookEntries) {
+            $report.Add((
+                "idx={0} entry=0x{1:X8} target=0x{2:X8} detour=0x{3:X8} replay=0x{4:X8} flags=0x{5:X2} reloc={6} target_rva=0x{7:X} detour_rva=0x{8:X}" -f
+                $entry.Index, $entry.EntryAddress, $entry.Target, $entry.Detour, $entry.Replay, $entry.Flags, $entry.RelocCount, $entry.TargetRva, $entry.DetourRva
+            ))
+            $report.Add(("  saved0=0x{0:X8} saved1=0x{1:X8}" -f $entry.Saved0, $entry.Saved1))
+            $report.Add(("  orig_offsets={0}" -f $entry.OrigOffsets))
+            $report.Add(("  stub_offsets={0}" -f $entry.StubOffsets))
+        }
+    }
+    $report.Add("")
+
+    $memPatchVecStart = Read-U32 -ProcessHandle $hProcess -Address ($gwcaBase + $gwcaOffsets["MemPatchVecStart"])
+    $memPatchVecEnd = Read-U32 -ProcessHandle $hProcess -Address ($gwcaBase + $gwcaOffsets["MemPatchVecEnd"])
+    $memPatchVecCap = Read-U32 -ProcessHandle $hProcess -Address ($gwcaBase + $gwcaOffsets["MemPatchVecCap"])
+    $memPatchEnabled = Read-U32 -ProcessHandle $hProcess -Address ($gwcaBase + $gwcaOffsets["MemPatchEnabled"])
+    $report.Add(("MemPatchVecStartPtr: 0x{0:X8}" -f $memPatchVecStart))
+    $report.Add(("MemPatchVecEndPtr: 0x{0:X8}" -f $memPatchVecEnd))
+    $report.Add(("MemPatchVecCapPtr: 0x{0:X8}" -f $memPatchVecCap))
+    $report.Add(("MemPatchEnabled: 0x{0:X8}" -f $memPatchEnabled))
+    $patches = Read-MemoryPatches -ProcessHandle $hProcess -BaseAddress $gwcaBase -VecStart $memPatchVecStart -VecEnd $memPatchVecEnd
+    if ($patches.Count -gt 0) {
+        $report.Add("=== GWCA Memory Patches ===")
+        foreach ($patch in $patches) {
+            $report.Add((
+                "idx={0} obj=0x{1:X8} target=0x{2:X8} patched=0x{3:X8} original=0x{4:X8} size=0x{5:X} enabled=0x{6:X8} target_rva=0x{7:X}" -f
+                $patch.Index, $patch.Object, $patch.Target, $patch.PatchedBuf, $patch.OriginalBuf, $patch.Size, $patch.Enabled, $patch.TargetRva
+            ))
+            $report.Add(("  patched_bytes={0}" -f $patch.PatchedBytes))
+            $report.Add(("  original_bytes={0}" -f $patch.OriginalBytes))
+            $report.Add(("  live_bytes={0}" -f $patch.LiveBytes))
+        }
+    }
 
     $reportPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\GWA Censured\tests\live_gwca_runtime_report.txt"))
     [IO.File]::WriteAllLines($reportPath, $report)

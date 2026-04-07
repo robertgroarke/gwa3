@@ -1,7 +1,10 @@
 #include <gwa3/managers/QuestMgr.h>
+#include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
+#include <gwa3/core/GameThread.h>
+#include <gwa3/core/Scanner.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/game/GameTypes.h>
 
@@ -10,6 +13,9 @@
 namespace GWA3::QuestMgr {
 
 static bool s_initialized = false;
+using SetActiveQuestFn = void(__cdecl*)(uint32_t);
+static SetActiveQuestFn s_setActiveQuestFn = nullptr;
+static constexpr uint32_t kSendSetActiveQuestUiMessage = 0x30000009u;
 
 // WorldContext: BasePointer → deref → +0x18 → +0x2C
 static uintptr_t ResolveWorldContext() {
@@ -29,8 +35,21 @@ static uintptr_t ResolveWorldContext() {
 
 bool Initialize() {
     if (s_initialized) return true;
+
+    uintptr_t questLogUi = Scanner::FindAssertion(
+        "P:\\Code\\Gw\\Ui\\Game\\Quest\\QuestLog.cpp",
+        "MISSION_MAP_OUTPOST == MissionCliGetMap()",
+        -0x128);
+    if (questLogUi > 0x10000) {
+        uintptr_t fn = Scanner::FunctionFromNearCall(questLogUi + 0x96);
+        if (fn > 0x10000) {
+            s_setActiveQuestFn = reinterpret_cast<SetActiveQuestFn>(fn);
+        }
+    }
+
     s_initialized = true;
-    Log::Info("QuestMgr: Initialized");
+    Log::Info("QuestMgr: Initialized (SetActiveQuest=0x%08X)",
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_setActiveQuestFn)));
     return true;
 }
 
@@ -39,6 +58,32 @@ void Dialog(uint32_t dialogId) {
 }
 
 void SetActiveQuest(uint32_t questId) {
+    if (s_setActiveQuestFn && GameThread::IsInitialized()) {
+        auto fn = s_setActiveQuestFn;
+        GameThread::EnqueuePost([fn, questId]() {
+            fn(questId);
+        });
+        return;
+    }
+
+    if (GameThread::IsInitialized()) {
+        GameThread::EnqueuePost([questId]() {
+            UIMgr::SendUIMessage(
+                kSendSetActiveQuestUiMessage,
+                reinterpret_cast<void*>(static_cast<uintptr_t>(questId)),
+                nullptr);
+        });
+        return;
+    }
+
+    if (Offsets::UIMessage > 0x10000) {
+        UIMgr::SendUIMessage(
+            kSendSetActiveQuestUiMessage,
+            reinterpret_cast<void*>(static_cast<uintptr_t>(questId)),
+            nullptr);
+        return;
+    }
+
     CtoS::QuestSetActive(questId);
 }
 

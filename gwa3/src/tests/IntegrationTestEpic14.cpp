@@ -16,6 +16,7 @@
 #include <gwa3/managers/PartyMgr.h>
 #include <gwa3/managers/EffectMgr.h>
 #include <gwa3/managers/TradeMgr.h>
+#include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/game/Agent.h>
 
@@ -75,10 +76,111 @@ static uint32_t FindNearestNpc(float x, float y, float maxDist) {
         auto* living = static_cast<AgentLiving*>(a);
         if (living->allegiance != 6) continue; // NPC
         if (living->hp <= 0.0f) continue;
+        if ((living->effects & 0x0010u) != 0) continue;
         float d = AgentMgr::GetSquaredDistance(x, y, living->x, living->y);
         if (d < bestDist) { bestDist = d; bestId = living->agent_id; }
     }
     return bestId;
+}
+
+static uint32_t FindNearestNpcByPlayerNumber(float x, float y, float maxDist, uint16_t playerNumber) {
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    float bestDist = maxDist * maxDist;
+    uint32_t bestId = 0;
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (living->allegiance != 6) continue;
+        if (living->hp <= 0.0f) continue;
+        if ((living->effects & 0x0010u) != 0) continue;
+        if (living->player_number != playerNumber) continue;
+        float d = AgentMgr::GetSquaredDistance(x, y, living->x, living->y);
+        if (d < bestDist) { bestDist = d; bestId = living->agent_id; }
+    }
+    return bestId;
+}
+
+struct NpcCandidate {
+    uint32_t agentId = 0;
+    uint16_t playerNumber = 0;
+    uint32_t npcId = 0;
+    uint32_t effects = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    float distance = 0.0f;
+    uint32_t score = 0xFFFFFFFFu;
+};
+
+static size_t CollectMerchantNpcCandidates(float x, float y, float maxDist, uint16_t preferredPlayerNumber, NpcCandidate* out, size_t maxOut) {
+    if (!out || maxOut == 0) return 0;
+
+    for (size_t i = 0; i < maxOut; ++i) {
+        out[i] = {};
+        out[i].score = 0xFFFFFFFFu;
+    }
+
+    const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    const float maxDistSq = maxDist * maxDist;
+    size_t count = 0;
+
+    for (uint32_t i = 1; i < maxAgents; ++i) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (living->allegiance != 6) continue;
+        if (living->hp <= 0.0f) continue;
+        if ((living->effects & 0x0010u) != 0) continue;
+
+        const float distSq = AgentMgr::GetSquaredDistance(x, y, living->x, living->y);
+        if (distSq > maxDistSq) continue;
+
+        NpcCandidate candidate;
+        candidate.agentId = living->agent_id;
+        candidate.playerNumber = living->player_number;
+        candidate.npcId = living->transmog_npc_id;
+        candidate.effects = living->effects;
+        candidate.x = living->x;
+        candidate.y = living->y;
+        candidate.distance = sqrtf(distSq);
+        candidate.score = static_cast<uint32_t>(candidate.distance) + (candidate.playerNumber == preferredPlayerNumber ? 0u : 100000u);
+
+        size_t insertAt = maxOut;
+        for (size_t slot = 0; slot < maxOut; ++slot) {
+            if (candidate.score < out[slot].score) {
+                insertAt = slot;
+                break;
+            }
+        }
+        if (insertAt == maxOut) continue;
+
+        for (size_t slot = maxOut - 1; slot > insertAt; --slot) {
+            out[slot] = out[slot - 1];
+        }
+        out[insertAt] = candidate;
+        if (count < maxOut) count++;
+    }
+
+    return count;
+}
+
+static void DumpMerchantNpcCandidates(float x, float y, float maxDist, uint16_t preferredPlayerNumber) {
+    NpcCandidate candidates[8];
+    const size_t count = CollectMerchantNpcCandidates(x, y, maxDist, preferredPlayerNumber, candidates, _countof(candidates));
+    IntReport("  NPC candidates near merchant coords (preferred player_number=%u): %zu", preferredPlayerNumber, count);
+    for (size_t i = 0; i < count; ++i) {
+        const auto& c = candidates[i];
+        IntReport("    cand[%zu]: agent=%u player=%u npc_id=%u effects=0x%08X dist=%.0f pos=(%.0f, %.0f)%s",
+                  i,
+                  c.agentId,
+                  c.playerNumber,
+                  c.npcId,
+                  c.effects,
+                  c.distance,
+                  c.x,
+                  c.y,
+                  c.playerNumber == preferredPlayerNumber ? " [preferred]" : "");
+    }
 }
 
 static uint32_t FindNearestFoe(float maxRange) {
@@ -97,6 +199,105 @@ static uint32_t FindNearestFoe(float maxRange) {
         if (d < bestDist) { bestDist = d; bestId = living->agent_id; }
     }
     return bestId;
+}
+
+static bool WaitForMerchantContext(DWORD timeoutMs) {
+    static constexpr uint32_t kMerchantRootHash = 3613855137u;
+    DWORD start = GetTickCount();
+    while ((GetTickCount() - start) < timeoutMs) {
+        if (TradeMgr::GetMerchantItemCount() > 0) return true;
+        if (UIMgr::GetFrameByHash(kMerchantRootHash) != 0) return true;
+        Sleep(100);
+    }
+    return false;
+}
+
+static bool KickAllHeroesWithObservation(DWORD timeoutMs) {
+    PartyMgr::KickAllHeroes();
+    const DWORD start = GetTickCount();
+    while ((GetTickCount() - start) < timeoutMs) {
+        if (PartyMgr::CountPartyHeroes() == 0) return true;
+        Sleep(250);
+    }
+    return PartyMgr::CountPartyHeroes() == 0;
+}
+
+static bool OpenMerchantContextWithVariants(uint32_t npcId) {
+    auto* npc = AgentMgr::GetAgentByID(npcId);
+    const uint32_t npcPtr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(npc));
+
+    struct DialogVariant {
+        const char* label;
+        uint32_t header;
+        uint32_t value;
+        bool requiresPtr;
+    };
+    const DialogVariant variants[] = {
+        {"dialog 0x3B by id", 0x3Bu, npcId, false},
+        {"dialog 0x3B by ptr", 0x3Bu, npcPtr, true},
+        {"dialog 0x3A by id", 0x3Au, npcId, false},
+        {"dialog 0x3A by ptr", 0x3Au, npcPtr, true},
+        {"dialog 0x3B generic merchant 0x84", 0x3Bu, 0x84u, false},
+        {"dialog 0x3B generic merchant 0x85", 0x3Bu, 0x85u, false},
+        {"dialog 0x3A generic merchant 0x84", 0x3Au, 0x84u, false},
+        {"dialog 0x3A generic merchant 0x85", 0x3Au, 0x85u, false},
+    };
+
+    for (int attempt = 1; attempt <= 2; ++attempt) {
+        IntReport("  Merchant open attempt %d via AgentMgr::InteractNPC...", attempt);
+        AgentMgr::ChangeTarget(npcId);
+        Sleep(250);
+        AgentMgr::InteractNPC(npcId);
+        Sleep(750);
+        if (WaitForMerchantContext(1500)) return true;
+
+        IntReport("  Merchant open attempt %d via raw 0x38 interact...", attempt);
+        CtoS::SendPacket(2, 0x38u, npcId);
+        Sleep(750);
+        if (WaitForMerchantContext(1500)) {
+            IntReport("  Merchant context opened via raw 0x38 interact");
+            return true;
+        }
+
+        for (const auto& variant : variants) {
+            if (variant.requiresPtr && variant.value <= 0x10000) continue;
+            IntReport("  Trying %s (0x%X, 0x%08X)...", variant.label, variant.header, variant.value);
+            CtoS::SendPacket(2, variant.header, variant.value);
+            Sleep(750);
+            if (WaitForMerchantContext(2000)) {
+                IntReport("  Merchant context opened via %s", variant.label);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static bool GoToNpcLikeAutoIt(uint32_t npcId, DWORD timeoutMs) {
+    DWORD start = GetTickCount();
+    while ((GetTickCount() - start) < timeoutMs) {
+        auto* npc = AgentMgr::GetAgentByID(npcId);
+        if (!npc) return false;
+
+        float px = 0.0f;
+        float py = 0.0f;
+        if (TryReadAgentPosition(ReadMyId(), px, py)) {
+            const float dist = AgentMgr::GetDistance(px, py, npc->x, npc->y);
+            if (dist <= 250.0f) {
+                Sleep(1000);
+                return true;
+            }
+        }
+
+        GameThread::EnqueuePost([x = npc->x, y = npc->y]() {
+            AgentMgr::Move(x, y);
+        });
+        Sleep(100);
+        AgentMgr::InteractNPC(npcId);
+        Sleep(250);
+    }
+    return false;
 }
 
 int RunFroggyFeatureTest() {
@@ -155,10 +356,18 @@ int RunFroggyFeatureTest() {
     IntReport("=== PHASE 2: Outpost Tests ===");
 
     // Add heroes
+    const uint32_t heroesBefore = PartyMgr::CountPartyHeroes();
+    IntReport("  Party heroes before setup: %u", heroesBefore);
+    if (heroesBefore > 0) {
+        IntReport("  Clearing existing heroes before setup...");
+        const bool cleared = KickAllHeroesWithObservation(4000);
+        const uint32_t heroesAfterKick = PartyMgr::CountPartyHeroes();
+        IntReport("  Party heroes after clear: %u", heroesAfterKick);
+        IntCheck("Existing heroes cleared before setup", cleared && heroesAfterKick == 0);
+    }
+
     IntReport("  Adding heroes...");
-    PartyMgr::KickAllHeroes();
-    Sleep(2000);
-    uint32_t heroIds[] = {25, 14, 21, 4, 24, 15, 1};
+    uint32_t heroIds[] = {30, 14, 21, 4, 24, 15, 29};
     for (int i = 0; i < 7; i++) {
         IntReport("  Adding hero %u (%d/7)...", heroIds[i], i + 1);
         PartyMgr::AddHero(heroIds[i]);
@@ -169,6 +378,9 @@ int RunFroggyFeatureTest() {
         Sleep(300);
     }
     Sleep(1000);
+    const uint32_t heroesAfterAdd = PartyMgr::CountPartyHeroes();
+    IntReport("  Party heroes after setup: %u", heroesAfterAdd);
+    IntCheck("Seven heroes present after setup", heroesAfterAdd == 7);
 
     // Skillbar validation
     auto* bar = SkillMgr::GetPlayerSkillbar();
@@ -233,57 +445,67 @@ int RunFroggyFeatureTest() {
     Sleep(500);
 
     // Find and interact with merchant (with retry)
-    uint32_t merchantId = FindNearestNpc(kMerchX, kMerchY, 900.0f);
-    if (!merchantId) {
-        // If not found, walk closer and retry
-        IntReport("  No merchant at 900 range, walking closer...");
+    static constexpr uint16_t kGaddsMerchantPlayerNumber = 6060;
+    DumpMerchantNpcCandidates(kMerchX, kMerchY, 1500.0f, kGaddsMerchantPlayerNumber);
+
+    NpcCandidate merchantCandidates[6];
+    size_t merchantCandidateCount = CollectMerchantNpcCandidates(
+        kMerchX, kMerchY, 1500.0f, kGaddsMerchantPlayerNumber, merchantCandidates, _countof(merchantCandidates));
+    if (!merchantCandidateCount) {
+        IntReport("  No merchant candidates at 1500 range, walking closer...");
         MovePlayerNear(kMerchX, kMerchY, 200.0f, 10000);
         Sleep(500);
-        merchantId = FindNearestNpc(kMerchX, kMerchY, 1500.0f);
+        DumpMerchantNpcCandidates(kMerchX, kMerchY, 1500.0f, kGaddsMerchantPlayerNumber);
+        merchantCandidateCount = CollectMerchantNpcCandidates(
+            kMerchX, kMerchY, 1500.0f, kGaddsMerchantPlayerNumber, merchantCandidates, _countof(merchantCandidates));
     }
 
-    if (merchantId) {
-        auto* npc = AgentMgr::GetAgentByID(merchantId);
-        auto* living = npc ? static_cast<AgentLiving*>(npc) : nullptr;
-        IntReport("  Found NPC agent=%u allegiance=%u player_number=%u npc_id=%u at (%.0f, %.0f)",
-                  merchantId,
-                  living ? living->allegiance : 0,
-                  living ? living->player_number : 0,
-                  living ? living->transmog_npc_id : 0,
-                  npc ? npc->x : 0.0f, npc ? npc->y : 0.0f);
-        bool reachedNpc = false;
-        if (npc) {
-            reachedNpc = MovePlayerNear(npc->x, npc->y, 200.0f, 15000);
-            float px = 0, py = 0;
-            TryReadAgentPosition(ReadMyId(), px, py);
-            IntReport("  After move to NPC: pos=(%.0f,%.0f) reached=%d", px, py, reachedNpc);
-        }
-
-        if (!reachedNpc) {
-            IntReport("  WARN: Could not reach merchant NPC — skipping interact to avoid crash");
-            IntSkip("Merchant interaction", "Movement to NPC failed");
-            goto phase4;
-        }
-
+    if (merchantCandidateCount) {
         bool merchantOpen = false;
-        for (int attempt = 1; attempt <= 3 && !merchantOpen; attempt++) {
-            IntReport("  Interact attempt %d...", attempt);
-            AgentMgr::ChangeTarget(merchantId);
-            Sleep(250);
-            CtoS::SendPacket(2, 0x38u, merchantId); // INTERACT_NPC
-            Sleep(750);
-            CtoS::SendPacket(2, 0x3Bu, merchantId); // Dialog to open merchant
-            Sleep(1000);
+        uint32_t openedMerchantId = 0;
 
-            merchantOpen = WaitFor("Merchant window open", 3000, []() {
-                return TradeMgr::GetMerchantItemCount() > 0;
-            });
+        for (size_t idx = 0; idx < merchantCandidateCount; ++idx) {
+            const auto& candidate = merchantCandidates[idx];
+            auto* npc = AgentMgr::GetAgentByID(candidate.agentId);
+            auto* living = npc ? static_cast<AgentLiving*>(npc) : nullptr;
+            IntReport("  Trying merchant candidate %zu/%zu: agent=%u allegiance=%u player_number=%u npc_id=%u at (%.0f, %.0f)",
+                idx + 1,
+                merchantCandidateCount,
+                candidate.agentId,
+                living ? living->allegiance : 0,
+                living ? living->player_number : 0,
+                living ? living->transmog_npc_id : 0,
+                npc ? npc->x : 0.0f,
+                npc ? npc->y : 0.0f);
+            bool reachedNpc = false;
+            if (npc) {
+                reachedNpc = GoToNpcLikeAutoIt(candidate.agentId, 15000);
+                float px = 0, py = 0;
+                TryReadAgentPosition(ReadMyId(), px, py);
+                IntReport("  After GoToNpcLikeAutoIt: pos=(%.0f,%.0f) reached=%d", px, py, reachedNpc);
+            }
+
+
+            if (!reachedNpc) {
+                IntReport("  WARN: Could not reach candidate %u", candidate.agentId);
+                continue;
+            }
+
+            merchantOpen = OpenMerchantContextWithVariants(candidate.agentId);
+            if (merchantOpen) {
+                openedMerchantId = candidate.agentId;
+                break;
+            }
+
+            AgentMgr::CancelAction();
+            Sleep(500);
         }
 
         IntCheck("Merchant window opened", merchantOpen);
 
         if (merchantOpen) {
             uint32_t itemCount = TradeMgr::GetMerchantItemCount();
+            IntReport("  Merchant opened via candidate agent=%u", openedMerchantId);
             IntCheck("Merchant has items", itemCount > 0);
             IntReport("  Merchant has %u items", itemCount);
         }
@@ -293,7 +515,6 @@ int RunFroggyFeatureTest() {
     } else {
         IntSkip("Merchant tests", "Merchant NPC not found near target coords");
     }
-
     // ===== PHASE 4: Enter Explorable =====
 phase4:
     // Movement safety guards added to AgentMgr::Move — re-enabled.

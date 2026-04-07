@@ -136,6 +136,7 @@ namespace GWA3::Offsets {
     // ===== Agent Interaction (GWCA) =====
     extern uintptr_t InteractAgent;      // func — interaction dispatcher (resolves CallTarget at +0xD6)
     extern uintptr_t CallTargetFunc;     // func — native CallTarget(type, agent_id)
+    extern uintptr_t InteractNPCFunc;    // func — native InteractNPC(agent_id, call_target)
 
     // ===== Trade (GWCA) =====
     extern uintptr_t OfferTradeItem;     // func — __fastcall offer item in trade window

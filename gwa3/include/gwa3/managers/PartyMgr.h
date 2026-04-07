@@ -34,5 +34,8 @@ namespace GWA3::PartyMgr {
 
     // State queries
     bool GetIsPartyDefeated();
+    uint32_t CountVisibleHeroes();
+    uint32_t CountPartyHeroes();
+    uint32_t GetCalledTargetId();
 
 } // namespace GWA3::PartyMgr

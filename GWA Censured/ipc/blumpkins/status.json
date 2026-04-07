@@ -1,0 +1,52 @@
+{
+  "character": "B L U M P K I N S",
+  "script": "Froggy_HM_v1.6",
+  "pid": 35980,
+  "timestamp": 1774869889,
+  "uptime_seconds": 331,
+  "bot_running": true,
+  "map_id": 857,
+  "gold": { "character": 68328, "storage": 791813 },
+  "state": "maintenance",
+  "settings": {
+    "add_heroes": true,
+    "consets": false,
+    "buy_consets": true,
+    "stones": false,
+    "open_chests": false,
+    "pick_up_golds": true,
+    "auto_salvage": true,
+    "hero_config": "Standard"
+  },
+  "stats": {
+    "run_count": 0,
+    "fail_count": 0,
+    "best_run_time": "---",
+    "avg_run_time": "---",
+    "current_run_time": "209:33:13",
+    "total_time": "00:05:31"
+  },
+  "log": [
+    "[04:19] INI file incompleted. Recreating it.",
+    "[04:19] Creating INI File.",
+    "[04:19] Start pressed",
+    "[04:19] Mapping your skill bar",
+    "[04:19] Mapping your skill bar - completed",
+    "[04:19] Entering Setup function...",
+    "[04:19] Starting Maintenance Run... (BuyConsumables=True)",
+    "[04:19] Conset buy triggered (runs=1 bank=882613)",
+    "[04:19] Conset plan: 25 sets. Need Iron=2500 Dust=2500 Bone=1250 Feather=1250",
+    "[04:19] Have: Iron=0 Dust=2000 Bone=1250 Feather=1250",
+    "[04:20] Withdrew gold, now have 100000",
+    "[04:20] Buying: Iron=2500 Dust=500 Bone=0 Feather=0",
+    "[04:20] Buying 2500 of material 948 (Batch Size: 10)",
+    "[04:20] Requesting 250 packs from trader.",
+    "[04:23] Bought 250 packs.",
+    "[04:23] Buying 500 of material 929 (Batch Size: 10)",
+    "[04:23] Requesting 50 packs from trader.",
+    "[04:24] Bought 50 packs.",
+    "[04:24] Crafting 25 Grails at Eyja...",
+    "[04:24] Debug: BuyConsumableChunk ID=24861 Amount=25 Cost=250",
+    "[04:24] Crafting 25 items via UI (index 0)..."
+  ]
+}

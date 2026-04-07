@@ -6,6 +6,7 @@
 #include <gwa3/core/RenderHook.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/managers/AgentMgr.h>
+#include <gwa3/game/Party.h>
 
 #include <Windows.h>
 #include <cstring>
@@ -65,6 +66,41 @@ static uintptr_t GetSkillbarArrayBase() {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
+}
+
+static PartyInfo* ResolvePlayerParty() {
+    if (Offsets::BasePointer <= 0x10000) return nullptr;
+
+    __try {
+        const uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+        if (ctx <= 0x10000) return nullptr;
+
+        const uintptr_t p1 = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
+        if (p1 <= 0x10000) return nullptr;
+
+        const uintptr_t party = *reinterpret_cast<uintptr_t*>(p1 + 0x4C);
+        if (party <= 0x10000) return nullptr;
+
+        const uintptr_t playerParty = *reinterpret_cast<uintptr_t*>(party + 0x54);
+        if (playerParty <= 0x10000) return nullptr;
+
+        return reinterpret_cast<PartyInfo*>(playerParty);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+static uint32_t ResolveSkillbarAgentId(uint32_t heroIndex) {
+    if (heroIndex == 0) {
+        return AgentMgr::GetMyId();
+    }
+
+    PartyInfo* playerParty = ResolvePlayerParty();
+    if (!playerParty || !playerParty->heroes.buffer || heroIndex > playerParty->heroes.size) {
+        return 0;
+    }
+
+    return playerParty->heroes.buffer[heroIndex - 1].agent_id;
 }
 
 bool Initialize() {
@@ -137,13 +173,26 @@ void UseHeroSkill(uint32_t heroIndex, uint32_t slot, uint32_t targetAgentId) {
 }
 
 void LoadSkillbar(const uint32_t skillIds[8], uint32_t heroIndex) {
-    CtoS::SendPacket(10, Packets::LOAD_SKILLBAR, heroIndex,
+    const uint32_t agentId = ResolveSkillbarAgentId(heroIndex);
+    if (!agentId) {
+        Log::Warn("SkillMgr: LoadSkillbar skipped (heroIndex=%u agentId unresolved)", heroIndex);
+        return;
+    }
+
+    CtoS::SendPacket(11, Packets::LOAD_SKILLBAR, agentId, 8u,
                      skillIds[0], skillIds[1], skillIds[2], skillIds[3],
                      skillIds[4], skillIds[5], skillIds[6], skillIds[7]);
 }
 
 void SetSkillbarSkill(uint32_t slot, uint32_t skillId, uint32_t heroIndex) {
-    CtoS::SendPacket(4, Packets::SET_SKILLBAR_SKILL, slot, skillId, heroIndex);
+    const uint32_t agentId = ResolveSkillbarAgentId(heroIndex);
+    if (!agentId || slot == 0) {
+        Log::Warn("SkillMgr: SetSkillbarSkill skipped (heroIndex=%u slot=%u agentId=%u)",
+                  heroIndex, slot, agentId);
+        return;
+    }
+
+    CtoS::SendPacket(5, Packets::SET_SKILLBAR_SKILL, agentId, slot - 1, skillId, 0u);
 }
 
 void ToggleHeroSkillSlot(uint32_t heroIndex, uint32_t slot) {

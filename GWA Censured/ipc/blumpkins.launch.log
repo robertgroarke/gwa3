@@ -1,0 +1,179 @@
+[GWLauncher] Loaded 5 accounts
+[Froggy] Headless auto-launch: B L U M P K I N S
+[GWLauncher] Auto-launch: B L U M P K I N S
+[GWLauncher] Loaded 5 accounts
+[GWLauncher] Launching account: B L U M P K I N S
+[GWLauncher] Command: "C:\Program Files (x86)\Guild Wars - Copy (3)\Gw.exe" -email "groarkerob@gmail.com" -password "bob82191101" -character "B L U M P K I N S" -perf -fps 144
+[GWLauncher] Process created (suspended). PID=47144
+[GWLauncher] GetModuleBase: PEB at 0x00228000
+[GWLauncher] GetModuleBase: ImageBase=0x009C0000 TextBase=0x009C1000
+[GWLauncher] McPatch: Module base = 0x009C1000
+[GWLauncher] McPatch: Read 4771840 bytes from process memory.
+[GWLauncher] McPatch: Signature found at offset 0x0007D02A
+[GWLauncher] McPatch: Patching at address 0x00A3E010
+[GWLauncher] McPatch: Patch written successfully (4 bytes).
+[GWLauncher] Multiclient patch applied successfully.
+[GWLauncher] Thread resumed. GW client running. PID=47144
+[GWLauncher] Waiting for client to log in (timeout: 120s)...
+[GWLauncher] Phase 1: Waiting for GW window (PID 47144)...
+[GWLauncher] Phase 2: Connecting to client...
+[DEBUG] Registering scan patterns
+[DEBUG] PostMessage: 0x00000000
+[DEBUG] ChatLogStart: 0x00000000
+[DEBUG] ChatLogReturn: 0x00000005
+[DEBUG] Resolving file-message assertions patterns
+[DEBUG] Getting game base address (PE included)
+[DEBUG] Reading PE sections to map their start/end
+[DEBUG] Getting game base address (PE included)
+[DEBUG] Getting game base address (PE excluded)
+[DEBUG] Executing pattern scan
+[DEBUG] Appending patterns to ASM injection string
+[DEBUG] Creating scan procedure
+[DEBUG] Checking for no previous injection
+[DEBUG] Writing header to external process
+[DEBUG] Completing ASM code
+[DEBUG] Writing ASM code
+[DEBUG] Executing scan routine
+[DEBUG] Retrieving scan results
+[DEBUG] Mapping scan results to labels
+[DEBUG] Offset is larger than 0x7FFFFFFF, adjusting for 64-bit address space.
+[DEBUG] Offset is larger than 0x7FFFFFFF, adjusting for 64-bit address space.
+[FrameUI] Scanning for SendFrameUIMsg in .text (0x009C1000-0x00EC6800)...
+[FrameUI] SendFrameUIMsg: 0x00BE86D0 (call at 0x00BE72CC)
+[DEBUG] PostMessage: 0x00000000
+[DEBUG] ChatLogStart: 0x00000000
+[DEBUG] ChatLogReturn: 0x00000005
+[DEBUG] ChatLogCallbackEvent: 0x00000501
+[DEBUG] ChatLogSize: 0x00000010
+[DEBUG] BasePointer: 0x01182A08
+[DEBUG] Ping: 0x01182C48
+[DEBUG] StatusCode: 0x01182DB0
+[DEBUG] PacketSend: 0x00D74B10
+[DEBUG] PacketLocation: 0x01182DAC
+[DEBUG] Action: 0x00BE86D0
+[DEBUG] ActionBase: 0x011754B8
+[DEBUG] Environment: 0x00B60D48
+[DEBUG] PreGame: 0x01186470
+[DEBUG] FrameArray: 0x01175624
+[DEBUG] SceneContext: 0x0A130320
+[DEBUG] SkillBase: 0x00F15ED0
+[DEBUG] SkillTimer: 0x01182424
+[DEBUG] UseSkill: 0x00DADBC0
+[DEBUG] UseHeroSkill: 0x00DA57B0
+[DEBUG] FriendList: 0x01606B58
+[DEBUG] PlayerStatus: 0x00DD4D00
+[DEBUG] AddFriend: 0x00DD4A00
+[DEBUG] RemoveFriend: 0x00A4CED0
+[DEBUG] AttributeInfo: 0x00FC1EB0
+[DEBUG] IncreaseAttribute: 0x00DA50E0
+[DEBUG] DecreaseAttribute: 0x00DA5020
+[DEBUG] Transaction: 0x00EABA90
+[DEBUG] BuyItemBase: 0x00EE4FDC
+[DEBUG] RequestQuote: 0x00EABCA0
+[DEBUG] Salvage: 0x00DE38C0
+[DEBUG] SalvageGlobal: 0x01186C44
+[DEBUG] AgentBase: 0x011792D4
+[DEBUG] ChangeTarget: 0x00D7E240
+[DEBUG] CurrentTarget: 0x01605E64
+[DEBUG] MyID: 0x01606714
+[DEBUG] Move: 0x00DADA20
+[DEBUG] ClickCoords: 0x01186FB0
+[DEBUG] InstanceInfo: 0x01605E40
+[DEBUG] WorldConst: 0x00FC2950
+[DEBUG] Region: 0x01182C40
+[DEBUG] AreaInfo: 0x00EFB080
+[DEBUG] TradeCancel: 0x00DF3F40
+[DEBUG] UIMessage: 0x00BD02C0
+[DEBUG] CompassFlag: 0x0A130C30
+[DEBUG] PartySearchButtonCallback: 0x0A130C80
+[DEBUG] PartyWindowButtonCallback: 0x0A130CD0
+[DEBUG] EnterMission: 0x00DEE690
+[DEBUG] SetDifficulty: 0x00DED680
+[DEBUG] OpenChest: 0x00DAE0F0
+[DEBUG] Dialog: 0x00DAD8A0
+[DEBUG] AiMode: 0x0A130E60
+[DEBUG] HeroCommand: 0x0A130EB0
+[DEBUG] HeroSkills: 0x0A130F00
+[DEBUG] PlayerAdd: 0x0A130F50
+[DEBUG] PlayerKick: 0x0A130FA0
+[DEBUG] PartyInvitations: 0x0A130FF0
+[DEBUG] ActiveQuest: 0x00DA5570
+[DEBUG] Engine: 0x0A131090
+[DEBUG] Render: 0x0A1310E0
+[DEBUG] LoadFinished: 0x0A131130
+[DEBUG] Trader: 0x0A131180
+[DEBUG] TradePartner: 0x0A1311D0
+[DEBUG] ValidateAsyncDecodeStr: 0x00D61C20
+[DEBUG] : 0x0A1313B0
+[DEBUG] ScanProc: 0x0A131400
+[DEBUG] ScanLoop: 0x0A13140B
+[DEBUG] ScanInnerLoop: 0x0A131413
+[DEBUG] ScanContinue: 0x0A13142B
+[DEBUG] ScanMatched: 0x0A131453
+[DEBUG] ScanFound: 0x0A13146E
+[DEBUG] ScanExit: 0x0A131488
+[DEBUG] SceneContext : 0x01186D74
+[DEBUG] TimeOnMap : 0x01186D80
+[DEBUG] MaxAgents: 0x011792DC
+[DEBUG] TradeAccept: 0x00DF3FA0
+[DEBUG] TradeOfferItem: 0x00DF3FD0
+[DEBUG] TradeSubmitOffer: 0x00DF40D0
+[DEBUG] AddNPC: 0x00DED700
+[DEBUG] AddHero: 0x00DA5990
+[DEBUG] KickNPC: 0x00DEE4D0
+[DEBUG] KickHero: 0x00DA59E0
+[DEBUG] LeaveGroup: 0x00DED9A0
+[DEBUG] FlagHero: 0x00DA5770
+[DEBUG] FlagAll: 0x00DA5790
+[DEBUG] SetHeroBehavior: 0x00DA56F0
+[DEBUG] DropHeroBundle: 0x00DA5730
+[DEBUG] LockHeroTarget: 0x00DA5720
+[DEBUG] ToggleHeroSkillState: 0x00DA5740
+[DEBUG] CancelHeroSkill: 0x00DA57E0
+[DEBUG] AddPlayer: 0x00DED720
+[DEBUG] KickPlayer: 0x00DEE4F0
+[DEBUG] KickInvitedPlayer: 0x00DED6C0
+[DEBUG] RejectInvitation: 0x00DED6E0
+[DEBUG] AcceptInvitation: 0x00DED6A0
+[DEBUG] MainStart: 0x00D80881
+[DEBUG] MainReturn: 0x00D80886
+[DEBUG] RenderingMod: 0x00BD186E
+[DEBUG] RenderingModReturn: 0x00BD1878
+[DEBUG] LoadFinishedStart: 0x00DB2B94
+[DEBUG] LoadFinishedReturn: 0x00DB2B99
+[DEBUG] TraderStart: 0x00B549FE
+[DEBUG] TraderReturn: 0x00B54A03
+[DEBUG] TradePartnerStart: 0x00DF3D79
+[DEBUG] TradePartnerReturn: 0x00DF3D7E
+[DEBUG] SendFrameUIMsg: 0x00BE86D0
+[DEBUG] QueueSize: 0x00000040
+[DEBUG] Initializing command structures
+[DEBUG] ChatLogCallbackHandle: -1
+[GWLauncher] Initialized client 2
+[GWLauncher] Phase 3: Frame-based char select handling...
+[GWLauncher] Pressing Play (programmatic)...
+[FrameUI] Context=0x000000001B3C2AE0 for frame 40
+[FrameUI] Shellcode at 0x0A400000
+[FrameUI] Clicked hash=184818986 frame_id=40
+[GWLauncher] Phase 4: Waiting for map load...
+[GWLauncher] Still waiting... (30s)
+[GWLauncher] Still waiting... (35s)
+[GWLauncher] Still waiting... (40s)
+[GWLauncher] Still waiting... (45s)
+[GWLauncher] Still waiting... (50s)
+[GWLauncher] Still waiting... (55s)
+[GWLauncher] Still waiting... (60s)
+[GWLauncher] Still waiting... (65s)
+[GWLauncher] Still waiting... (70s)
+[GWLauncher] Still waiting... (75s)
+[GWLauncher] Still waiting... (80s)
+[GWLauncher] Still waiting... (85s)
+[GWLauncher] Still waiting... (90s)
+[GWLauncher] Still waiting... (95s)
+[GWLauncher] Still waiting... (100s)
+[GWLauncher] Still waiting... (105s)
+[GWLauncher] Still waiting... (110s)
+[GWLauncher] Still waiting... (115s)
+[GWLauncher] Still waiting... (120s)
+[GWLauncher] Timeout waiting for client: B L U M P K I N S
+[Froggy] Auto-launch failed for: B L U M P K I N S

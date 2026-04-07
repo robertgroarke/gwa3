@@ -248,18 +248,36 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
-    bool gameThreadOk = GWA3::GameThread::Initialize();
-    if (!gameThreadOk) {
-        GWA3::Log::Warn("GameThread initialization failed — trying RenderHook fallback");
-    }
+    // Defer GameThread init to AFTER bootstrap — the VEH INT3 hook at the
+    // function entry interferes with RenderHook's mid-function detour in
+    // the same function during char select.
+    bool gameThreadOk = false;
+
+    // === BISECT: which hook breaks PacketSend? ===
+    auto bisectTest = [](const char* label) {
+        if (!GWA3::Offsets::PacketSend || !GWA3::Offsets::PacketLocation) {
+            GWA3::Log::Warn("[BISECT] %s: SKIP (offsets null)", label);
+            return;
+        }
+        uintptr_t loc = *reinterpret_cast<uintptr_t*>(GWA3::Offsets::PacketLocation);
+        if (!loc) {
+            GWA3::Log::Warn("[BISECT] %s: SKIP (PacketLocation deref null)", label);
+            return;
+        }
+        auto fn = reinterpret_cast<void(__cdecl*)(void*, uint32_t, uint32_t*)>(GWA3::Offsets::PacketSend);
+        uint32_t d[1] = { 0x28 }; // ACTION_CANCEL
+        GWA3::Log::Info("[BISECT] %s: calling PacketSend...", label);
+        fn(reinterpret_cast<void*>(loc), 4, d);
+        GWA3::Log::Info("[BISECT] %s: OK", label);
+    };
 
     if (integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || workflowTest || froggyTest || !anyTest) {
-        if (!gameThreadOk) {
-            // Fallback: use old render hook if GameThread failed
-            if (!GWA3::RenderHook::Initialize()) {
-                GWA3::Log::Error("Both GameThread and RenderHook failed - aborting");
-                return 1;
-            }
+        // RenderHook handles pre-game char select UI clicks (ButtonClick).
+        // Always initialize it — GameThread (VEH INT3) handles in-game dispatch
+        // but RenderHook is needed for the bootstrap phase.
+        if (!GWA3::RenderHook::Initialize()) {
+            GWA3::Log::Error("RenderHook failed - aborting");
+            return 1;
         }
         if (!RunCharSelectBootstrap(90000)) {
             GWA3::Log::Error("Bootstrap failed - aborting startup");
@@ -267,11 +285,27 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         }
         GWA3::RenderHook::SetMapLoaded(true);
         WaitForPlayerHydration(45000);
+
+        // Now safe to install GameThread VEH INT3 hook — RenderHook has shut
+        // down (SetMapLoaded calls Shutdown), so no conflict in the same function.
+        gameThreadOk = GWA3::GameThread::Initialize();
+        if (!gameThreadOk) {
+            GWA3::Log::Warn("GameThread initialization failed after bootstrap");
+        }
+
         GWA3::CtoS::Initialize();
-        // CtoSHook disabled — CtoS now dispatches via GameThread::EnqueuePostRaw
-        // GWA3::CtoSHook::Initialize();
+
+        // Enable post-queue dispatch now that we're in-game with valid PacketLocation
+        GWA3::GameThread::EnablePostDispatch();
+
+        bisectTest("After CtoS (before other hooks)");
+
+        // CtoSHook disabled
         GWA3::TraderHook::Initialize();
+        bisectTest("After TraderHook");
+
         GWA3::TargetLogHook::Initialize();
+        bisectTest("After TargetLogHook");
     }
 
     if (!gameThreadOk) {
@@ -285,9 +319,12 @@ DWORD WINAPI InitThread(LPVOID hModule) {
             GWA3::Log::Info("Hello from game thread! Hook is working.");
         });
         GWA3::StoC::Initialize();
+        bisectTest("After StoC");
+
         GWA3::DialogMgr::Initialize();
         GWA3::ChatLogMgr::Initialize();
         GWA3::StringEncoding::Initialize();
+        bisectTest("After ALL hooks");
     }
 
     if (cmdTest) {
