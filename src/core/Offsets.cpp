@@ -101,6 +101,7 @@ uintptr_t MapPortBypass = 0;
 
 uintptr_t InteractAgent = 0;
 uintptr_t CallTargetFunc = 0;
+uintptr_t InteractNPCFunc = 0;
 
 uintptr_t OfferTradeItem = 0;
 uintptr_t UpdateTradeCart = 0;
@@ -444,8 +445,7 @@ static void PostProcessOffsets() {
     if (DropBuff)       DropBuff       = Scanner::FunctionFromNearCall(DropBuff);
 
     // Agent interaction: InteractAgent scan+0x41 should contain E8 near call to dispatcher.
-    // GWCA offset may shift between GW builds, so search ±16 bytes for the E8.
-    // Then CallTarget is at dispatcher + 0xD6 (also a near call, also searched ±16).
+    // GWCA offsets may shift between GW builds, so search nearby for the relevant E8s.
     if (InteractAgent) {
         uintptr_t rawScan = InteractAgent;
 
@@ -479,10 +479,26 @@ static void PostProcessOffsets() {
                     }
                 }
             }
+
+            // Search ±24 around dispatcher+0xE7 for InteractNPC E8
+            for (int delta = -24; delta <= 24 && InteractNPCFunc <= 0x10000; delta++) {
+                uintptr_t probe = InteractAgent + 0xE7 + delta;
+                if (*reinterpret_cast<uint8_t*>(probe) == 0xE8) {
+                    uintptr_t candidate = Scanner::FunctionFromNearCall(probe);
+                    if (candidate > 0x10000) {
+                        InteractNPCFunc = candidate;
+                        Log::Info("Offsets: InteractNPCFunc E8 at dispatcher+0x%X -> 0x%08X",
+                                  0xE7 + delta, InteractNPCFunc);
+                    }
+                }
+            }
         }
 
         if (CallTargetFunc <= 0x10000) {
             Log::Warn("Offsets: CallTargetFunc resolution failed (InteractAgent=0x%08X)", InteractAgent);
+        }
+        if (InteractNPCFunc <= 0x10000) {
+            Log::Warn("Offsets: InteractNPCFunc resolution failed (InteractAgent=0x%08X)", InteractAgent);
         }
     }
 

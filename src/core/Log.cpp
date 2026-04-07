@@ -11,6 +11,7 @@ namespace GWA3::Log {
 static FILE* g_logFile = nullptr;
 static std::mutex g_mutex;
 static bool g_initialized = false;
+static bool g_consoleCreated = false;
 
 static void GetTimestamp(char* buf, size_t len) {
     time_t now = time(nullptr);
@@ -68,12 +69,14 @@ void Initialize() {
 
     fopen_s(&g_logFile, dllPath, "a");
 
-    // Attach to existing console (GW.exe console window) or allocate one
-    if (AttachConsole(ATTACH_PARENT_PROCESS) || GetConsoleWindow() != nullptr || AllocConsole()) {
+    // Always create a dedicated console so injected runs have a visible live log window.
+    if (AllocConsole()) {
         FILE* dummy = nullptr;
         freopen_s(&dummy, "CONOUT$", "w", stdout);
         freopen_s(&dummy, "CONOUT$", "w", stderr);
+        SetConsoleTitleA("gwa3 live log");
         g_consoleAttached = true;
+        g_consoleCreated = true;
     }
 
     g_initialized = true;
@@ -84,6 +87,10 @@ void Shutdown() {
     if (g_logFile) {
         fclose(g_logFile);
         g_logFile = nullptr;
+    }
+    if (g_consoleCreated) {
+        FreeConsole();
+        g_consoleCreated = false;
     }
     g_consoleAttached = false;
     g_initialized = false;

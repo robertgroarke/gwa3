@@ -32,6 +32,7 @@ static volatile LONG s_repatchCount = 0;
 static HANDLE s_postDispatchEvent = nullptr;
 static HANDLE s_postSenderThread = nullptr;
 static volatile bool s_postSenderRunning = false;
+static volatile bool s_postSenderEnabled = false; // set true after bootstrap
 
 // --- Singleshot queue ---
 // Uses raw function pointers with inline context (no heap allocation).
@@ -49,12 +50,12 @@ struct InlineTask {
 };
 
 static InlineTask s_preQueue[kMaxQueue];
-static uint32_t s_queueHead = 0;
-static uint32_t s_queueTail = 0;
+static volatile uint32_t s_queueHead = 0;
+static volatile uint32_t s_queueTail = 0;
 
 static InlineTask s_postQueue_ring[kMaxQueue];
-static uint32_t s_postHead = 0;
-static uint32_t s_postTail = 0;
+static volatile uint32_t s_postHead = 0;
+static volatile uint32_t s_postTail = 0;
 
 // Legacy — kept for API compatibility
 static std::vector<Callback> s_queue;
@@ -89,6 +90,7 @@ static void EmplaceCallback(InlineTask& slot, Callback&& task) {
 static volatile LONG s_inHandler = 0;
 
 static volatile LONG s_vehHitCount = 0;
+static volatile LONG s_tryFail = 0;
 
 static LONG CALLBACK VehHandler(PEXCEPTION_POINTERS ep) {
     if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT)
@@ -98,7 +100,12 @@ static LONG CALLBACK VehHandler(PEXCEPTION_POINTERS ep) {
     if (faultAddr != s_hookTarget)
         return EXCEPTION_CONTINUE_SEARCH;
 
-    InterlockedIncrement(&s_vehHitCount);
+    LONG hitNum = InterlockedIncrement(&s_vehHitCount);
+    // Log first few hits + whenever queue has work
+    if (hitNum <= 3 || (s_queueTail != s_queueHead && hitNum % 100 == 0)) {
+        Log::Info("GameThread: VEH hit #%d tid=%u qH=%u qT=%u",
+                  static_cast<int>(hitNum), GetCurrentThreadId(), s_queueHead, s_queueTail);
+    }
 
     // Re-entrancy: PacketSend can reach this address internally.
     // Just emulate the original instruction and return.
@@ -112,6 +119,7 @@ static LONG CALLBACK VehHandler(PEXCEPTION_POINTERS ep) {
 
     // --- Game thread dispatch ---
     EnterCriticalSection(&s_cs);
+
     s_onGameThread = true;
     s_gameThreadId = GetCurrentThreadId();
 
@@ -125,12 +133,21 @@ static LONG CALLBACK VehHandler(PEXCEPTION_POINTERS ep) {
         EnterCriticalSection(&s_cs);
     }
 
-    // Post-queue: signal the sender thread to dispatch ONE task.
-    // PacketSend cannot be called from inside VEH exception dispatch —
-    // the exception context restricts what the game's network code can do.
-    // A separate thread calls PacketSend outside any exception context.
+    // Post-queue: dispatch ONE task directly on game thread.
+    // Temporarily restore original byte so PacketSend's internal path
+    // through the hook site doesn't trigger a nested INT3 in exception context.
     if (s_postTail != s_postHead) {
-        SetEvent(s_postDispatchEvent);
+        uint32_t idx = s_postTail;
+        s_postTail = (s_postTail + 1) % kMaxQueue;
+        LeaveCriticalSection(&s_cs);
+
+        // Restore original byte for PacketSend, then re-patch after
+        *reinterpret_cast<volatile uint8_t*>(s_hookTarget) = s_originalByte;
+        s_postQueue_ring[idx]();
+        s_postQueue_ring[idx].invoke = nullptr;
+        *reinterpret_cast<volatile uint8_t*>(s_hookTarget) = 0xCC;
+
+        EnterCriticalSection(&s_cs);
     }
 
     s_onGameThread = false;
@@ -169,6 +186,7 @@ static DWORD WINAPI PostSenderThread(LPVOID) {
     while (s_postSenderRunning) {
         WaitForSingleObject(s_postDispatchEvent, 200);
         if (!s_postSenderRunning) break;
+        if (!s_postSenderEnabled) continue; // wait until bootstrap complete
 
         // Suspend INT3, dispatch one task, restore INT3
         EnterCriticalSection(&s_cs);
@@ -180,20 +198,12 @@ static DWORD WINAPI PostSenderThread(LPVOID) {
         s_postTail = (s_postTail + 1) % kMaxQueue;
         LeaveCriticalSection(&s_cs);
 
-        Log::Info("GameThread: [PostSender] Dispatching post-queue[%u]", idx);
-
-        // Restore original byte so PacketSend doesn't hit INT3
-        *reinterpret_cast<volatile uint8_t*>(s_hookTarget) = s_originalByte;
-        FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(s_hookTarget), 1);
-
+        // Call directly — the VEH re-entrancy guard handles any INT3 hits
+        // that PacketSend triggers internally (emulates push ebp, no dispatch).
+        // Bisect tests proved PacketSend works from non-VEH thread context
+        // with INT3 active.
         s_postQueue_ring[idx]();
         s_postQueue_ring[idx].invoke = nullptr;
-
-        Log::Info("GameThread: [PostSender] Post-queue[%u] done", idx);
-
-        // Re-patch INT3
-        *reinterpret_cast<volatile uint8_t*>(s_hookTarget) = 0xCC;
-        FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(s_hookTarget), 1);
     }
     return 0;
 }
@@ -208,7 +218,9 @@ static DWORD WINAPI HookWatchdog(LPVOID) {
         // Periodically log hit count for diagnostics
         static int watchdogCycles = 0;
         if (++watchdogCycles % 50 == 1) { // every ~5 seconds
-            Log::Info("GameThread: [WATCHDOG] VEH hits=%d", static_cast<int>(s_vehHitCount));
+            Log::Info("GameThread: [WATCHDOG] VEH hits=%d tryFail=%d qH=%u qT=%u",
+                      static_cast<int>(s_vehHitCount), static_cast<int>(s_tryFail),
+                      s_queueHead, s_queueTail);
         }
 
         uint8_t cur = *reinterpret_cast<const uint8_t*>(s_hookTarget);
@@ -468,6 +480,11 @@ bool IsOnGameThread() {
 
 bool IsInitialized() {
     return s_initialized;
+}
+
+void EnablePostDispatch() {
+    s_postSenderEnabled = true;
+    Log::Info("GameThread: Post-dispatch sender enabled");
 }
 
 // Atomic single-byte writes — no thread suspension needed.

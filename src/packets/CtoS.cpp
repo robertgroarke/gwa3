@@ -89,6 +89,8 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
         if (fresh) task.location = fresh;
     }
 
+    // Dispatch via GameThread post-queue — the VEH INT3 handler will
+    // call PacketSend on the game thread during the next frame.
     if (GameThread::IsInitialized()) {
         GameThread::EnqueuePostRaw(PacketTaskInvoker, &task, sizeof(task));
         return;

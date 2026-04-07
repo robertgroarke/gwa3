@@ -28,7 +28,13 @@ void DestroyItem(uint32_t itemId) {
 }
 
 void MoveItem(uint32_t itemId, uint32_t bagId, uint32_t slot) {
-    CtoS::MoveItem(itemId, bagId, slot);
+    uint32_t packetBagId = bagId;
+    Bag* bag = GetBag(bagId);
+    if (bag) {
+        // GW packets use the bag's runtime ID at +0x08, not the bag-array index.
+        packetBagId = bag->h0008;
+    }
+    CtoS::MoveItem(itemId, packetBagId, slot);
 }
 
 void IdentifyItem(uint32_t itemId, uint32_t kitId) {

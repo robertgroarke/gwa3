@@ -33,6 +33,7 @@ struct CallTargetPacket {
 using MoveFn = void(__cdecl*)(const void*);
 using ChangeTargetFn = void(__cdecl*)(uint32_t, uint32_t);
 using InteractItemFn = void(__cdecl*)(uint32_t, uint32_t);
+using InteractNPCFn = void(__cdecl*)(uint32_t, uint32_t);
 using CallTargetFn = void(__cdecl*)(CallTargetType, uint32_t);
 
 struct MoveData {
@@ -44,6 +45,7 @@ struct MoveData {
 static MoveFn s_moveFn = nullptr;
 static ChangeTargetFn s_changeTargetFn = nullptr;
 static InteractItemFn s_interactItemFn = nullptr;
+static InteractNPCFn s_interactNpcFn = nullptr;
 static CallTargetFn s_callTargetFn = nullptr;
 static bool s_initialized = false;
 static bool s_loggedCurrentTargetRead = false;
@@ -87,6 +89,10 @@ bool Initialize() {
             if (interactItemFn) {
                 s_interactItemFn = reinterpret_cast<InteractItemFn>(interactItemFn);
             }
+            uintptr_t interactNpcFn = FindNearCallTarget(interactAgentFn + 0xE7, 24, 24);
+            if (interactNpcFn) {
+                s_interactNpcFn = reinterpret_cast<InteractNPCFn>(interactNpcFn);
+            }
             Log::Info("AgentMgr: Interact scan anchor=0x%08X agentFn=0x%08X itemFn=0x%08X",
                       static_cast<unsigned>(interactAgentCall),
                       static_cast<unsigned>(interactAgentFn),
@@ -99,11 +105,16 @@ bool Initialize() {
         s_callTargetFn = reinterpret_cast<CallTargetFn>(Offsets::CallTargetFunc);
         Log::Info("AgentMgr: CallTarget resolved from Offsets::CallTargetFunc=0x%08X", Offsets::CallTargetFunc);
     }
+    if (!s_interactNpcFn && Offsets::InteractNPCFunc > 0x10000) {
+        s_interactNpcFn = reinterpret_cast<InteractNPCFn>(Offsets::InteractNPCFunc);
+        Log::Info("AgentMgr: InteractNPC resolved from Offsets::InteractNPCFunc=0x%08X", Offsets::InteractNPCFunc);
+    }
 
     s_initialized = true;
-    Log::Info("AgentMgr: Initialized (Move=0x%08X, ChangeTarget=0x%08X, CallTarget=0x%08X, InteractItem=0x%08X)",
+    Log::Info("AgentMgr: Initialized (Move=0x%08X, ChangeTarget=0x%08X, CallTarget=0x%08X, InteractNPC=0x%08X, InteractItem=0x%08X)",
               Offsets::Move, Offsets::ChangeTarget,
               static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_callTargetFn)),
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_interactNpcFn)),
               static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_interactItemFn)));
     return true;
 }
@@ -241,7 +252,11 @@ void InteractItem(uint32_t agentId, bool callTarget) {
 }
 
 void InteractNPC(uint32_t agentId) {
-    CtoS::SendPacket(2, Packets::INTERACT_NPC, agentId);
+    // Keep packet path as the production default.
+    // Unlike CallTarget, the scanned native InteractNPC candidate has not yet
+    // been validated end-to-end on this client build.
+    // GWA2's GoNPC sends a 12-byte packet: header + agent id + trailing 0.
+    CtoS::SendPacket(3, Packets::INTERACT_NPC, agentId, 0u);
 }
 
 void InteractPlayer(uint32_t agentId) {
@@ -249,7 +264,7 @@ void InteractPlayer(uint32_t agentId) {
 }
 
 void InteractSignpost(uint32_t agentId) {
-    CtoS::SendPacket(2, Packets::SIGNPOST_RUN, agentId);
+    CtoS::SendPacket(3, Packets::SIGNPOST_RUN, agentId, 0u);
 }
 
 // Agent access via flat pointer chain: *AgentBase = agent_ptr_array, *(AgentBase+8) = maxAgents

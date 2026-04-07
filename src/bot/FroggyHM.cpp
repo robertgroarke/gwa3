@@ -1774,6 +1774,62 @@ static uint32_t FindNearestNpcByAllegiance(float x, float y, float maxDist) {
     return bestId;
 }
 
+static bool WaitForMerchantContext(DWORD timeoutMs) {
+    static constexpr uint32_t kMerchantRootHash = 3613855137u;
+    DWORD start = GetTickCount();
+    while ((GetTickCount() - start) < timeoutMs) {
+        if (TradeMgr::GetMerchantItemCount() > 0) return true;
+        if (UIMgr::GetFrameByHash(kMerchantRootHash) != 0) return true;
+        WaitMs(100);
+    }
+    return false;
+}
+
+static bool OpenMerchantContextWithVariants(uint32_t npcId) {
+    auto* npc = AgentMgr::GetAgentByID(npcId);
+    const uint32_t npcPtr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(npc));
+
+    struct DialogVariant {
+        const char* label;
+        uint32_t header;
+        uint32_t value;
+        bool requiresPtr;
+    };
+    DialogVariant variants[] = {
+        {"dialog 0x3B by id", 0x3Bu, npcId, false},
+        {"dialog 0x3B by ptr", 0x3Bu, npcPtr, true},
+        {"dialog 0x3A by id", 0x3Au, npcId, false},
+        {"dialog 0x3A by ptr", 0x3Au, npcPtr, true},
+    };
+
+    for (int attempt = 1; attempt <= 2; ++attempt) {
+        LogBot("Merchant open attempt %d via packet interact...", attempt);
+        AgentMgr::ChangeTarget(npcId);
+        WaitMs(250);
+        AgentMgr::InteractNPC(npcId);
+        WaitMs(750);
+        if (WaitForMerchantContext(1500)) return true;
+
+        LogBot("Merchant open attempt %d via legacy raw interact 0x38...", attempt);
+        CtoS::SendPacket(2, 0x38u, npcId);
+        WaitMs(750);
+        if (WaitForMerchantContext(1500)) return true;
+
+        for (const auto& variant : variants) {
+            if (variant.requiresPtr && variant.value <= 0x10000) continue;
+            LogBot("Trying %s (0x%X, 0x%08X)...", variant.label, variant.header, variant.value);
+            CtoS::SendPacket(2, variant.header, variant.value);
+            WaitMs(750);
+            if (WaitForMerchantContext(2000)) {
+                LogBot("Merchant context opened via %s", variant.label);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 static void SellJunkToMerchant() {
     // Gadd's Encampment merchant coordinates
     static constexpr float kGaddsMerchantX = -8374.0f;
@@ -1800,21 +1856,7 @@ static void SellJunkToMerchant() {
         MoveToAndWait(npc->x, npc->y, 120.0f);
     }
 
-    CtoS::SendPacket(2, 0x38u, merchantId); // INTERACT_NPC
-    WaitMs(750);
-    CtoS::SendPacket(2, 0x3Bu, merchantId); // Dialog to open merchant
-    WaitMs(1000);
-
-    // Check if merchant window opened
-    if (TradeMgr::GetMerchantItemCount() == 0) {
-        LogBot("Merchant window did not open, retrying...");
-        CtoS::SendPacket(2, 0x38u, merchantId);
-        WaitMs(500);
-        CtoS::SendPacket(2, 0x3Bu, merchantId);
-        WaitMs(1000);
-    }
-
-    if (TradeMgr::GetMerchantItemCount() == 0) {
+    if (!OpenMerchantContextWithVariants(merchantId)) {
         LogBot("Merchant window failed to open, skipping sell");
         return;
     }
@@ -1890,7 +1932,7 @@ static void DepositValuablesToXunlai() {
     if (npc) {
         MoveToAndWait(npc->x, npc->y, 120.0f);
     }
-    CtoS::SendPacket(2, 0x38u, xunlaiId); // INTERACT_NPC
+    AgentMgr::InteractNPC(xunlaiId);
     WaitMs(1500);
 
     // Move valuable items from backpack (bags 1-4) to storage (bag 8 = first storage pane)
@@ -2090,9 +2132,9 @@ static void CraftConsetsIfNeeded() {
         auto* npc = AgentMgr::GetAgentByID(npcId);
         if (npc) MoveToAndWait(npc->x, npc->y, 120.0f);
 
-        CtoS::SendPacket(2, 0x38u, npcId); // INTERACT_NPC
+        AgentMgr::InteractNPC(npcId);
         WaitMs(750);
-        CtoS::SendPacket(2, 0x3Bu, npcId); // Open crafter dialog
+        QuestMgr::Dialog(npcId);
         WaitMs(1000);
 
         if (TradeMgr::GetMerchantItemCount() == 0) {
