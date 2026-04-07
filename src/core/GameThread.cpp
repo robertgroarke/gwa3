@@ -92,6 +92,32 @@ static volatile LONG s_inHandler = 0;
 static volatile LONG s_vehHitCount = 0;
 static volatile LONG s_tryFail = 0;
 
+// --- Post-queue trampoline ---
+// Allocated as RWX shellcode. When VEH handler detects post-queue work,
+// it sets EIP to this trampoline instead of hookTarget+1. The trampoline
+// runs OUTSIDE VEH exception context (normal game thread execution):
+//   pushad/pushfd
+//   restore original byte (so PacketSend doesn't re-hit INT3)
+//   call DispatchOnePostTask
+//   re-patch INT3
+//   popfd/popad
+//   push ebp              (emulate replaced instruction)
+//   jmp hookTarget+1      (continue normal function)
+static void* s_postTrampoline = nullptr;
+
+static void __stdcall DispatchOnePostTask() {
+    EnterCriticalSection(&s_cs);
+    if (s_postTail != s_postHead) {
+        uint32_t idx = s_postTail;
+        s_postTail = (s_postTail + 1) % kMaxQueue;
+        LeaveCriticalSection(&s_cs);
+        s_postQueue_ring[idx]();
+        s_postQueue_ring[idx].invoke = nullptr;
+    } else {
+        LeaveCriticalSection(&s_cs);
+    }
+}
+
 static LONG CALLBACK VehHandler(PEXCEPTION_POINTERS ep) {
     if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT)
         return EXCEPTION_CONTINUE_SEARCH;
@@ -133,31 +159,28 @@ static LONG CALLBACK VehHandler(PEXCEPTION_POINTERS ep) {
         EnterCriticalSection(&s_cs);
     }
 
-    // Post-queue: dispatch ONE task directly on game thread.
-    // Temporarily restore original byte so PacketSend's internal path
-    // through the hook site doesn't trigger a nested INT3 in exception context.
-    if (s_postTail != s_postHead) {
-        uint32_t idx = s_postTail;
-        s_postTail = (s_postTail + 1) % kMaxQueue;
-        LeaveCriticalSection(&s_cs);
-
-        // Restore original byte for PacketSend, then re-patch after
-        *reinterpret_cast<volatile uint8_t*>(s_hookTarget) = s_originalByte;
-        s_postQueue_ring[idx]();
-        s_postQueue_ring[idx].invoke = nullptr;
-        *reinterpret_cast<volatile uint8_t*>(s_hookTarget) = 0xCC;
-
-        EnterCriticalSection(&s_cs);
-    }
+    // Post-queue: set flag for trampoline dispatch.
+    // PacketSend cannot be called from VEH exception context.
+    // Instead, we redirect EIP to a trampoline that calls our dispatch
+    // function in normal game thread context, then continues normally.
+    bool hasPostWork = (s_postTail != s_postHead);
 
     s_onGameThread = false;
     s_gameThreadId = 0;
     LeaveCriticalSection(&s_cs);
 
-    // Emulate the replaced instruction: push ebp (0x55)
-    ep->ContextRecord->Esp -= 4;
-    *reinterpret_cast<uint32_t*>(ep->ContextRecord->Esp) = ep->ContextRecord->Ebp;
-    ep->ContextRecord->Eip = static_cast<DWORD>(s_hookTarget + 1);
+    // If post-queue has work, redirect to the trampoline which calls
+    // PacketSend dispatch in normal game thread context (not VEH).
+    // Otherwise, just emulate push ebp and continue normally.
+    if (hasPostWork) {
+        ep->ContextRecord->Eip = static_cast<DWORD>(
+            reinterpret_cast<uintptr_t>(s_postTrampoline));
+    } else {
+        // Emulate: push ebp
+        ep->ContextRecord->Esp -= 4;
+        *reinterpret_cast<uint32_t*>(ep->ContextRecord->Esp) = ep->ContextRecord->Ebp;
+        ep->ContextRecord->Eip = static_cast<DWORD>(s_hookTarget + 1);
+    }
 
     InterlockedExchange(&s_inHandler, 0);
     return EXCEPTION_CONTINUE_EXECUTION;
@@ -286,6 +309,43 @@ bool Initialize() {
     // Write INT3 (single atomic byte write — no race with game thread)
     *reinterpret_cast<uint8_t*>(s_hookTarget) = 0xCC;
     FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(s_hookTarget), 1);
+
+    // Build post-queue dispatch trampoline
+    s_postTrampoline = VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (s_postTrampoline) {
+        uint8_t* sc = reinterpret_cast<uint8_t*>(s_postTrampoline);
+        size_t i = 0;
+        auto emit8 = [&](uint8_t v) { sc[i++] = v; };
+        auto emit32 = [&](uint32_t v) { memcpy(sc + i, &v, 4); i += 4; };
+
+        // Restore original byte (C6 05 [addr] [byte])
+        emit8(0xC6); emit8(0x05);
+        emit32(static_cast<uint32_t>(s_hookTarget));
+        emit8(s_originalByte);
+
+        // call DispatchOnePostTask (__stdcall, saves/restores own regs)
+        emit8(0xE8);
+        uintptr_t callAddr = reinterpret_cast<uintptr_t>(&DispatchOnePostTask);
+        int32_t callRel = static_cast<int32_t>(callAddr - reinterpret_cast<uintptr_t>(sc + i + 4));
+        emit32(*reinterpret_cast<uint32_t*>(&callRel));
+
+        // Re-patch INT3 (C6 05 [addr] CC)
+        emit8(0xC6); emit8(0x05);
+        emit32(static_cast<uint32_t>(s_hookTarget));
+        emit8(0xCC);
+
+        // push ebp (emulate replaced instruction)
+        emit8(0x55);
+
+        // jmp hookTarget+1
+        emit8(0xE9);
+        int32_t jmpRel = static_cast<int32_t>((s_hookTarget + 1) - reinterpret_cast<uintptr_t>(sc + i + 4));
+        emit32(*reinterpret_cast<uint32_t*>(&jmpRel));
+
+        FlushInstructionCache(GetCurrentProcess(), sc, static_cast<DWORD>(i));
+        Log::Info("GameThread: Post-queue trampoline at 0x%08X (%u bytes)",
+                  reinterpret_cast<uintptr_t>(s_postTrampoline), static_cast<unsigned>(i));
+    }
 
     // Start watchdog
     s_watchdogRunning = true;
