@@ -49,15 +49,4 @@ namespace GWA3::GameThread {
     // Returns true if the hook is installed and active.
     bool IsInitialized();
 
-    // Enable post-queue dispatch (call after bootstrap/map load).
-    // The sender thread won't dispatch packets until this is called,
-    // preventing stale packets from firing during char select.
-    void EnablePostDispatch();
-
-    // Temporarily disable/re-enable the MinHook detour.
-    // Use around calls to game functions (e.g. PacketSend) that
-    // internally execute code at the hook site.
-    void SuspendHook();
-    void ResumeHook();
-
 } // namespace GWA3::GameThread

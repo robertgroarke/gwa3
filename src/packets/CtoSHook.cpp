@@ -33,12 +33,51 @@ static volatile bool s_watchdogRunning = false;
 // We replicate both instructions, then JMP to hookAddr+10.
 static __declspec(naked) void CtoSDetourNaked() {
     __asm {
-        // BISECT: absolute minimum — just replay original instructions, no queue
+        // Save all registers (mirrors AutoIt's RenderingModProc approach)
+        mov dword ptr [s_savedESP], esp
+        pushad
+        pushfd
+
+        // Increment heartbeat for watchdog / diagnostics
+        inc dword ptr [s_heartbeat]
+
+        // Check if queue has a command
+        mov eax, dword ptr [s_queueCounter]
+        mov ecx, eax
+        mov ebx, dword ptr [s_queue + eax * 4]
+        test ebx, ebx
+        jz no_command
+
+        // Clear slot, save command pointer, advance counter
+        mov dword ptr [s_queue + eax * 4], 0
+        mov dword ptr [s_savedCommand], ebx
+        mov eax, ecx
+        inc eax
+        cmp eax, kQueueSize
+        jnz no_wrap
+        xor eax, eax
+    no_wrap:
+        mov dword ptr [s_queueCounter], eax
+
+        // Call the shellcode command (which calls PacketSend with proper args)
+        call dword ptr [s_savedCommand]
+
+    no_command:
+        // Restore all registers
+        popfd
+        popad
+        mov esp, dword ptr [s_savedESP]
+
+        // Replay the original 10 bytes inline:
+        // add esp, 4  (83 C4 04)
         add esp, 4
+        // cmp dword ptr [s_cmpAddr], 0  (indirect — load addr first)
         push eax
         mov eax, dword ptr [s_cmpAddr]
         cmp dword ptr [eax], 0
         pop eax
+
+        // Jump back to hookAddr + 10
         jmp [s_returnAddr]
     }
 }
