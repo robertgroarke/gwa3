@@ -53,8 +53,7 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
         Sleep(1000);
 
         // --- Crash detection: render heartbeat stall ---
-        // Skip when GameThread VEH hook is active — RenderHook is shut down
-        // after bootstrap, so its heartbeat naturally stops.
+        // Skip when GameThread is active — RenderHook shuts down after bootstrap
         uint32_t hb = RenderHook::GetHeartbeat();
         if (!GameThread::IsInitialized() && hb == lastHeartbeat && hb > 0) {
             stallCount++;
