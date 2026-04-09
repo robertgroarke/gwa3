@@ -926,6 +926,11 @@ static bool RunEnterBogrootProof() {
         IntCheck(step.label, reached || true); // Log but don't hard-fail waypoints
     }
 
+    // Shut down DialogMgr StoC hooks BEFORE the map transition.
+    // These hooks crash when they fire in the Bogroot dungeon context.
+    IntReport("  Disabling DialogMgr hooks before dungeon transition...");
+    DialogMgr::Shutdown();
+
     // Push toward dungeon portal until we zone into Bogroot
     IntReport("  Pushing toward dungeon portal (%.0f, %.0f)...", kDungeonPortalX, kDungeonPortalY);
     bool enteredBogroot = false;
@@ -947,6 +952,11 @@ static bool RunEnterBogrootProof() {
             return AgentMgr::GetMyId() > 0;
         });
         Sleep(5000); // stability wait
+
+        // Re-enable DialogMgr hooks now that we're stable inside Bogroot
+        IntReport("  Re-enabling DialogMgr hooks inside Bogroot...");
+        DialogMgr::Initialize();
+
         IntCheck("Phase 6: Entered Bogroot Growths Level 1", agentOk);
         return true;
     } else {
