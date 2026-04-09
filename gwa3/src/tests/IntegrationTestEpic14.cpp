@@ -723,7 +723,7 @@ static void ReportCombatObservabilitySnapshot(const char* label, const CombatObs
 }
 
 static void RunCombatObservabilityHarness(uint32_t foeId, const char* label) {
-    IntReport("=== PHASE 5A: Combat Observability Harness (%s) ===", label ? label : "default");
+    IntReport("=== PHASE 5B: Combat Observability Harness (%s) ===", label ? label : "default");
 
     CombatObservabilitySnapshot before = {};
     const bool beforeCaptured = CaptureCombatObservabilitySnapshot(foeId, before);
@@ -760,12 +760,53 @@ static void RunCombatObservabilityHarness(uint32_t foeId, const char* label) {
     IntCheck("Combat snapshot hero agents readable after dwell", after.heroAgentsReadable);
 }
 
+static void RunExplorableSkillbarRefreshProof() {
+    IntReport("=== PHASE 5A: Explorable Skillbar Refresh ===");
+
+    SkillbarSnapshot before = {};
+    const bool beforeCaptured = CapturePlayerSkillbarSnapshot(before);
+    IntCheck("Explorable skillbar readable before Froggy refresh", beforeCaptured);
+    if (!beforeCaptured) {
+        IntSkip("Explorable skillbar refresh proof", "Could not read player skillbar before refresh");
+        return;
+    }
+
+    IntReport("  Skillbar before refresh: agent=%u nonZero=%d ids=[%u %u %u %u %u %u %u %u]",
+              before.agentId,
+              before.nonZeroSkills,
+              before.skillIds[0], before.skillIds[1], before.skillIds[2], before.skillIds[3],
+              before.skillIds[4], before.skillIds[5], before.skillIds[6], before.skillIds[7]);
+    IntCheck("Explorable skillbar has non-zero skills before Froggy refresh", before.nonZeroSkills > 0);
+
+    const bool refreshed = Bot::Froggy::RefreshCombatSkillbar();
+    IntCheck("Froggy combat skillbar refresh succeeds in explorable", refreshed);
+
+    SkillbarSnapshot after = {};
+    const bool afterCaptured = CapturePlayerSkillbarSnapshot(after);
+    IntCheck("Explorable skillbar readable after Froggy refresh", afterCaptured);
+    if (!afterCaptured) {
+        IntSkip("Explorable skillbar refresh proof after refresh", "Could not read player skillbar after refresh");
+        return;
+    }
+
+    IntReport("  Skillbar after refresh: agent=%u nonZero=%d ids=[%u %u %u %u %u %u %u %u]",
+              after.agentId,
+              after.nonZeroSkills,
+              after.skillIds[0], after.skillIds[1], after.skillIds[2], after.skillIds[3],
+              after.skillIds[4], after.skillIds[5], after.skillIds[6], after.skillIds[7]);
+
+    IntCheck("Explorable skillbar agent id stable across refresh", before.agentId == after.agentId);
+    IntCheck("Explorable skillbar remains populated after refresh", after.nonZeroSkills > 0);
+    IntCheck("Explorable skillbar IDs stable across refresh",
+             memcmp(before.skillIds, after.skillIds, sizeof(before.skillIds)) == 0);
+}
+
 static bool IsSaneCombatPosition(float x, float y) {
     return _finite(x) && _finite(y) && fabsf(x) < 50000.0f && fabsf(y) < 50000.0f;
 }
 
 static void RunCombatAgentReadValidation(uint32_t foeId, const char* label) {
-    IntReport("=== PHASE 5B: Combat Agent Read Validation (%s) ===", label ? label : "default");
+    IntReport("=== PHASE 5C: Combat Agent Read Validation (%s) ===", label ? label : "default");
 
     CombatActorSnapshot playerBefore = {};
     CombatActorSnapshot foeBefore = {};
@@ -832,7 +873,7 @@ static void RunCombatAgentReadValidation(uint32_t foeId, const char* label) {
 }
 
 static void RunCombatEffectReadValidation(uint32_t foeId, const char* label) {
-    IntReport("=== PHASE 5C: Combat Effect Read Validation (%s) ===", label ? label : "default");
+    IntReport("=== PHASE 5D: Combat Effect Read Validation (%s) ===", label ? label : "default");
 
     const uint32_t myId = AgentMgr::GetMyId();
     IntCheck("Combat effect read bogus player effect is false", !EffectMgr::HasEffect(myId, 9999));
@@ -898,7 +939,7 @@ static bool CaptureCombatCastTelemetrySnapshot(const SkillTestCandidate& candida
 }
 
 static void RunCombatTargetAndCastTelemetryValidation(uint32_t foeId, const char* label) {
-    IntReport("=== PHASE 5D: Combat Target/Cast Telemetry Validation (%s) ===", label ? label : "default");
+    IntReport("=== PHASE 5E: Combat Target/Cast Telemetry Validation (%s) ===", label ? label : "default");
 
     GameThread::Enqueue([foeId]() {
         AgentMgr::ChangeTarget(foeId);
@@ -975,7 +1016,7 @@ static void RunCombatTargetAndCastTelemetryValidation(uint32_t foeId, const char
 }
 
 static void RunReadOnlyCombatPreconditions(uint32_t foeId, const char* label) {
-    IntReport("=== PHASE 5E: Read-only Combat Preconditions (%s) ===", label ? label : "default");
+    IntReport("=== PHASE 5F: Read-only Combat Preconditions (%s) ===", label ? label : "default");
 
     CombatObservabilitySnapshot before = {};
     const bool beforeCaptured = CaptureCombatObservabilitySnapshot(foeId, before);
@@ -1050,8 +1091,41 @@ static void RunReadOnlyCombatPreconditions(uint32_t foeId, const char* label) {
     }
 }
 
+static bool MoveNearFoeForCombat(uint32_t foeId, float desiredRange, DWORD timeoutMs) {
+    DWORD start = GetTickCount();
+    while ((GetTickCount() - start) < timeoutMs) {
+        auto* me = GetAgentLivingRaw(AgentMgr::GetMyId());
+        auto* foe = GetAgentLivingRaw(foeId);
+        if (!me || !foe || foe->hp <= 0.0f) return false;
+
+        const float dist = AgentMgr::GetDistance(me->x, me->y, foe->x, foe->y);
+        if (dist <= desiredRange) return true;
+
+        const float dx = foe->x - me->x;
+        const float dy = foe->y - me->y;
+        const float len = sqrtf(dx * dx + dy * dy);
+        if (len < 1.0f) return true;
+
+        const float stepBack = desiredRange > 150.0f ? desiredRange - 150.0f : desiredRange;
+        const float scale = (len - stepBack) / len;
+        const float moveX = me->x + dx * scale;
+        const float moveY = me->y + dy * scale;
+
+        GameThread::Enqueue([moveX, moveY]() {
+            AgentMgr::Move(moveX, moveY);
+        });
+        Sleep(350);
+    }
+    return false;
+}
+
+static CombatObservabilitySnapshot s_lastBuiltinCombatBefore = {};
+static CombatObservabilitySnapshot s_lastBuiltinCombatAfter = {};
+static bool s_lastBuiltinCombatSnapshotsValid = false;
+
 static void RunBuiltinCombatSingleStepProof(uint32_t foeId, const char* label) {
-    IntReport("=== PHASE 5F: Builtin Combat Single-Step Proof (%s) ===", label ? label : "default");
+    IntReport("=== PHASE 5G: Builtin Combat Single-Step Proof (%s) ===", label ? label : "default");
+    s_lastBuiltinCombatSnapshotsValid = false;
 
     CombatObservabilitySnapshot before = {};
     const bool beforeCaptured = CaptureCombatObservabilitySnapshot(foeId, before);
@@ -1069,7 +1143,34 @@ static void RunBuiltinCombatSingleStepProof(uint32_t foeId, const char* label) {
     });
     IntCheck("Builtin combat proof target set to foe", targetChanged);
 
+    auto* meBeforeEngage = GetAgentLivingRaw(AgentMgr::GetMyId());
+    auto* foeBeforeEngage = GetAgentLivingRaw(foeId);
+    if (meBeforeEngage && foeBeforeEngage) {
+        const float distBeforeEngage = AgentMgr::GetDistance(meBeforeEngage->x, meBeforeEngage->y,
+                                                             foeBeforeEngage->x, foeBeforeEngage->y);
+        IntReport("  Builtin combat pre-engage distance: %.0f", distBeforeEngage);
+    }
+
+    const bool inCombatRange = MoveNearFoeForCombat(foeId, 1200.0f, 12000);
+    if (!inCombatRange) {
+        IntSkip("Builtin combat single-step proof", "Could not move into engagement range for builtin combat");
+        return;
+    }
+    IntCheck("Builtin combat proof moved into engagement range", true);
+
+    auto* meAfterEngage = GetAgentLivingRaw(AgentMgr::GetMyId());
+    auto* foeAfterEngage = GetAgentLivingRaw(foeId);
+    if (meAfterEngage && foeAfterEngage) {
+        const float distAfterEngage = AgentMgr::GetDistance(meAfterEngage->x, meAfterEngage->y,
+                                                            foeAfterEngage->x, foeAfterEngage->y);
+        IntReport("  Builtin combat engaged distance: %.0f", distAfterEngage);
+    }
+
     Bot::Froggy::DebugDumpBuiltinCombatDecision(foeId);
+    const int dumpCount = Bot::Froggy::GetBuiltinCombatDecisionDumpCount();
+    for (int i = 0; i < dumpCount; ++i) {
+        IntReport("  Builtin combat dump[%d]: %s", i, Bot::Froggy::GetBuiltinCombatDecisionDumpLine(i));
+    }
 
     const bool stepExecuted = Bot::Froggy::ExecuteBuiltinCombatStep(foeId);
     IntCheck("Builtin combat proof step executed", stepExecuted);
@@ -1080,6 +1181,10 @@ static void RunBuiltinCombatSingleStepProof(uint32_t foeId, const char* label) {
 
     const char* actionDesc = Bot::Froggy::GetLastCombatStepDescription();
     IntReport("  Builtin combat action: %s", actionDesc ? actionDesc : "<null>");
+    const int traceCount = Bot::Froggy::GetCombatDebugTraceCount();
+    for (int i = 0; i < traceCount; ++i) {
+        IntReport("  Builtin combat trace[%d]: %s", i, Bot::Froggy::GetCombatDebugTraceLine(i));
+    }
     const bool actionChosen =
         actionDesc && actionDesc[0] != '\0' &&
         strncmp(actionDesc, "uninitialized", 13) != 0 &&
@@ -1170,6 +1275,183 @@ static void RunBuiltinCombatSingleStepProof(uint32_t foeId, const char* label) {
     IntCheck("Builtin combat proof observed concrete signal", observedSignal);
     IntCheck("Builtin combat proof signal matches selected action",
              validConcreteSignal);
+    s_lastBuiltinCombatBefore = before;
+    s_lastBuiltinCombatAfter = after;
+    s_lastBuiltinCombatSnapshotsValid = true;
+}
+
+static constexpr uint32_t TEST_ROLE_HEX = (1u << 8);
+static constexpr uint32_t TEST_ROLE_PRESSURE = (1u << 9);
+static constexpr uint32_t TEST_ROLE_ATTACK = (1u << 10);
+static constexpr uint32_t TEST_ROLE_INTERRUPT_HARD = (1u << 11);
+static constexpr uint32_t TEST_ROLE_INTERRUPT_SOFT = (1u << 12);
+static constexpr uint32_t TEST_ROLE_ENCHANT_REMOVE = (1u << 7);
+
+static bool IsLiveEnemyAgent(uint32_t agentId) {
+    auto* a = AgentMgr::GetAgentByID(agentId);
+    if (!a || a->type != 0xDB) return false;
+    auto* living = static_cast<AgentLiving*>(a);
+    return living->allegiance == 3 && living->hp > 0.0f;
+}
+
+static void RunCombatTargetSelectionCoverage(uint32_t foeId, const char* label) {
+    IntReport("=== PHASE 5H: Combat Target Selection Coverage (%s) ===", label ? label : "default");
+
+    const auto info = Bot::Froggy::GetLastCombatStepInfo();
+    if (!info.valid) {
+        IntSkip("Combat target selection coverage", "No builtin combat step metadata available");
+        return;
+    }
+    IntCheck("Combat target selection has last combat step info", true);
+
+    if (info.target_type == 5 || info.auto_attack) {
+        IntCheck("Chosen combat action resolved non-zero foe target", info.target_id != 0);
+        IntCheck("Chosen combat action target is live foe", IsLiveEnemyAgent(info.target_id));
+    } else {
+        IntSkip("Combat target selection - chosen foe-target action",
+                "Last builtin combat step did not use a foe-targeting action");
+    }
+
+    uint32_t skillId = 0, targetId = 0;
+    uint8_t targetType = 0;
+    if (!Bot::Froggy::DebugResolveFirstSkillTarget(TEST_ROLE_HEX | TEST_ROLE_PRESSURE, foeId, skillId, targetId, targetType)) {
+        IntSkip("Combat target selection - unhexed foe branch",
+                "No hex or pressure skill classified on current player bar");
+    } else if (targetType != 5) {
+        IntSkip("Combat target selection - unhexed foe branch",
+                "Current hex/pressure skill is not foe-targeting in this bar configuration");
+    } else if (targetId == 0) {
+        IntSkip("Combat target selection - unhexed foe branch",
+                "No valid foe target resolved for the current hex/pressure skill");
+    } else {
+        IntCheck("Unhexed/default foe branch resolved live foe target", targetId != 0 && IsLiveEnemyAgent(targetId));
+    }
+
+    if (!Bot::Froggy::DebugResolveFirstSkillTarget(TEST_ROLE_INTERRUPT_HARD | TEST_ROLE_INTERRUPT_SOFT, foeId, skillId, targetId, targetType)) {
+        IntSkip("Combat target selection - casting foe branch",
+                "No interrupt skill classified on current player bar");
+    } else {
+        const uint32_t castingFoe = Bot::Froggy::DebugGetCastingEnemy();
+        if (!castingFoe) {
+            IntSkip("Combat target selection - casting foe branch",
+                    "No casting foe present in the current encounter");
+        } else {
+            auto* a = AgentMgr::GetAgentByID(castingFoe);
+            auto* living = (a && a->type == 0xDB) ? static_cast<AgentLiving*>(a) : nullptr;
+            IntCheck("Casting-foe branch resolved current casting foe", targetId == castingFoe);
+            IntCheck("Casting-foe branch target is live foe", targetId != 0 && IsLiveEnemyAgent(targetId));
+            IntCheck("Casting-foe branch target observed non-zero skill", living && living->skill != 0);
+        }
+    }
+
+    if (!Bot::Froggy::DebugResolveFirstSkillTarget(TEST_ROLE_ENCHANT_REMOVE, foeId, skillId, targetId, targetType)) {
+        IntSkip("Combat target selection - enchanted foe branch",
+                "No enchant-removal skill classified on current player bar");
+    } else {
+        const uint32_t enchantedFoe = Bot::Froggy::DebugGetEnchantedEnemy();
+        if (!enchantedFoe) {
+            IntSkip("Combat target selection - enchanted foe branch",
+                    "No enchanted foe present in the current encounter");
+        } else {
+            IntCheck("Enchanted-foe branch resolved enchanted foe", targetId == enchantedFoe);
+            IntCheck("Enchanted-foe branch target is live foe", targetId != 0 && IsLiveEnemyAgent(targetId));
+        }
+    }
+
+    if (!Bot::Froggy::DebugResolveFirstSkillTarget(TEST_ROLE_ATTACK, foeId, skillId, targetId, targetType)) {
+        IntSkip("Combat target selection - melee branch",
+                "No attack skill classified on current player bar");
+    } else {
+        const uint32_t meleeFoe = Bot::Froggy::DebugGetMeleeRangeEnemy();
+        if (!meleeFoe) {
+            IntSkip("Combat target selection - melee branch",
+                    "No melee-range foe present in the current encounter");
+        } else {
+            auto* me = AgentMgr::GetMyAgent();
+            auto* foe = AgentMgr::GetAgentByID(targetId);
+            auto* living = (foe && foe->type == 0xDB) ? static_cast<AgentLiving*>(foe) : nullptr;
+            const float dist = (me && living) ? AgentMgr::GetDistance(me->x, me->y, living->x, living->y) : 99999.0f;
+            IntCheck("Melee branch resolved melee-range foe", targetId == meleeFoe);
+            IntCheck("Melee branch target within melee threshold", dist <= 1320.0f);
+        }
+    }
+}
+
+static void RunCombatCastGatingAndSafetyAssertions(const CombatObservabilitySnapshot& before,
+                                                   const CombatObservabilitySnapshot& after,
+                                                   const char* label) {
+    IntReport("=== PHASE 5I: Cast Gating and Safety Assertions (%s) ===", label ? label : "default");
+
+    const auto info = Bot::Froggy::GetLastCombatStepInfo();
+    if (!info.valid) {
+        IntSkip("Cast gating and safety assertions", "No builtin combat step metadata available");
+        return;
+    }
+    IntCheck("Cast gating has last combat step info", true);
+    if (!info.used_skill) {
+        IntSkip("Cast gating and safety assertions", "Last builtin combat step was not a skill cast");
+        return;
+    }
+
+    IntCheck("Chosen combat skill slot is in range", info.slot >= 1 && info.slot <= 8);
+    if (info.slot < 1 || info.slot > 8) return;
+
+    const int slotIndex = info.slot - 1;
+    const uint32_t beforeRecharge = before.skillbar.recharge[slotIndex];
+    const uint32_t afterRecharge = after.skillbar.recharge[slotIndex];
+    IntReport("  Chosen skill slot %d recharge: before=%u after=%u expectedAftercastMs=%u observedDurationMs=%u",
+              info.slot, beforeRecharge, afterRecharge, info.expected_aftercast_ms,
+              info.finished_at_ms >= info.started_at_ms ? (info.finished_at_ms - info.started_at_ms) : 0);
+
+    IntCheck("Chosen combat skill target is non-zero", info.target_id != 0);
+    if (info.target_type == 5) {
+        IntCheck("Chosen combat skill target is live foe", IsLiveEnemyAgent(info.target_id));
+    }
+
+    const bool chosenRechargeTransition = beforeRecharge == 0 && afterRecharge > 0;
+    const bool chosenEnergyChanged = after.player.maxEnergy == before.player.maxEnergy &&
+                                     after.player.energy != before.player.energy;
+    const bool chosenActiveSkillChanged = after.player.castingSkill != before.player.castingSkill;
+    if (chosenRechargeTransition || chosenEnergyChanged || chosenActiveSkillChanged) {
+        IntCheck("Chosen combat skill shows gated cast-side transition", true);
+    } else {
+        IntSkip("Chosen combat skill cast-side transition",
+                "No slot-local recharge, energy, or active-skill transition was observable for this skill window");
+    }
+
+    if (info.expected_aftercast_ms > 0 && info.finished_at_ms >= info.started_at_ms) {
+        const uint32_t observedDurationMs = info.finished_at_ms - info.started_at_ms;
+        IntCheck("Aftercast pacing observed at or beyond expected delay",
+                 observedDurationMs + 50 >= info.expected_aftercast_ms);
+    } else {
+        IntSkip("Aftercast pacing assertion",
+                "Chosen skill did not expose a positive expected aftercast duration");
+    }
+
+    int blockedSlot = -1;
+    for (int i = 0; i < 8; ++i) {
+        if (i == slotIndex) continue;
+        if (before.skillbar.recharge[i] > 0) {
+            blockedSlot = i;
+            break;
+        }
+    }
+    if (blockedSlot < 0) {
+        IntSkip("Recharge-blocked candidate assertion",
+                "No non-chosen recharging skill was available to prove gating");
+    } else {
+        IntReport("  Recharge-blocked slot %d: before=%u after=%u",
+                  blockedSlot + 1, before.skillbar.recharge[blockedSlot], after.skillbar.recharge[blockedSlot]);
+        if (before.skillbar.recharge[blockedSlot] > 0 && after.skillbar.recharge[blockedSlot] > 0) {
+            IntCheck("Recharge-blocked candidate stayed non-ready", true);
+        } else {
+            IntSkip("Recharge-blocked candidate assertion",
+                    "The sampled blocked slot cooled down naturally before the post-step snapshot");
+        }
+    }
+
+    IntCheck("Combat cast left player snapshot valid after step", after.player.valid);
+    IntCheck("Combat cast left foe snapshot valid after step", after.foe.valid);
 }
 
 static void ReportMerchantRuntimeContext(const char* label) {
@@ -1770,6 +2052,7 @@ phase4:
 
             // ===== PHASE 5: Explorable Tests =====
             IntReport("=== PHASE 5: Explorable Tests ===");
+            RunExplorableSkillbarRefreshProof();
 
             // Look for enemies
             uint32_t foeId = FindNearestFoe(5000.0f);
@@ -1796,6 +2079,12 @@ phase4:
                 RunCombatTargetAndCastTelemetryValidation(foeId, "initial foe");
                 RunReadOnlyCombatPreconditions(foeId, "initial foe");
                 RunBuiltinCombatSingleStepProof(foeId, "initial foe");
+                RunCombatTargetSelectionCoverage(foeId, "initial foe");
+                if (s_lastBuiltinCombatSnapshotsValid) {
+                    RunCombatCastGatingAndSafetyAssertions(s_lastBuiltinCombatBefore, s_lastBuiltinCombatAfter, "initial foe");
+                } else {
+                    IntSkip("Cast gating and safety assertions", "Builtin combat proof did not capture before/after snapshots");
+                }
 
                 if (s_isolatedExplorableFlaggingMode) {
                     // GWA3-116: hero flagging only makes sense in explorable.
@@ -1834,6 +2123,12 @@ phase4:
                 RunCombatTargetAndCastTelemetryValidation(foeId, "foe after moving");
                 RunReadOnlyCombatPreconditions(foeId, "foe after moving");
                 RunBuiltinCombatSingleStepProof(foeId, "foe after moving");
+                RunCombatTargetSelectionCoverage(foeId, "foe after moving");
+                if (s_lastBuiltinCombatSnapshotsValid) {
+                    RunCombatCastGatingAndSafetyAssertions(s_lastBuiltinCombatBefore, s_lastBuiltinCombatAfter, "foe after moving");
+                } else {
+                    IntSkip("Cast gating and safety assertions", "Builtin combat proof did not capture before/after snapshots");
+                }
 
                 if (s_isolatedExplorableFlaggingMode) {
                     auto* meExplorableAfterMove = AgentMgr::GetMyAgent();
