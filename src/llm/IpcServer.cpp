@@ -22,6 +22,7 @@ namespace GWA3::LLM::IpcServer {
         uint32_t length;
     };
     static std::mutex g_inboundMutex;
+    static std::mutex g_sendMutex;
     static std::queue<InboundMsg> g_inboundQueue;
 
     // Write exactly `count` bytes to the pipe. Returns false on failure.
@@ -205,6 +206,7 @@ namespace GWA3::LLM::IpcServer {
     }
 
     bool Send(const char* json, uint32_t length) {
+        std::lock_guard<std::mutex> lock(g_sendMutex);
         if (!g_clientConnected.load() || g_pipe == INVALID_HANDLE_VALUE) {
             return false;
         }
