@@ -33,7 +33,9 @@ static constexpr uint32_t MAP_GADDS_ENCAMPMENT  = 638;
 
 static constexpr uint32_t QUEST_TEKKS_WAR       = 0x339;
 static constexpr uint32_t DIALOG_QUEST_REWARD   = 0x833907;
-static constexpr uint32_t DIALOG_QUEST_ACCEPT   = 0x833905;
+// AutoIt AcceptQuest(0x339) sends 0x00833901. Keep Froggy aligned with the
+// proven quest-accept dialog scalar used by the original bot.
+static constexpr uint32_t DIALOG_QUEST_ACCEPT   = 0x833901;
 static constexpr uint32_t DIALOG_QUEST_BODY     = 0x8101;
 static constexpr uint32_t DIALOG_NPC_TALK       = 0x2AE6;
 
@@ -329,6 +331,7 @@ struct CachedSkill {
 
 static CachedSkill s_skillCache[8] = {};
 static bool s_skillsCached = false;
+static bool s_skillUsedThisStep[8] = {};
 static char s_lastCombatStep[128] = "uninitialized";
 static LastCombatStepInfo s_lastCombatStepInfo = {};
 static bool s_combatDebugLogging = false;
@@ -1057,6 +1060,11 @@ static bool TryUseSkillWithRole(uint32_t targetId, uint32_t roleMask) {
             CombatDebugLog("roleMask=0x%X slot=%d skip empty", roleMask, i + 1);
             continue;
         }
+        if (s_skillUsedThisStep[i]) {
+            CombatDebugLog("roleMask=0x%X slot=%d skill=%u skip already_used_this_step",
+                           roleMask, i + 1, c.skill_id);
+            continue;
+        }
         if (!(c.roles & roleMask)) {
             CombatDebugLog("roleMask=0x%X slot=%d skill=%u skip roles=0x%X", roleMask, i + 1, c.skill_id, c.roles);
             continue; // no matching role
@@ -1095,6 +1103,7 @@ static bool TryUseSkillWithRole(uint32_t targetId, uint32_t roleMask) {
         s_lastCombatStepInfo.role_mask = roleMask;
         s_lastCombatStepInfo.target_type = c.target_type;
         s_lastCombatStepInfo.started_at_ms = GetTickCount();
+        s_skillUsedThisStep[i] = true;
         CombatDebugLog("roleMask=0x%X slot=%d skill=%u USE target=%u",
                        roleMask, i + 1, c.skill_id, skillTarget);
         SkillMgr::UseSkill(i + 1, skillTarget, 0);
@@ -1127,6 +1136,8 @@ static bool TryUseSkillWithRole(uint32_t targetId, uint32_t roleMask) {
     return false;
 }
 
+static int UseAllSkillsWithRole(uint32_t targetId, uint32_t roleMask, int maxUses = 8);
+
 // Full combat routine: use skills then fall back to auto-attack
 static void FightTarget(uint32_t targetId) {
     // GWA3-121: Combat mode toggle — if LLM mode, just auto-attack
@@ -1148,6 +1159,7 @@ static void FightTarget(uint32_t targetId) {
     if (!s_skillsCached) CacheSkillBar();
     SetLastCombatStepDescription("no_action target=%u", targetId);
     ResetLastCombatStepInfo();
+    memset(s_skillUsedThisStep, 0, sizeof(s_skillUsedThisStep));
     CombatDebugLog("FightTarget start target=%u", targetId);
 
     auto* me = AgentMgr::GetMyAgent();
@@ -1194,10 +1206,10 @@ static void FightTarget(uint32_t targetId) {
     }
 
     // Priority 6: Pre-combat buffs (stances, shouts, preparations)
-    TryUseSkillWithRole(targetId, ROLE_PRECAST | ROLE_SHOUT);
+    UseAllSkillsWithRole(targetId, ROLE_PRECAST | ROLE_SHOUT);
 
     // Priority 7: Hex pressure — prefer unhexed enemies
-    TryUseSkillWithRole(targetId, ROLE_HEX | ROLE_PRESSURE);
+    UseAllSkillsWithRole(targetId, ROLE_HEX | ROLE_PRESSURE);
 
     // Priority 8: Enchant removal on enchanted enemies
     uint32_t enchantedFoe = GetEnchantedEnemy();
@@ -1997,6 +2009,20 @@ static bool WaitForMerchantContext(DWORD timeoutMs) {
         WaitMs(100);
     }
     return false;
+}
+
+static int UseAllSkillsWithRole(uint32_t targetId, uint32_t roleMask, int maxUses) {
+    int usedCount = 0;
+    while (usedCount < maxUses) {
+        if (!TryUseSkillWithRole(targetId, roleMask)) {
+            break;
+        }
+        ++usedCount;
+    }
+    if (usedCount > 0) {
+        CombatDebugLog("roleMask=0x%X multi_use count=%d", roleMask, usedCount);
+    }
+    return usedCount;
 }
 
 static bool OpenMerchantContextWithVariants(uint32_t npcId) {
