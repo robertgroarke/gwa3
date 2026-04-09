@@ -204,7 +204,8 @@ void SetMapLoaded(bool loaded) {
             memcpy(reinterpret_cast<void*>(hookAddr), s_savedBytes, kPatchSize);
             FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hookAddr), kPatchSize);
             VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, oldProtect, &oldProtect);
-            Log::Info("RenderHook: Removed mid-function JMP (trampoline retained for queue)");
+            Log::Info("RenderHook: Removed mid-function JMP, marking unavailable");
+            s_initialized = false; // Ring is no longer drained — callers must use GameThread fallbacks
         }
     }
 }
