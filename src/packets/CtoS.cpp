@@ -66,9 +66,11 @@ static DWORD WINAPI PacketSenderThread(LPVOID) {
     while (s_watchdogRunning) { // reuse watchdog flag for lifetime
         WaitForSingleObject(s_packetReadyEvent, 200);
         while (s_pktTail != s_pktHead) {
-            LONG idx = s_pktTail % 64;
-            PacketTask t = s_packetRing[idx];
-            InterlockedIncrement(&s_pktTail);
+            LONG idx = InterlockedIncrement(&s_pktTail) - 1;
+            PacketTask t = s_packetRing[idx % 64];
+
+
+
 
             // Re-read PacketLocation fresh
             uintptr_t loc = t.location;
@@ -103,9 +105,8 @@ static void (__stdcall* s_engineDispatchOnePtr)() = nullptr;
 static void __stdcall EngineDispatchOne() {
     if (s_pktTail == s_pktHead) return;
 
-    LONG idx = s_pktTail % 64;
-    PacketTask t = s_packetRing[idx];
-    InterlockedIncrement(&s_pktTail);
+    LONG idx = InterlockedIncrement(&s_pktTail) - 1;
+    PacketTask t = s_packetRing[idx % 64];
 
     uintptr_t loc = t.location;
     if (Offsets::PacketLocation) {

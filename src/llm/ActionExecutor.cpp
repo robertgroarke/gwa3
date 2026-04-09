@@ -473,7 +473,7 @@ namespace GWA3::LLM::ActionExecutor {
     }
 
     static ActionResult HandleResign(const json&) {
-        wchar_t msg[] = L"/resign";
+        wchar_t msg[] = L"resign";
         GWA3::GameThread::Enqueue([msg]() {
             ChatMgr::SendChat(msg, L'/');
         });

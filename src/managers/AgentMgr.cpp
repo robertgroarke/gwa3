@@ -142,17 +142,23 @@ void Move(float x, float y) {
     // The native fn crashes if called while the world state is being torn down/rebuilt.
     if (!MapMgr::GetIsMapLoaded() || GetMyId() == 0) {
         return;  // silently skip — caller will retry on next tick
-    }
 
-    // Direct function call on the game thread. IMPORTANT: the caller must
-    // ensure this is called from within the game thread context (e.g., via
-    // GameThread::Enqueue wrapping the call). The fn() only works during
-    // the game's own frame callback execution.
-    static MoveData s_moveData;
-    s_moveData.x = x;
-    s_moveData.y = y;
-    s_moveData.plane = 0;
-    s_moveFn(&s_moveData);
+    // If already on game thread, call directly. Otherwise marshal via EnqueuePost
+    // so that Move executes after the game's frame callback (safe timing).
+    if (GameThread::IsOnGameThread()) {
+        static MoveData s_moveData;
+        s_moveData.x = x;
+        s_moveData.y = y;
+        s_moveData.plane = 0;
+        s_moveFn(&s_moveData);
+    } else {
+        auto fn = s_moveFn;
+        GameThread::EnqueuePost([fn, x, y]() {
+            static MoveData s_md;
+            s_md.x = x; s_md.y = y; s_md.plane = 0;
+            fn(&s_md);
+        });
+    }
 }
 
 void ChangeTarget(uint32_t agentId) {
