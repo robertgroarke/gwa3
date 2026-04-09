@@ -1018,27 +1018,35 @@ static bool RunBogrootBlessingProof() {
     // GoNPC must go through GameThread (direct CtoS crashes after Bogroot map transition).
     // Dialog uses the AutoIt header 0x3B (DIALOG_SEND), not 0x3A (DIALOG_SEND_LIVING).
 
-    // Step 1: ChangeTarget — send directly (test thread), not through GameThread
-    CtoS::ChangeTarget(npcId);
+    // Use native function paths only — CtoS engine hook crashes in Bogroot dungeons.
+    // Native functions (AgentMgr, QuestMgr) use scanned game function pointers
+    // that are safe across map transitions.
+
+    // Step 1: ChangeTarget (native)
+    GameThread::EnqueuePost([npcId]() {
+        AgentMgr::ChangeTarget(npcId);
+    });
     Sleep(500);
-    IntReport("  ChangeTarget to agent=%u (direct)", npcId);
+    IntReport("  ChangeTarget to agent=%u (native)", npcId);
 
-    // Step 2: GoNPC (0x39) — send directly, same as AutoIt external injection
-    // Previous runs showed GameThread::Drain crashes in Bogroot.
-    // DialogMgr hooks are freshly re-initialized, so StoC dialog callbacks are safe.
-    CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
-    IntReport("  Sent GoNPC (0x39) to agent=%u (direct)", npcId);
-
-    // Step 3: Wait for dialog (AutoIt: Sleep(1000))
-    // Wait long enough for the dialog to appear but give GameThread time to drain naturally.
+    // Step 2: InteractNPC (native) — uses scanned InteractNPC function pointer
+    GameThread::EnqueuePost([npcId]() {
+        AgentMgr::InteractNPC(npcId);
+    });
+    IntReport("  Sent InteractNPC to agent=%u (native)", npcId);
     Sleep(3000);
 
-    // Step 4: Dialog (0x3B, 0x84) — AutoIt uses DIALOG_SEND (0x3B), not DIALOG_SEND_LIVING (0x3A)
-    // Send through GameThread as well to keep all packets on the same path.
+    // Check dialog state
+    bool dialogOpened = DialogMgr::IsDialogOpen();
+    IntReport("  After InteractNPC: dialogOpen=%d sender=%u buttons=%u",
+              dialogOpened, DialogMgr::GetDialogSenderAgentId(),
+              DialogMgr::GetButtonCount());
+
+    // Step 3: Dialog (0x84) — use native QuestMgr::Dialog which uses scanned SendDialog fn
     GameThread::EnqueuePost([]() {
-        CtoS::SendPacket(2, Packets::DIALOG_SEND, DIALOG_ACCEPT_BLESSING);
+        QuestMgr::Dialog(DIALOG_ACCEPT_BLESSING);
     });
-    IntReport("  Sent Dialog (0x3B, 0x%X) via GameThread", DIALOG_ACCEPT_BLESSING);
+    IntReport("  Sent QuestMgr::Dialog(0x%X) (native)", DIALOG_ACCEPT_BLESSING);
     Sleep(2000);
 
     // Verify blessing effect appeared
