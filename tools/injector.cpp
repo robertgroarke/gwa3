@@ -204,6 +204,10 @@ static void ClearTestModeFlags() {
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_llm_mode.flag", dir);
     DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_llm_advisory.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_froggy.flag", dir);
+    DeleteFileA(path);
 }
 
 // ===== Injection =====

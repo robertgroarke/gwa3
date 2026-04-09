@@ -141,7 +141,8 @@ void Move(float x, float y) {
     // Safety: don't call native move during zone transitions or when agent is invalid.
     // The native fn crashes if called while the world state is being torn down/rebuilt.
     if (!MapMgr::GetIsMapLoaded() || GetMyId() == 0) {
-        return;  // silently skip — caller will retry on next tick
+        return;  // silently skip
+    } — caller will retry on next tick
 
     // If already on game thread, call directly. Otherwise marshal via EnqueuePost
     // so that Move executes after the game's frame callback (safe timing).
