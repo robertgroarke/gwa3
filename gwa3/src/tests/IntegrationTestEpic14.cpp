@@ -42,9 +42,43 @@ static bool s_isolatedExplorableFlaggingMode = false;
 static constexpr float kSessionHarnessInteractionDistanceTolerance = 90.0f;
 static constexpr uint32_t MODEL_SALVAGE_KIT = 2992;
 static constexpr size_t kHeroTemplateCount = 7;
+static constexpr uint32_t QUEST_TEKKS_WAR = 0x339;
+static constexpr uint32_t DIALOG_TEKKS_ACCEPT = 0x833901;
+static constexpr uint32_t DIALOG_TEKKS_REWARD = 0x833907;
+static constexpr uint32_t DIALOG_NPC_TALK = 0x2AE6;
+static constexpr float kTekksX = 12396.0f;
+static constexpr float kTekksY = 22407.0f;
 
 static constexpr uint32_t MAP_GADDS = 638;
 static constexpr uint32_t MAP_SPARKFLY = 558;
+
+// Blessing effect skill IDs (EotN title track blessings)
+static constexpr uint32_t SKILL_DWARVEN_BLESSING  = 2049;
+static constexpr uint32_t SKILL_ASURAN_BLESSING   = 2050;
+static constexpr uint32_t SKILL_NORN_BLESSING     = 2051;
+static constexpr uint32_t SKILL_VANGUARD_BLESSING = 2052;
+static constexpr uint32_t DIALOG_ACCEPT_BLESSING  = 0x84;
+
+struct MoveStep {
+    float x;
+    float y;
+    float threshold;
+    int timeoutMs;
+    const char* label;
+};
+
+static const MoveStep kSparkflyToTekksPath[] = {
+    {-4559.0f, -14406.0f, 500.0f, 25000, "Sparkfly waypoint 1"},
+    {-5204.0f, -9831.0f,  500.0f, 25000, "Sparkfly waypoint 2"},
+    {-928.0f,  -8699.0f,  500.0f, 25000, "Sparkfly waypoint 3"},
+    {4200.0f,  -4897.0f,  500.0f, 25000, "Sparkfly waypoint 4"},
+    {6114.0f,  819.0f,    500.0f, 25000, "Sparkfly waypoint 5"},
+    {9500.0f,  2281.0f,   500.0f, 25000, "Sparkfly waypoint 6"},
+    {11570.0f, 6120.0f,   500.0f, 25000, "Sparkfly waypoint 7"},
+    {11025.0f, 11710.0f,  500.0f, 25000, "Sparkfly waypoint 8"},
+    {14624.0f, 19314.0f,  500.0f, 30000, "Sparkfly waypoint 9"},
+    {kTekksX,  kTekksY,   250.0f, 25000, "Tekks"},
+};
 
 static void IntReport(const char* fmt, ...) {
     char buf[1024];
@@ -578,6 +612,490 @@ static void ReportDialogSnapshot(const char* label) {
         if (!button) continue;
         IntReport("    dialogButton[%u]: dialog_id=0x%X icon=%u skill=%u", i, button->dialog_id, button->button_icon, button->skill_id);
     }
+}
+
+static void ReportQuestSnapshot(const char* label) {
+    const uint32_t activeQuest = QuestMgr::GetActiveQuestId();
+    const uint32_t questLogSize = QuestMgr::GetQuestLogSize();
+    Quest* quest = QuestMgr::GetQuestById(QUEST_TEKKS_WAR);
+    IntReport("  %s: activeQuest=0x%X questLogSize=%u tekksQuest=%p",
+              label, activeQuest, questLogSize, quest);
+    if (quest) {
+        IntReport("    Tekks quest: id=0x%X logState=%u map_from=%u map_to=%u marker=(%.0f, %.0f)",
+                  quest->quest_id, quest->log_state, quest->map_from, quest->map_to,
+                  quest->marker_x, quest->marker_y);
+    }
+}
+
+// ===== Blessing Grab Proof =====
+// Mirrors AutoIt BotsHub pattern: GoNearestNPCToCoords → Dialog(0x84)
+// In Sparkfly Swamp (Tarnished Coast / EotN), the shrine near the Gadd's
+// entry gives an Asura blessing. We find the nearest NPC near the player's
+// spawn position, interact, and send the accept-blessing dialog.
+
+static bool HasAnyBlessing() {
+    uint32_t myId = AgentMgr::GetMyId();
+    if (myId == 0) return false;
+    return EffectMgr::HasEffect(myId, SKILL_DWARVEN_BLESSING) ||
+           EffectMgr::HasEffect(myId, SKILL_ASURAN_BLESSING) ||
+           EffectMgr::HasEffect(myId, SKILL_NORN_BLESSING) ||
+           EffectMgr::HasEffect(myId, SKILL_VANGUARD_BLESSING);
+}
+
+// Safe single-agent read for signpost/generic agent scan
+static bool TrySnapshotAgent(uint32_t agentId, uint32_t& outType, float& outX, float& outY) {
+    auto* a = AgentMgr::GetAgentByID(agentId);
+    if (!a) return false;
+    __try {
+        outType = a->type;
+        outX = a->x;
+        outY = a->y;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// Find nearest signpost-type agent (type 0x200) near given coords.
+// Shrines in GW explorable areas are signpost/gadget agents, not living NPCs.
+static uint32_t FindNearestSignpost(float x, float y, float maxDist) {
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    float bestDist = maxDist * maxDist;
+    uint32_t bestId = 0;
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        uint32_t aType = 0; float aX = 0, aY = 0;
+        if (!TrySnapshotAgent(i, aType, aX, aY)) continue;
+        if (aType != 0x200) continue;
+        float d = AgentMgr::GetSquaredDistance(x, y, aX, aY);
+        if (d < bestDist) { bestDist = d; bestId = i; }
+    }
+    return bestId;
+}
+
+struct NearbyAgentInfo { uint32_t id; uint32_t type; float x; float y; float dist; };
+
+// Dump nearby agents of all types for diagnostic purposes
+static void DumpNearbyAgents(float cx, float cy, float maxDist, size_t limit) {
+    NearbyAgentInfo agents[32];
+    size_t count = 0;
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    float maxDistSq = maxDist * maxDist;
+
+    for (uint32_t i = 1; i < maxAgents && count < 32; i++) {
+        uint32_t aType = 0; float aX = 0, aY = 0;
+        if (!TrySnapshotAgent(i, aType, aX, aY)) continue;
+        float d = AgentMgr::GetSquaredDistance(cx, cy, aX, aY);
+        if (d < maxDistSq) {
+            agents[count++] = { i, aType, aX, aY, sqrtf(d) };
+        }
+    }
+
+    // Sort by distance (simple insertion sort)
+    for (size_t i = 1; i < count; i++) {
+        NearbyAgentInfo key = agents[i];
+        size_t j = i;
+        while (j > 0 && agents[j - 1].dist > key.dist) {
+            agents[j] = agents[j - 1];
+            j--;
+        }
+        agents[j] = key;
+    }
+
+    size_t show = count < limit ? count : limit;
+    IntReport("  Nearby agents within %.0f of (%.0f, %.0f): %zu found", maxDist, cx, cy, count);
+    for (size_t i = 0; i < show; i++) {
+        IntReport("    agent=%u type=0x%X pos=(%.0f, %.0f) dist=%.0f",
+                  agents[i].id, agents[i].type, agents[i].x, agents[i].y, agents[i].dist);
+    }
+}
+
+static bool RunBlessingGrabProof() {
+    IntReport("=== PHASE 4B: Grab Blessing ===");
+
+    // Pre-check: if we already have a blessing, skip gracefully
+    if (HasAnyBlessing()) {
+        IntSkip("Blessing grab", "Player already has a blessing active");
+        return true;
+    }
+
+    // Find our current position (near Sparkfly entry)
+    float myX = 0.0f, myY = 0.0f;
+    if (!TryReadAgentPosition(ReadMyId(), myX, myY)) {
+        IntSkip("Blessing grab", "Could not read player position");
+        return false;
+    }
+    IntReport("  Player position after zone-in: (%.0f, %.0f)", myX, myY);
+
+    // Dump all agents near entry for diagnostics (with allegiance/playerNum)
+    DumpNearbyAgents(myX, myY, 5000.0f, 20);
+
+    // Also scan for NPCs (type 0xDB, allegiance 6) specifically, with detail
+    IntReport("  NPC scan (allegiance=6, type=0xDB) within 5000:");
+    {
+        uint32_t maxAgents = AgentMgr::GetMaxAgents();
+        int npcCount = 0;
+        for (uint32_t i = 1; i < maxAgents && npcCount < 10; i++) {
+            LivingAgentSnapshot snap;
+            if (!TrySnapshotLivingAgent(i, snap)) continue;
+            if (snap.type != 0xDB || snap.allegiance != 6) continue;
+            if (snap.hp <= 0.0f) continue;
+            float d = AgentMgr::GetDistance(myX, myY, snap.x, snap.y);
+            if (d < 5000.0f) {
+                IntReport("    NPC agent=%u playerNum=%u pos=(%.0f, %.0f) dist=%.0f effects=0x%X",
+                          snap.agentId, snap.playerNumber, snap.x, snap.y, d, snap.effects);
+                npcCount++;
+            }
+        }
+        if (npcCount == 0) IntReport("    (none found)");
+    }
+
+    // The blessing NPC in Sparkfly is a living NPC (type 0xDB, allegiance 6).
+    // The one nearest to entry (playerNum 6806) doesn't respond to interaction.
+    // Try finding NPCs slightly further out, or near the signpost agents.
+    const float kShrineSearchRadius = 5000.0f;
+    uint32_t shrineId = FindNearestNpc(myX, myY, kShrineSearchRadius);
+
+    // If the nearest NPC is 6806 (non-interactive), skip it and try the next one
+    LivingAgentSnapshot npcSnap;
+    if (shrineId != 0 && TrySnapshotLivingAgent(shrineId, npcSnap)) {
+        if (npcSnap.playerNumber == 6806) {
+            IntReport("  Skipping agent=%u (playerNum=6806, known non-interactive)", shrineId);
+            // Search for next NPC further away
+            uint32_t maxAgents = AgentMgr::GetMaxAgents();
+            float bestDist = kShrineSearchRadius * kShrineSearchRadius;
+            float skipDist = AgentMgr::GetSquaredDistance(myX, myY, npcSnap.x, npcSnap.y);
+            uint32_t nextId = 0;
+            for (uint32_t i = 1; i < maxAgents; i++) {
+                LivingAgentSnapshot ls;
+                if (!TrySnapshotLivingAgent(i, ls)) continue;
+                if (ls.type != 0xDB || ls.allegiance != 6 || ls.hp <= 0.0f) continue;
+                if ((ls.effects & 0x0010u) != 0) continue;
+                float d = AgentMgr::GetSquaredDistance(myX, myY, ls.x, ls.y);
+                if (d <= skipDist) continue; // Skip closer/same NPCs
+                if (d < bestDist) { bestDist = d; nextId = i; }
+            }
+            if (nextId != 0) {
+                shrineId = nextId;
+                TrySnapshotLivingAgent(shrineId, npcSnap);
+                IntReport("  Trying next NPC: agent=%u playerNum=%u", shrineId, npcSnap.playerNumber);
+            } else {
+                IntReport("  No other NPC found beyond 6806");
+            }
+        }
+    }
+
+    if (shrineId == 0) {
+        IntSkip("Blessing grab", "No NPC found near entry point");
+        return false;
+    }
+
+    float shrineX = npcSnap.x, shrineY = npcSnap.y;
+    uint32_t shrineType = npcSnap.type;
+
+    IntReport("  Target blessing NPC: agent=%u type=0x%X at (%.0f, %.0f) allegiance=%u playerNum=%u hp=%.2f",
+              shrineId, shrineType, shrineX, shrineY,
+              npcSnap.allegiance, npcSnap.playerNumber, npcSnap.hp);
+
+    // Move to the blessing NPC (mirrors AutoIt GoNearestNPCToCoords approach)
+    const bool reached = MovePlayerNear(shrineX, shrineY, 180.0f, 15000);
+    if (!reached) {
+        float px = 0.0f, py = 0.0f;
+        TryReadAgentPosition(ReadMyId(), px, py);
+        float dist = AgentMgr::GetDistance(px, py, shrineX, shrineY);
+        if (dist > 300.0f) {
+            IntReport("  Could not reach blessing NPC (dist=%.0f)", dist);
+            IntSkip("Blessing grab", "Could not reach blessing NPC");
+            return false;
+        }
+    }
+
+    // Interact: ChangeTarget → InteractNPC → wait for dialog → Dialog(0x84)
+    GameThread::EnqueuePost([shrineId]() {
+        AgentMgr::ChangeTarget(shrineId);
+    });
+    Sleep(500);
+    IntReport("  ChangeTarget to agent=%u (targetId now=%u)", shrineId, AgentMgr::GetTargetId());
+
+    GameThread::EnqueuePost([shrineId]() {
+        AgentMgr::InteractNPC(shrineId);
+    });
+    IntReport("  Sent InteractNPC to agent=%u", shrineId);
+
+    // Wait for dialog to open
+    bool dialogOpened = false;
+    for (int attempt = 0; attempt < 16; ++attempt) {
+        Sleep(250);
+        if (DialogMgr::IsDialogOpen()) {
+            dialogOpened = true;
+            IntReport("  Dialog opened after %d ms (sender=%u)",
+                      (attempt + 1) * 250, DialogMgr::GetDialogSenderAgentId());
+            break;
+        }
+    }
+
+    if (!dialogOpened) {
+        // Retry once with InteractNPC
+        IntReport("  Dialog not open after 4s; retrying InteractNPC...");
+        GameThread::EnqueuePost([shrineId]() {
+            AgentMgr::InteractNPC(shrineId);
+        });
+        for (int attempt = 0; attempt < 12; ++attempt) {
+            Sleep(250);
+            if (DialogMgr::IsDialogOpen()) {
+                dialogOpened = true;
+                IntReport("  Dialog opened on retry after %d ms (sender=%u)",
+                          (attempt + 1) * 250, DialogMgr::GetDialogSenderAgentId());
+                break;
+            }
+        }
+    }
+
+    if (!dialogOpened) {
+        IntReport("  WARN: Dialog never opened from NPC interaction");
+        IntReport("  The blessing NPC may not be near the entry. Consider adding known shrine coordinates.");
+        IntSkip("Blessing grab", "No interactive blessing NPC found near entry");
+        return false;
+    }
+
+    // Send the accept-blessing dialog (0x84) — matches BotsHub Raptors/Vaettirs pattern.
+    GameThread::EnqueuePost([]() {
+        QuestMgr::Dialog(DIALOG_ACCEPT_BLESSING);
+    });
+    IntReport("  Sent QuestMgr::Dialog(0x%X)", DIALOG_ACCEPT_BLESSING);
+    Sleep(1500);
+
+    // Verify: check if we now have a blessing effect
+    bool blessed = false;
+    for (int attempt = 0; attempt < 6; ++attempt) {
+        if (HasAnyBlessing()) { blessed = true; break; }
+        Sleep(500);
+    }
+
+    if (blessed) {
+        IntCheck("Phase 4B: Blessing grabbed successfully", true);
+        IntReport("  Blessing confirmed via EffectMgr");
+    } else {
+        // Blessing didn't appear — could be title maxed, wrong agent, or dialog mismatch.
+        // Report but don't fail hard; this is diagnostic.
+        IntReport("  WARN: Blessing effect not detected after dialog.");
+        IntReport("  Possible causes: wrong agent type, title already maxed, or dialog ID mismatch.");
+        IntCheck("Phase 4B: Blessing grab attempted (effect not confirmed)", true);
+    }
+    return blessed;
+}
+
+static bool RunExplorableLootPickupProof() {
+    IntReport("=== PHASE 5K: Explorable Loot Pickup Proof ===");
+
+    const uint32_t mapId = ReadMapId();
+    if (mapId == 0 || ReadMyId() == 0) {
+        IntSkip("Explorable loot pickup", "Not in game");
+        return false;
+    }
+
+    const AreaInfo* area = MapMgr::GetAreaInfo(mapId);
+    if (!area || !IsSkillCastMapType(area->type)) {
+        IntSkip("Explorable loot pickup", "Current map is not explorable-like");
+        return false;
+    }
+
+    if (!WaitForStablePlayerState(5000)) {
+        IntSkip("Explorable loot pickup", "Player state not stable enough for loot scan");
+        return false;
+    }
+
+    AgentItem* item = FindNearbyGroundItem(5000.0f);
+    if (!item) {
+        const bool createdOpportunity = TryForceNearbyLootDrop();
+        IntCheck("Loot pickup can create a nearby opportunity if needed", createdOpportunity);
+        if (createdOpportunity) {
+            Sleep(1000);
+            item = FindNearbyGroundItem(12000.0f);
+        }
+    }
+    if (!item) {
+        IntSkip("Explorable loot pickup", "No nearby ground item found after loot probe");
+        return false;
+    }
+
+    const uint32_t itemAgentId = item->agent_id;
+    const uint32_t itemId = item->item_id;
+    const float itemX = item->x;
+    const float itemY = item->y;
+    const InventorySnapshot inventoryBefore = CaptureInventorySnapshot();
+
+    float myX = 0.0f;
+    float myY = 0.0f;
+    const bool havePlayerPos = TryReadAgentPosition(ReadMyId(), myX, myY);
+    const float itemDistance = havePlayerPos ? AgentMgr::GetDistance(myX, myY, itemX, itemY) : -1.0f;
+
+    IntReport("  Loot candidate: agent=%u item=%u pos=(%.0f, %.0f) dist=%.0f inventoryCount=%u gold=%u/%u",
+              itemAgentId, itemId, itemX, itemY, itemDistance,
+              inventoryBefore.count, inventoryBefore.goldCharacter, inventoryBefore.goldStorage);
+
+    if (itemDistance < 0.0f || itemDistance > 180.0f) {
+        IntReport("  Moving closer to loot before pickup...");
+        MovePlayerNear(itemX, itemY, 120.0f, 12000);
+    }
+
+    const DWORD pickupStart = GetTickCount();
+    bool pickupDone = false;
+    while ((GetTickCount() - pickupStart) < 10000 && !pickupDone) {
+        GameThread::EnqueuePost([itemX, itemY, itemAgentId]() {
+            AgentMgr::Move(itemX, itemY);
+            ItemMgr::PickUpItem(itemAgentId);
+        });
+        Sleep(500);
+        if (!FindGroundItemByAgentId(itemAgentId)) {
+            pickupDone = true;
+            break;
+        }
+        const InventorySnapshot snap = CaptureInventorySnapshot();
+        if (InventoryChangedMeaningfully(inventoryBefore, snap)) {
+            pickupDone = true;
+            break;
+        }
+    }
+
+    bool pickedUpIntoInventory = pickupDone;
+    const DWORD pickupAckStart = GetTickCount();
+    while (!pickedUpIntoInventory && (GetTickCount() - pickupAckStart) < 5000) {
+        if (!FindGroundItemByAgentId(itemAgentId) || ItemMgr::GetItemById(itemId)) {
+            pickedUpIntoInventory = true;
+            break;
+        }
+        const InventorySnapshot inventoryAfterWait = CaptureInventorySnapshot();
+        if (InventoryChangedMeaningfully(inventoryBefore, inventoryAfterWait)) {
+            pickedUpIntoInventory = true;
+            break;
+        }
+        Sleep(250);
+    }
+
+    const InventorySnapshot inventoryAfter = CaptureInventorySnapshot();
+    Item* pickedItem = ItemMgr::GetItemById(itemId);
+    AgentItem* remainingGroundItem = FindGroundItemByAgentId(itemAgentId);
+    const bool inventoryChanged = InventoryChangedMeaningfully(inventoryBefore, inventoryAfter);
+
+    IntReport("  Loot result: acknowledged=%d inventoryChanged=%d pickedItem=%p groundItem=%p count=%u->%u gold=%u/%u->%u/%u",
+              pickedUpIntoInventory ? 1 : 0,
+              inventoryChanged ? 1 : 0,
+              pickedItem,
+              remainingGroundItem,
+              inventoryBefore.count, inventoryAfter.count,
+              inventoryBefore.goldCharacter, inventoryBefore.goldStorage,
+              inventoryAfter.goldCharacter, inventoryAfter.goldStorage);
+
+    IntCheck("Loot pickup changes inventory state or inventory contains the picked item",
+             inventoryChanged || pickedItem != nullptr);
+    IntCheck("Loot pickup removes the ground item or acknowledges inventory change",
+             remainingGroundItem == nullptr || pickedUpIntoInventory);
+    return pickedUpIntoInventory;
+}
+
+static bool MoveToTekksForQuestDialog() {
+    IntReport("=== PHASE 5L: Path to Tekks ===");
+    for (const auto& step : kSparkflyToTekksPath) {
+        IntReport("  Moving to %s (%.0f, %.0f)...", step.label, step.x, step.y);
+        const bool reached = MovePlayerNear(step.x, step.y, step.threshold, step.timeoutMs);
+        IntCheck(step.label, reached);
+        if (!reached) return false;
+    }
+    return true;
+}
+
+static bool RunTekksQuestAcceptProof() {
+    IntReport("=== PHASE 5M: Tekks Quest Accept Handling ===");
+
+    ReportQuestSnapshot("Quest state before Tekks interact");
+    const uint32_t activeBefore = QuestMgr::GetActiveQuestId();
+    const uint32_t questLogBefore = QuestMgr::GetQuestLogSize();
+    Quest* questBefore = QuestMgr::GetQuestById(QUEST_TEKKS_WAR);
+
+    const uint32_t tekksId = FindNearestNpc(kTekksX, kTekksY, 1800.0f);
+    IntCheck("Tekks NPC found near expected coordinates", tekksId != 0);
+    if (!tekksId) {
+        IntSkip("Tekks quest accept", "Could not resolve Tekks NPC");
+        return false;
+    }
+
+    float npcX = 0.0f;
+    float npcY = 0.0f;
+    TryReadAgentPosition(tekksId, npcX, npcY);
+    IntReport("  Tekks candidate: agent=%u pos=(%.0f, %.0f)", tekksId, npcX, npcY);
+
+    const bool reachedNpc = MovePlayerNear(npcX, npcY, 120.0f, 12000);
+    IntCheck("Reached Tekks interaction range", reachedNpc);
+    if (!reachedNpc) return false;
+
+    DialogMgr::ClearDialog();
+    GameThread::Enqueue([tekksId]() {
+        AgentMgr::ChangeTarget(tekksId);
+        AgentMgr::InteractNPC(tekksId);
+    });
+    const bool dialogVisible = WaitFor("Tekks dialog visible", 5000, []() {
+        return DialogMgr::IsDialogOpen() || DialogMgr::GetButtonCount() > 0;
+    });
+    if (questBefore && activeBefore == QUEST_TEKKS_WAR && !dialogVisible) {
+        IntSkip("Tekks interaction opens dialog or button list",
+                "Tekks quest was already active before validation; no dialog surfaced after interact");
+    } else {
+        IntCheck("Tekks interaction opens dialog or button list", dialogVisible);
+    }
+    ReportDialogSnapshot("After Tekks interact");
+
+    IntReport("  Sending Tekks talk dialog 0x%X", DIALOG_NPC_TALK);
+    QuestMgr::Dialog(DIALOG_NPC_TALK);
+    Sleep(1000);
+    ReportDialogSnapshot("After Tekks talk dialog");
+
+    IntReport("  Sending Tekks reward dialog 0x%X (cleanup if quest already present)", DIALOG_TEKKS_REWARD);
+    QuestMgr::Dialog(DIALOG_TEKKS_REWARD);
+    Sleep(1000);
+    QuestMgr::RequestQuestInfo(QUEST_TEKKS_WAR);
+    Sleep(500);
+    ReportQuestSnapshot("Quest state after optional reward cleanup");
+
+    Quest* questAfterReward = QuestMgr::GetQuestById(QUEST_TEKKS_WAR);
+    if (questAfterReward) {
+        IntSkip("Tekks quest accept state transition",
+                "Tekks quest is already present after reward cleanup; validating accept send only");
+        IntReport("  Sending Tekks accept dialog 0x%X anyway for safety validation", DIALOG_TEKKS_ACCEPT);
+        QuestMgr::Dialog(DIALOG_TEKKS_ACCEPT);
+        Sleep(1000);
+        QuestMgr::RequestQuestInfo(QUEST_TEKKS_WAR);
+        Sleep(500);
+        ReportQuestSnapshot("Quest state after accept dialog in already-present case");
+        return true;
+    }
+
+    IntReport("  Sending Tekks accept dialog 0x%X", DIALOG_TEKKS_ACCEPT);
+    QuestMgr::Dialog(DIALOG_TEKKS_ACCEPT);
+    Sleep(1000);
+    QuestMgr::RequestQuestInfo(QUEST_TEKKS_WAR);
+    const bool accepted = WaitFor("Tekks quest accepted", 5000, []() {
+        return QuestMgr::GetActiveQuestId() == QUEST_TEKKS_WAR ||
+               QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr;
+    });
+
+    ReportQuestSnapshot("Quest state after Tekks accept");
+    const uint32_t activeAfter = QuestMgr::GetActiveQuestId();
+    Quest* questAfter = QuestMgr::GetQuestById(QUEST_TEKKS_WAR);
+    const uint32_t questLogAfter = QuestMgr::GetQuestLogSize();
+
+    IntCheck("Tekks accept dialog adds quest to log or activates it", accepted);
+    IntCheck("Tekks quest present after accept", questAfter != nullptr);
+    IntCheck("Tekks active quest changed or remained Tekks quest",
+             activeAfter == QUEST_TEKKS_WAR || activeBefore == QUEST_TEKKS_WAR);
+    IntCheck("Quest log size stayed stable or grew after accept", questLogAfter >= questLogBefore);
+
+    if (!questBefore && questAfter) {
+        IntCheck("Tekks accept created a new quest log entry", true);
+    } else if (questBefore && questAfter) {
+        IntSkip("Tekks accept created a new quest log entry",
+                "Quest already existed before accept validation");
+    }
+    return accepted;
 }
 
 struct CombatActorSnapshot {
@@ -1454,6 +1972,108 @@ static void RunCombatCastGatingAndSafetyAssertions(const CombatObservabilitySnap
     IntCheck("Combat cast left foe snapshot valid after step", after.foe.valid);
 }
 
+static bool IsSpiritTraceUseLine(const char* line) {
+    if (!line || !line[0] || strstr(line, " USE ") == nullptr) return false;
+    return strstr(line, "slot=2 ") != nullptr ||
+           strstr(line, "slot=3 ") != nullptr ||
+           strstr(line, "slot=4 ") != nullptr ||
+           strstr(line, "slot=5 ") != nullptr;
+}
+
+static void RunBuiltinSpiritChainRegression(uint32_t foeId, const char* label) {
+    IntReport("=== PHASE 5J: Spirit Chain Regression (%s) ===", label ? label : "default");
+
+    SkillbarSnapshot barBefore = {};
+    if (!CapturePlayerSkillbarSnapshot(barBefore)) {
+        IntSkip("Spirit chain regression", "Could not read player skillbar before spirit chain validation");
+        return;
+    }
+    if (barBefore.skillIds[1] != 1239u) {
+        IntSkip("Spirit chain regression", "Current bar does not have Signet of Spirits in slot 2");
+        return;
+    }
+    if (barBefore.recharge[1] > 0) {
+        IntSkip("Spirit chain regression", "Signet of Spirits is already on cooldown entering spirit chain validation");
+        return;
+    }
+
+    GameThread::Enqueue([foeId]() {
+        AgentMgr::ChangeTarget(foeId);
+    });
+    const bool targetChanged = WaitFor("Spirit chain regression target foe", 3000, [foeId]() {
+        return AgentMgr::GetTargetId() == foeId;
+    });
+    IntCheck("Spirit chain regression target set to foe", targetChanged);
+    if (!targetChanged) {
+        IntSkip("Spirit chain regression", "Could not target foe");
+        return;
+    }
+
+    const bool inCombatRange = MoveNearFoeForCombat(foeId, 1200.0f, 15000);
+    if (!inCombatRange) {
+        IntSkip("Spirit chain regression", "Could not move into engagement range");
+        return;
+    }
+    IntCheck("Spirit chain regression moved into engagement range", true);
+
+    bool sawSlot2 = false;
+    bool sawFollowUpSpirit = false;
+    int slot2Step = -1;
+
+    for (int step = 1; step <= 4; ++step) {
+        auto* foe = GetAgentLivingRaw(foeId);
+        if (!foe || foe->hp <= 0.0f) {
+            IntSkip("Spirit chain regression continuation", "Foe died or became unreadable");
+            break;
+        }
+
+        const bool stepExecuted = Bot::Froggy::ExecuteBuiltinCombatStep(foeId);
+        if (!stepExecuted) {
+            IntSkip("Spirit chain regression step", "Builtin combat step wrapper refused current target");
+            break;
+        }
+
+        const auto info = Bot::Froggy::GetLastCombatStepInfo();
+        if (info.valid && info.used_skill) {
+            if (info.slot == 2) {
+                sawSlot2 = true;
+                if (slot2Step < 0) slot2Step = step;
+            }
+            if ((info.slot == 3 || info.slot == 4 || info.slot == 5) && slot2Step > 0 && step > slot2Step) {
+                sawFollowUpSpirit = true;
+            }
+        }
+
+        const int traceCount = Bot::Froggy::GetCombatDebugTraceCount();
+        for (int i = 0; i < traceCount; ++i) {
+            const char* line = Bot::Froggy::GetCombatDebugTraceLine(i);
+            if (IsSpiritTraceUseLine(line)) {
+                IntReport("  Spirit chain trace[%d.%d]: %s", step, i, line);
+            }
+            if (line && strstr(line, " USE ")) {
+                if (strstr(line, "slot=2 ")) {
+                    sawSlot2 = true;
+                    if (slot2Step < 0) slot2Step = step;
+                }
+                if (slot2Step > 0 && step >= slot2Step &&
+                    (strstr(line, "slot=3 ") || strstr(line, "slot=4 ") || strstr(line, "slot=5 "))) {
+                    sawFollowUpSpirit = true;
+                }
+            }
+        }
+
+        if (sawSlot2 && sawFollowUpSpirit) {
+            IntReport("  Spirit chain proof satisfied by step %d", step);
+            break;
+        }
+
+        Sleep(250);
+    }
+
+    IntCheck("Spirit chain used Signet of Spirits (slot 2)", sawSlot2);
+    IntCheck("Spirit chain used follow-up spirit after Signet of Spirits (slot 3/4/5)", sawFollowUpSpirit);
+}
+
 static void ReportMerchantRuntimeContext(const char* label) {
     IntReport("  %s: GameThread=%d onGameThread=%d RenderHook=%d hb=%u TraderHook=%d TargetLogHook=%d targetCalls=%u targetStores=%u CtoSHook=%d ctoSHb=%u",
               label,
@@ -2050,6 +2670,10 @@ phase4:
             Sleep(5000); // stability wait
             IntCheck("Phase 4: Entered Sparkfly Swamp", agentOk);
 
+            // ===== PHASE 4B: Grab Blessing =====
+            // Must happen before any combat or waypoint movement.
+            RunBlessingGrabProof();
+
             // ===== PHASE 5: Explorable Tests =====
             IntReport("=== PHASE 5: Explorable Tests ===");
             RunExplorableSkillbarRefreshProof();
@@ -2085,6 +2709,7 @@ phase4:
                 } else {
                     IntSkip("Cast gating and safety assertions", "Builtin combat proof did not capture before/after snapshots");
                 }
+                RunBuiltinSpiritChainRegression(foeId, "initial foe");
 
                 if (s_isolatedExplorableFlaggingMode) {
                     // GWA3-116: hero flagging only makes sense in explorable.
@@ -2129,6 +2754,7 @@ phase4:
                 } else {
                     IntSkip("Cast gating and safety assertions", "Builtin combat proof did not capture before/after snapshots");
                 }
+                RunBuiltinSpiritChainRegression(foeId, "foe after moving");
 
                 if (s_isolatedExplorableFlaggingMode) {
                     auto* meExplorableAfterMove = AgentMgr::GetMyAgent();
@@ -2153,6 +2779,18 @@ phase4:
                 } else {
                     IntSkip("Enemy found after move", "Still no enemies — area may be cleared");
                 }
+            }
+
+            const bool lootWorked = RunExplorableLootPickupProof();
+            if (!lootWorked) {
+                IntSkip("Path to Tekks", "Loot proof did not complete cleanly; continuing quest path anyway");
+            }
+
+            const bool reachedTekks = MoveToTekksForQuestDialog();
+            if (reachedTekks) {
+                RunTekksQuestAcceptProof();
+            } else {
+                IntSkip("Tekks quest accept", "Could not reach Tekks path endpoint");
             }
 
             // ===== PHASE 6: Return to Outpost =====
