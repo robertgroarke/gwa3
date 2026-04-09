@@ -1001,59 +1001,33 @@ static bool RunBogrootBlessingProof() {
     // Move close to the NPC
     MovePlayerNear(npcSnap.x, npcSnap.y, 120.0f, 12000);
 
-    // AutoIt pattern: ChangeTarget → GoNPC (0x39) → wait for dialog → Dialog(0x84)
-    // All dispatched through GameThread to avoid concurrent packet conflicts.
+    // AutoIt pattern: ChangeTarget → GoNPC (0x39) → Sleep → Dialog (0x3B, 0x84)
+    // GoNPC must go through GameThread (direct CtoS crashes after Bogroot map transition).
+    // Dialog uses the AutoIt header 0x3B (DIALOG_SEND), not 0x3A (DIALOG_SEND_LIVING).
+
+    // Step 1: ChangeTarget
     GameThread::EnqueuePost([npcId]() {
-        AgentMgr::ChangeTarget(npcId);
+        CtoS::SendPacket(2, Packets::TARGET_AGENT, npcId);
     });
     Sleep(500);
     IntReport("  ChangeTarget to agent=%u", npcId);
 
-    // Single GoNPC packet via GameThread
+    // Step 2: GoNPC (0x39) — same packet as AutoIt: SendPacket(0xC, 0x39, agentId)
     GameThread::EnqueuePost([npcId]() {
         CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
     });
-    IntReport("  Sent GoNPC (0x39) to agent=%u", npcId);
+    IntReport("  Sent GoNPC (0x39) to agent=%u via GameThread", npcId);
 
-    // Wait for dialog to open
-    bool dialogOpened = false;
-    for (int attempt = 0; attempt < 20; ++attempt) {
-        Sleep(500);
-        if (DialogMgr::IsDialogOpen()) {
-            dialogOpened = true;
-            IntReport("  Dialog opened after %d ms (sender=%u)",
-                      (attempt + 1) * 500, DialogMgr::GetDialogSenderAgentId());
-            break;
-        }
-    }
+    // Step 3: Wait for dialog (AutoIt: Sleep(1000))
+    // Wait long enough for the dialog to appear but give GameThread time to drain naturally.
+    Sleep(3000);
 
-    if (!dialogOpened) {
-        // Retry GoNPC once
-        IntReport("  Dialog not open; retrying GoNPC...");
-        GameThread::EnqueuePost([npcId]() {
-            CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
-        });
-        for (int attempt = 0; attempt < 10; ++attempt) {
-            Sleep(500);
-            if (DialogMgr::IsDialogOpen()) {
-                dialogOpened = true;
-                IntReport("  Dialog opened on retry after %d ms", (attempt + 1) * 500);
-                break;
-            }
-        }
-    }
-
-    if (!dialogOpened) {
-        IntReport("  WARN: Dialog never opened from blessing NPC");
-        IntSkip("Bogroot blessing", "NPC dialog did not open");
-        return false;
-    }
-
-    // Send blessing accept dialog (0x84) — raw packet, matching AutoIt exactly.
-    // Delay after dialog opens to let game state settle before sending.
-    Sleep(1000);
-    CtoS::Dialog(DIALOG_ACCEPT_BLESSING);
-    IntReport("  Sent CtoS::Dialog(0x%X)", DIALOG_ACCEPT_BLESSING);
+    // Step 4: Dialog (0x3B, 0x84) — AutoIt uses DIALOG_SEND (0x3B), not DIALOG_SEND_LIVING (0x3A)
+    // Send through GameThread as well to keep all packets on the same path.
+    GameThread::EnqueuePost([]() {
+        CtoS::SendPacket(2, Packets::DIALOG_SEND, DIALOG_ACCEPT_BLESSING);
+    });
+    IntReport("  Sent Dialog (0x3B, 0x%X) via GameThread", DIALOG_ACCEPT_BLESSING);
     Sleep(2000);
 
     // Verify blessing effect appeared
