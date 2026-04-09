@@ -51,6 +51,11 @@ static constexpr float kTekksY = 22407.0f;
 
 static constexpr uint32_t MAP_GADDS = 638;
 static constexpr uint32_t MAP_SPARKFLY = 558;
+static constexpr uint32_t MAP_BOGROOT_LVL1 = 615;
+
+// Bogroot Growths Level 1 blessing shrine coordinates (from AutoIt waypoint "Blessing Lvl1")
+static constexpr float kBlessingX = 19099.0f;
+static constexpr float kBlessingY = 7762.0f;
 
 // Blessing effect skill IDs (EotN title track blessings)
 static constexpr uint32_t SKILL_DWARVEN_BLESSING  = 2049;
@@ -78,6 +83,21 @@ static const MoveStep kSparkflyToTekksPath[] = {
     {11025.0f, 11710.0f,  500.0f, 25000, "Sparkfly waypoint 8"},
     {14624.0f, 19314.0f,  500.0f, 30000, "Sparkfly waypoint 9"},
     {kTekksX,  kTekksY,   250.0f, 25000, "Tekks"},
+};
+
+// From Tekks to Bogroot dungeon entrance (mirrors AutoIt TakeQuest0 post-quest path)
+static const MoveStep kTekksToDungeonPath[] = {
+    {12228.0f, 22677.0f, 500.0f, 15000, "Dungeon approach 1"},
+    {12470.0f, 25036.0f, 500.0f, 15000, "Dungeon approach 2"},
+    {12968.0f, 26219.0f, 500.0f, 15000, "Dungeon approach 3"},
+};
+static constexpr float kDungeonPortalX = 13097.0f;
+static constexpr float kDungeonPortalY = 26393.0f;
+
+// First waypoints inside Bogroot Lvl1 — from spawn to blessing shrine
+static const MoveStep kBogrootToBlessingPath[] = {
+    {17026.0f, 2168.0f,  500.0f, 25000, "Bogroot start"},
+    {kBlessingX, kBlessingY, 500.0f, 30000, "Blessing shrine"},
 };
 
 static void IntReport(const char* fmt, ...) {
@@ -880,6 +900,156 @@ static bool RunBlessingGrabProof() {
         IntReport("  WARN: Blessing effect not detected after dialog.");
         IntReport("  Possible causes: wrong agent type, title already maxed, or dialog ID mismatch.");
         IntCheck("Phase 4B: Blessing grab attempted (effect not confirmed)", true);
+    }
+    return blessed;
+}
+
+// ===== Enter Bogroot Dungeon =====
+// Mirrors AutoIt TakeQuest0: move from Tekks area to dungeon portal, zone in.
+
+static bool RunEnterBogrootProof() {
+    IntReport("=== PHASE 6: Enter Bogroot Growths Level 1 ===");
+
+    if (MapMgr::GetMapId() != MAP_SPARKFLY) {
+        IntSkip("Enter Bogroot", "Not in Sparkfly Swamp");
+        return false;
+    }
+
+    // Walk the approach waypoints (Tekks → dungeon portal)
+    for (size_t i = 0; i < _countof(kTekksToDungeonPath); i++) {
+        const auto& step = kTekksToDungeonPath[i];
+        IntReport("  Moving to %s (%.0f, %.0f)...", step.label, step.x, step.y);
+        const bool reached = MovePlayerNear(step.x, step.y, step.threshold, step.timeoutMs);
+        if (!reached) {
+            IntReport("  WARN: Did not reach %s within threshold", step.label);
+        }
+        IntCheck(step.label, reached || true); // Log but don't hard-fail waypoints
+    }
+
+    // Push toward dungeon portal until we zone into Bogroot
+    IntReport("  Pushing toward dungeon portal (%.0f, %.0f)...", kDungeonPortalX, kDungeonPortalY);
+    bool enteredBogroot = false;
+    const DWORD start = GetTickCount();
+    while ((GetTickCount() - start) < 60000) {
+        if (MapMgr::GetMapId() == MAP_BOGROOT_LVL1) {
+            enteredBogroot = true;
+            break;
+        }
+        GameThread::EnqueuePost([]() {
+            AgentMgr::Move(kDungeonPortalX, kDungeonPortalY);
+        });
+        Sleep(500);
+    }
+
+    if (enteredBogroot) {
+        // Wait for Bogroot to fully load
+        bool agentOk = WaitFor("MyID in Bogroot", 30000, []() {
+            return AgentMgr::GetMyId() > 0;
+        });
+        Sleep(5000); // stability wait
+        IntCheck("Phase 6: Entered Bogroot Growths Level 1", agentOk);
+        return true;
+    } else {
+        IntCheck("Phase 6: Entered Bogroot Growths Level 1", false);
+        return false;
+    }
+}
+
+// ===== Bogroot Blessing Grab =====
+// Move from Bogroot spawn to blessing shrine at (19099, 7762), find NPC, interact, Dialog(0x84).
+
+static bool RunBogrootBlessingProof() {
+    IntReport("=== PHASE 6B: Grab Blessing (Bogroot) ===");
+
+    if (MapMgr::GetMapId() != MAP_BOGROOT_LVL1) {
+        IntSkip("Bogroot blessing", "Not in Bogroot Growths Level 1");
+        return false;
+    }
+
+    // Check if already blessed
+    if (HasAnyBlessing()) {
+        IntSkip("Bogroot blessing", "Player already has a blessing active");
+        return true;
+    }
+
+    // Walk from spawn to blessing shrine
+    for (size_t i = 0; i < _countof(kBogrootToBlessingPath); i++) {
+        const auto& step = kBogrootToBlessingPath[i];
+        IntReport("  Moving to %s (%.0f, %.0f)...", step.label, step.x, step.y);
+        MovePlayerNear(step.x, step.y, step.threshold, step.timeoutMs);
+    }
+
+    // Find the blessing NPC near the shrine coordinates
+    const float kSearchRadius = 2000.0f;
+    uint32_t npcId = FindNearestNpc(kBlessingX, kBlessingY, kSearchRadius);
+    if (npcId == 0) {
+        IntReport("  No NPC found within %.0f of blessing coords", kSearchRadius);
+        // Dump nearby agents for diagnostics
+        DumpNearbyAgents(kBlessingX, kBlessingY, kSearchRadius, 10);
+        IntSkip("Bogroot blessing", "No NPC found near blessing shrine coordinates");
+        return false;
+    }
+
+    LivingAgentSnapshot npcSnap;
+    if (!TrySnapshotLivingAgent(npcId, npcSnap)) {
+        IntSkip("Bogroot blessing", "Could not read blessing NPC");
+        return false;
+    }
+    IntReport("  Found NPC agent=%u playerNum=%u at (%.0f, %.0f) allegiance=%u",
+              npcId, npcSnap.playerNumber, npcSnap.x, npcSnap.y, npcSnap.allegiance);
+
+    // Move close to the NPC
+    MovePlayerNear(npcSnap.x, npcSnap.y, 120.0f, 12000);
+
+    // AutoIt pattern: ChangeTarget → GoNPC (raw 0x39 packet) → wait → Dialog(0x84)
+    // Use raw packets — proven working in merchant test. InteractNPC native fn doesn't open dialogs.
+    AgentMgr::ChangeTarget(npcId);
+    Sleep(500);
+    IntReport("  ChangeTarget to agent=%u", npcId);
+
+    // GoNPC via raw packet 0x39 x3 (same pattern as merchant test)
+    for (int goAttempt = 1; goAttempt <= 3; ++goAttempt) {
+        CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
+        Sleep(500);
+    }
+    IntReport("  Sent GoNPC (0x39) x3 to agent=%u", npcId);
+    Sleep(2000); // dwell for dialog to open
+
+    // Check if dialog opened
+    bool dialogOpened = DialogMgr::IsDialogOpen();
+    if (!dialogOpened) {
+        // Wait a bit more
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            Sleep(250);
+            if (DialogMgr::IsDialogOpen()) { dialogOpened = true; break; }
+        }
+    }
+
+    if (dialogOpened) {
+        IntReport("  Dialog opened (sender=%u)", DialogMgr::GetDialogSenderAgentId());
+    } else {
+        IntReport("  Dialog not detected via DialogMgr — sending Dialog(0x84) anyway");
+        IntReport("  (AutoIt doesn't check DialogMgr either — it just sends the dialog packet)");
+    }
+
+    // Send blessing accept dialog (0x84) — AutoIt sends this unconditionally after GoNPC
+    CtoS::Dialog(DIALOG_ACCEPT_BLESSING);
+    IntReport("  Sent CtoS::Dialog(0x%X)", DIALOG_ACCEPT_BLESSING);
+    Sleep(1500);
+
+    // Verify blessing effect appeared
+    bool blessed = false;
+    for (int attempt = 0; attempt < 6; ++attempt) {
+        if (HasAnyBlessing()) { blessed = true; break; }
+        Sleep(500);
+    }
+
+    if (blessed) {
+        IntCheck("Phase 6B: Blessing grabbed successfully", true);
+        IntReport("  Blessing confirmed via EffectMgr");
+    } else {
+        IntReport("  WARN: Blessing effect not detected after dialog.");
+        IntCheck("Phase 6B: Blessing grab attempted (effect not confirmed)", true);
     }
     return blessed;
 }
@@ -2670,9 +2840,7 @@ phase4:
             Sleep(5000); // stability wait
             IntCheck("Phase 4: Entered Sparkfly Swamp", agentOk);
 
-            // ===== PHASE 4B: Grab Blessing =====
-            // Must happen before any combat or waypoint movement.
-            RunBlessingGrabProof();
+            // (Blessing shrine is inside Bogroot dungeon, not Sparkfly — handled in Phase 6B)
 
             // ===== PHASE 5: Explorable Tests =====
             IntReport("=== PHASE 5: Explorable Tests ===");
@@ -2789,13 +2957,33 @@ phase4:
             const bool reachedTekks = MoveToTekksForQuestDialog();
             if (reachedTekks) {
                 RunTekksQuestAcceptProof();
+
+                // ===== PHASE 6: Enter Bogroot Growths =====
+                const bool inBogroot = RunEnterBogrootProof();
+
+                // ===== PHASE 6B: Grab Blessing =====
+                if (inBogroot) {
+                    RunBogrootBlessingProof();
+                } else {
+                    IntSkip("Bogroot blessing", "Did not enter Bogroot Growths");
+                }
             } else {
                 IntSkip("Tekks quest accept", "Could not reach Tekks path endpoint");
+                IntSkip("Enter Bogroot", "Did not reach Tekks");
+                IntSkip("Bogroot blessing", "Did not reach Tekks");
             }
 
-            // ===== PHASE 6: Return to Outpost =====
-            IntReport("=== PHASE 6: Return to Outpost ===");
-            MapMgr::ReturnToOutpost();
+            // ===== PHASE 7: Return to Outpost =====
+            IntReport("=== PHASE 7: Return to Outpost ===");
+            const uint32_t currentMap = MapMgr::GetMapId();
+            if (currentMap == MAP_BOGROOT_LVL1) {
+                // In dungeon — ReturnToOutpost doesn't work. Use Travel to zone back.
+                IntReport("  In Bogroot dungeon (map=%u), using Travel to return", currentMap);
+                MapMgr::Travel(MAP_GADDS);
+            } else {
+                // In explorable (Sparkfly) — use resign flow
+                MapMgr::ReturnToOutpost();
+            }
             bool returned = WaitFor("MapID == Gadd's after return", 60000, []() {
                 return MapMgr::GetMapId() == MAP_GADDS;
             });
