@@ -247,6 +247,7 @@ bool BuyMerchantItemByPosition(uint32_t itemPosition, uint32_t quantity, uint32_
     if (!itemId || !Offsets::Transaction) return false;
 
     const uint32_t totalValue = unitValue * quantity;
+    if (!GameThread::IsInitialized()) return false;
     GameThread::Enqueue([itemId, quantity, totalValue]() {
         TransactionBuyNative(quantity, itemId, totalValue);
     });
@@ -262,6 +263,7 @@ bool BuyMerchantItemByModelId(uint32_t modelId, uint32_t quantity) {
     if (!itemId || unitValue == 0 || !Offsets::Transaction) return false;
 
     const uint32_t totalValue = unitValue * quantity;
+    if (!GameThread::IsInitialized()) return false;
     GameThread::Enqueue([itemId, quantity, totalValue]() {
         TransactionBuyNative(quantity, itemId, totalValue);
     });
@@ -270,6 +272,7 @@ bool BuyMerchantItemByModelId(uint32_t modelId, uint32_t quantity) {
 
 bool SellMerchantItem(uint32_t itemId, uint32_t quantity, uint32_t totalValue) {
     if (!itemId || !Offsets::Transaction) return false;
+    if (!GameThread::IsInitialized()) return false;
     GameThread::Enqueue([itemId, quantity, totalValue]() {
         TransactionSellNative(quantity, itemId, totalValue);
     });

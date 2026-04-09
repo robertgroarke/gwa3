@@ -396,11 +396,6 @@ void EnqueuePost(Callback task) {
     // game callback, but s_onGameThread is true during pre-callback Dispatch too.
     EnterCriticalSection(&s_cs);
 
-    // Fast path: if already on game thread during post-dispatch, execute immediately
-    if (s_onGameThread && s_gameThreadId == GetCurrentThreadId()) {
-        LeaveCriticalSection(&s_cs);
-        task();
-        return;
     }
 
     uint32_t next = (s_postHead + 1) % kMaxQueue;
