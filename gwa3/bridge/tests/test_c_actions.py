@@ -195,20 +195,10 @@ async def test_use_hero_skill_invalid_slot(tc: BridgeTestCase):
 # C4: Party & Hero
 # ============================================================
 
-async def test_kick_all_heroes_success(tc: BridgeTestCase):
-    """Kick all heroes — party size should decrease to 1 (just player)."""
-    snap_before = await tc.wait_for_snapshot(tier=1)
-    size_before = snap_before["party"]["size"]
+async def test_kick_all_heroes_deprecated(tc: BridgeTestCase):
+    """Bulk kick-all is intentionally disabled; caller should use kick_hero repeatedly."""
     result = await tc.send_action("kick_all_heroes", {})
-    tc.assert_action_success(result)
-
-    if size_before > 1:
-        def party_shrunk(s):
-            return s["party"]["size"] < size_before
-        try:
-            await tc.wait_for_state_change(party_shrunk, tier=1, timeout=5.0)
-        except Exception:
-            pass  # May not shrink if no heroes were in party
+    tc.assert_action_error(result, "deprecated_use_kick_hero_individually")
 
 
 async def test_add_hero_success(tc: BridgeTestCase):

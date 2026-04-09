@@ -52,6 +52,8 @@ static bool s_loggedCurrentTargetRead = false;
 static bool s_loggedCurrentTargetFault = false;
 static bool s_loggedTargetLogRead = false;
 static bool s_loggedTargetLogStats = false;
+static bool s_loggedInteractNpcNative = false;
+static bool s_loggedInteractNpcFallback = false;
 
 static uintptr_t FindNearCallTarget(uintptr_t center, int backward, int forward) {
     if (!center) return 0;
@@ -252,11 +254,27 @@ void InteractItem(uint32_t agentId, bool callTarget) {
 }
 
 void InteractNPC(uint32_t agentId) {
-    // Keep packet path as the production default.
-    // Unlike CallTarget, the scanned native InteractNPC candidate has not yet
-    // been validated end-to-end on this client build.
-    // GWA2's GoNPC sends a 12-byte packet: header + agent id + trailing 0.
-    CtoS::SendPacket(3, Packets::INTERACT_NPC, agentId, 0u);
+    if (s_interactNpcFn && GameThread::IsInitialized()) {
+        if (!s_loggedInteractNpcNative) {
+            Log::Info("AgentMgr: InteractNPC using native GameThread path fn=0x%08X",
+                      static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_interactNpcFn)));
+            s_loggedInteractNpcNative = true;
+        }
+        auto fn = s_interactNpcFn;
+        GameThread::EnqueuePost([fn, agentId]() {
+            fn(agentId, 0u);
+        });
+        return;
+    }
+
+    // Current AutoIt GWA2 logic uses INTERACT_LIVING (0x38) for NPCs.
+    // Keep the native path above first, but make the packet fallback match
+    // the modern working merchant-interaction packet shape.
+    if (!s_loggedInteractNpcFallback) {
+        Log::Warn("AgentMgr: InteractNPC falling back to raw packet path");
+        s_loggedInteractNpcFallback = true;
+    }
+    CtoS::SendPacket(3, Packets::INTERACT_LIVING, agentId, 0u);
 }
 
 void InteractPlayer(uint32_t agentId) {

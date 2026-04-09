@@ -3,90 +3,156 @@
 #include <gwa3/core/Log.h>
 
 #include <Windows.h>
+#include <cstdarg>
+#include <cstring>
 
 namespace GWA3::CtoSHook {
 
 static constexpr uint32_t kQueueSize = 256;
 static constexpr uint32_t kPatchSize = 5;
 static constexpr uint32_t kReplaySize = 10; // add esp,4 (3) + cmp dword ptr [addr],0 (7)
+static constexpr uint32_t kCommandSlotCount = 32;
+
+using PacketSendFn = void(__cdecl*)(void*, uint32_t, uint32_t*);
+
+struct PacketCommand {
+    uintptr_t entry;
+    uint32_t sizeBytes;
+    uint32_t data[12];
+};
+static_assert(sizeof(PacketCommand) <= 64, "PacketCommand must remain compact");
 
 static volatile LONG s_heartbeat = 0;
 static volatile LONG s_queueCounter = 0;
 static volatile LONG s_savedCommand = 0;
 static volatile LONG s_savedESP = 0;
+static volatile LONG s_savedIndex = -1;
+static volatile LONG s_packetCommandSlot = 0;
 
 static uintptr_t s_queue[kQueueSize] = {};
 static bool s_initialized = false;
 static uintptr_t s_returnAddr = 0;   // hookAddr + 10
 static uintptr_t s_cmpAddr = 0;      // operand for replicated cmp instruction
-static uintptr_t s_replayCode = 0;   // VirtualAlloc'd: original 10 bytes + JMP return
 static uint8_t s_savedBytes[kPatchSize] = {};
 static uint8_t s_patchedBytes[kPatchSize] = {};
+
+static PacketSendFn s_packetSendFn = nullptr;
+static uintptr_t s_packetLocation = 0;
+static uintptr_t s_packetCommandPool = 0;
+static uintptr_t s_commandReturnAddr = 0;
 
 // Watchdog for re-patching when the game's integrity checker restores original bytes
 static HANDLE s_watchdogThread = nullptr;
 static volatile bool s_watchdogRunning = false;
 
-// Naked detour — processes one CtoS shellcode command per frame, then
-// replicates the overwritten instructions inline (no trampoline).
-// Original 10 bytes: 83 C4 04 (add esp,4) + 83 3D [addr] 00 (cmp dword ptr [addr],0)
-// We replicate both instructions, then JMP to hookAddr+10.
+static bool EnsurePacketCommandPool() {
+    if (s_packetCommandPool) return true;
+
+    void* mem = VirtualAlloc(nullptr,
+                             sizeof(PacketCommand) * kCommandSlotCount,
+                             MEM_RESERVE | MEM_COMMIT,
+                             PAGE_EXECUTE_READWRITE);
+    if (!mem) {
+        Log::Error("CtoSHook: VirtualAlloc failed for packet command pool");
+        return false;
+    }
+
+    s_packetCommandPool = reinterpret_cast<uintptr_t>(mem);
+    ZeroMemory(mem, sizeof(PacketCommand) * kCommandSlotCount);
+    return true;
+}
+
+static uintptr_t NextPacketCommandSlot() {
+    if (!EnsurePacketCommandPool()) return 0;
+    LONG idx = InterlockedIncrement(&s_packetCommandSlot) - 1;
+    return s_packetCommandPool + (static_cast<uint32_t>(idx) % kCommandSlotCount) * sizeof(PacketCommand);
+}
+
+// AutoIt-style packet command entry:
+//   EAX -> PacketCommand blob
+//   [eax+4] = packet size in bytes
+//   [eax+8] = packet data
+static __declspec(naked) void CommandPacketSendNaked() {
+    __asm {
+        lea edx, [eax + 8]
+        push edx
+        mov ebx, dword ptr [eax + 4]
+        push ebx
+        mov ebx, dword ptr [s_packetLocation]
+        push ebx
+        mov ebx, dword ptr [s_packetSendFn]
+        call ebx
+        add esp, 0x0C
+        jmp [s_commandReturnAddr]
+    }
+}
+
+static __declspec(naked) void CommandReturnNaked() {
+    __asm {
+        mov ecx, dword ptr [s_savedIndex]
+        mov edx, dword ptr [s_queueCounter]
+        cmp edx, ecx
+        jnz exit_path
+        mov eax, ecx
+        inc eax
+        cmp eax, kQueueSize
+        jnz no_reset
+        xor eax, eax
+    no_reset:
+        mov dword ptr [s_queueCounter], eax
+    exit_path:
+        popfd
+        popad
+        mov esp, dword ptr [s_savedESP]
+        add esp, 4
+        push eax
+        mov eax, dword ptr [s_cmpAddr]
+        cmp dword ptr [eax], 0
+        pop eax
+        jmp [s_returnAddr]
+    }
+}
+
+// Naked detour mirroring AutoIt's command-object execution shape more closely:
+// queue slot holds a pointer to a command blob, EAX points at the blob on entry,
+// and control transfers via JMP into the command entrypoint stored at [EAX].
 static __declspec(naked) void CtoSDetourNaked() {
     __asm {
-        // Save all registers (mirrors AutoIt's RenderingModProc approach)
         mov dword ptr [s_savedESP], esp
         pushad
         pushfd
 
-        // Increment heartbeat for watchdog / diagnostics
         inc dword ptr [s_heartbeat]
 
-        // Check if queue has a command
         mov eax, dword ptr [s_queueCounter]
         mov ecx, eax
         mov ebx, dword ptr [s_queue + eax * 4]
         test ebx, ebx
         jz no_command
 
-        // Clear slot, save command pointer, advance counter
         mov dword ptr [s_queue + eax * 4], 0
         mov dword ptr [s_savedCommand], ebx
-        mov eax, ecx
-        inc eax
-        cmp eax, kQueueSize
-        jnz no_wrap
-        xor eax, eax
-    no_wrap:
-        mov dword ptr [s_queueCounter], eax
-
-        // Call the shellcode command (which calls PacketSend with proper args)
-        call dword ptr [s_savedCommand]
+        mov dword ptr [s_savedIndex], ecx
+        mov eax, ebx
+        mov ebx, dword ptr [eax]
+        jmp ebx
 
     no_command:
-        // Restore all registers
         popfd
         popad
         mov esp, dword ptr [s_savedESP]
-
-        // Replay the original 10 bytes inline:
-        // add esp, 4  (83 C4 04)
         add esp, 4
-        // cmp dword ptr [s_cmpAddr], 0  (indirect — load addr first)
         push eax
         mov eax, dword ptr [s_cmpAddr]
         cmp dword ptr [eax], 0
         pop eax
-
-        // Jump back to hookAddr + 10
         jmp [s_returnAddr]
     }
 }
 
-// Watchdog: re-patches the mid-function hook when the game's integrity
-// checker restores original bytes (~38s cycle).
 static DWORD WINAPI Watchdog(LPVOID) {
     while (s_watchdogRunning) {
-        Sleep(5); // fast poll — must re-patch before the next render frame
+        Sleep(5);
         if (!s_initialized) continue;
 
         uintptr_t hookAddr = Offsets::Render;
@@ -99,7 +165,7 @@ static DWORD WINAPI Watchdog(LPVOID) {
                                PAGE_EXECUTE_READWRITE, &oldProtect)) {
                 memcpy(reinterpret_cast<void*>(hookAddr), s_patchedBytes, kPatchSize);
                 FlushInstructionCache(GetCurrentProcess(),
-                                     reinterpret_cast<void*>(hookAddr), kPatchSize);
+                                      reinterpret_cast<void*>(hookAddr), kPatchSize);
                 VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize,
                                oldProtect, &oldProtect);
                 Log::Info("CtoSHook: [WATCHDOG] Re-patched mid-function hook");
@@ -115,60 +181,67 @@ bool Initialize() {
         Log::Error("CtoSHook: Render offset not resolved");
         return false;
     }
+    if (!Offsets::PacketSend || !Offsets::PacketLocation) {
+        Log::Error("CtoSHook: PacketSend or PacketLocation offset not resolved");
+        return false;
+    }
+
+    s_packetSendFn = reinterpret_cast<PacketSendFn>(Offsets::PacketSend);
+    s_packetLocation = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
+    if (!s_packetLocation) {
+        Log::Error("CtoSHook: PacketLocation dereference returned null");
+        return false;
+    }
 
     uintptr_t hookAddr = Offsets::Render;
     s_returnAddr = hookAddr + kReplaySize;
+    s_commandReturnAddr = reinterpret_cast<uintptr_t>(&CommandReturnNaked);
     s_queueCounter = 0;
     s_savedCommand = 0;
+    s_savedIndex = -1;
     ZeroMemory(s_queue, sizeof(s_queue));
 
-    // Save original bytes and extract cmp operand address.
-    // Original 10 bytes: 83 C4 04 83 3D [4-byte addr] 00
-    //   add esp, 4        (bytes 0-2)
-    //   cmp dword ptr [addr], 0  (bytes 3-9, addr at bytes 5-8)
     memcpy(s_savedBytes, reinterpret_cast<void*>(hookAddr), kPatchSize);
 
     const uint8_t* orig = reinterpret_cast<const uint8_t*>(hookAddr);
-    // Verify expected instruction pattern
     if (orig[0] != 0x83 || orig[1] != 0xC4 || orig[2] != 0x04 ||
         orig[3] != 0x83 || orig[4] != 0x3D) {
         Log::Error("CtoSHook: Unexpected bytes at hook site: %02X %02X %02X %02X %02X",
                    orig[0], orig[1], orig[2], orig[3], orig[4]);
         return false;
     }
-    // Extract the absolute address from the cmp instruction (bytes 5-8)
-    memcpy(&s_cmpAddr, orig + 5, 4);
-    Log::Info("CtoSHook: cmp operand addr=0x%08X", s_cmpAddr);
 
-    // Write 5-byte JMP detour
+    memcpy(&s_cmpAddr, orig + 5, 4);
+    Log::Info("CtoSHook: cmp operand addr=0x%08X PacketSend=0x%08X PacketLocation=0x%08X",
+              s_cmpAddr,
+              static_cast<unsigned>(Offsets::PacketSend),
+              static_cast<unsigned>(s_packetLocation));
+
     DWORD oldProtect;
     VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, PAGE_EXECUTE_READWRITE, &oldProtect);
 
     uint8_t patch[kPatchSize];
     patch[0] = 0xE9;
-    int32_t rel = reinterpret_cast<uintptr_t>(&CtoSDetourNaked) - (hookAddr + 5);
+    int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(&CtoSDetourNaked) - (hookAddr + 5));
     memcpy(patch + 1, &rel, 4);
     memcpy(reinterpret_cast<void*>(hookAddr), patch, kPatchSize);
     FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hookAddr), kPatchSize);
 
     VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, oldProtect, &oldProtect);
 
-    // Save patched bytes for watchdog comparison
     memcpy(s_patchedBytes, reinterpret_cast<void*>(hookAddr), kPatchSize);
 
-    // Start watchdog thread
     s_watchdogRunning = true;
     s_watchdogThread = CreateThread(nullptr, 0, Watchdog, nullptr, 0, nullptr);
 
     s_initialized = true;
-    Log::Info("CtoSHook: Installed at 0x%08X (inline replay, watchdog active)", hookAddr);
+    Log::Info("CtoSHook: Installed at 0x%08X (AutoIt-style command lane experiment)", hookAddr);
     return true;
 }
 
 void Shutdown() {
     if (!s_initialized) return;
 
-    // Stop watchdog
     s_watchdogRunning = false;
     if (s_watchdogThread) {
         WaitForSingleObject(s_watchdogThread, 2000);
@@ -176,7 +249,6 @@ void Shutdown() {
         s_watchdogThread = nullptr;
     }
 
-    // Restore original bytes
     uintptr_t hookAddr = Offsets::Render;
     DWORD oldProtect;
     VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, PAGE_EXECUTE_READWRITE, &oldProtect);
@@ -186,6 +258,7 @@ void Shutdown() {
 
     ZeroMemory(s_queue, sizeof(s_queue));
     s_queueCounter = 0;
+    s_savedIndex = -1;
     s_initialized = false;
     Log::Info("CtoSHook: Shutdown");
 }
@@ -202,6 +275,43 @@ bool EnqueueCommand(uintptr_t command) {
 
     Log::Warn("CtoSHook: queue full, dropping command 0x%08X", command);
     return false;
+}
+
+bool SendPacketCommand(uint32_t size, uint32_t header, ...) {
+    if (!s_initialized && !Initialize()) return false;
+    if (size == 0 || size > 12) {
+        Log::Warn("CtoSHook: invalid packet size %u for header 0x%X", size, header);
+        return false;
+    }
+
+    if (Offsets::PacketLocation) {
+        uintptr_t fresh = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
+        if (fresh) s_packetLocation = fresh;
+    }
+
+    const uintptr_t slotAddr = NextPacketCommandSlot();
+    if (!slotAddr) return false;
+
+    auto* cmd = reinterpret_cast<PacketCommand*>(slotAddr);
+    cmd->entry = reinterpret_cast<uintptr_t>(&CommandPacketSendNaked);
+    cmd->sizeBytes = size * 4;
+    ZeroMemory(cmd->data, sizeof(cmd->data));
+    cmd->data[0] = header;
+
+    va_list args;
+    va_start(args, header);
+    for (uint32_t i = 1; i < size && i < 12; ++i) {
+        cmd->data[i] = va_arg(args, uint32_t);
+    }
+    va_end(args);
+
+    FlushInstructionCache(GetCurrentProcess(), cmd, sizeof(PacketCommand));
+
+    const bool queued = EnqueueCommand(slotAddr);
+    if (!queued) {
+        Log::Warn("CtoSHook: failed to enqueue packet command hdr=0x%X", header);
+    }
+    return queued;
 }
 
 bool IsInitialized() {

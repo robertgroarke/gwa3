@@ -122,6 +122,7 @@ $summarySeen = $false
 $summaryLine = $null
 $failureLine = $null
 $summarySeenAt = $null
+$merchantShot = $null
 $startTime = Get-Date
 
 while (((Get-Date) - $startTime).TotalSeconds -lt $RunTimeoutSeconds) {
@@ -132,6 +133,14 @@ while (((Get-Date) - $startTime).TotalSeconds -lt $RunTimeoutSeconds) {
         break
     }
     if (-not (Get-Process Gw -ErrorAction SilentlyContinue)) { break }
+
+    if (-not $merchantShot -and (Test-Path $script:LogPath)) {
+        $merchantMarkerSeen = Select-String -Path $script:LogPath -Pattern "MERCHANT_SCREENSHOT_NOW" -Quiet -ErrorAction SilentlyContinue
+        if ($merchantMarkerSeen) {
+            $merchantShot = Capture-RunScreenshot -Tag "merchant_open"
+            Write-Host "MERCHANT_SCREENSHOT: $merchantShot"
+        }
+    }
 
     if (Test-Path $script:LogPath) {
         $froggyLines = Get-LatestFroggyBlock

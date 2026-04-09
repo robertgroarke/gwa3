@@ -174,6 +174,8 @@ static void ClearTestModeFlags() {
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_quote.flag", dir);
     DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_merchant_shell.flag", dir);
+    DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_variant_standard_ptr.flag", dir);
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_variant_legacy_id.flag", dir);
@@ -185,6 +187,10 @@ static void ClearTestModeFlags() {
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_stage_approach_only.flag", dir);
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_stage_target_only.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_merchant_stage_interact_single_packet_only.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_merchant_stage_interact_agentmgr_only.flag", dir);
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_stage_interact_packet_only.flag", dir);
     DeleteFileA(path);
@@ -337,10 +343,11 @@ static void PrintUsage(const char* argv0) {
     printf("  --test-froggy   Inject in Froggy feature test mode (Epic 14 tests)\n");
     printf("  --test-npc      Inject in isolated NPC/dialog test mode\n");
     printf("  --test-merchant Inject in isolated merchant/trader quote test mode\n");
+    printf("  --test-merchant-shell Inject in dedicated merchant wrapper shell mode\n");
     printf("  --llm           Inject in LLM agent mode (named pipe bridge for Gemma 4)\n");
     printf("  --llm-advisory  Inject in advisory mode (Froggy bot + LLM bridge together)\n");
     printf("  --merchant-variant <standard-id|standard-ptr|legacy-id|legacy-ptr>\n");
-    printf("  --merchant-stage <full|travel-only|approach-only|target-only|interact-packet-only|interact-only>\n");
+    printf("  --merchant-stage <full|travel-only|approach-only|target-only|interact-single-packet-only|interact-agentmgr-only|interact-packet-only|interact-only>\n");
     printf("\nOptions:\n");
     printf("  --pid <N>       Target specific process ID\n");
     printf("  -h, --help      Show this help\n");
@@ -362,6 +369,7 @@ int main(int argc, char* argv[]) {
     bool doTestFroggy = false;
     bool doTestNpc = false;
     bool doTestMerchant = false;
+    bool doTestMerchantShell = false;
     bool doLlm = false;
     bool doLlmAdvisory = false;
     const char* merchantVariantFlag = nullptr;
@@ -394,6 +402,8 @@ int main(int argc, char* argv[]) {
             doTestNpc = true;
         } else if (strcmp(argv[i], "--test-merchant") == 0) {
             doTestMerchant = true;
+        } else if (strcmp(argv[i], "--test-merchant-shell") == 0) {
+            doTestMerchantShell = true;
         } else if (strcmp(argv[i], "--llm") == 0) {
             doLlm = true;
         } else if (strcmp(argv[i], "--llm-advisory") == 0) {
@@ -423,6 +433,10 @@ int main(int argc, char* argv[]) {
                 merchantStageFlag = "gwa3_test_merchant_stage_approach_only.flag";
             } else if (strcmp(stage, "target-only") == 0) {
                 merchantStageFlag = "gwa3_test_merchant_stage_target_only.flag";
+            } else if (strcmp(stage, "interact-single-packet-only") == 0) {
+                merchantStageFlag = "gwa3_test_merchant_stage_interact_single_packet_only.flag";
+            } else if (strcmp(stage, "interact-agentmgr-only") == 0) {
+                merchantStageFlag = "gwa3_test_merchant_stage_interact_agentmgr_only.flag";
             } else if (strcmp(stage, "interact-packet-only") == 0) {
                 merchantStageFlag = "gwa3_test_merchant_stage_interact_packet_only.flag";
             } else if (strcmp(stage, "interact-only") == 0) {
@@ -505,6 +519,7 @@ int main(int argc, char* argv[]) {
     if (doTestFroggy) SetTestModeFlag("gwa3_test_froggy.flag");
     if (doTestNpc) SetTestModeFlag("gwa3_test_npc_dialog.flag");
     if (doTestMerchant) SetTestModeFlag("gwa3_test_merchant_quote.flag");
+    if (doTestMerchantShell) SetTestModeFlag("gwa3_test_merchant_shell.flag");
     if (doTestMerchant && merchantVariantFlag) SetTestModeFlag(merchantVariantFlag);
     if (doTestMerchant && merchantStageFlag) SetTestModeFlag(merchantStageFlag);
     if (doLlm) SetTestModeFlag("gwa3_llm_mode.flag");

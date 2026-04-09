@@ -48,6 +48,8 @@ act on your own judgment to pursue your current objective.
 - HP and Energy are 0.0-1.0 fractions (0.85 = 85%)
 - Skill slots are 0-7, recharge > 0 means cooling down
 - Hero behavior: 0=fight, 1=guard, 2=avoid combat
+- To clear a party, remove heroes individually with repeated kick_hero calls for the currently present hero IDs.
+- Do not assume any bulk kick-all-heroes action exists or is reliable.
 - Item rarity: white < blue < purple < gold < green. Always pick up gold and green items.
 - has_hex=true means the foe already has a hex on it (don't re-hex)
 - has_enchantment=true means the foe has an enchantment (consider enchant removal)

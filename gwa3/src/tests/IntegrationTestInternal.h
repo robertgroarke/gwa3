@@ -170,9 +170,10 @@ bool TestAgentInteraction();
 bool TestCameraFOV();
 bool TestPersonalDir();
 bool TestExplorableCallTarget();
+int RunMerchantQuoteTest();
 
 // Watchdog (crash/disconnect detection)
 void StartWatchdog();
-void StopWatchdog();
+void StopWatchdog(bool waitForThread = true);
 
 } // namespace GWA3::SmokeTest

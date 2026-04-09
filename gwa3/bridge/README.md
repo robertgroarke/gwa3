@@ -76,7 +76,7 @@ Gemma starts playing immediately. No further input required.
 [Agent] Starting autonomous agent loop
 [Agent] Objective: Farm Bogroot Growths HM repeatedly. Sell loot when inventory is full.
 [Chat] Gemma is playing autonomously. Type to send messages (optional).
-[Gemma -> GW] set_hard_mode, kick_all_heroes, add_hero, add_hero, add_hero
+[Gemma -> GW] set_hard_mode, kick_hero, kick_hero, add_hero, add_hero, add_hero
 [Gemma -> GW] travel
 [Gemma -> GW] enter_mission
 [Gemma -> GW] move_to
@@ -170,7 +170,7 @@ Gemma sees three tiers of data, sent at different frequencies:
 
 All skill IDs, item IDs, and profession IDs are resolved to human-readable names before Gemma sees them.
 
-## Available Actions (41 tools)
+## Available Actions (40 tools)
 
 **Movement (3):** `move_to`, `change_target`, `cancel_action`
 
@@ -178,7 +178,9 @@ All skill IDs, item IDs, and profession IDs are resolved to human-readable names
 
 **Interaction (4):** `interact_npc`, `interact_player`, `interact_signpost`, `dialog`
 
-**Party/Hero (8):** `add_hero`, `kick_hero`, `kick_all_heroes`, `flag_hero`, `flag_all`, `unflag_all`, `set_hero_behavior`, `lock_hero_target`
+**Party/Hero (7):** `add_hero`, `kick_hero`, `flag_hero`, `flag_all`, `unflag_all`, `set_hero_behavior`, `lock_hero_target`
+
+To clear a party, issue repeated `kick_hero` actions for the currently present hero IDs. The bulk `kick_all_heroes` action is intentionally not exposed because the legacy sentinel path is not confirmed reliable in `gwa3`.
 
 **Travel (5):** `travel`, `enter_mission`, `return_to_outpost`, `set_hard_mode`, `skip_cinematic`
 

@@ -79,8 +79,22 @@ void AddHero(uint32_t heroId) {
 }
 void KickHero(uint32_t heroId)   { CtoS::HeroKick(heroId); }
 void KickAllHeroes() {
-    // Use the kick-all sentinel — sending multiple individual kicks in one
-    // game frame crashes the client.
+    // Confirmed on the current client/test environment: HERO_KICK with the
+    // legacy 0x26 "kick all" sentinel does not reliably remove party heroes,
+    // even when forced through increasingly faithful AutoIt-style transport
+    // experiments. Individual HERO_KICK(hero_id) packets are the confirmed
+    // working path, so we enumerate current heroes and kick them one by one.
+    uint32_t heroIds[16] = {};
+    const size_t heroCount = GetPartyHeroIds(heroIds, _countof(heroIds));
+    if (heroCount) {
+        for (size_t i = 0; i < heroCount; ++i) {
+            if (heroIds[i] != 0) {
+                CtoS::HeroKick(heroIds[i]);
+            }
+        }
+        return;
+    }
+    // Fallback only when party state is unavailable.
     CtoS::SendPacket(2, Packets::HERO_KICK, 0x26u);
 }
 
@@ -219,4 +233,74 @@ uint32_t GetCalledTargetId() {
     return 0;
 }
 
+size_t GetPartyHeroIds(uint32_t* out, size_t maxCount) {
+    if (!out || maxCount == 0) return 0;
+
+    PartyInfo* playerParty = ResolvePlayerParty();
+    if (!playerParty) return 0;
+
+    __try {
+        auto* heroes = &playerParty->heroes;
+        if (!heroes || !heroes->buffer || heroes->size > 16) return 0;
+
+        const size_t count = heroes->size < maxCount ? heroes->size : maxCount;
+        for (size_t i = 0; i < count; ++i) {
+            out[i] = heroes->buffer[i].hero_id;
+        }
+        return count;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+void DebugDumpPartyState(const char* label) {
+    PartyInfo* playerParty = ResolvePlayerParty();
+    const uintptr_t partyContext = ResolvePartyContext();
+    if (!playerParty) {
+        Log::Info("PartyMgr: %s partyContext=0x%08X playerParty=NULL",
+                  label ? label : "(null)",
+                  static_cast<unsigned>(partyContext));
+        return;
+    }
+
+    __try {
+        Log::Info("PartyMgr: %s partyContext=0x%08X playerParty=0x%08X party_id=%u players=%u heroes=%u hench=%u others=%u",
+                  label ? label : "(null)",
+                  static_cast<unsigned>(partyContext),
+                  static_cast<unsigned>(reinterpret_cast<uintptr_t>(playerParty)),
+                  playerParty->party_id,
+                  playerParty->players.size,
+                  playerParty->heroes.size,
+                  playerParty->henchmen.size,
+                  playerParty->others.size);
+
+        if (playerParty->players.buffer && playerParty->players.size <= 16) {
+            for (uint32_t i = 0; i < playerParty->players.size; ++i) {
+                const auto& p = playerParty->players.buffer[i];
+                Log::Info("PartyMgr:   player[%u] login=%u called=%u state=0x%X",
+                          i, p.login_number, p.called_target_id, p.state);
+            }
+        }
+
+        if (playerParty->heroes.buffer && playerParty->heroes.size <= 16) {
+            for (uint32_t i = 0; i < playerParty->heroes.size; ++i) {
+                const auto& h = playerParty->heroes.buffer[i];
+                Log::Info("PartyMgr:   hero[%u] hero_id=%u agent=%u owner=%u level=%u",
+                          i, h.hero_id, h.agent_id, h.owner_player_id, h.level);
+            }
+        }
+
+        if (playerParty->henchmen.buffer && playerParty->henchmen.size <= 16) {
+            for (uint32_t i = 0; i < playerParty->henchmen.size; ++i) {
+                const auto& h = playerParty->henchmen.buffer[i];
+                Log::Info("PartyMgr:   hench[%u] agent=%u prof=%u level=%u",
+                          i, h.agent_id, h.profession, h.level);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("PartyMgr: %s debug dump faulted", label ? label : "(null)");
+    }
+}
+
 } // namespace GWA3::PartyMgr
+

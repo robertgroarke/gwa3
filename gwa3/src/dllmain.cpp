@@ -62,6 +62,53 @@ static bool IsInGame() {
     return GWA3::MapMgr::GetMapId() > 0 && ReadMyIdRaw() > 0;
 }
 
+static bool ClickPlayButtonMouseFallback() {
+    HWND hwnd = static_cast<HWND>(GWA3::MemoryMgr::GetGWWindowHandle());
+    if (!hwnd || !IsWindow(hwnd)) {
+        GWA3::Log::Warn("Bootstrap: mouse Play fallback has no valid GW hwnd");
+        return false;
+    }
+
+    RECT rect{};
+    if (!GetWindowRect(hwnd, &rect)) {
+        GWA3::Log::Warn("Bootstrap: mouse Play fallback failed to read window rect");
+        return false;
+    }
+
+    const LONG width = rect.right - rect.left;
+    const LONG height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) {
+        GWA3::Log::Warn("Bootstrap: mouse Play fallback invalid window size %ldx%ld", width, height);
+        return false;
+    }
+
+    const LONG clickX = rect.left + static_cast<LONG>(width * 0.78f);
+    const LONG clickY = rect.top + static_cast<LONG>(height * 0.96f);
+
+    SetForegroundWindow(hwnd);
+    SetActiveWindow(hwnd);
+    BringWindowToTop(hwnd);
+    Sleep(100);
+
+    POINT oldPos{};
+    GetCursorPos(&oldPos);
+    SetCursorPos(clickX, clickY);
+    Sleep(50);
+
+    INPUT inputs[2] = {};
+    inputs[0].type = INPUT_MOUSE;
+    inputs[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+    inputs[1].type = INPUT_MOUSE;
+    inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+    const UINT sent = SendInput(2, inputs, sizeof(INPUT));
+
+    Sleep(50);
+    SetCursorPos(oldPos.x, oldPos.y);
+
+    GWA3::Log::Info("Bootstrap: mouse-clicking Play fallback at (%ld,%ld), sent=%u", clickX, clickY, sent);
+    return sent == 2;
+}
+
 static bool RunCharSelectBootstrap(DWORD timeoutMs) {
     if (IsInGame()) {
         GWA3::Log::Info("Bootstrap: Already in game (MapID=%u MyID=%u)",
@@ -86,9 +133,11 @@ static bool RunCharSelectBootstrap(DWORD timeoutMs) {
         const DWORD now = GetTickCount();
         if (now - lastLog >= 3000) {
             const uintptr_t playFrame = GWA3::UIMgr::GetFrameByHash(GWA3::UIMgr::Hashes::PlayButton);
+            const uintptr_t playGreyFrame = GWA3::UIMgr::GetFrameByHash(GWA3::UIMgr::Hashes::PlayButtonGreyed);
             const uint32_t playState = playFrame ? GWA3::UIMgr::GetFrameState(playFrame) : 0;
-            GWA3::Log::Info("Bootstrap: waiting (MapID=%u MyID=%u PlayFrame=0x%08X state=0x%X hb=%u)",
-                            mapId, myId, playFrame, playState,
+            const uint32_t playGreyState = playGreyFrame ? GWA3::UIMgr::GetFrameState(playGreyFrame) : 0;
+            GWA3::Log::Info("Bootstrap: waiting (MapID=%u MyID=%u PlayFrame=0x%08X state=0x%X GreyFrame=0x%08X grey=0x%X hb=%u)",
+                            mapId, myId, playFrame, playState, playGreyFrame, playGreyState,
                             GWA3::RenderHook::GetHeartbeat());
             lastLog = now;
         }
@@ -101,16 +150,38 @@ static bool RunCharSelectBootstrap(DWORD timeoutMs) {
         }
 
         if (now - lastPlayAttempt >= 2500) {
-            const uintptr_t playFrame = GWA3::UIMgr::GetFrameByHash(GWA3::UIMgr::Hashes::PlayButton);
-            if (playFrame) {
+            const uintptr_t playCandidates[] = {
+                GWA3::UIMgr::GetFrameByHash(GWA3::UIMgr::Hashes::PlayButton),
+                GWA3::UIMgr::GetFrameByHash(GWA3::UIMgr::Hashes::PlayButtonGreyed)
+            };
+            const uint32_t playHashes[] = {
+                GWA3::UIMgr::Hashes::PlayButton,
+                GWA3::UIMgr::Hashes::PlayButtonGreyed
+            };
+            for (int i = 0; i < 2; ++i) {
+                const uintptr_t playFrame = playCandidates[i];
+                if (!playFrame) continue;
                 const uint32_t state = GWA3::UIMgr::GetFrameState(playFrame);
                 const bool created = (state & GWA3::UIMgr::FRAME_CREATED) != 0;
                 const bool hidden = (state & GWA3::UIMgr::FRAME_HIDDEN) != 0;
                 const bool disabled = (state & GWA3::UIMgr::FRAME_DISABLED) != 0;
                 if (created && !hidden && !disabled) {
-                    GWA3::Log::Info("Bootstrap: clicking Play (state=0x%X)", state);
-                    GWA3::UIMgr::ButtonClickByHash(GWA3::UIMgr::Hashes::PlayButton);
+                    GWA3::Log::Info("Bootstrap: clicking Play hash=0x%X (state=0x%X)", playHashes[i], state);
+                    GWA3::UIMgr::ButtonClickByHash(playHashes[i]);
                     lastPlayAttempt = now;
+                    break;
+                }
+                // Some char-select states expose only a "greyed" or hidden-tagged Play frame
+                // even though clicking it still advances to map load. Fall back to trying it.
+                if (created && (playHashes[i] == GWA3::UIMgr::Hashes::PlayButtonGreyed || state == 0x4B14 || state == 0x4314)) {
+                    GWA3::Log::Info("Bootstrap: force-clicking Play hash=0x%X (state=0x%X)", playHashes[i], state);
+                    GWA3::UIMgr::ButtonClickByHash(playHashes[i]);
+                    Sleep(250);
+                    if (!IsInGame()) {
+                        ClickPlayButtonMouseFallback();
+                    }
+                    lastPlayAttempt = now;
+                    break;
                 }
             }
         }
@@ -182,14 +253,15 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     bool integrationTest = CheckFlag("GWA3_TEST_INTEGRATION", "gwa3_test_integration.flag");
     bool npcDialogTest = CheckFlag("GWA3_TEST_NPC_DIALOG", "gwa3_test_npc_dialog.flag");
     bool merchantQuoteTest = CheckFlag("GWA3_TEST_MERCHANT_QUOTE", "gwa3_test_merchant_quote.flag");
+    bool merchantShellTest = CheckFlag("GWA3_TEST_MERCHANT_SHELL", "gwa3_test_merchant_shell.flag");
     bool advancedTest = CheckFlag("GWA3_TEST_ADVANCED", "gwa3_test_advanced.flag");
     bool workflowTest = CheckFlag("GWA3_TEST_WORKFLOW", "gwa3_test_workflow.flag");
     bool froggyTest = CheckFlag("GWA3_TEST_FROGGY", "gwa3_test_froggy.flag");
     bool llmMode = CheckFlag("GWA3_LLM_MODE", "gwa3_llm_mode.flag");
     bool llmAdvisory = CheckFlag("GWA3_LLM_ADVISORY", "gwa3_llm_advisory.flag");
-    bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || workflowTest || froggyTest;
-    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d advanced=%d workflow=%d froggy=%d llm=%d advisory=%d",
-                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, advancedTest, workflowTest, froggyTest, llmMode, llmAdvisory);
+    bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || merchantShellTest || advancedTest || workflowTest || froggyTest;
+    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d merchantShell=%d advanced=%d workflow=%d froggy=%d llm=%d advisory=%d",
+                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, merchantShellTest, advancedTest, workflowTest, froggyTest, llmMode, llmAdvisory);
 
     HMODULE gwModule = GetModuleHandleA(nullptr);
     if (!GWA3::Scanner::Initialize(gwModule)) {
@@ -255,7 +327,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::Log::Warn("GameThread initialization failed — trying RenderHook fallback");
     }
 
-    if (integrationTest || npcDialogTest || merchantQuoteTest || advancedTest || workflowTest || froggyTest || !anyTest) {
+    if (integrationTest || npcDialogTest || merchantQuoteTest || merchantShellTest || advancedTest || workflowTest || froggyTest || !anyTest) {
         // Always init RenderHook for bootstrap char select UI clicks
         if (!GWA3::RenderHook::Initialize()) {
             GWA3::Log::Error("RenderHook failed - aborting");
@@ -333,6 +405,13 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::Log::Info("=== MERCHANT/QUOTE TEST MODE ===");
         int failures = GWA3::SmokeTest::RunMerchantQuoteTest();
         GWA3::Log::Info("Merchant/quote test complete: %d failures", failures);
+        return static_cast<DWORD>(failures);
+    }
+
+    if (merchantShellTest) {
+        GWA3::Log::Info("=== MERCHANT SHELL TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunMerchantQuoteTest();
+        GWA3::Log::Info("Merchant shell test complete: %d failures", failures);
         return static_cast<DWORD>(failures);
     }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <gwa3/game/Party.h>
+#include <cstddef>
 #include <cstdint>
 
 namespace GWA3::PartyMgr {
@@ -37,5 +38,7 @@ namespace GWA3::PartyMgr {
     uint32_t CountVisibleHeroes();
     uint32_t CountPartyHeroes();
     uint32_t GetCalledTargetId();
+    size_t GetPartyHeroIds(uint32_t* out, size_t maxCount);
+    void DebugDumpPartyState(const char* label);
 
 } // namespace GWA3::PartyMgr

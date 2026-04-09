@@ -131,8 +131,10 @@ bool TestHeroSetup() {
 
     if (isOutpost && heroesBefore > 0) {
         IntReport("  Clearing existing heroes before setup...");
+        PartyMgr::DebugDumpPartyState("IntegrationTestGameplay before KickAllHeroes");
         PartyMgr::KickAllHeroes();
         Sleep(2000);
+        PartyMgr::DebugDumpPartyState("IntegrationTestGameplay after KickAllHeroes");
         const uint32_t heroesAfterKick = PartyMgr::CountPartyHeroes();
         IntReport("  Party heroes after clear: %u", heroesAfterKick);
         IntCheck("Existing heroes cleared before setup", heroesAfterKick == 0);

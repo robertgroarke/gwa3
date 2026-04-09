@@ -173,12 +173,6 @@ KICK_HERO = _tool(
     },
 )
 
-KICK_ALL_HEROES = _tool(
-    "kick_all_heroes",
-    "Remove all heroes from the party.",
-    {"properties": {}, "required": []},
-)
-
 FLAG_HERO = _tool(
     "flag_hero",
     "Flag a specific hero to a position. Hero index is 1-7.",
@@ -572,7 +566,6 @@ ALL_TOOLS = [
     # Party/Hero
     ADD_HERO,
     KICK_HERO,
-    KICK_ALL_HEROES,
     FLAG_HERO,
     FLAG_ALL,
     UNFLAG_ALL,

@@ -3,6 +3,7 @@
 #include "IntegrationTestInternal.h"
 
 #include <gwa3/core/TraderHook.h>
+#include <gwa3/managers/DialogMgr.h>
 #include <gwa3/managers/QuestMgr.h>
 #include <gwa3/managers/TradeMgr.h>
 #include <gwa3/managers/UIMgr.h>
@@ -24,7 +25,10 @@ enum class MerchantIsolationStage {
     TravelOnly,
     ApproachOnly,
     TargetOnly,
+    InteractSinglePacketOnly,
+    InteractAgentMgrOnly,
     InteractPacketOnly,
+    InteractDwellOnly,
     InteractOnly,
 };
 
@@ -44,6 +48,10 @@ bool CheckLocalFlagFile(const char* flagFile) {
         return true;
     }
     return false;
+}
+
+bool UseGaddsMerchantTarget() {
+    return CheckLocalFlagFile("gwa3_test_merchant_target_gadds.flag");
 }
 
 MerchantDialogVariant GetMerchantDialogVariant() {
@@ -79,8 +87,17 @@ MerchantIsolationStage GetMerchantIsolationStage() {
     if (CheckLocalFlagFile("gwa3_test_merchant_stage_target_only.flag")) {
         return MerchantIsolationStage::TargetOnly;
     }
+    if (CheckLocalFlagFile("gwa3_test_merchant_stage_interact_single_packet_only.flag")) {
+        return MerchantIsolationStage::InteractSinglePacketOnly;
+    }
+    if (CheckLocalFlagFile("gwa3_test_merchant_stage_interact_agentmgr_only.flag")) {
+        return MerchantIsolationStage::InteractAgentMgrOnly;
+    }
     if (CheckLocalFlagFile("gwa3_test_merchant_stage_interact_packet_only.flag")) {
         return MerchantIsolationStage::InteractPacketOnly;
+    }
+    if (CheckLocalFlagFile("gwa3_test_merchant_stage_interact_dwell_only.flag")) {
+        return MerchantIsolationStage::InteractDwellOnly;
     }
     if (CheckLocalFlagFile("gwa3_test_merchant_stage_interact_only.flag")) {
         return MerchantIsolationStage::InteractOnly;
@@ -94,7 +111,10 @@ const char* DescribeMerchantIsolationStage(MerchantIsolationStage stage) {
     case MerchantIsolationStage::TravelOnly: return "travel only";
     case MerchantIsolationStage::ApproachOnly: return "travel + approach";
     case MerchantIsolationStage::TargetOnly: return "travel + approach + target";
+    case MerchantIsolationStage::InteractSinglePacketOnly: return "travel + approach + target + single raw interact";
+    case MerchantIsolationStage::InteractAgentMgrOnly: return "travel + approach + target + AgentMgr::InteractNPC";
     case MerchantIsolationStage::InteractPacketOnly: return "travel + approach + target + raw interact";
+    case MerchantIsolationStage::InteractDwellOnly: return "travel + approach + target + raw interact + dwell";
     case MerchantIsolationStage::InteractOnly: return "travel + interact";
     default: return "unknown";
     }
@@ -102,8 +122,11 @@ const char* DescribeMerchantIsolationStage(MerchantIsolationStage stage) {
 
 constexpr uint32_t kMerchantRootHash = 3613855137u;
 constexpr uint32_t kMapEmbarkBeach = 857u;
+constexpr uint32_t kMapGadds = 638u;
 constexpr float kEmbarkEyjaX = 3336.0f;
 constexpr float kEmbarkEyjaY = 627.0f;
+constexpr float kGaddsMerchantX = -8374.0f;
+constexpr float kGaddsMerchantY = -22491.0f;
 
 uintptr_t GetAgentPtrRaw(uint32_t agentId) {
     if (Offsets::AgentBase <= 0x10000 || agentId == 0 || agentId >= 5000) return 0;
@@ -115,6 +138,33 @@ uintptr_t GetAgentPtrRaw(uint32_t agentId) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
+}
+
+void ReportMerchantPreInteractState(const char* label, uint32_t npcId, float npcX, float npcY) {
+    float meX = 0.0f;
+    float meY = 0.0f;
+    TryReadAgentPosition(ReadMyId(), meX, meY);
+    const uint32_t currentTarget = AgentMgr::GetTargetId();
+    const bool dialogOpen = DialogMgr::IsDialogOpen();
+    const uint32_t dialogSender = DialogMgr::GetDialogSenderAgentId();
+    const uint32_t dialogButtons = DialogMgr::GetButtonCount();
+    const uintptr_t merchantFrame = UIMgr::GetFrameByHash(kMerchantRootHash);
+    const uint32_t merchantItems = TradeMgr::GetMerchantItemCount();
+    const uint32_t heroCount = PartyMgr::CountPartyHeroes();
+    const float dist = AgentMgr::GetDistance(meX, meY, npcX, npcY);
+    IntReport("  %s: npc=%u playerPos=(%.0f, %.0f) npcPos=(%.0f, %.0f) dist=%.0f target=%u dialogOpen=%d sender=%u buttons=%u merchantFrame=0x%08X items=%u heroes=%u",
+              label,
+              npcId,
+              meX, meY,
+              npcX, npcY,
+              dist,
+              currentTarget,
+              dialogOpen ? 1 : 0,
+              dialogSender,
+              dialogButtons,
+              static_cast<unsigned>(merchantFrame),
+              merchantItems,
+              heroCount);
 }
 
 uint32_t FindNearestNpcLikeAgentToCoords(float targetX, float targetY, float maxDistance) {
@@ -247,20 +297,24 @@ bool TestMerchantQuote() {
         return false;
     }
 
-    if (ReadMapId() != kMapEmbarkBeach) {
-        IntReport("  Traveling to Embark Beach (%u) for merchant-open trace...", kMapEmbarkBeach);
-        MapMgr::Travel(kMapEmbarkBeach);
+    const bool useGaddsTarget = UseGaddsMerchantTarget();
+    const uint32_t targetMapId = useGaddsTarget ? kMapGadds : kMapEmbarkBeach;
+    const char* targetMapLabel = useGaddsTarget ? "Gadd's Encampment" : "Embark Beach";
 
-        const bool atEmbark = WaitFor("MapID changes to Embark Beach", 60000, []() {
-            return ReadMapId() == kMapEmbarkBeach;
+    if (ReadMapId() != targetMapId) {
+        IntReport("  Traveling to %s (%u) for merchant-open trace...", targetMapLabel, targetMapId);
+        MapMgr::Travel(targetMapId);
+
+        const bool atTargetMap = WaitFor("MapID changes to target merchant map", 60000, [targetMapId]() {
+            return ReadMapId() == targetMapId;
         });
-        IntCheck("Reached Embark Beach for merchant-open trace", atEmbark);
-        if (!atEmbark) {
+        IntCheck("Reached merchant-open trace map", atTargetMap);
+        if (!atTargetMap) {
             IntReport("");
             return false;
         }
 
-        const bool myIdReady = WaitFor("MyID valid after travel to Embark Beach", 30000, []() {
+        const bool myIdReady = WaitFor("MyID valid after travel to target merchant map", 30000, []() {
             return ReadMyId() > 0;
         });
         IntCheck("MyID valid after trader travel", myIdReady);
@@ -284,8 +338,10 @@ bool TestMerchantQuote() {
     };
 
     const MerchantTarget targets[] = {
+        {"Gadd's merchant", kGaddsMerchantX, kGaddsMerchantY, false},
         {"consumable trader Eyja", kEmbarkEyjaX, kEmbarkEyjaY, false},
     };
+    const size_t targetCount = useGaddsTarget ? 1u : _countof(targets);
 
     bool merchantVisible = false;
     uint32_t traderAgentId = 0;
@@ -304,7 +360,8 @@ bool TestMerchantQuote() {
     IntReport("  Merchant isolation stage: %s", DescribeMerchantIsolationStage(isolationStage));
     IntReport("  Merchant interact path: legacy living interact header 0x38");
 
-    for (const auto& target : targets) {
+    for (size_t targetIndex = 0; targetIndex < targetCount; ++targetIndex) {
+        const auto& target = targets[targetIndex];
         const bool nearTarget = MovePlayerNear(target.x, target.y, 350.0f, 25000);
         IntCheck(target.expectQuote ? "Reached basic material trader area" : "Reached merchant area", nearTarget);
         if (!nearTarget) continue;
@@ -338,6 +395,7 @@ bool TestMerchantQuote() {
             TryReadAgentPosition(ReadMyId(), meX, meY);
             IntReport("    Player pos before interact: (%.0f, %.0f) dist=%.0f",
                       meX, meY, AgentMgr::GetDistance(meX, meY, npcX, npcY));
+            ReportMerchantPreInteractState("Merchant harness pre-interact snapshot", traderAgentId, npcX, npcY);
 
             if (isolationStage == MerchantIsolationStage::ApproachOnly) {
                 IntSkip("Merchant target/interact/dialog", "Approach-only isolation stage");
@@ -347,6 +405,7 @@ bool TestMerchantQuote() {
 
             AgentMgr::ChangeTarget(traderAgentId);
             Sleep(250);
+            IntReport("    step 0 complete: ChangeTarget(%u)", traderAgentId);
 
             if (isolationStage == MerchantIsolationStage::TargetOnly) {
                 IntSkip("Merchant interact/dialog", "Target-only isolation stage");
@@ -354,16 +413,64 @@ bool TestMerchantQuote() {
                 return true;
             }
 
+            if (isolationStage == MerchantIsolationStage::InteractAgentMgrOnly) {
+                IntReport("    step 1: AgentMgr::InteractNPC(%u)", traderAgentId);
+                AgentMgr::InteractNPC(traderAgentId);
+                Sleep(4000);
+                IntReport("    step 1 complete after AgentMgr dwell");
+                const uint32_t merchantCountAfterAgentMgr = TradeMgr::GetMerchantItemCount();
+                const uintptr_t merchantFrameAfterAgentMgr = UIMgr::GetFrameByHash(kMerchantRootHash);
+                IntReport("      Merchant probe after AgentMgr dwell: frame=0x%08X items=%u",
+                          merchantFrameAfterAgentMgr,
+                          merchantCountAfterAgentMgr);
+                IntSkip("Merchant dialog", "AgentMgr-interact-only isolation stage");
+                IntReport("");
+                return true;
+            }
+
+            IntReport("    step 1: SendPacket(2, 0x38, %u)", traderAgentId);
             CtoS::SendPacket(2, 0x38u, traderAgentId);
             Sleep(750);
+            IntReport("    step 1 complete");
+
+            if (isolationStage == MerchantIsolationStage::InteractSinglePacketOnly) {
+                IntReport("    Single-packet isolation: waiting 4000ms after first raw interact...");
+                Sleep(4000);
+                IntReport("    Single-packet wait complete");
+                const uint32_t merchantCountAfterSingle = TradeMgr::GetMerchantItemCount();
+                const uintptr_t merchantFrameAfterSingle = UIMgr::GetFrameByHash(kMerchantRootHash);
+                IntReport("      Merchant probe after single-packet dwell: frame=0x%08X items=%u",
+                          merchantFrameAfterSingle,
+                          merchantCountAfterSingle);
+                IntSkip("Merchant dialog", "Interact-single-packet-only isolation stage");
+                IntReport("");
+                return true;
+            }
+
+            IntReport("    step 2: SendPacket(2, 0x38, %u)", traderAgentId);
             CtoS::SendPacket(2, 0x38u, traderAgentId);
             Sleep(250);
+            IntReport("    step 2 complete");
 
             const uintptr_t traderAgentPtr = GetAgentPtrRaw(traderAgentId);
             IntReport("    Agent scalars: id=%u ptr=0x%08X", traderAgentId, traderAgentPtr);
 
             if (isolationStage == MerchantIsolationStage::InteractPacketOnly) {
                 IntSkip("Merchant dialog", "Interact-packet-only isolation stage");
+                IntReport("");
+                return true;
+            }
+
+            if (isolationStage == MerchantIsolationStage::InteractDwellOnly) {
+                IntReport("    Interact-dwell isolation: waiting 4000ms after raw interact...");
+                Sleep(4000);
+                IntReport("    Interact-dwell wait complete");
+                const uint32_t merchantCountAfterDwell = TradeMgr::GetMerchantItemCount();
+                const uintptr_t merchantFrameAfterDwell = UIMgr::GetFrameByHash(kMerchantRootHash);
+                IntReport("      Merchant probe after dwell: frame=0x%08X items=%u",
+                          merchantFrameAfterDwell,
+                          merchantCountAfterDwell);
+                IntSkip("Merchant dialog", "Interact-dwell-only isolation stage");
                 IntReport("");
                 return true;
             }

@@ -130,10 +130,15 @@ void StartWatchdog() {
     s_watchdogThread = CreateThread(nullptr, 0, WatchdogThread, nullptr, 0, nullptr);
 }
 
-void StopWatchdog() {
+void StopWatchdog(bool waitForThread) {
     s_watchdogRunning = false;
     if (s_watchdogThread) {
-        WaitForSingleObject(s_watchdogThread, 5000);
+        if (waitForThread) {
+            const DWORD waitResult = WaitForSingleObject(s_watchdogThread, 5000);
+            if (waitResult == WAIT_TIMEOUT) {
+                Log::Warn("[WATCHDOG] StopWatchdog timed out waiting for watchdog thread; detaching handle");
+            }
+        }
         CloseHandle(s_watchdogThread);
         s_watchdogThread = nullptr;
     }

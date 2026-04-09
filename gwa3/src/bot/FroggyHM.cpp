@@ -10,6 +10,7 @@
 #include <gwa3/managers/EffectMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/managers/ChatMgr.h>
+#include <gwa3/packets/CtoSHook.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
@@ -1779,7 +1780,7 @@ static bool WaitForMerchantContext(DWORD timeoutMs) {
     DWORD start = GetTickCount();
     while ((GetTickCount() - start) < timeoutMs) {
         if (TradeMgr::GetMerchantItemCount() > 0) return true;
-        if (UIMgr::GetFrameByHash(kMerchantRootHash) != 0) return true;
+        if (UIMgr::IsFrameVisible(kMerchantRootHash)) return true;
         WaitMs(100);
     }
     return false;
@@ -1796,22 +1797,31 @@ static bool OpenMerchantContextWithVariants(uint32_t npcId) {
         bool requiresPtr;
     };
     DialogVariant variants[] = {
-        {"dialog 0x3B by id", 0x3Bu, npcId, false},
-        {"dialog 0x3B by ptr", 0x3Bu, npcPtr, true},
-        {"dialog 0x3A by id", 0x3Au, npcId, false},
-        {"dialog 0x3A by ptr", 0x3Au, npcPtr, true},
+        {"dialog 0x3A generic merchant 0x84", Packets::DIALOG_SEND_LIVING, 0x84u, false},
+        {"dialog 0x3A generic merchant 0x85", Packets::DIALOG_SEND_LIVING, 0x85u, false},
+        {"dialog 0x3A by id", Packets::DIALOG_SEND_LIVING, npcId, false},
+        {"dialog 0x3A by ptr", Packets::DIALOG_SEND_LIVING, npcPtr, true},
+        {"dialog 0x3B by id", Packets::DIALOG_SEND, npcId, false},
+        {"dialog 0x3B by ptr", Packets::DIALOG_SEND, npcPtr, true},
     };
 
     for (int attempt = 1; attempt <= 2; ++attempt) {
-        LogBot("Merchant open attempt %d via packet interact...", attempt);
-        AgentMgr::ChangeTarget(npcId);
-        WaitMs(250);
+        LogBot("Merchant open attempt %d via native InteractNPC...", attempt);
         AgentMgr::InteractNPC(npcId);
         WaitMs(750);
         if (WaitForMerchantContext(1500)) return true;
 
-        LogBot("Merchant open attempt %d via legacy raw interact 0x38...", attempt);
-        CtoS::SendPacket(2, 0x38u, npcId);
+        LogBot("Merchant open attempt %d via native InteractNPC + 0x84...", attempt);
+        CtoS::SendPacket(2, Packets::DIALOG_SEND_LIVING, 0x84u);
+        WaitMs(750);
+        if (WaitForMerchantContext(1500)) return true;
+
+        LogBot("Merchant open attempt %d via AutoIt-style 0x38 + 0x84 fallback...", attempt);
+        AgentMgr::ChangeTarget(npcId);
+        WaitMs(200);
+        CtoS::SendPacket(3, Packets::INTERACT_LIVING, npcId, 0u);
+        WaitMs(250);
+        CtoS::SendPacket(2, Packets::DIALOG_SEND_LIVING, 0x84u);
         WaitMs(750);
         if (WaitForMerchantContext(1500)) return true;
 
@@ -1830,7 +1840,43 @@ static bool OpenMerchantContextWithVariants(uint32_t npcId) {
     return false;
 }
 
-static void SellJunkToMerchant() {
+static bool OpenMerchantContextWithExperimentalAutoItLane(uint32_t npcId) {
+    // This is an opt-in debug path that intentionally does not replace the
+    // existing merchant logic. It uses the experimental AutoIt-style command
+    // lane to compare execution context, not to serve as the default path.
+    if (!CtoSHook::Initialize()) {
+        LogBot("Experimental AutoIt merchant lane failed to initialize");
+        return false;
+    }
+
+    for (int attempt = 1; attempt <= 2; ++attempt) {
+        LogBot("Merchant open attempt %d via experimental AutoIt command lane 0x38...", attempt);
+        if (!CtoSHook::SendPacketCommand(3, Packets::INTERACT_LIVING, npcId, 0u)) {
+            LogBot("Experimental AutoIt merchant lane enqueue failed");
+            return false;
+        }
+        WaitMs(1000);
+        if (WaitForMerchantContext(1500)) {
+            LogBot("Merchant context opened via experimental AutoIt command lane");
+            return true;
+        }
+
+        LogBot("Merchant open attempt %d via experimental AutoIt command lane + 0x84...", attempt);
+        if (!CtoSHook::SendPacketCommand(2, Packets::DIALOG_SEND_LIVING, 0x84u)) {
+            LogBot("Experimental AutoIt dialog enqueue failed");
+            return false;
+        }
+        WaitMs(750);
+        if (WaitForMerchantContext(1500)) {
+            LogBot("Merchant context opened via experimental AutoIt command lane + 0x84");
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void SellJunkToMerchant(const BotConfig& cfg) {
     // Gadd's Encampment merchant coordinates
     static constexpr float kGaddsMerchantX = -8374.0f;
     static constexpr float kGaddsMerchantY = -22491.0f;
@@ -1856,7 +1902,11 @@ static void SellJunkToMerchant() {
         MoveToAndWait(npc->x, npc->y, 120.0f);
     }
 
-    if (!OpenMerchantContextWithVariants(merchantId)) {
+    const bool merchantOpen = cfg.use_experimental_autoit_merchant_lane
+        ? OpenMerchantContextWithExperimentalAutoItLane(merchantId)
+        : OpenMerchantContextWithVariants(merchantId);
+
+    if (!merchantOpen) {
         LogBot("Merchant window failed to open, skipping sell");
         return;
     }
@@ -2342,9 +2392,18 @@ BotState HandleTownSetup(BotConfig& cfg) {
 
     // Load hero config from file (adds heroes + loads their skillbars)
     if (!cfg.hero_config_file.empty()) {
-        // Kick existing heroes first so we get a clean slate
+        // Kick existing heroes first so we get a clean slate.
+        // Note: legacy HERO_KICK(0x26) "kick all" sentinel is not reliable in
+        // our current client environment. PartyMgr::KickAllHeroes() is kept as
+        // the confirmed working per-hero clear path.
         PartyMgr::KickAllHeroes();
-        WaitMs(500);
+        for (int retry = 0; retry < 20 && PartyMgr::CountPartyHeroes() > 0; ++retry) {
+            if (retry == 8) {
+                LogBot("KickAllHeroes still pending during bot setup, reissuing per-hero clear...");
+                PartyMgr::KickAllHeroes();
+            }
+            WaitMs(250);
+        }
 
         int loaded = LoadHeroConfigFile(cfg.hero_config_file.c_str(), cfg);
         if (loaded == 0) {
@@ -2484,8 +2543,11 @@ BotState HandleLoot(BotConfig& cfg) {
 }
 
 BotState HandleMerchant(BotConfig& cfg) {
-    (void)cfg;
     LogBot("State: Merchant (return to outpost)");
+    LogBot("Merchant lane: %s",
+           cfg.use_experimental_autoit_merchant_lane
+               ? "experimental AutoIt-style command lane"
+               : "default CtoS merchant lane");
 
     uint32_t mapId = MapMgr::GetMapId();
 
@@ -2513,8 +2575,9 @@ BotState HandleMerchant(BotConfig& cfg) {
     // Salvage white/blue items for materials (before selling remaining junk)
     SalvageJunkItems();
 
-    // Sell junk items to merchant
-    SellJunkToMerchant();
+    // Sell junk items to merchant. The experimental AutoIt-style merchant lane
+    // is opt-in via config so the existing merchant path remains untouched.
+    SellJunkToMerchant(cfg);
 
     // Buy kits while merchant window is still open
     BuyKitsIfNeeded();

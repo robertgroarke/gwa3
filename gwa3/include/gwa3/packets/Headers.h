@@ -33,7 +33,8 @@ constexpr uint32_t PING_REQUEST                       = 0x0B;  // Requests a pin
 constexpr uint32_t QUEST_ABANDON                      = 0x11;  // Abandons a selected quest
 constexpr uint32_t QUEST_REQUEST_INFOS                = 0x12;  // Requests information about a quest
 constexpr uint32_t QUEST_SET_ACTIVE                   = 0x14;  // Confirms setting a quest as active
-constexpr uint32_t DIALOG_SEND                        = 0x3B;  // Accepts a quest or a quest reward from the NPC
+constexpr uint32_t DIALOG_SEND                        = 0x3B;  // Legacy dialog header kept for compatibility checks
+constexpr uint32_t DIALOG_SEND_LIVING                 = 0x3A;  // Modern dialog header used by current GWA2 AutoIt code
 
 // ===== Heroes & NPCs =====
 constexpr uint32_t HERO_BEHAVIOR                      = 0x15;  // Sets the behavior/aggression level of a hero
@@ -55,7 +56,8 @@ constexpr uint32_t TARGET_AGENT                       = 0xC1;  // Target an agen
 // ===== Movement & Interaction =====
 constexpr uint32_t DRAW_MAP                           = 0x2B;  // Draws on the map (for map pinging/markers)
 constexpr uint32_t INTERACT_PLAYER                    = 0x33;  // Follows the agent/npc. Ctrl+Click triggers 'I am following Person' in chat
-constexpr uint32_t INTERACT_NPC                       = 0x39;  // Talks/goes to NPC
+constexpr uint32_t INTERACT_NPC                       = 0x39;  // Legacy NPC interact header kept for compatibility checks
+constexpr uint32_t INTERACT_LIVING                    = 0x38;  // Modern living-agent interact header used by current GWA2 AutoIt code
 constexpr uint32_t MOVE_TO_COORD                      = 0x3E;  // Moves to specified coordinates
 constexpr uint32_t ITEM_INTERACT                      = 0x3F;  // Interacts with an item in the environment to pick it up or interact
 constexpr uint32_t ROTATE_PLAYER                      = 0x40;  // Rotates the player character
