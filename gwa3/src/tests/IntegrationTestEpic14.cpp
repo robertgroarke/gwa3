@@ -926,9 +926,11 @@ static bool RunEnterBogrootProof() {
         IntCheck(step.label, reached || true); // Log but don't hard-fail waypoints
     }
 
-    // Shut down DialogMgr StoC hooks BEFORE the map transition.
-    // These hooks crash when they fire in the Bogroot dungeon context.
-    IntReport("  Disabling DialogMgr hooks before dungeon transition...");
+    // Suspend hooks BEFORE the map transition.
+    // Both the CtoS engine hook and DialogMgr StoC hooks can crash
+    // when the game context changes during the Sparkfly→Bogroot zone.
+    IntReport("  Suspending CtoS engine hook and DialogMgr before dungeon transition...");
+    CtoS::SuspendEngineHook();
     DialogMgr::Shutdown();
 
     // Push toward dungeon portal until we zone into Bogroot
@@ -953,8 +955,9 @@ static bool RunEnterBogrootProof() {
         });
         Sleep(5000); // stability wait
 
-        // Re-enable DialogMgr hooks now that we're stable inside Bogroot
-        IntReport("  Re-enabling DialogMgr hooks inside Bogroot...");
+        // Re-enable hooks now that we're stable inside Bogroot
+        IntReport("  Resuming CtoS engine hook and DialogMgr inside Bogroot...");
+        CtoS::ResumeEngineHook();
         DialogMgr::Initialize();
 
         IntCheck("Phase 6: Entered Bogroot Growths Level 1", agentOk);
@@ -1015,18 +1018,16 @@ static bool RunBogrootBlessingProof() {
     // GoNPC must go through GameThread (direct CtoS crashes after Bogroot map transition).
     // Dialog uses the AutoIt header 0x3B (DIALOG_SEND), not 0x3A (DIALOG_SEND_LIVING).
 
-    // Step 1: ChangeTarget
-    GameThread::EnqueuePost([npcId]() {
-        CtoS::SendPacket(2, Packets::TARGET_AGENT, npcId);
-    });
+    // Step 1: ChangeTarget — send directly (test thread), not through GameThread
+    CtoS::ChangeTarget(npcId);
     Sleep(500);
-    IntReport("  ChangeTarget to agent=%u", npcId);
+    IntReport("  ChangeTarget to agent=%u (direct)", npcId);
 
-    // Step 2: GoNPC (0x39) — same packet as AutoIt: SendPacket(0xC, 0x39, agentId)
-    GameThread::EnqueuePost([npcId]() {
-        CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
-    });
-    IntReport("  Sent GoNPC (0x39) to agent=%u via GameThread", npcId);
+    // Step 2: GoNPC (0x39) — send directly, same as AutoIt external injection
+    // Previous runs showed GameThread::Drain crashes in Bogroot.
+    // DialogMgr hooks are freshly re-initialized, so StoC dialog callbacks are safe.
+    CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
+    IntReport("  Sent GoNPC (0x39) to agent=%u (direct)", npcId);
 
     // Step 3: Wait for dialog (AutoIt: Sleep(1000))
     // Wait long enough for the dialog to appear but give GameThread time to drain naturally.

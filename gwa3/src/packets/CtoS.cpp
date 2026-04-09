@@ -36,6 +36,7 @@ static uintptr_t s_engineReturnAddr = 0;
 static uint8_t s_engineSavedBytes[8] = {};
 static uint8_t s_enginePatchedBytes[8] = {};
 static bool s_engineInitialized = false;
+static volatile bool s_engineSuspended = false;
 
 // Watchdog: re-patches the Engine hook when game integrity checker restores bytes
 static HANDLE s_watchdogThread = nullptr;
@@ -142,6 +143,7 @@ static DWORD WINAPI EngineWatchdog(LPVOID) {
     while (s_watchdogRunning) {
         Sleep(5);
         if (!s_engineInitialized || !s_engineHookAddr) continue;
+        if (s_engineSuspended) continue;  // Don't re-patch while suspended
 
         const uint8_t* cur = reinterpret_cast<const uint8_t*>(s_engineHookAddr);
         if (memcmp(cur, s_enginePatchedBytes, 5) != 0) {
@@ -223,6 +225,55 @@ static bool InstallEngineHook() {
     return true;
 }
 
+
+void SuspendEngineHook() {
+    if (!s_engineInitialized || !s_engineHookAddr) return;
+    s_engineSuspended = true;  // Tell watchdog to stop re-patching
+    Sleep(10);  // Let watchdog cycle pass
+    DWORD oldProtect;
+    VirtualProtect(reinterpret_cast<void*>(s_engineHookAddr), 5,
+                   PAGE_EXECUTE_READWRITE, &oldProtect);
+    memcpy(reinterpret_cast<void*>(s_engineHookAddr), s_engineSavedBytes, 5);
+    FlushInstructionCache(GetCurrentProcess(),
+                          reinterpret_cast<void*>(s_engineHookAddr), 5);
+    VirtualProtect(reinterpret_cast<void*>(s_engineHookAddr), 5,
+                   oldProtect, &oldProtect);
+    Log::Info("CtoS: Engine hook SUSPENDED (original bytes restored at 0x%08X)", s_engineHookAddr);
+}
+
+void ResumeEngineHook() {
+    if (!s_engineInitialized || !s_engineHookAddr) return;
+
+    // Re-read current original bytes (may have changed after map transition)
+    memcpy(s_engineSavedBytes, reinterpret_cast<void*>(s_engineHookAddr), 5);
+    Log::Info("CtoS: ResumeEngineHook re-read original bytes: %02X %02X %02X %02X %02X",
+              s_engineSavedBytes[0], s_engineSavedBytes[1], s_engineSavedBytes[2],
+              s_engineSavedBytes[3], s_engineSavedBytes[4]);
+
+    // Rebuild trampoline with fresh original bytes
+    if (s_engineReplayTrampoline) {
+        uint8_t* t = reinterpret_cast<uint8_t*>(s_engineReplayTrampoline);
+        memcpy(t, s_engineSavedBytes, 5);
+        // JMP back to engineHookAddr + 5 (unchanged)
+        t[5] = 0xE9;
+        int32_t jmpRel = static_cast<int32_t>(s_engineReturnAddr - reinterpret_cast<uintptr_t>(t + 5 + 4));
+        memcpy(t + 6, &jmpRel, 4);
+        FlushInstructionCache(GetCurrentProcess(), t, 10);
+        Log::Info("CtoS: Trampoline rebuilt with fresh bytes");
+    }
+
+    // Re-patch the engine hook
+    DWORD oldProtect;
+    VirtualProtect(reinterpret_cast<void*>(s_engineHookAddr), 5,
+                   PAGE_EXECUTE_READWRITE, &oldProtect);
+    memcpy(reinterpret_cast<void*>(s_engineHookAddr), s_enginePatchedBytes, 5);
+    FlushInstructionCache(GetCurrentProcess(),
+                          reinterpret_cast<void*>(s_engineHookAddr), 5);
+    VirtualProtect(reinterpret_cast<void*>(s_engineHookAddr), 5,
+                   oldProtect, &oldProtect);
+    s_engineSuspended = false;
+    Log::Info("CtoS: Engine hook RESUMED at 0x%08X", s_engineHookAddr);
+}
 
 bool Initialize() {
     if (s_initialized) return true;

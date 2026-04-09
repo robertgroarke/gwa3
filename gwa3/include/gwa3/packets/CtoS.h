@@ -7,6 +7,11 @@ namespace GWA3::CtoS {
     // Initialize: resolve PacketSend and PacketLocation from Offsets.
     bool Initialize();
 
+    // Temporarily unhook/rehook the engine inline hook.
+    // Use around map transitions to prevent stale-trampoline crashes.
+    void SuspendEngineHook();
+    void ResumeEngineHook();
+
     // Raw packet send. Enqueues on game thread if not already on it.
     // header is the packet opcode, followed by up to 10 dword params.
     void SendPacket(uint32_t size, uint32_t header, ...);
