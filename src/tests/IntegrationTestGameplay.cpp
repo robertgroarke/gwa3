@@ -4,6 +4,8 @@
 
 #include <atomic>
 #include <cmath>
+#include <gwa3/packets/CtoS.h>
+#include <gwa3/packets/Headers.h>
 
 namespace GWA3::SmokeTest {
 
@@ -24,6 +26,24 @@ bool TryAddHeroWithObservation(uint32_t heroId, uint32_t* beforeOut = nullptr, u
     if (afterOut) *afterOut = afterAdd;
     IntReport("    Hero %u add: before=%u after=%u", heroId, beforeAdd, afterAdd);
     return afterAdd > beforeAdd;
+}
+
+bool TryKickAllHeroesSentinelWithObservation(uint32_t sentinel, uint32_t* beforeOut = nullptr, uint32_t* afterOut = nullptr) {
+    const uint32_t before = PartyMgr::CountPartyHeroes();
+    IntReport("    Trying HERO_KICK sentinel 0x%X: before=%u", sentinel, before);
+    CtoS::SendPacket(2, Packets::HERO_KICK, sentinel);
+    Sleep(500);
+
+    uint32_t after = PartyMgr::CountPartyHeroes();
+    for (int retry = 0; retry < 6 && after == before; ++retry) {
+        Sleep(400);
+        after = PartyMgr::CountPartyHeroes();
+    }
+
+    if (beforeOut) *beforeOut = before;
+    if (afterOut) *afterOut = after;
+    IntReport("    HERO_KICK sentinel 0x%X: after=%u", sentinel, after);
+    return after < before;
 }
 
 void RunHeroAddDiagnostics() {
@@ -131,6 +151,13 @@ bool TestHeroSetup() {
 
     if (isOutpost && heroesBefore > 0) {
         IntReport("  Clearing existing heroes before setup...");
+        uint32_t before27 = 0;
+        uint32_t after27 = 0;
+        const bool kickAll27Worked = TryKickAllHeroesSentinelWithObservation(0x27u, &before27, &after27);
+        IntCheck("Upstream KickAllHeroes sentinel 0x27 removes party heroes", kickAll27Worked);
+        if (!kickAll27Worked) {
+            IntReport("  Upstream 0x27 sentinel did not clear heroes; using reliable per-hero clear path");
+        }
         PartyMgr::DebugDumpPartyState("IntegrationTestGameplay before KickAllHeroes");
         PartyMgr::KickAllHeroes();
         Sleep(2000);

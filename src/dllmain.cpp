@@ -257,11 +257,12 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     bool advancedTest = CheckFlag("GWA3_TEST_ADVANCED", "gwa3_test_advanced.flag");
     bool workflowTest = CheckFlag("GWA3_TEST_WORKFLOW", "gwa3_test_workflow.flag");
     bool froggyTest = CheckFlag("GWA3_TEST_FROGGY", "gwa3_test_froggy.flag");
+    bool froggyFlaggingTest = CheckFlag("GWA3_TEST_FROGGY_FLAGGING", "gwa3_test_froggy_flagging.flag");
     bool llmMode = CheckFlag("GWA3_LLM_MODE", "gwa3_llm_mode.flag");
     bool llmAdvisory = CheckFlag("GWA3_LLM_ADVISORY", "gwa3_llm_advisory.flag");
-    bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || merchantShellTest || advancedTest || workflowTest || froggyTest;
-    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d merchantShell=%d advanced=%d workflow=%d froggy=%d llm=%d advisory=%d",
-                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, merchantShellTest, advancedTest, workflowTest, froggyTest, llmMode, llmAdvisory);
+    bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || merchantShellTest || advancedTest || workflowTest || froggyTest || froggyFlaggingTest;
+    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d merchantShell=%d advanced=%d workflow=%d froggy=%d froggyFlagging=%d llm=%d advisory=%d",
+                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, merchantShellTest, advancedTest, workflowTest, froggyTest, froggyFlaggingTest, llmMode, llmAdvisory);
 
     HMODULE gwModule = GetModuleHandleA(nullptr);
     if (!GWA3::Scanner::Initialize(gwModule)) {
@@ -327,7 +328,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::Log::Warn("GameThread initialization failed — trying RenderHook fallback");
     }
 
-    if (integrationTest || npcDialogTest || merchantQuoteTest || merchantShellTest || advancedTest || workflowTest || froggyTest || !anyTest) {
+    if (integrationTest || npcDialogTest || merchantQuoteTest || merchantShellTest || advancedTest || workflowTest || froggyTest || froggyFlaggingTest || !anyTest) {
         // Always init RenderHook for bootstrap char select UI clicks
         if (!GWA3::RenderHook::Initialize()) {
             GWA3::Log::Error("RenderHook failed - aborting");
@@ -408,6 +409,17 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
+    if (froggyFlaggingTest) {
+        GWA3::Log::Info("=== FROGGY EXPLORABLE FLAGGING TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunFroggyExplorableFlaggingTest();
+        GWA3::Log::Info("Froggy explorable flagging test complete: %d failures", failures);
+        GWA3::Log::Info("Froggy flagging test finished - terminating GW process");
+        GWA3::Log::Shutdown();
+        Sleep(100);
+        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
+        return static_cast<DWORD>(failures);
+    }
+
     if (merchantShellTest) {
         GWA3::Log::Info("=== MERCHANT SHELL TEST MODE ===");
         int failures = GWA3::SmokeTest::RunMerchantQuoteTest();
@@ -438,6 +450,17 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         int failures = GWA3::SmokeTest::RunFroggyFeatureTest();
         GWA3::Log::Info("Froggy feature test complete: %d failures", failures);
         GWA3::Log::Info("Froggy test finished — terminating GW process");
+        GWA3::Log::Shutdown();
+        Sleep(100);
+        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
+        return static_cast<DWORD>(failures);
+    }
+
+    if (froggyFlaggingTest) {
+        GWA3::Log::Info("=== FROGGY EXPLORABLE FLAGGING TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunFroggyExplorableFlaggingTest();
+        GWA3::Log::Info("Froggy explorable flagging test complete: %d failures", failures);
+        GWA3::Log::Info("Froggy flagging test finished - terminating GW process");
         GWA3::Log::Shutdown();
         Sleep(100);
         TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));

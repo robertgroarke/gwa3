@@ -1,4 +1,5 @@
 #include <gwa3/managers/QuestMgr.h>
+#include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
@@ -14,8 +15,13 @@ namespace GWA3::QuestMgr {
 
 static bool s_initialized = false;
 using SetActiveQuestFn = void(__cdecl*)(uint32_t);
+using SendDialogFn = void(__cdecl*)(uint32_t);
 static SetActiveQuestFn s_setActiveQuestFn = nullptr;
+static SendDialogFn s_sendDialogFn = nullptr;
+static SendDialogFn s_sendSignpostDialogFn = nullptr;
 static constexpr uint32_t kSendSetActiveQuestUiMessage = 0x30000009u;
+static bool s_loggedNativeDialog = false;
+static bool s_loggedFallbackDialog = false;
 
 // WorldContext: BasePointer → deref → +0x18 → +0x2C
 static uintptr_t ResolveWorldContext() {
@@ -47,13 +53,48 @@ bool Initialize() {
         }
     }
 
+    uintptr_t dialogAnchor = Scanner::Find("\x89\x4B\x24\x8B\x4B\x28\x83\xE9\x00", "xxxxxxxxx");
+    if (dialogAnchor > 0x10000) {
+        uintptr_t sendDialog = Scanner::FunctionFromNearCall(dialogAnchor + 0x15);
+        uintptr_t sendSignpostDialog = Scanner::FunctionFromNearCall(dialogAnchor + 0x25);
+        if (sendDialog > 0x10000) {
+            s_sendDialogFn = reinterpret_cast<SendDialogFn>(sendDialog);
+        }
+        if (sendSignpostDialog > 0x10000) {
+            s_sendSignpostDialogFn = reinterpret_cast<SendDialogFn>(sendSignpostDialog);
+        }
+    }
+
     s_initialized = true;
-    Log::Info("QuestMgr: Initialized (SetActiveQuest=0x%08X)",
-              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_setActiveQuestFn)));
+    Log::Info("QuestMgr: Initialized (SetActiveQuest=0x%08X, SendDialog=0x%08X, SendSignpostDialog=0x%08X)",
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_setActiveQuestFn)),
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_sendDialogFn)),
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_sendSignpostDialogFn)));
     return true;
 }
 
 void Dialog(uint32_t dialogId) {
+    auto* target = AgentMgr::GetAgentByID(AgentMgr::GetTargetId());
+    const bool useSignpost = target && target->type == 0x200 && s_sendSignpostDialogFn;
+    auto fn = useSignpost ? s_sendSignpostDialogFn : s_sendDialogFn;
+
+    if (fn && GameThread::IsInitialized()) {
+        if (!s_loggedNativeDialog) {
+            Log::Info("QuestMgr: Dialog using native %s path fn=0x%08X",
+                      useSignpost ? "signpost" : "dialog",
+                      static_cast<unsigned>(reinterpret_cast<uintptr_t>(fn)));
+            s_loggedNativeDialog = true;
+        }
+        GameThread::EnqueuePost([fn, dialogId]() {
+            fn(dialogId);
+        });
+        return;
+    }
+
+    if (!s_loggedFallbackDialog) {
+        Log::Warn("QuestMgr: Dialog falling back to raw packet path");
+        s_loggedFallbackDialog = true;
+    }
     CtoS::Dialog(dialogId);
 }
 

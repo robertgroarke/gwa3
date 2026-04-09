@@ -45,4 +45,8 @@ namespace GWA3::SmokeTest {
     // functions. Requires logged-in character.
     int RunFroggyFeatureTest();
 
+    // Run the isolated explorable hero-flagging slice from the Froggy flow.
+    // This intentionally stops shortly after validating flag/unflag behavior.
+    int RunFroggyExplorableFlaggingTest();
+
 } // namespace GWA3::SmokeTest

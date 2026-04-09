@@ -176,6 +176,8 @@ static void ClearTestModeFlags() {
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_shell.flag", dir);
     DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_froggy_flagging.flag", dir);
+    DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_variant_standard_ptr.flag", dir);
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_variant_legacy_id.flag", dir);
@@ -341,6 +343,7 @@ static void PrintUsage(const char* argv0) {
     printf("  --test-advanced Inject in advanced integration test mode\n");
     printf("  --test-workflow Inject in advanced workflow test mode\n");
     printf("  --test-froggy   Inject in Froggy feature test mode (Epic 14 tests)\n");
+    printf("  --test-froggy-flagging Inject in isolated Froggy explorable flagging mode\n");
     printf("  --test-npc      Inject in isolated NPC/dialog test mode\n");
     printf("  --test-merchant Inject in isolated merchant/trader quote test mode\n");
     printf("  --test-merchant-shell Inject in dedicated merchant wrapper shell mode\n");
@@ -367,6 +370,7 @@ int main(int argc, char* argv[]) {
     bool doTestAdvanced = false;
     bool doTestWorkflow = false;
     bool doTestFroggy = false;
+    bool doTestFroggyFlagging = false;
     bool doTestNpc = false;
     bool doTestMerchant = false;
     bool doTestMerchantShell = false;
@@ -398,6 +402,8 @@ int main(int argc, char* argv[]) {
             doTestWorkflow = true;
         } else if (strcmp(argv[i], "--test-froggy") == 0) {
             doTestFroggy = true;
+        } else if (strcmp(argv[i], "--test-froggy-flagging") == 0) {
+            doTestFroggyFlagging = true;
         } else if (strcmp(argv[i], "--test-npc") == 0) {
             doTestNpc = true;
         } else if (strcmp(argv[i], "--test-merchant") == 0) {
@@ -517,6 +523,7 @@ int main(int argc, char* argv[]) {
     if (doTestAdvanced) SetTestModeFlag("gwa3_test_advanced.flag");
     if (doTestWorkflow) SetTestModeFlag("gwa3_test_workflow.flag");
     if (doTestFroggy) SetTestModeFlag("gwa3_test_froggy.flag");
+    if (doTestFroggyFlagging) SetTestModeFlag("gwa3_test_froggy_flagging.flag");
     if (doTestNpc) SetTestModeFlag("gwa3_test_npc_dialog.flag");
     if (doTestMerchant) SetTestModeFlag("gwa3_test_merchant_quote.flag");
     if (doTestMerchantShell) SetTestModeFlag("gwa3_test_merchant_shell.flag");

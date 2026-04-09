@@ -24,8 +24,12 @@ namespace GWA3::TradeMgr {
     void RequestQuote(uint32_t itemId);
     void TransactItems(uint32_t type, uint32_t quantity, uint32_t itemId);
     uint32_t GetMerchantItemCount();
+    Item* GetMerchantItemByPosition(uint32_t itemPosition);
     Item* GetMerchantItemByModelId(uint32_t modelId);
     uint32_t GetMerchantItemIdByModelId(uint32_t modelId);
+    bool BuyMerchantItemByPosition(uint32_t itemPosition, uint32_t quantity, uint32_t unitValue);
+    bool BuyMerchantItemByModelId(uint32_t modelId, uint32_t quantity);
+    bool SellMerchantItem(uint32_t itemId, uint32_t quantity, uint32_t totalValue);
     bool RequestTraderQuoteByItemId(uint32_t itemId);
     bool RequestTraderQuoteByModelId(uint32_t modelId);
 
