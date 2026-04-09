@@ -178,6 +178,17 @@ if ($froggyBlock.Count -eq 0) {
 
 $froggyBlock | ForEach-Object { $_ }
 
+# Final parse after process shutdown. The run can complete and terminate GW
+# before the live polling loop observes the summary/failure lines.
+foreach ($line in $froggyBlock) {
+    if ($line -match "FROGGY FEATURE TESTS COMPLETE") {
+        $summarySeen = $true
+    }
+    if ($line -match "Froggy feature test complete: .* failures") {
+        $failureLine = $line
+    }
+}
+
 if ($crashDialogSeen) {
     Write-Error "Froggy run failed: visible Gw.exe crash dialog detected."
     exit 10

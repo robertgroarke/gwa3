@@ -3,6 +3,7 @@
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/RenderHook.h>
 #include <gwa3/core/TraderHook.h>
+#include <gwa3/core/GameThread.h>
 #include <gwa3/game/Item.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
@@ -29,6 +30,17 @@ static bool ReadPtr(uintptr_t address, uintptr_t& value) {
     }
 }
 
+static bool ReadU32(uintptr_t address, uint32_t& value) {
+    if (address <= 0x10000) return false;
+    __try {
+        value = *reinterpret_cast<uint32_t*>(address);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        value = 0;
+        return false;
+    }
+}
+
 static bool GetMerchantItemsBaseAndSize(uintptr_t& base, uint32_t& size) {
     base = 0;
     size = 0;
@@ -43,12 +55,12 @@ static bool GetMerchantItemsBaseAndSize(uintptr_t& base, uint32_t& size) {
     if (!ReadPtr(p1 + 0x2C, p2)) return false;
 
     uintptr_t merchantBase = 0;
-    uintptr_t merchantSize = 0;
+    uint32_t merchantSize = 0;
     if (!ReadPtr(p2 + 0x24, merchantBase)) return false;
-    if (!ReadPtr(p2 + 0x28, merchantSize)) return false;
+    if (!ReadU32(p2 + 0x28, merchantSize)) return false;
 
     base = merchantBase;
-    size = static_cast<uint32_t>(merchantSize);
+    size = merchantSize;
     return base > 0x10000 && size > 0 && size < 4096;
 }
 
@@ -81,6 +93,60 @@ static bool EnsureRequestQuoteShellcode() {
 
     s_requestQuoteBase = reinterpret_cast<uintptr_t>(mem);
     return true;
+}
+
+static void TransactionBuyNative(uint32_t quantity, uint32_t itemId, uint32_t totalValue) {
+    if (!Offsets::Transaction || quantity == 0 || itemId == 0) return;
+    uint32_t qty = quantity;
+    uint32_t id = itemId;
+    const uintptr_t fn = Offsets::Transaction;
+    __asm {
+        lea eax, qty
+        push eax
+        lea eax, id
+        push eax
+        push 1
+        push 0
+        push 0
+        push 0
+        push 0
+        mov eax, totalValue
+        push eax
+        push 1
+        mov eax, fn
+        call eax
+        add esp, 0x24
+    }
+}
+
+static void TransactionSellNative(uint32_t quantity, uint32_t itemId, uint32_t totalValue) {
+    if (!Offsets::Transaction || itemId == 0) return;
+    uint32_t qty = quantity;
+    uint32_t id = itemId;
+    const uintptr_t fn = Offsets::Transaction;
+    __asm {
+        push 0
+        push 0
+        push 0
+        mov eax, totalValue
+        push eax
+        cmp qty, 0
+        jz sell_all
+        lea eax, qty
+        push eax
+        jmp sell_qty_done
+sell_all:
+        push 0
+sell_qty_done:
+        lea eax, id
+        push eax
+        push 1
+        push 0
+        push 0x0B
+        mov eax, fn
+        call eax
+        add esp, 0x24
+    }
 }
 
 static void NextQuoteSlot(uintptr_t& scAddr, uintptr_t& itemAddr) {
@@ -135,6 +201,17 @@ uint32_t GetMerchantItemCount() {
     return size;
 }
 
+Item* GetMerchantItemByPosition(uint32_t itemPosition) {
+    uintptr_t merchantBase = 0;
+    uint32_t merchantSize = 0;
+    if (!GetMerchantItemsBaseAndSize(merchantBase, merchantSize)) return nullptr;
+    if (itemPosition == 0 || itemPosition > merchantSize) return nullptr;
+
+    uint32_t itemId = 0;
+    if (!ReadU32(merchantBase + 4 * (itemPosition - 1), itemId)) return nullptr;
+    return itemId ? GetMerchantItemPtrByItemId(itemId) : nullptr;
+}
+
 Item* GetMerchantItemByModelId(uint32_t modelId) {
     uintptr_t merchantBase = 0;
     uint32_t merchantSize = 0;
@@ -161,6 +238,42 @@ Item* GetMerchantItemByModelId(uint32_t modelId) {
 uint32_t GetMerchantItemIdByModelId(uint32_t modelId) {
     Item* item = GetMerchantItemByModelId(modelId);
     return item ? item->item_id : 0;
+}
+
+bool BuyMerchantItemByPosition(uint32_t itemPosition, uint32_t quantity, uint32_t unitValue) {
+    Item* item = GetMerchantItemByPosition(itemPosition);
+    if (!item || quantity == 0 || unitValue == 0) return false;
+    const uint32_t itemId = item->item_id;
+    if (!itemId || !Offsets::Transaction) return false;
+
+    const uint32_t totalValue = unitValue * quantity;
+    GameThread::Enqueue([itemId, quantity, totalValue]() {
+        TransactionBuyNative(quantity, itemId, totalValue);
+    });
+    return true;
+}
+
+bool BuyMerchantItemByModelId(uint32_t modelId, uint32_t quantity) {
+    Item* item = GetMerchantItemByModelId(modelId);
+    if (!item || quantity == 0) return false;
+
+    const uint32_t itemId = item->item_id;
+    const uint32_t unitValue = item->value;
+    if (!itemId || unitValue == 0 || !Offsets::Transaction) return false;
+
+    const uint32_t totalValue = unitValue * quantity;
+    GameThread::Enqueue([itemId, quantity, totalValue]() {
+        TransactionBuyNative(quantity, itemId, totalValue);
+    });
+    return true;
+}
+
+bool SellMerchantItem(uint32_t itemId, uint32_t quantity, uint32_t totalValue) {
+    if (!itemId || !Offsets::Transaction) return false;
+    GameThread::Enqueue([itemId, quantity, totalValue]() {
+        TransactionSellNative(quantity, itemId, totalValue);
+    });
+    return true;
 }
 
 bool RequestTraderQuoteByItemId(uint32_t itemId) {

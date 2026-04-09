@@ -1,5 +1,7 @@
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/AgentMgr.h>
+#include <gwa3/managers/ChatMgr.h>
+#include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
@@ -55,6 +57,38 @@ void LeaveGuildHall() {
 }
 
 void ReturnToOutpost() {
+    const uint32_t mapId = GetMapId();
+    const AreaInfo* area = GetAreaInfo(mapId);
+    const bool inExplorable = area && area->type == 2;
+
+    if (!inExplorable) {
+        Log::Info("MapMgr: ReturnToOutpost sending direct packet outside explorable");
+        CtoS::SendPacket(1, Packets::PARTY_RETURN_TO_OUTPOST);
+        return;
+    }
+
+    Log::Info("MapMgr: ReturnToOutpost using /resign + button flow in explorable map %u", mapId);
+    ChatMgr::SendChat(L"resign", L'/');
+
+    // Match the previously working test path: allow resign and party defeat
+    // state to settle before looking for the Return to Outpost button.
+    Sleep(5000);
+
+    for (int attempt = 1; attempt <= 10; ++attempt) {
+        if (UIMgr::IsFrameVisible(UIMgr::Hashes::ReturnToOutpost)) {
+            Log::Info("MapMgr: ReturnToOutpost button visible on attempt %d; clicking hash=%u",
+                      attempt, UIMgr::Hashes::ReturnToOutpost);
+            if (UIMgr::ButtonClickByHash(UIMgr::Hashes::ReturnToOutpost)) {
+                return;
+            }
+            Log::Warn("MapMgr: ReturnToOutpost button click failed on attempt %d", attempt);
+        } else {
+            Log::Info("MapMgr: ReturnToOutpost button not yet visible (attempt %d)", attempt);
+        }
+        Sleep(500);
+    }
+
+    Log::Warn("MapMgr: ReturnToOutpost button never appeared; falling back to direct packet");
     CtoS::SendPacket(1, Packets::PARTY_RETURN_TO_OUTPOST);
 }
 

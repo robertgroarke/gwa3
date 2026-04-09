@@ -8,6 +8,8 @@ namespace GWA3::QuestMgr {
     bool Initialize();
 
     // Dialog
+    // Prefers the native SendDialog/SendSignpostDialog path when resolved.
+    // Falls back to the legacy raw packet path only if no native path is available.
     void Dialog(uint32_t dialogId);
 
     // Quest management

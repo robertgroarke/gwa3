@@ -80,10 +80,11 @@ void AddHero(uint32_t heroId) {
 void KickHero(uint32_t heroId)   { CtoS::HeroKick(heroId); }
 void KickAllHeroes() {
     // Confirmed on the current client/test environment: HERO_KICK with the
-    // legacy 0x26 "kick all" sentinel does not reliably remove party heroes,
-    // even when forced through increasingly faithful AutoIt-style transport
-    // experiments. Individual HERO_KICK(hero_id) packets are the confirmed
-    // working path, so we enumerate current heroes and kick them one by one.
+    // upstream 0x27 "kick all" sentinel does work, while the older 0x26
+    // sentinel does not reliably remove party heroes. We still prefer the
+    // observed per-hero path when party state is available because it gives
+    // us deterministic behavior and clearer recovery when a specific hero
+    // fails to leave.
     uint32_t heroIds[16] = {};
     const size_t heroCount = GetPartyHeroIds(heroIds, _countof(heroIds));
     if (heroCount) {
@@ -95,7 +96,7 @@ void KickAllHeroes() {
         return;
     }
     // Fallback only when party state is unavailable.
-    CtoS::SendPacket(2, Packets::HERO_KICK, 0x26u);
+    CtoS::SendPacket(2, Packets::HERO_KICK, 0x27u);
 }
 
 void AddHenchman(uint32_t id)    { CtoS::SendPacket(2, Packets::PARTY_INVITE_NPC, id); }

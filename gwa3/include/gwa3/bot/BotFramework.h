@@ -31,7 +31,6 @@ namespace GWA3::Bot {
         bool open_chests = true;
         bool pickup_golds = true;
         bool auto_salvage = true;
-        bool use_experimental_autoit_merchant_lane = false;
         uint32_t hero_ids[7] = {0};
         uint32_t skill_template[8] = {0};
         uint32_t target_map_id = 0;

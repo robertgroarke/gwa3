@@ -194,8 +194,6 @@ void LoadConfigFromIni(const char* iniPath) {
     s_config.open_chests = (GetPrivateProfileIntA("Settings", "OpenChests", 1, iniPath) != 0);
     s_config.pickup_golds = (GetPrivateProfileIntA("Settings", "PickUpGolds", 1, iniPath) != 0);
     s_config.auto_salvage = (GetPrivateProfileIntA("Settings", "AutoSalvage", 1, iniPath) != 0);
-    s_config.use_experimental_autoit_merchant_lane =
-        (GetPrivateProfileIntA("Settings", "ExperimentalAutoItMerchantLane", 0, iniPath) != 0);
     s_config.target_map_id = static_cast<uint32_t>(GetPrivateProfileIntA("Settings", "TargetMapID", 0, iniPath));
     s_config.outpost_map_id = static_cast<uint32_t>(GetPrivateProfileIntA("Settings", "OutpostMapID", 0, iniPath));
 
