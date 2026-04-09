@@ -1018,35 +1018,31 @@ static bool RunBogrootBlessingProof() {
     // GoNPC must go through GameThread (direct CtoS crashes after Bogroot map transition).
     // Dialog uses the AutoIt header 0x3B (DIALOG_SEND), not 0x3A (DIALOG_SEND_LIVING).
 
-    // Use native function paths only — CtoS engine hook crashes in Bogroot dungeons.
-    // Native functions (AgentMgr, QuestMgr) use scanned game function pointers
-    // that are safe across map transitions.
+    // EngineDispatchOne now has __try/__except crash protection.
+    // Use GameThread::EnqueuePost so packets dispatch from the game thread
+    // (required for 0x39 NPC interaction to trigger dialogs).
 
-    // Step 1: ChangeTarget (native)
+    // Step 1: ChangeTarget
     GameThread::EnqueuePost([npcId]() {
         AgentMgr::ChangeTarget(npcId);
     });
     Sleep(500);
-    IntReport("  ChangeTarget to agent=%u (native)", npcId);
+    IntReport("  ChangeTarget to agent=%u", npcId);
 
-    // Step 2: InteractNPC (native) — uses scanned InteractNPC function pointer
-    GameThread::EnqueuePost([npcId]() {
-        AgentMgr::InteractNPC(npcId);
-    });
-    IntReport("  Sent InteractNPC to agent=%u (native)", npcId);
+    // Step 2: GoNPC (0x39) — dispatched via engine hook (now crash-protected)
+    CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
+    IntReport("  Sent GoNPC (0x39) to agent=%u", npcId);
     Sleep(3000);
 
     // Check dialog state
     bool dialogOpened = DialogMgr::IsDialogOpen();
-    IntReport("  After InteractNPC: dialogOpen=%d sender=%u buttons=%u",
+    IntReport("  After GoNPC: dialogOpen=%d sender=%u buttons=%u",
               dialogOpened, DialogMgr::GetDialogSenderAgentId(),
               DialogMgr::GetButtonCount());
 
-    // Step 3: Dialog (0x84) — use native QuestMgr::Dialog which uses scanned SendDialog fn
-    GameThread::EnqueuePost([]() {
-        QuestMgr::Dialog(DIALOG_ACCEPT_BLESSING);
-    });
-    IntReport("  Sent QuestMgr::Dialog(0x%X) (native)", DIALOG_ACCEPT_BLESSING);
+    // Step 3: Dialog (0x3B, 0x84) — AutoIt header
+    CtoS::SendPacket(2, Packets::DIALOG_SEND, DIALOG_ACCEPT_BLESSING);
+    IntReport("  Sent Dialog (0x3B, 0x%X)", DIALOG_ACCEPT_BLESSING);
     Sleep(2000);
 
     // Verify blessing effect appeared
