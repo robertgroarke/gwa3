@@ -195,8 +195,10 @@ namespace GWA3::LLM::ActionExecutor {
     }
 
     static ActionResult HandleKickAllHeroes(const json&) {
-        GWA3::GameThread::Enqueue([]() { PartyMgr::KickAllHeroes(); });
-        return MakeOk();
+        // Intentionally deprecated: the legacy bulk sentinel is not a
+        // confirmed reliable clear path in gwa3. Bridge clients should issue
+        // repeated kick_hero calls for the currently present hero IDs.
+        return MakeError("deprecated_use_kick_hero_individually");
     }
 
     static ActionResult HandleFlagHero(const json& p) {

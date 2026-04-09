@@ -18,11 +18,11 @@ static uintptr_t s_packetLocation = 0;
 static bool s_initialized = false;
 
 // ===== Engine inline hook for CtoS dispatch =====
-// Hooks at Offsets::Engine (0x00C93C91) — a DIFFERENT function from the
+// Hooks at Offsets::Engine (0x00C93C91) â€” a DIFFERENT function from the
 // Render/FrApi function (0x00AE3D10) that GameThread hooks.
 // This avoids the lock-ordering deadlock that occurs when PacketSend is
 // called from within the Render function.
-// Architecture matches AutoIt's MainStart/CommandPacketSend.
+// Architecture is currently the sender-thread/game-thread dispatch path used by gwa3.
 
 static constexpr uint32_t kQueueSize = 256;
 static uintptr_t s_queue[kQueueSize] = {};
@@ -44,9 +44,9 @@ static volatile bool s_watchdogRunning = false;
 static uintptr_t s_engineReplayTrampoline = 0;
 
 // Naked detour at Engine hook site.
-// Mirrors AutoIt's MainProc: pushad/pushfd → process one queue command → popfd/popad → replay → jmp return.
-// The queue commands are shellcode blobs that call PacketSend with the right args.
-// Signal event: the Engine hook sets this to wake the sender thread.
+// Minimal engine detour used by gwa3's current packet transport.
+// It wakes or drains the queued sender-thread work without the old experimental
+// AutoIt-style command lane.
 // PacketSend cannot be called from within any frame hook (deadlocks).
 // The sender thread runs BETWEEN frames, outside the frame lock.
 static HANDLE s_packetReadyEvent = nullptr;
@@ -85,7 +85,7 @@ static DWORD WINAPI PacketSenderThread(LPVOID) {
                     t.data[0]),
                 EXCEPTION_EXECUTE_HANDLER
             ) {
-                Log::Error("CtoS: PacketSend crashed — continuing");
+                Log::Error("CtoS: PacketSend crashed â€” continuing");
             }
             Sleep(10);
         }
@@ -93,9 +93,12 @@ static DWORD WINAPI PacketSenderThread(LPVOID) {
     return 0;
 }
 
-// Test: call PacketSend directly from Engine detour (game thread context)
-// with a hardcoded ACTION_CANCEL packet to see if it works
+// Packet transport instrumentation.
+// s_engineCallTest tracks engine-thread dispatch observations for debugging.
+
+// Pointers used by the dispatch path â€” set during Initialize from Offsets
 static volatile LONG s_engineCallTest = 0;
+static void (__stdcall* s_engineDispatchOnePtr)() = nullptr;
 
 static void __stdcall EngineDispatchOne() {
     if (s_pktTail == s_pktHead) return;
@@ -121,11 +124,12 @@ static __declspec(naked) void EngineDetourNaked() {
 
         inc dword ptr [s_heartbeat]
 
-        // Check if packets pending — if so, dispatch one from game thread
+
+        // Check if normal packets pending — if so, dispatch one from game thread
         mov eax, dword ptr [s_pktTail]
         cmp eax, dword ptr [s_pktHead]
         je no_packet
-        call EngineDispatchOne
+        call dword ptr [s_engineDispatchOnePtr]
     no_packet:
 
         popfd
@@ -185,6 +189,7 @@ static bool InstallEngineHook() {
     memcpy(t + 6, &jmpRel, 4);
     FlushInstructionCache(GetCurrentProcess(), t, 10);
     s_engineReplayTrampoline = reinterpret_cast<uintptr_t>(tramp);
+    s_engineDispatchOnePtr = &EngineDispatchOne;
 
     // Write 5-byte JMP to our detour
     DWORD oldProtect;
@@ -218,42 +223,6 @@ static bool InstallEngineHook() {
     return true;
 }
 
-static bool EnqueueToEngine(uintptr_t command) {
-    if (!s_engineInitialized || command < 0x10000) return false;
-
-    for (uint32_t attempt = 0; attempt < kQueueSize; ++attempt) {
-        uint32_t index = (static_cast<uint32_t>(s_queueCounter) + attempt) % kQueueSize;
-        if (s_queue[index] != 0) continue;
-        s_queue[index] = command;
-        return true;
-    }
-
-    Log::Warn("CtoS: Engine queue full, dropping command 0x%08X", command);
-    return false;
-}
-
-// Ring buffer for shellcode packet blobs
-static constexpr int kPacketSlots = 32;
-static constexpr int kPacketSlotSize = 80;
-static uintptr_t s_packetShellcodeBase = 0;
-static volatile LONG s_packetSlotIndex = 0;
-
-static bool EnsurePacketShellcode() {
-    if (s_packetShellcodeBase) return true;
-    void* mem = VirtualAlloc(nullptr, kPacketSlots * kPacketSlotSize,
-                             MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-    if (!mem) {
-        Log::Error("CtoS: VirtualAlloc failed for packet shellcode pool");
-        return false;
-    }
-    s_packetShellcodeBase = reinterpret_cast<uintptr_t>(mem);
-    return true;
-}
-
-static uintptr_t NextPacketSlot() {
-    LONG idx = InterlockedIncrement(&s_packetSlotIndex) % kPacketSlots;
-    return s_packetShellcodeBase + idx * kPacketSlotSize;
-}
 
 bool Initialize() {
     if (s_initialized) return true;
@@ -277,16 +246,16 @@ bool Initialize() {
 
     // Install Engine inline hook for packet dispatch
     if (!InstallEngineHook()) {
-        Log::Warn("CtoS: Engine hook failed — packets will be dropped");
+        Log::Warn("CtoS: Engine hook failed â€” packets will be dropped");
     }
 
     return true;
 }
 
-// Core send: builds shellcode that calls PacketSend, enqueues to Engine hook.
+// Core send: queue a packet for the sender-thread/game-thread transport.
 void SendPacket(uint32_t size, uint32_t header, ...) {
     if (!s_initialized && !Initialize()) {
-        Log::Warn("CtoS: SendPacket dropped (header=0x%X) — not initialized", header);
+        Log::Warn("CtoS: SendPacket dropped (header=0x%X) â€” not initialized", header);
         return;
     }
 
@@ -301,6 +270,7 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
     va_end(args);
 
     const uint32_t sizeBytes = size * 4;
+    const bool traceHeroKick = header == Packets::HERO_KICK;
 
     // Re-read PacketLocation every call
     if (Offsets::PacketLocation) {
@@ -308,7 +278,7 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
         if (fresh) s_packetLocation = fresh;
     }
 
-    // Enqueue to sender thread ring buffer
+    // Enqueue to sender-thread ring buffer
     if (s_engineInitialized && s_packetReadyEvent) {
         LONG idx = InterlockedIncrement(&s_pktHead) - 1;
         PacketTask& t = s_packetRing[idx % 64];
@@ -316,14 +286,26 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
         t.location = s_packetLocation;
         t.sizeBytes = sizeBytes;
         memcpy(t.data, data, sizeBytes);
+        if (traceHeroKick) {
+            const uint32_t arg1 = size > 1 ? data[1] : 0u;
+            Log::Info("CtoS: HERO_KICK queued arg=0x%X pktIdx=%ld loc=0x%08X hb=%ld engineCalls=%ld head=%ld tail=%ld",
+                      arg1,
+                      idx,
+                      static_cast<unsigned>(s_packetLocation),
+                      s_heartbeat,
+                      s_engineCallTest,
+                      s_pktHead,
+                      s_pktTail);
+        }
         SetEvent(s_packetReadyEvent);
         return;
     }
 
-    Log::Warn("CtoS: SendPacket dropped header=0x%X — not ready", header);
+    Log::Warn("CtoS: SendPacket dropped header=0x%X â€” not ready", header);
 }
 
 // --- Type-safe wrappers ---
+
 
 void MoveToCoord(float x, float y) {
     uint32_t ix, iy;
@@ -333,7 +315,8 @@ void MoveToCoord(float x, float y) {
 }
 
 void Dialog(uint32_t dialogId) {
-    SendPacket(2, Packets::DIALOG_SEND, dialogId);
+    // Current AutoIt GWA2 logic uses 0x3A for dialog sends.
+    SendPacket(2, Packets::DIALOG_SEND_LIVING, dialogId);
 }
 
 void ChangeTarget(uint32_t agentId) {
@@ -427,3 +410,22 @@ void TradeAccept() {
 }
 
 } // namespace GWA3::CtoS
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

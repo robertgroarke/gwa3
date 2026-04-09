@@ -75,7 +75,7 @@ async def test_orchestrated_phase2_party_setup(tc: BridgeTestCase):
     """Phase 2: Add heroes, verify party grows."""
     # Kick existing heroes
     result = await tc.send_action("kick_all_heroes")
-    tc.assert_action_success(result)
+    tc.assert_action_error(result, "deprecated_use_kick_hero_individually")
 
     # Wait for party to actually shrink to 1 (just player)
     def party_is_solo(s):

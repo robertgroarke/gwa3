@@ -16,6 +16,11 @@ namespace GWA3::CtoSHook {
     // ending in RET (0xC3).
     bool EnqueueCommand(uintptr_t command);
 
+    // Experimental AutoIt-style packet lane.
+    // This is intentionally isolated from the main CtoS sender-thread path and is
+    // only meant for interaction-command experiments while we compare hook context.
+    bool SendPacketCommand(uint32_t size, uint32_t header, ...);
+
     bool IsInitialized();
     uint32_t GetHeartbeat();
 

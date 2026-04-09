@@ -274,8 +274,6 @@ bool ButtonClick(uintptr_t frame) {
         return false;
     }
 
-    memcpy(reinterpret_cast<void*>(s_frameClickAction), &action, sizeof(action));
-
     const uint32_t thisPtrU32 = static_cast<uint32_t>(context + 0xA8);
     const uint32_t sendFrame = static_cast<uint32_t>(s_sendFrameUIAddr);
     auto* sc = reinterpret_cast<uint8_t*>(s_frameClickShellcode);
@@ -294,6 +292,12 @@ bool ButtonClick(uintptr_t frame) {
     sc[19] = 0xC3;
 
     FlushInstructionCache(GetCurrentProcess(), sc, 20);
+
+    // Match the stable GWCA-style button click path: SendFrameUIMsg with a
+    // single MouseUp action. The local FrameUI research notes that injecting
+    // an extra MouseDown here can leave pre-game UI in a bad state.
+    action.action_state = ACTION_MOUSE_UP;
+    memcpy(reinterpret_cast<void*>(s_frameClickAction), &action, sizeof(action));
     return RenderHook::EnqueueCommand(s_frameClickShellcode);
 }
 
