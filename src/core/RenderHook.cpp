@@ -195,8 +195,17 @@ void SetMapLoaded(bool loaded) {
         // crashes GW's in-game render loop after ~2300 frames (~37-43s).
         // The hook is only needed for pre-game char select ButtonClick;
         // once in-game, GameThread's MinHook handles all dispatch.
-        Log::Info("RenderHook: Removing mid-function patch (prevents in-game trampoline crash)");
-        Shutdown();
+        // Remove JMP but keep s_initialized + trampoline alive for TradeMgr.
+        // Dont free trampoline — detour may be mid-flight on render thread.
+        uintptr_t hookAddr = Offsets::Render;
+        if (hookAddr) {
+            DWORD oldProtect;
+            VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, PAGE_EXECUTE_READWRITE, &oldProtect);
+            memcpy(reinterpret_cast<void*>(hookAddr), s_savedBytes, kPatchSize);
+            FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hookAddr), kPatchSize);
+            VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, oldProtect, &oldProtect);
+            Log::Info("RenderHook: Removed mid-function JMP (trampoline retained for queue)");
+        }
     }
 }
 
