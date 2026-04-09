@@ -330,13 +330,38 @@ struct CachedSkill {
 static CachedSkill s_skillCache[8] = {};
 static bool s_skillsCached = false;
 static char s_lastCombatStep[128] = "uninitialized";
+static LastCombatStepInfo s_lastCombatStepInfo = {};
 static bool s_combatDebugLogging = false;
+static char s_builtinCombatDump[12][256] = {};
+static int s_builtinCombatDumpCount = 0;
+static char s_combatDebugTrace[96][256] = {};
+static int s_combatDebugTraceCount = 0;
 
 static void SetLastCombatStepDescription(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
     vsnprintf_s(s_lastCombatStep, sizeof(s_lastCombatStep), _TRUNCATE, fmt, args);
     va_end(args);
+}
+
+static void ResetLastCombatStepInfo() {
+    s_lastCombatStepInfo = {};
+}
+
+static void ResetCombatDebugTrace() {
+    s_combatDebugTraceCount = 0;
+    ZeroMemory(s_combatDebugTrace, sizeof(s_combatDebugTrace));
+}
+
+static void AddCombatDebugTraceLine(const char* fmt, ...) {
+    if (s_combatDebugTraceCount >= static_cast<int>(std::size(s_combatDebugTrace))) return;
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf_s(s_combatDebugTrace[s_combatDebugTraceCount],
+                sizeof(s_combatDebugTrace[s_combatDebugTraceCount]),
+                _TRUNCATE, fmt, args);
+    va_end(args);
+    s_combatDebugTraceCount++;
 }
 
 static void CombatDebugLog(const char* fmt, ...) {
@@ -346,7 +371,26 @@ static void CombatDebugLog(const char* fmt, ...) {
     va_start(args, fmt);
     vsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
+    AddCombatDebugTraceLine("%s", buffer);
     LogBot("CombatDebug: %s", buffer);
+}
+
+static void ResetBuiltinCombatDump() {
+    s_builtinCombatDumpCount = 0;
+    for (auto& line : s_builtinCombatDump) {
+        line[0] = '\0';
+    }
+}
+
+static void AddBuiltinCombatDumpLine(const char* fmt, ...) {
+    if (s_builtinCombatDumpCount < 0 || s_builtinCombatDumpCount >= static_cast<int>(std::size(s_builtinCombatDump))) {
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(s_builtinCombatDump[s_builtinCombatDumpCount], sizeof(s_builtinCombatDump[s_builtinCombatDumpCount]), fmt, args);
+    va_end(args);
+    ++s_builtinCombatDumpCount;
 }
 
 // ===== Skill Classifiers (ported from BotCore-SkillRules.au3) =====
@@ -410,11 +454,44 @@ static bool IsSpeedBoostId(uint32_t id) {
 // Binding ritual skill IDs
 static bool IsBindingId(uint32_t id) {
     switch (id) {
+    case 2233: // Ebon Battle Standard of Honor
+    case 2100: // Summon Spirits Kurzick
+    case 1228: // Spirit Siphon
+    case 1232: // Armor of Unfeeling
+    case 1238: // Signet of Creation
+    case 1239: // Signet of Spirits
+    case 1253: // Bloodsong
+    case 2110: // Vampirism
+    case 1742: // Signet of Ghostly Might
+    case 1217: // Ritual Lord
+    case 1884: // Soul Twisting
     case 786: case 787: case 788: case 789: case 790:  // Spirits
     case 791: case 792: case 793: case 794: case 795:
     case 960: case 961: case 962: case 963: case 964:
     case 965: case 966: case 967: case 2083: case 2084:
     case 2085: case 2087: case 2088: case 2089:
+        return true;
+    }
+    return false;
+}
+
+static bool IsPressureSpiritId(uint32_t id) {
+    switch (id) {
+    case 1239: // Signet of Spirits
+    case 1253: // Bloodsong
+    case 2110: // Vampirism
+    case 2233: // Ebon Battle Standard of Honor
+        return true;
+    }
+    return false;
+}
+
+static bool IsPrecastId(uint32_t id) {
+    if (IsPressureSpiritId(id)) return true;
+    switch (id) {
+    case 1232: // Armor of Unfeeling
+    case 1228: // Spirit Siphon
+    case 2100: // Summon Spirits Kurzick
         return true;
     }
     return false;
@@ -461,6 +538,8 @@ static void CacheSkillBar() {
         if (IsSurvivalId(c.skill_id))       c.roles |= ROLE_SURVIVAL;
         if (IsSpeedBoostId(c.skill_id))     c.roles |= ROLE_SPEED_BOOST;
         if (IsBindingId(c.skill_id))        c.roles |= ROLE_BINDING;
+        if (IsPressureSpiritId(c.skill_id)) c.roles |= ROLE_PRESSURE | ROLE_PRECAST;
+        if (IsPrecastId(c.skill_id))        c.roles |= ROLE_PRECAST;
 
         // Type-based classification
         switch (data->type) {
@@ -522,6 +601,13 @@ static void CacheSkillBar() {
             break;
         case 13: // Ritual
             c.roles |= ROLE_BINDING | ROLE_PRECAST;
+            break;
+        case 22: // Ritualist spirit/bundle style skills in current client
+            if (c.roles == ROLE_NONE) {
+                c.roles |= ROLE_BINDING | ROLE_PRECAST;
+            } else {
+                c.roles |= ROLE_PRECAST;
+            }
             break;
         case 14: // Item Spell
         case 15: // Weapon Spell
@@ -773,7 +859,49 @@ static constexpr uint32_t DEBUFF_WELL_OF_SILENCE  = 668;
 // Signet blocking
 static constexpr uint32_t DEBUFF_IGNORANCE        = 56;
 
+static const char* ExplainCanCastFailure(const CachedSkill& skill) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return "no_player";
+    if (me->hp <= 0.0f) return "dead";
+
+    const uint32_t loadingState = MapMgr::GetLoadingState();
+    if (loadingState == 2) return "disconnected";
+    if (loadingState != 1) return "not_loaded";
+    if (PartyMgr::GetIsPartyDefeated()) return "party_defeated";
+    if (me->model_state == 0x450) return "knocked";
+
+    const uint32_t myId = me->agent_id;
+    const uint8_t type = skill.skill_type;
+    if (type == 1 || type == 2 || type == 3 || type == 5 || type == 7 ||
+        type == 14 || type == 15 || type == 16) {
+        if (EffectMgr::HasEffect(myId, DEBUFF_DIVERSION)) return "diversion";
+        if (EffectMgr::HasEffect(myId, DEBUFF_BACKFIRE)) return "backfire";
+        if (EffectMgr::HasEffect(myId, DEBUFF_SOUL_LEECH)) return "soul_leech";
+        if (EffectMgr::HasEffect(myId, DEBUFF_MISTRUST)) return "mistrust";
+        if (EffectMgr::HasEffect(myId, DEBUFF_VISIONS_OF_REGRET)) return "visions_of_regret";
+        if (EffectMgr::HasEffect(myId, DEBUFF_MARK_OF_SUBVERSION)) return "mark_of_subversion";
+        if (EffectMgr::HasEffect(myId, DEBUFF_SPITEFUL_SPIRIT)) return "spiteful_spirit";
+    }
+    if (type == 9 || type == 17) {
+        if (EffectMgr::HasEffect(myId, DEBUFF_INEPTITUDE)) return "ineptitude";
+        if (EffectMgr::HasEffect(myId, DEBUFF_CLUMSINESS)) return "clumsiness";
+        if (EffectMgr::HasEffect(myId, DEBUFF_WANDERING_EYE)) return "wandering_eye";
+        if (EffectMgr::HasEffect(myId, DEBUFF_SPITEFUL_SPIRIT)) return "spiteful_spirit";
+    }
+    if (type == 4) {
+        if (EffectMgr::HasEffect(myId, DEBUFF_IGNORANCE)) return "ignorance";
+        if (EffectMgr::HasEffect(myId, DEBUFF_DIVERSION)) return "diversion";
+    }
+    if (type == 10 || type == 20) {
+        if (EffectMgr::HasEffect(myId, DEBUFF_WELL_OF_SILENCE)) return "well_of_silence";
+        if (EffectMgr::HasEffect(myId, DEBUFF_DIVERSION)) return "diversion";
+    }
+    return nullptr;
+}
+
 static bool CanCast(const CachedSkill& skill) {
+    return ExplainCanCastFailure(skill) == nullptr;
+#if 0
     auto* me = AgentMgr::GetMyAgent();
     if (!me) return false;
     if (me->hp <= 0.0f) return false; // dead
@@ -825,6 +953,7 @@ static bool CanCast(const CachedSkill& skill) {
     }
 
     return true;
+#endif
 }
 
 // ===== HP Gating & Effect Overlap (GWA3-124) =====
@@ -956,6 +1085,16 @@ static bool TryUseSkillWithRole(uint32_t targetId, uint32_t roleMask) {
 
         SetLastCombatStepDescription("skill slot=%d skill=%u target=%u roleMask=0x%X",
                                      i + 1, c.skill_id, skillTarget, roleMask);
+        ResetLastCombatStepInfo();
+        s_lastCombatStepInfo.valid = true;
+        s_lastCombatStepInfo.used_skill = true;
+        s_lastCombatStepInfo.auto_attack = false;
+        s_lastCombatStepInfo.slot = i + 1;
+        s_lastCombatStepInfo.skill_id = c.skill_id;
+        s_lastCombatStepInfo.target_id = skillTarget;
+        s_lastCombatStepInfo.role_mask = roleMask;
+        s_lastCombatStepInfo.target_type = c.target_type;
+        s_lastCombatStepInfo.started_at_ms = GetTickCount();
         CombatDebugLog("roleMask=0x%X slot=%d skill=%u USE target=%u",
                        roleMask, i + 1, c.skill_id, skillTarget);
         SkillMgr::UseSkill(i + 1, skillTarget, 0);
@@ -976,9 +1115,12 @@ static bool TryUseSkillWithRole(uint32_t targetId, uint32_t roleMask) {
         if (skillData && skillData->aftercast > 0) {
             aftercast = skillData->aftercast;
         }
+        s_lastCombatStepInfo.expected_aftercast_ms =
+            aftercast > 0 ? static_cast<uint32_t>(aftercast * 1000.0f) : 0;
         if (aftercast > 0) {
             WaitMs(static_cast<DWORD>(aftercast * 1000));
         }
+        s_lastCombatStepInfo.finished_at_ms = GetTickCount();
 
         return true;
     }
@@ -992,13 +1134,20 @@ static void FightTarget(uint32_t targetId) {
     auto& cfg = Bot::GetConfig();
     if (cfg.combat_mode == CombatMode::LLM) {
         SetLastCombatStepDescription("llm_auto_attack target=%u", targetId);
+        ResetLastCombatStepInfo();
+        s_lastCombatStepInfo.valid = true;
+        s_lastCombatStepInfo.auto_attack = true;
+        s_lastCombatStepInfo.target_id = targetId;
+        s_lastCombatStepInfo.started_at_ms = GetTickCount();
         CombatDebugLog("LLM combat mode issuing auto-attack target=%u", targetId);
         AgentMgr::Attack(targetId);
+        s_lastCombatStepInfo.finished_at_ms = GetTickCount();
         return;
     }
 
     if (!s_skillsCached) CacheSkillBar();
     SetLastCombatStepDescription("no_action target=%u", targetId);
+    ResetLastCombatStepInfo();
     CombatDebugLog("FightTarget start target=%u", targetId);
 
     auto* me = AgentMgr::GetMyAgent();
@@ -1061,7 +1210,14 @@ static void FightTarget(uint32_t targetId) {
         // No skills ready — auto-attack
         CombatDebugLog("No skill selected, issuing auto-attack target=%u", targetId);
         SetLastCombatStepDescription("auto_attack target=%u", targetId);
+        ResetLastCombatStepInfo();
+        s_lastCombatStepInfo.valid = true;
+        s_lastCombatStepInfo.auto_attack = true;
+        s_lastCombatStepInfo.target_id = targetId;
+        s_lastCombatStepInfo.role_mask = ROLE_ATTACK | ROLE_OFFENSIVE;
+        s_lastCombatStepInfo.started_at_ms = GetTickCount();
         AgentMgr::Attack(targetId);
+        s_lastCombatStepInfo.finished_at_ms = GetTickCount();
     }
 }
 
@@ -2453,6 +2609,9 @@ BotState HandleDungeon(BotConfig& cfg) {
     (void)cfg;
     uint32_t mapId = MapMgr::GetMapId();
 
+    // Refresh combat cache on explorable entry rather than relying on town-setup state.
+    RefreshCombatSkillbar();
+
     if (mapId == MAP_SPARKFLY_SWAMP) {
         LogBot("State: Sparkfly Swamp — running to dungeon");
         s_runCount++;
@@ -3177,6 +3336,8 @@ bool ExecuteBuiltinCombatStep(uint32_t targetId) {
     const CombatMode originalMode = cfg.combat_mode;
     cfg.combat_mode = CombatMode::Builtin;
     SetLastCombatStepDescription("uninitialized");
+    ResetLastCombatStepInfo();
+    ResetCombatDebugTrace();
     s_combatDebugLogging = true;
 
     FightTarget(targetId);
@@ -3190,11 +3351,71 @@ const char* GetLastCombatStepDescription() {
     return s_lastCombatStep;
 }
 
+LastCombatStepInfo GetLastCombatStepInfo() {
+    return s_lastCombatStepInfo;
+}
+
+bool DebugResolveFirstSkillTarget(uint32_t roleMask, uint32_t defaultFoeId,
+                                  uint32_t& outSkillId, uint32_t& outTargetId, uint8_t& outTargetType) {
+    if (!s_skillsCached) {
+        CacheSkillBar();
+    }
+    outSkillId = 0;
+    outTargetId = 0;
+    outTargetType = 0;
+    for (int i = 0; i < 8; ++i) {
+        const auto& c = s_skillCache[i];
+        if (c.skill_id == 0) continue;
+        if (!(c.roles & roleMask)) continue;
+        outSkillId = c.skill_id;
+        outTargetType = c.target_type;
+        outTargetId = ResolveSkillTarget(c, defaultFoeId);
+        return true;
+    }
+    return false;
+}
+
+uint32_t DebugGetCastingEnemy() {
+    return GetCastingEnemy();
+}
+
+uint32_t DebugGetEnchantedEnemy() {
+    return GetEnchantedEnemy();
+}
+
+uint32_t DebugGetMeleeRangeEnemy() {
+    return GetMeleeRangeEnemy();
+}
+
+bool RefreshCombatSkillbar() {
+    s_skillsCached = false;
+    CacheSkillBar();
+    if (!s_skillsCached) return false;
+
+    bool hasNonZero = false;
+    bool hasClassifiedRole = false;
+    for (int i = 0; i < 8; ++i) {
+        if (s_skillCache[i].skill_id != 0) {
+            hasNonZero = true;
+        }
+        if (s_skillCache[i].roles != ROLE_NONE) {
+            hasClassifiedRole = true;
+        }
+    }
+
+    LogBot("Froggy combat skillbar refresh: cached=%d hasNonZero=%d hasRole=%d",
+           s_skillsCached ? 1 : 0, hasNonZero ? 1 : 0, hasClassifiedRole ? 1 : 0);
+    return hasNonZero;
+}
+
 void DebugDumpBuiltinCombatDecision(uint32_t targetId) {
+    ResetBuiltinCombatDump();
     auto* me = AgentMgr::GetMyAgent();
     auto* target = AgentMgr::GetAgentByID(targetId);
     auto* bar = SkillMgr::GetPlayerSkillbar();
     if (!me || !target || target->type != 0xDB || !bar) {
+        AddBuiltinCombatDumpLine("unavailable me=%d target=%d bar=%d",
+                                 me ? 1 : 0, target ? 1 : 0, bar ? 1 : 0);
         LogBot("BuiltinCombatDump: unavailable me=%d target=%d bar=%d",
                me ? 1 : 0, target ? 1 : 0, bar ? 1 : 0);
         return;
@@ -3207,25 +3428,55 @@ void DebugDumpBuiltinCombatDecision(uint32_t targetId) {
     auto* living = static_cast<AgentLiving*>(target);
     const float myEnergy = me->energy * me->max_energy;
     const float distance = AgentMgr::GetDistance(me->x, me->y, living->x, living->y);
+    AddBuiltinCombatDumpLine("target=%u distance=%.0f hp=%.3f energy=%.1f activeSkill=%u modelState=0x%X",
+                             targetId, distance, living->hp, myEnergy, me->skill, me->model_state);
     LogBot("BuiltinCombatDump: target=%u distance=%.0f hp=%.3f energy=%.1f activeSkill=%u modelState=0x%X",
            targetId, distance, living->hp, myEnergy, me->skill, me->model_state);
 
     for (int i = 0; i < 8; ++i) {
         const auto& c = s_skillCache[i];
         if (c.skill_id == 0) {
+            AddBuiltinCombatDumpLine("slot=%d empty", i + 1);
             LogBot("BuiltinCombatDump: slot=%d empty", i + 1);
             continue;
         }
         const bool roleMatch = (c.roles & (ROLE_OFFENSIVE | ROLE_ATTACK)) != 0;
         const bool rechargeReady = bar->skills[i].recharge == 0;
         const bool energyReady = c.energy_cost <= static_cast<uint8_t>(myEnergy);
+        const bool canCast = CanCast(c);
         const bool canUse = CanUseSkill(c, targetId);
+        const char* canCastReason = ExplainCanCastFailure(c);
         const uint32_t resolvedTarget = ResolveSkillTarget(c, targetId);
+        const uint32_t adrenalineReq = SkillMgr::GetSkillConstantData(c.skill_id) ? SkillMgr::GetSkillConstantData(c.skill_id)->adrenaline : 0;
+        const uint32_t adrenalineCur = bar->skills[i].adrenaline_a;
+        AddBuiltinCombatDumpLine("slot=%d skill=%u roles=0x%X match=%d recharge=%u ready=%d e=%u/%0.1f adren=%u/%u canCast=%d canUse=%d reason=%s target=%u tgtType=%u type=%u",
+                                 i + 1, c.skill_id, c.roles, roleMatch ? 1 : 0, bar->skills[i].recharge,
+                                 rechargeReady ? 1 : 0, c.energy_cost, myEnergy, adrenalineCur, adrenalineReq,
+                                 canCast ? 1 : 0, canUse ? 1 : 0, canCastReason ? canCastReason : "ok",
+                                 resolvedTarget, c.target_type, c.skill_type);
         LogBot("BuiltinCombatDump: slot=%d skill=%u roles=0x%X roleMatch=%d recharge=%u ready=%d energyCost=%u energyReady=%d canUse=%d resolvedTarget=%u targetType=%u type=%u",
                i + 1, c.skill_id, c.roles, roleMatch ? 1 : 0, bar->skills[i].recharge,
                rechargeReady ? 1 : 0, c.energy_cost, energyReady ? 1 : 0, canUse ? 1 : 0,
                resolvedTarget, c.target_type, c.skill_type);
     }
+}
+
+int GetBuiltinCombatDecisionDumpCount() {
+    return s_builtinCombatDumpCount;
+}
+
+const char* GetBuiltinCombatDecisionDumpLine(int index) {
+    if (index < 0 || index >= s_builtinCombatDumpCount) return "";
+    return s_builtinCombatDump[index];
+}
+
+int GetCombatDebugTraceCount() {
+    return s_combatDebugTraceCount;
+}
+
+const char* GetCombatDebugTraceLine(int index) {
+    if (index < 0 || index >= s_combatDebugTraceCount) return "";
+    return s_combatDebugTrace[index];
 }
 
 } // namespace GWA3::Bot::Froggy
