@@ -60,11 +60,24 @@ static constexpr uint32_t MAP_BOGROOT_LVL1 = 615;
 static constexpr float kBlessingX = 19099.0f;
 static constexpr float kBlessingY = 7762.0f;
 
-// Blessing effect skill IDs (EotN title track blessings)
+// Title display IDs for SetActiveTitle packet (0x58).
+// These match GWCA TitleID enum, NOT the title track array index.
+// AutoIt: $ID_ASURA_TITLE=0x26, $ID_DWARF_TITLE=0x27, $ID_EBON_VANGUARD_TITLE=0x28, $ID_NORN_TITLE=0x29
+static constexpr uint32_t TITLE_DISPLAY_ASURA     = 0x26; // 38
+static constexpr uint32_t TITLE_DISPLAY_DELDRIMOR = 0x27; // 39
+static constexpr uint32_t TITLE_DISPLAY_VANGUARD  = 0x28; // 40
+static constexpr uint32_t TITLE_DISPLAY_NORN      = 0x29; // 41
+
+// Blessing effect skill IDs — overworld EotN zone blessings
 static constexpr uint32_t SKILL_DWARVEN_BLESSING  = 2049;
 static constexpr uint32_t SKILL_ASURAN_BLESSING   = 2050;
 static constexpr uint32_t SKILL_NORN_BLESSING     = 2051;
 static constexpr uint32_t SKILL_VANGUARD_BLESSING = 2052;
+// Dungeon veteran blessing variants (from shrine NPCs inside dungeons)
+static constexpr uint32_t SKILL_VET_ASURAN_BODYGUARD    = 2548;
+static constexpr uint32_t SKILL_VET_DWARVEN_RAIDER      = 2549;
+static constexpr uint32_t SKILL_VET_VANGUARD_PATROL     = 2550;
+static constexpr uint32_t SKILL_VET_NORN_HUNTING_PARTY  = 2551;
 static constexpr uint32_t DIALOG_ACCEPT_BLESSING  = 0x84;
 
 struct MoveStep {
@@ -659,10 +672,17 @@ static void ReportQuestSnapshot(const char* label) {
 static bool HasAnyBlessing() {
     uint32_t myId = AgentMgr::GetMyId();
     if (myId == 0) return false;
-    return EffectMgr::HasEffect(myId, SKILL_DWARVEN_BLESSING) ||
-           EffectMgr::HasEffect(myId, SKILL_ASURAN_BLESSING) ||
-           EffectMgr::HasEffect(myId, SKILL_NORN_BLESSING) ||
-           EffectMgr::HasEffect(myId, SKILL_VANGUARD_BLESSING);
+    // Check overworld blessings
+    if (EffectMgr::HasEffect(myId, SKILL_DWARVEN_BLESSING) ||
+        EffectMgr::HasEffect(myId, SKILL_ASURAN_BLESSING) ||
+        EffectMgr::HasEffect(myId, SKILL_NORN_BLESSING) ||
+        EffectMgr::HasEffect(myId, SKILL_VANGUARD_BLESSING)) return true;
+    // Check dungeon veteran blessings
+    if (EffectMgr::HasEffect(myId, SKILL_VET_ASURAN_BODYGUARD) ||
+        EffectMgr::HasEffect(myId, SKILL_VET_DWARVEN_RAIDER) ||
+        EffectMgr::HasEffect(myId, SKILL_VET_VANGUARD_PATROL) ||
+        EffectMgr::HasEffect(myId, SKILL_VET_NORN_HUNTING_PARTY)) return true;
+    return false;
 }
 
 // Safe single-agent read for signpost/generic agent scan
@@ -1064,6 +1084,27 @@ static bool RunBogrootBlessingProof() {
               myId ? EffectMgr::HasEffect(myId, SKILL_ASURAN_BLESSING) : -1,
               myId ? EffectMgr::HasEffect(myId, SKILL_NORN_BLESSING) : -1,
               myId ? EffectMgr::HasEffect(myId, SKILL_VANGUARD_BLESSING) : -1);
+
+    // ===== SET TITLE =====
+    // Blessing shrines require the appropriate EotN title to be displayed.
+    // Bogroot is Deldrimor territory → set Deldrimor title (0x27).
+    // AutoIt: SetDisplayedTitle($ID_DWARF_TITLE) before shrine interaction.
+    uint32_t activeTitleBefore = PlayerMgr::GetActiveTitleId();
+    IntReport("  Active title before: %u", activeTitleBefore);
+
+    // Set Deldrimor title via packet 0x58
+    if (activeTitleBefore == 0) {
+        // No title displayed — set Deldrimor
+        PlayerMgr::SetActiveTitle(TITLE_DISPLAY_DELDRIMOR);
+        Sleep(1000);
+        uint32_t activeTitleAfter = PlayerMgr::GetActiveTitleId();
+        IntReport("  Active title after SetActiveTitle(%u): %u", TITLE_DISPLAY_DELDRIMOR, activeTitleAfter);
+        IntCheck("Deldrimor title set for blessing", activeTitleAfter != 0);
+    } else {
+        // Title already displayed (may be from previous run) — keep it
+        IntReport("  Title already active (%u), keeping current display", activeTitleBefore);
+        IntCheck("Title already set for blessing", true);
+    }
 
     // ===== BLESSING INTERACTION =====
     // Shut down DialogMgr hooks — StringEncoding::DecodeStr times out in Bogroot.
