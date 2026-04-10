@@ -2849,7 +2849,10 @@ static int RunFroggyFeatureTestImpl(bool isolatedExplorableFlaggingMode) {
                 IntReport("  Free inventory slots before maintenance: %u", freeBefore);
                 if (freeBefore < 5) {
                     IntReport("  Running maintenance to free up inventory space...");
-                    MaintenanceMgr::PerformMaintenance();
+                    // Use sell-only maintenance — full maintenance with Xunlai/salvage
+                    // disrupts player position. Just sell junk and deposit gold.
+                    MaintenanceMgr::DepositGold(10000);
+                    MaintenanceMgr::SellJunkItems();
                     uint32_t freeAfter = MaintenanceMgr::CountFreeSlots();
                     IntReport("  Free inventory slots after maintenance: %u", freeAfter);
                 }
