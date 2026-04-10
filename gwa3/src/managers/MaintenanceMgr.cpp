@@ -609,6 +609,32 @@ static void ExecuteSalvageCommand(uint32_t itemId, uint32_t kitId, uint32_t sess
     }
 }
 
+// Wait for the bags array pointer to become non-null after salvage.
+// The Salvage function temporarily zeroes p2+0xF8 during processing.
+static void WaitForBagsPointerRestore() {
+    __try {
+        uintptr_t bp = Offsets::BasePointer;
+        uintptr_t ctx = bp ? *reinterpret_cast<uintptr_t*>(bp) : 0;
+        uintptr_t p1 = ctx ? *reinterpret_cast<uintptr_t*>(ctx + 0x18) : 0;
+        uintptr_t p2 = p1 ? *reinterpret_cast<uintptr_t*>(p1 + 0x40) : 0;
+
+        Log::Info("MaintenanceMgr: POST-SALVAGE: p2=0x%08X bags=0x%08X",
+                  p2, p2 ? *reinterpret_cast<uintptr_t*>(p2 + 0xF8) : 0);
+
+        for (int wait = 0; wait < 30; wait++) {
+            uintptr_t bags = p2 ? *reinterpret_cast<uintptr_t*>(p2 + 0xF8) : 0;
+            if (bags != 0) {
+                Log::Info("MaintenanceMgr: Bags pointer restored after %d ms (bags=0x%08X)", wait * 100, bags);
+                return;
+            }
+            Sleep(100);
+        }
+        Log::Warn("MaintenanceMgr: Bags pointer still NULL after 3s");
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Error("MaintenanceMgr: Exception reading pointer chain after salvage");
+    }
+}
+
 uint32_t SalvageJunkItems() {
     Item* kit = FindSalvageKit();
     if (!kit) {
@@ -670,6 +696,17 @@ uint32_t SalvageJunkItems() {
         }
 
         uint32_t kitId = kit->item_id;
+        // PRE-SALVAGE: trace the pointer chain
+        {
+            uintptr_t bp = Offsets::BasePointer;
+            uintptr_t ctx = bp ? *reinterpret_cast<uintptr_t*>(bp) : 0;
+            uintptr_t p1 = ctx ? *reinterpret_cast<uintptr_t*>(ctx + 0x18) : 0;
+            uintptr_t p2 = p1 ? *reinterpret_cast<uintptr_t*>(p1 + 0x40) : 0;
+            uintptr_t bags = p2 ? *reinterpret_cast<uintptr_t*>(p2 + 0xF8) : 0;
+            uint32_t gold = p2 ? *reinterpret_cast<uint32_t*>(p2 + 0x90) : 0;
+            Log::Info("MaintenanceMgr: PRE-SALVAGE chain: BP=0x%08X ctx=0x%08X p1=0x%08X p2=0x%08X bags=0x%08X gold=%u",
+                      bp, ctx, p1, p2, bags, gold);
+        }
         Log::Info("MaintenanceMgr: Salvaging [%u/%u] item=%u model=%u kit=%u session=%u",
                   i + 1, toSalvageCount, itemId, item->model_id, kitId, sessionId);
 
@@ -687,22 +724,9 @@ uint32_t SalvageJunkItems() {
         // We'll wait and check if the item was consumed without sending any CtoS packets.
         WaitMs(2000);
 
-        // The Salvage function may reallocate the game's WorldContext, invalidating
-        // our cached BasePointer. Refresh it before any further reads.
-        Offsets::RefreshBasePointer();
-
-        // Check if item was consumed
-        Item* afterCheck = ItemMgr::GetItemById(itemId);
-        if (!afterCheck || afterCheck->model_id == 0) {
-            Log::Info("MaintenanceMgr: Item %u consumed by Salvage function (auto-complete)", itemId);
-        } else {
-            Log::Info("MaintenanceMgr: Item %u still exists — session open, sending SalvageMaterials", itemId);
-            GameThread::EnqueuePost([]() {
-                CtoS::SendPacket(1, Packets::SALVAGE_MATERIALS);
-            });
-            WaitMs(1000);
-            Offsets::RefreshBasePointer();
-        }
+        // The Salvage function zeroes the bags array pointer at p2+0xF8.
+        // Wait for the game to repopulate it before reading inventory again.
+        WaitForBagsPointerRestore();
 
         salvaged++;
     }
@@ -824,12 +848,14 @@ void PerformMaintenance(const Config& cfg) {
     uint32_t identified = IdentifyAllItems();
     if (identified > 0) WaitMs(500);
 
-    // Step 4: Salvage — DISABLED pending deeper investigation.
-    // The native Salvage function call works (items ARE consumed) but invalidates
-    // internal WorldContext pointers at a deeper level than BasePointer. All inventory,
-    // gold, and agent reads return 0 after salvage. RefreshBasePointer doesn't help —
-    // the corruption is in sub-pointers (Inventory, Bag array, etc.).
-    // Need to identify which specific pointer gets reallocated during salvage.
+    // Step 4: Salvage — DISABLED.
+    // The native Salvage function permanently NULLs the bags array pointer at
+    // WorldContext+0x18+0x40+0xF8. The pointer never restores (waited 3s+).
+    // This happens because the Salvage function expects to be called from within
+    // the game's command queue infrastructure, which manages inventory context.
+    // When called from our GameThread hook, the inventory rebuild doesn't trigger.
+    // Requires implementing the full AutoIt command queue (SafeEnqueue) to fix.
+    // Items are sold instead of salvaged for now.
 
     // Step 5: Sell remaining junk items (requires merchant to be open)
     uint32_t sold = SellJunkItems();

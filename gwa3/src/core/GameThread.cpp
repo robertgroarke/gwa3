@@ -157,7 +157,9 @@ static GameCallback s_postDrain = reinterpret_cast<GameCallback>(&DrainPostQueue
 static void __cdecl DetourCallback(float elapsed, int unknown) {
     // Pre-dispatch: drain queued tasks on game thread
     if (s_queueTail != s_queueHead) {
+        Log::Info("GameThread: Detour pre-dispatch pending (head=%u tail=%u)", s_queueHead, s_queueTail);
         s_preDrain(elapsed, unknown);
+        Log::Info("GameThread: Detour pre-dispatch returned (head=%u tail=%u)", s_queueHead, s_queueTail);
     }
 
     // Call original game callback
@@ -367,6 +369,10 @@ void EnqueueRaw(InlineTask::Invoker invoker, const void* data, size_t dataSize) 
     slot.invoke = invoker;
     memcpy(slot.storage, data, dataSize);
     s_queueHead = next;
+    Log::Info("GameThread: EnqueueRaw OK (head=%u tail=%u invoke=0x%08X size=%u)",
+              s_queueHead, s_queueTail,
+              reinterpret_cast<uintptr_t>(invoker),
+              static_cast<uint32_t>(dataSize));
     LeaveCriticalSection(&s_cs);
 }
 
