@@ -68,6 +68,20 @@ namespace GWA3::MaintenanceMgr {
     // Buy ID and salvage kits from the currently-open merchant to reach targets.
     void BuyKitsToTarget(const Config& cfg = {});
 
+    // ===== Item Identification =====
+
+    // Identify all unidentified items in bags 1-4.
+    // Skips rare skins (never identify those — preserves value).
+    // Requires an ID kit in inventory. Returns number of items identified.
+    uint32_t IdentifyAllItems();
+
+    // ===== Salvage =====
+
+    // Salvage all non-rare, identified white/blue items in bags 1-4.
+    // Uses SalvageSessionOpen + SalvageMaterials flow.
+    // Requires a salvage kit in inventory. Returns number of items salvaged.
+    uint32_t SalvageJunkItems();
+
     // ===== Full Maintenance =====
 
     // Run the full maintenance sequence:

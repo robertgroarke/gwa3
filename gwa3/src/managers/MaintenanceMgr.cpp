@@ -473,6 +473,144 @@ uint32_t SellJunkItems() {
     return soldCount;
 }
 
+// ===== Item Identification (GWA3-178) =====
+// Mirrors AutoIt IdentifyUnidentifiedItemsForMaintenance():
+// scan bags 1-4, skip rare skins, identify with ID kit.
+
+static Item* FindIdKit() {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return nullptr;
+    for (uint32_t b = 1; b <= 4; b++) {
+        Bag* bag = inv->bags[b];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t s = 0; s < bag->items.size; s++) {
+            Item* item = bag->items.buffer[s];
+            if (!item) continue;
+            if (item->model_id == MODEL_SUP_ID_KIT || item->model_id == MODEL_ID_KIT ||
+                item->model_id == MODEL_ALT_ID_KIT) return item;
+        }
+    }
+    return nullptr;
+}
+
+static Item* FindSalvageKit() {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return nullptr;
+    for (uint32_t b = 1; b <= 4; b++) {
+        Bag* bag = inv->bags[b];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t s = 0; s < bag->items.size; s++) {
+            Item* item = bag->items.buffer[s];
+            if (!item) continue;
+            if (item->model_id == MODEL_SALVAGE_KIT || item->model_id == MODEL_BASIC_SALVAGE_KIT ||
+                item->model_id == MODEL_ALT_SALVAGE_KIT) return item;
+        }
+    }
+    return nullptr;
+}
+
+uint32_t IdentifyAllItems() {
+    Item* kit = FindIdKit();
+    if (!kit) {
+        Log::Warn("MaintenanceMgr: No ID kit found in inventory");
+        return 0;
+    }
+
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    uint32_t identified = 0;
+    for (uint32_t b = 1; b <= 4; b++) {
+        Bag* bag = inv->bags[b];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t s = 0; s < bag->items.size; s++) {
+            Item* item = bag->items.buffer[s];
+            if (!item || item->model_id == 0) continue;
+            if (IsIdentified(item)) continue;
+            if (IsKit(item->model_id)) continue;
+            // Skip rare skins — don't identify, preserves value
+            if (IsRareSkin(item->model_id)) continue;
+
+            Log::Info("MaintenanceMgr: Identifying item=%u model=%u type=%u with kit=%u",
+                      item->item_id, item->model_id, item->type, kit->item_id);
+            ItemMgr::IdentifyItem(item->item_id, kit->item_id);
+            WaitMs(1000);
+            identified++;
+
+            // Re-find kit (it may have been consumed)
+            kit = FindIdKit();
+            if (!kit) {
+                Log::Warn("MaintenanceMgr: ID kit exhausted after %u identifications", identified);
+                return identified;
+            }
+        }
+    }
+    Log::Info("MaintenanceMgr: Identified %u items", identified);
+    return identified;
+}
+
+// ===== Salvage (GWA3-179) =====
+// Mirrors AutoIt SalvageItem(): SalvageSessionOpen → wait → SalvageMaterials → wait.
+// Only salvages identified white/blue items that are not rare skins.
+
+uint32_t SalvageJunkItems() {
+    Item* kit = FindSalvageKit();
+    if (!kit) {
+        Log::Warn("MaintenanceMgr: No salvage kit found in inventory");
+        return 0;
+    }
+
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    uint32_t salvaged = 0;
+    for (uint32_t b = 1; b <= 4; b++) {
+        Bag* bag = inv->bags[b];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t s = 0; s < bag->items.size; s++) {
+            Item* item = bag->items.buffer[s];
+            if (!item || item->model_id == 0) continue;
+            if (IsKit(item->model_id)) continue;
+            if (IsRareSkin(item->model_id)) continue;
+            if (!IsIdentified(item)) continue;
+            if (!(IsWeapon(item) || IsArmor(item))) continue;
+
+            // Only salvage white/blue — purple/gold sell for more than salvage yields
+            uint16_t rarity = GetRarity(item);
+            if (rarity != RARITY_WHITE && rarity != RARITY_BLUE) continue;
+
+            // Item is material-salvageable? Check the flag.
+            if (item->is_material_salvageable == 0) continue;
+
+            Log::Info("MaintenanceMgr: Salvaging item=%u model=%u rarity=%u with kit=%u",
+                      item->item_id, item->model_id, rarity, kit->item_id);
+
+            // Open salvage session
+            ItemMgr::SalvageSessionOpen(kit->item_id, item->item_id);
+            WaitMs(800);
+
+            // Salvage for materials
+            ItemMgr::SalvageMaterials();
+            WaitMs(500);
+
+            // Done
+            ItemMgr::SalvageSessionDone();
+            WaitMs(300);
+
+            salvaged++;
+
+            // Re-find kit
+            kit = FindSalvageKit();
+            if (!kit) {
+                Log::Warn("MaintenanceMgr: Salvage kit exhausted after %u salvages", salvaged);
+                return salvaged;
+            }
+        }
+    }
+    Log::Info("MaintenanceMgr: Salvaged %u items", salvaged);
+    return salvaged;
+}
+
 // ===== Kit Management =====
 
 void BuyKitsToTarget(const Config& cfg) {
@@ -568,14 +706,22 @@ void PerformMaintenance(const Config& cfg) {
         }
     }
 
-    // Step 3: Sell junk items (requires merchant to be open)
+    // Step 3: Identify unidentified items (needed before sell/salvage decisions)
+    uint32_t identified = IdentifyAllItems();
+    if (identified > 0) WaitMs(500);
+
+    // Step 4: Salvage white/blue junk weapons/armor for materials
+    uint32_t salvaged = SalvageJunkItems();
+    if (salvaged > 0) WaitMs(500);
+
+    // Step 5: Sell remaining junk items (requires merchant to be open)
     uint32_t sold = SellJunkItems();
     if (sold > 0) WaitMs(500);
 
-    // Step 4: Buy kits to target (requires merchant to be open)
+    // Step 6: Buy kits to target (requires merchant to be open)
     BuyKitsToTarget(cfg);
 
-    // Step 5: Final gold deposit
+    // Step 7: Final gold deposit
     charGold = ItemMgr::GetGoldCharacter();
     if (charGold > 10000) {
         DepositGold(5000);
