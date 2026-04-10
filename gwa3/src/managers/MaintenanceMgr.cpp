@@ -723,7 +723,10 @@ void PerformMaintenance(const Config& cfg) {
         }
     }
 
-    if (hasMaterials) {
+    // Only visit Xunlai if we're critically low on space AND have materials to deposit.
+    // Visiting Xunlai moves the player away from the merchant, breaking sell/buy flow.
+    uint32_t currentFreeSlots = CountFreeSlots();
+    if (hasMaterials && currentFreeSlots < cfg.minFreeSlots) {
         OpenXunlaiChest(kXunlaiX, kXunlaiY);
         uint32_t deposited = DepositMaterialsToStorage();
         if (deposited > 0) {
@@ -737,8 +740,11 @@ void PerformMaintenance(const Config& cfg) {
     if (identified > 0) WaitMs(500);
 
     // Step 4: Salvage white/blue junk weapons/armor for materials
-    uint32_t salvaged = SalvageJunkItems();
-    if (salvaged > 0) WaitMs(500);
+    // Only salvage if we're critically low on space — salvage takes ~3s per item
+    if (CountFreeSlots() < cfg.minFreeSlots) {
+        uint32_t salvaged = SalvageJunkItems();
+        if (salvaged > 0) WaitMs(500);
+    }
 
     // Step 5: Sell remaining junk items (requires merchant to be open)
     uint32_t sold = SellJunkItems();

@@ -179,6 +179,8 @@ static void ClearTestModeFlags() {
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_shell.flag", dir);
     DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_trade_helper.flag", dir);
+    DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_froggy_flagging.flag", dir);
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_variant_standard_ptr.flag", dir);
@@ -355,6 +357,7 @@ static void PrintUsage(const char* argv0) {
     printf("  --test-npc      Inject in isolated NPC/dialog test mode\n");
     printf("  --test-merchant Inject in isolated merchant/trader quote test mode\n");
     printf("  --test-merchant-shell Inject in dedicated merchant wrapper shell mode\n");
+    printf("  --test-trade-helper Inject in player trade helper mode\n");
     printf("  --llm           Inject in LLM agent mode (named pipe bridge for Gemma 4)\n");
     printf("  --llm-advisory  Inject in advisory mode (Froggy bot + LLM bridge together)\n");
     printf("  --merchant-variant <standard-id|standard-ptr|legacy-id|legacy-ptr>\n");
@@ -382,6 +385,7 @@ int main(int argc, char* argv[]) {
     bool doTestNpc = false;
     bool doTestMerchant = false;
     bool doTestMerchantShell = false;
+    bool doTestTradeHelper = false;
     bool doLlm = false;
     bool doLlmAdvisory = false;
     const char* merchantVariantFlag = nullptr;
@@ -420,6 +424,8 @@ int main(int argc, char* argv[]) {
             doTestMerchant = true;
         } else if (strcmp(argv[i], "--test-merchant-shell") == 0) {
             doTestMerchantShell = true;
+        } else if (strcmp(argv[i], "--test-trade-helper") == 0) {
+            doTestTradeHelper = true;
         } else if (strcmp(argv[i], "--llm") == 0) {
             doLlm = true;
         } else if (strcmp(argv[i], "--llm-advisory") == 0) {
@@ -537,6 +543,7 @@ int main(int argc, char* argv[]) {
     if (doTestNpc) SetTestModeFlag("gwa3_test_npc_dialog.flag");
     if (doTestMerchant) SetTestModeFlag("gwa3_test_merchant_quote.flag");
     if (doTestMerchantShell) SetTestModeFlag("gwa3_test_merchant_shell.flag");
+    if (doTestTradeHelper) SetTestModeFlag("gwa3_test_trade_helper.flag");
     if (doTestMerchant && merchantVariantFlag) SetTestModeFlag(merchantVariantFlag);
     if (doTestMerchant && merchantStageFlag) SetTestModeFlag(merchantStageFlag);
     if (doLlm) SetTestModeFlag("gwa3_llm_mode.flag");
