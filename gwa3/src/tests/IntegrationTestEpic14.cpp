@@ -28,6 +28,9 @@
 #include <gwa3/game/Agent.h>
 #include <gwa3/game/Party.h>
 #include <gwa3/game/Skill.h>
+#include <gwa3/game/Effect.h>
+#include <gwa3/game/Title.h>
+#include <gwa3/managers/PlayerMgr.h>
 
 #include <Windows.h>
 #include <cstdio>
@@ -1018,11 +1021,54 @@ static bool RunBogrootBlessingProof() {
     // GoNPC must go through GameThread (direct CtoS crashes after Bogroot map transition).
     // Dialog uses the AutoIt header 0x3B (DIALOG_SEND), not 0x3A (DIALOG_SEND_LIVING).
 
-    // Shut down DialogMgr hooks before interacting with the blessing NPC.
-    // The StoC dialog callbacks trigger StringEncoding::DecodeStr which times out
-    // in Bogroot dungeons and may corrupt game state, causing subsequent crashes.
+    // ===== PRE-INTERACTION DIAGNOSTICS =====
+    uint32_t myId = AgentMgr::GetMyId();
+    IntReport("  MyID=%u MapID=%u", myId, MapMgr::GetMapId());
+
+    // Dump EotN title tracks (Asura=30, Norn=29, Deldrimor=31, Vanguard=28)
+    static const struct { uint32_t id; const char* name; } kTitles[] = {
+        {TitleID::Asura, "Asura"}, {TitleID::Norn, "Norn"},
+        {TitleID::Deldrimor, "Deldrimor"}, {TitleID::Vanguard, "Vanguard"}
+    };
+    for (const auto& t : kTitles) {
+        Title* track = PlayerMgr::GetTitleTrack(t.id);
+        if (track) {
+            IntReport("  Title %s (id=%u): points=%u tier=%u/%u needed_next=%u maxRank=%u",
+                      t.name, t.id, track->current_points, track->current_title_tier_index,
+                      track->max_title_tier_index, track->points_needed_next_rank, track->max_title_rank);
+        } else {
+            IntReport("  Title %s (id=%u): NOT FOUND", t.name, t.id);
+        }
+    }
+
+    // Dump ALL active effects before interaction
+    auto* playerEffects = EffectMgr::GetPlayerEffects();
+    if (playerEffects && myId > 0) {
+        auto* effectArr = EffectMgr::GetAgentEffectArray(myId);
+        uint32_t effectCount = effectArr ? effectArr->size : 0;
+        IntReport("  Effects BEFORE interaction: agent=%u count=%u", playerEffects->agent_id, effectCount);
+        if (effectArr) {
+            for (uint32_t i = 0; i < effectCount && i < 10; i++) {
+                Effect& e = effectArr->buffer[i];
+                IntReport("    effect[%u]: skill=%u attr=%u duration=%.1f agent=%u",
+                          i, e.skill_id, e.attribute_level, e.duration, e.agent_id);
+            }
+        }
+    } else {
+        IntReport("  Effects BEFORE: playerEffects=%p myId=%u", playerEffects, myId);
+    }
+
+    // Check each blessing skill individually
+    IntReport("  HasEffect check: Dwarven(2049)=%d Asuran(2050)=%d Norn(2051)=%d Vanguard(2052)=%d",
+              myId ? EffectMgr::HasEffect(myId, SKILL_DWARVEN_BLESSING) : -1,
+              myId ? EffectMgr::HasEffect(myId, SKILL_ASURAN_BLESSING) : -1,
+              myId ? EffectMgr::HasEffect(myId, SKILL_NORN_BLESSING) : -1,
+              myId ? EffectMgr::HasEffect(myId, SKILL_VANGUARD_BLESSING) : -1);
+
+    // ===== BLESSING INTERACTION =====
+    // Shut down DialogMgr hooks — StringEncoding::DecodeStr times out in Bogroot.
     DialogMgr::Shutdown();
-    IntReport("  Disabled DialogMgr StoC hooks for blessing interaction");
+    IntReport("  Disabled DialogMgr StoC hooks");
 
     // Step 1: ChangeTarget
     GameThread::EnqueuePost([npcId]() {
@@ -1031,36 +1077,61 @@ static bool RunBogrootBlessingProof() {
     Sleep(500);
     IntReport("  ChangeTarget to agent=%u", npcId);
 
-    // Step 2: GoNPC (0x39) x3 with retry — matches AutoIt GoNearestNPCToCoords loop.
-    // AutoIt sends GoNPC, waits, re-sends if not close enough. We do 3 attempts.
+    // Step 2: GoNPC (0x39) x3
     for (int attempt = 1; attempt <= 3; ++attempt) {
         CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
         IntReport("  Sent GoNPC (0x39) attempt %d to agent=%u", attempt, npcId);
         Sleep(1000);
     }
 
-    // Step 3: Dialog (0x3B, 0x84) — AutoIt header, matches BotsHub exactly.
-    // BotsHub Raptors: GoNearestNPCToCoords → Sleep(1000) → Dialog(0x84) → Sleep(1000)
+    // Step 3: Dialog (0x3B, 0x84) — AutoIt header
     CtoS::SendPacket(2, Packets::DIALOG_SEND, DIALOG_ACCEPT_BLESSING);
     IntReport("  Sent Dialog (0x3B, 0x%X)", DIALOG_ACCEPT_BLESSING);
-    Sleep(2000); // Wait for blessing effect to register
+    Sleep(3000); // Longer wait for server to process and effect to register
 
-    // Re-enable DialogMgr for future use
+    // Re-enable DialogMgr
     DialogMgr::Initialize();
     IntReport("  Re-enabled DialogMgr StoC hooks");
 
-    // Verify blessing effect appeared
-    bool blessed = false;
-    for (int attempt = 0; attempt < 6; ++attempt) {
-        if (HasAnyBlessing()) { blessed = true; break; }
-        Sleep(500);
+    // ===== POST-INTERACTION DIAGNOSTICS =====
+    // Dump ALL effects after interaction
+    myId = AgentMgr::GetMyId(); // re-read in case it changed
+    playerEffects = EffectMgr::GetPlayerEffects();
+    if (playerEffects && myId > 0) {
+        auto* effectArr = EffectMgr::GetAgentEffectArray(myId);
+        uint32_t effectCount = effectArr ? effectArr->size : 0;
+        IntReport("  Effects AFTER interaction: agent=%u count=%u", playerEffects->agent_id, effectCount);
+        if (effectArr) {
+            for (uint32_t i = 0; i < effectCount && i < 10; i++) {
+                Effect& e = effectArr->buffer[i];
+                IntReport("    effect[%u]: skill=%u attr=%u duration=%.1f agent=%u",
+                          i, e.skill_id, e.attribute_level, e.duration, e.agent_id);
+            }
+        }
+    } else {
+        IntReport("  Effects AFTER: playerEffects=%p myId=%u", playerEffects, myId);
+    }
+
+    IntReport("  HasEffect check: Dwarven(2049)=%d Asuran(2050)=%d Norn(2051)=%d Vanguard(2052)=%d",
+              myId ? EffectMgr::HasEffect(myId, SKILL_DWARVEN_BLESSING) : -1,
+              myId ? EffectMgr::HasEffect(myId, SKILL_ASURAN_BLESSING) : -1,
+              myId ? EffectMgr::HasEffect(myId, SKILL_NORN_BLESSING) : -1,
+              myId ? EffectMgr::HasEffect(myId, SKILL_VANGUARD_BLESSING) : -1);
+
+    // Check blessing
+    bool blessed = HasAnyBlessing();
+    if (!blessed) {
+        // Wait more and retry
+        for (int attempt = 0; attempt < 6; ++attempt) {
+            Sleep(500);
+            if (HasAnyBlessing()) { blessed = true; break; }
+        }
     }
 
     if (blessed) {
         IntCheck("Phase 6B: Blessing grabbed successfully", true);
-        IntReport("  Blessing confirmed via EffectMgr");
     } else {
-        IntReport("  WARN: Blessing effect not detected after dialog.");
+        IntReport("  WARN: Blessing effect not detected. Title may be maxed or dialog not processed.");
         IntCheck("Phase 6B: Blessing grab attempted (effect not confirmed)", true);
     }
     return blessed;
