@@ -237,18 +237,16 @@ void WithdrawGold(uint32_t amount) {
 
 void OpenXunlaiChest(float chestX, float chestY) {
     // Move to the Xunlai chest NPC
-    // Uses AgentMgr::Move + wait loop (not MoveToAndWait which is in FroggyHM)
     GameThread::EnqueuePost([chestX, chestY]() {
         AgentMgr::Move(chestX, chestY);
     });
-    // Wait to arrive
     for (int tick = 0; tick < 30; tick++) {
         WaitMs(500);
         auto* me = AgentMgr::GetMyAgent();
         if (me && AgentMgr::GetDistance(me->x, me->y, chestX, chestY) < 350.0f) break;
     }
 
-    // Find and interact with the Xunlai NPC
+    // Find the Xunlai NPC
     uint32_t maxAgents = AgentMgr::GetMaxAgents();
     float bestDist = 900.0f * 900.0f;
     uint32_t chestId = 0;
@@ -266,9 +264,19 @@ void OpenXunlaiChest(float chestX, float chestY) {
         return;
     }
 
-    Log::Info("MaintenanceMgr: Opening Xunlai chest (agent=%u)", chestId);
-    AgentMgr::InteractNPC(chestId);
-    WaitMs(1500);
+    // Use raw GoNPC packet (0x39) like AutoIt — matches the proven merchant interaction.
+    // AgentMgr::InteractNPC uses the native function which opens a UI dialog that
+    // disrupts player agent state (causes position reads to return 0,0).
+    Log::Info("MaintenanceMgr: Opening Xunlai chest via GoNPC (agent=%u)", chestId);
+    AgentMgr::ChangeTarget(chestId);
+    WaitMs(250);
+    CtoS::SendPacket(3, Packets::INTERACT_NPC, chestId, 0u);
+    WaitMs(2000);
+
+    // Close the storage dialog — we only need the chest "activated" for MoveItem packets.
+    // The dialog itself blocks agent reads if left open.
+    AgentMgr::CancelAction();
+    WaitMs(500);
 }
 
 // ===== Material Storage Deposit =====
@@ -623,11 +631,19 @@ uint32_t SalvageJunkItems() {
 
         // Salvage for materials
         ItemMgr::SalvageMaterials();
-        WaitMs(1000);
+        WaitMs(1500);
 
         // Done
         ItemMgr::SalvageSessionDone();
-        WaitMs(500);
+        WaitMs(1000);
+
+        // Wait for inventory to settle after salvage UI closes.
+        // The salvage UI message corrupts inventory reads temporarily.
+        for (int settle = 0; settle < 10; settle++) {
+            uint32_t gold = ItemMgr::GetGoldCharacter();
+            if (gold > 0) break; // inventory reads valid again
+            WaitMs(300);
+        }
 
         salvaged++;
     }
@@ -733,18 +749,32 @@ void PerformMaintenance(const Config& cfg) {
             WaitMs(1000 + deposited * 200);
             Log::Info("MaintenanceMgr: After deposit: freeSlots=%u", CountFreeSlots());
         }
+
+        // Verify agent state is valid after Xunlai operations
+        for (int retry = 0; retry < 10; retry++) {
+            auto* me = AgentMgr::GetMyAgent();
+            if (me && me->x != 0.0f && me->y != 0.0f) {
+                Log::Info("MaintenanceMgr: Agent valid after Xunlai (pos=%.0f, %.0f)", me->x, me->y);
+                break;
+            }
+            Log::Warn("MaintenanceMgr: Agent invalid after Xunlai, waiting...");
+            WaitMs(500);
+        }
     }
 
     // Step 3: Identify unidentified items (needed before sell/salvage decisions)
     uint32_t identified = IdentifyAllItems();
     if (identified > 0) WaitMs(500);
 
-    // Step 4: Salvage white/blue junk weapons/armor for materials
-    // Only salvage if we're critically low on space — salvage takes ~3s per item
-    if (CountFreeSlots() < cfg.minFreeSlots) {
-        uint32_t salvaged = SalvageJunkItems();
-        if (salvaged > 0) WaitMs(500);
-    }
+    // Step 4: Salvage — DISABLED for now.
+    // The kPreStartSalvage UI message (0x10000102) permanently corrupts the game's
+    // agent/inventory state, causing all subsequent reads to return 0. The salvage
+    // UI dialog doesn't properly clean up even after SalvageSessionDone.
+    // TODO: investigate alternative salvage approach (raw packet or game function).
+    // if (CountFreeSlots() < cfg.minFreeSlots) {
+    //     uint32_t salvaged = SalvageJunkItems();
+    //     if (salvaged > 0) WaitMs(500);
+    // }
 
     // Step 5: Sell remaining junk items (requires merchant to be open)
     uint32_t sold = SellJunkItems();
