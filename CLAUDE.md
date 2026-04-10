@@ -187,6 +187,34 @@ File-based hero build system in `GWA Censured/hero_configs/`. Dropdown-selectabl
 
 ---
 
+## Launching Guild Wars
+
+**ALWAYS use the GWLauncher AutoIt path to launch GW clients.** See [GW_Launch_Method.md](GW_Launch_Method.md) for full details.
+
+| Rule | Detail |
+|---|---|
+| **Never start Gw.exe directly** | Always use `GWLauncher_LaunchAccount()` via AutoIt — it applies the multiclient patch |
+| **Never kill other agents' GW** | Multiple GW clients run simultaneously. Only kill/inject YOUR process |
+| **Track your PID** | Record the PID from the launcher and inject only that PID |
+| **This agent uses BEASTRIT** | Account index `0`, character `B E A S T R I T`. Another agent uses DISCOPANIC |
+
+### Launch flow for testing
+
+1. Create an AutoIt launcher script (see `GWA Censured/debug_scripts/launch_disco_panic_via_gwlauncher.au3` as template)
+2. Run it with `AutoIt3.exe` to get the PID: `GWLAUNCHER_PID=<pid>`
+3. Inject into that exact PID: `injector.exe --pid <pid> --test-froggy`
+
+### PowerShell runner (`gwa3/tools/run_froggy_test.ps1`)
+
+The runner script must:
+- Record existing Gw.exe PIDs before launch (do NOT kill them)
+- Launch via GWLauncher to get the multiclient patch applied
+- Find only the NEW GW process (not an existing one)
+- Inject and monitor only its own PID
+- On cleanup, kill only its own PID
+
+---
+
 ## Development Notes
 
 - The main logic file (`GWA_Logic_Censured_NEW.au3`) is ~32K lines. Navigate by function name, not scrolling.

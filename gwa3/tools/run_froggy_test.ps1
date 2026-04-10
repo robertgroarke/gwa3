@@ -74,53 +74,106 @@ function Get-LatestFroggyBlock {
     return $lines[$start..($lines.Count - 1)]
 }
 
-function Launch-GwAccount {
-    if (-not (Test-Path $AccountsPath)) { throw "Accounts file not found: $AccountsPath" }
-    $accounts = Get-Content $AccountsPath | ConvertFrom-Json
-    if ($AccountIndex -lt 0 -or $AccountIndex -ge $accounts.Count) {
-        throw "AccountIndex $AccountIndex out of range"
-    }
-    $acct = $accounts[$AccountIndex]
-    $gwPath = [string]$acct.gwpath
-    New-Item -Path 'HKCU:\Software\ArenaNet\Guild Wars' -Force | Out-Null
-    Set-ItemProperty -Path 'HKCU:\Software\ArenaNet\Guild Wars' -Name Path -Value $gwPath
-    Set-ItemProperty -Path 'HKCU:\Software\ArenaNet\Guild Wars' -Name Src -Value (Split-Path $gwPath -Parent)
-    $argString = '-email "{0}" -password "{1}" -character "{2}" {3}' -f $acct.email, $acct.password, $acct.character, $acct.extraargs
-    Start-Process -FilePath $gwPath -ArgumentList $argString | Out-Null
-    Write-Host "GW launched for character: $($acct.character)"
-}
+$script:AutoItPath = "C:\Program Files (x86)\AutoIt3\AutoIt3.exe"
+$script:LauncherScriptsDir = Join-Path $script:RepoRoot "..\GWA Censured\debug_scripts"
 
-function Wait-ForNewGwProcess {
-    param([int]$TimeoutSeconds, [int[]]$ExistingPids)
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+# Character names by account index (must match Accounts.json order)
+$script:CharacterNames = @(
+    "B E A S T R I T",
+    "D I S C O P A N I C",
+    "B L U M P K I N S",
+    "Starvin M A R V I N",
+    "L I L B I S C U I T"
+)
+
+function Launch-GwViaGWLauncher {
+    # Use the GWLauncher AutoIt path to launch with multiclient patch.
+    # Returns the PID of the launched GW process.
+    $charName = $script:CharacterNames[$AccountIndex]
+    $launcherScript = Join-Path $script:LauncherScriptsDir "launch_$($charName.ToLower().Replace(' ',''))_via_gwlauncher.au3"
+
+    if (-not (Test-Path $launcherScript)) {
+        # No per-character launcher script exists; create one dynamically
+        $launcherScript = Join-Path $env:TEMP "gwa3_launch_temp.au3"
+        $scriptContent = @"
+#RequireAdmin
+#include "C:\Users\Robert\Documents\GWA Censured X BotsHub\GWA Censured\lib\Froggy_Includes.au3"
+Global Const `$ACCOUNTS_PATH = "$AccountsPath"
+Global Const `$TARGET_CHARACTER = "$charName"
+Local `$accounts = GWLauncher_LoadAccounts(`$ACCOUNTS_PATH)
+Local `$idx = GWLauncher_FindAccountByCharacter(`$accounts, `$TARGET_CHARACTER)
+If `$idx < 0 Then Exit 2
+Local `$result = GWLauncher_LaunchAccount(`$accounts, `$idx)
+If `$result = 0 Then Exit 3
+ConsoleWrite("GWLAUNCHER_PID=" & `$result[0] & @CRLF)
+Exit 0
+"@
+        Set-Content -Path $launcherScript -Value $scriptContent -Encoding UTF8
+    }
+
+    # Determine log path — use per-character log that the AutoIt script writes
+    $logName = "launch_$($charName.ToLower().Replace(' ',''))_via_gwlauncher.log"
+    $launcherLog = Join-Path (Split-Path $launcherScript -Parent) $logName
+    if (-not (Test-Path (Split-Path $launcherScript -Parent))) {
+        $launcherLog = Join-Path $env:TEMP $logName
+    }
+
+    # Clear old log
+    Remove-Item $launcherLog -Force -ErrorAction SilentlyContinue
+
+    Write-Host "Launching $charName via GWLauncher: $launcherScript"
+    Start-Process -FilePath $script:AutoItPath -ArgumentList "`"$launcherScript`""
+
+    # Poll for the log file to contain the PID (AutoIt is a GUI app — no stdout capture)
+    $deadline = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $deadline) {
-        $allGw = Get-Process Gw -ErrorAction SilentlyContinue
-        if ($allGw) {
-            foreach ($proc in $allGw) {
-                if ($ExistingPids -notcontains $proc.Id) {
-                    Write-Host "Found new GW process: PID $($proc.Id) (existing PIDs: $($ExistingPids -join ', '))"
-                    return $proc.Id
-                }
-            }
+        if (Test-Path $launcherLog) {
+            $content = Get-Content $launcherLog -Raw -ErrorAction SilentlyContinue
+            if ($content -and $content -match "GWLAUNCHER_PID=") { break }
         }
         Start-Sleep -Seconds 1
     }
-    throw "Timed out waiting for new Guild Wars process."
+
+    if (-not (Test-Path $launcherLog)) {
+        throw "GWLauncher log not found: $launcherLog"
+    }
+    $logContent = Get-Content $launcherLog -Raw
+    Write-Host "GWLauncher log: $logContent"
+    $pidMatch = [regex]::Match($logContent, "GWLAUNCHER_PID=(\d+)")
+    if (-not $pidMatch.Success) {
+        throw "Could not parse PID from GWLauncher log"
+    }
+    $gwPid = [int]$pidMatch.Groups[1].Value
+    Write-Host "GWLauncher started $charName with PID $gwPid"
+    return $gwPid
+}
+
+function Wait-ForGwReady {
+    param([int]$ProcessId, [int]$TimeoutSeconds)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+        if ($proc -and $proc.MainWindowHandle -ne 0) {
+            Write-Host "GW window ready for PID $ProcessId"
+            return $ProcessId
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "Timed out waiting for GW window (PID $ProcessId)"
 }
 
 # === Main ===
-# Record existing GW PIDs so we don't kill or inject into another agent's client
-$existingGwPids = @()
-$existingGw = Get-Process Gw -ErrorAction SilentlyContinue
-if ($existingGw) {
-    $existingGwPids = @($existingGw | ForEach-Object { $_.Id })
-    Write-Host "Existing GW processes (will not touch): $($existingGwPids -join ', ')"
-}
+# Do NOT kill other GW processes — another agent may be running
 
 New-Item -ItemType File -Force -Path $script:FroggyFlagPath | Out-Null
 
-Launch-GwAccount
-$gwPid = Wait-ForNewGwProcess -TimeoutSeconds $LaunchTimeoutSeconds -ExistingPids $existingGwPids
+# Launch via GWLauncher (multiclient-safe, returns exact PID)
+$gwPid = Launch-GwViaGWLauncher
+
+# Wait for GW window to be ready before injection
+Write-Host "Waiting for GW window (PID $gwPid) to be ready..."
+Start-Sleep -Seconds $LaunchTimeoutSeconds
+Wait-ForGwReady -ProcessId $gwPid -TimeoutSeconds 30
 
 Write-Host "Injecting froggy test into PID $gwPid..."
 & $script:InjectorPath --pid $gwPid --test-froggy
