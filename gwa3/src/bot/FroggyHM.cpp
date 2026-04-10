@@ -10,6 +10,8 @@
 #include <gwa3/managers/EffectMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/managers/ChatMgr.h>
+#include <gwa3/managers/DialogMgr.h>
+#include <gwa3/managers/PlayerMgr.h>
 #include <gwa3/packets/CtoSHook.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
@@ -1400,6 +1402,7 @@ static int GetWipeRestartWaypoint(const Waypoint* wps, int count) {
     return restart;
 }
 
+static void GrabDungeonBlessing(float shrineX, float shrineY); // forward decl
 static void FollowWaypoints(const Waypoint* wps, int count) {
     int startIdx = GetNearestWaypointIndex(wps, count);
     uint32_t mapId = MapMgr::GetMapId();
@@ -1456,6 +1459,16 @@ static void FollowWaypoints(const Waypoint* wps, int count) {
         LogBot("Moving to waypoint %d: %s (%.0f, %.0f)", i, wps[i].label, wps[i].x, wps[i].y);
 
         // Special waypoint handling
+        if (strcmp(wps[i].label, "Blessing") == 0) {
+            // Move to shrine area with aggro (enemies may be nearby)
+            if (wps[i].fightRange > 0 && IsMapLoaded()) {
+                AggroMoveToEx(wps[i].x, wps[i].y, wps[i].fightRange);
+            } else {
+                MoveToAndWait(wps[i].x, wps[i].y);
+            }
+            GrabDungeonBlessing(wps[i].x, wps[i].y);
+            continue;
+        }
         if (strcmp(wps[i].label, "Lvl1 to Lvl2") == 0) {
             DWORD start = GetTickCount();
             while ((GetTickCount() - start) < 60000) {
@@ -2260,10 +2273,21 @@ static Item* FindItemByModel(uint32_t modelId) {
 }
 
 // Known buff/effect skill IDs for maintenance detection
+// Overworld EotN zone blessings
 static constexpr uint32_t SKILL_DWARVEN_BLESSING  = 2049;
 static constexpr uint32_t SKILL_ASURAN_BLESSING   = 2050;
 static constexpr uint32_t SKILL_NORN_BLESSING     = 2051;
 static constexpr uint32_t SKILL_VANGUARD_BLESSING = 2052;
+// Dungeon veteran blessing variants (from shrine NPCs inside dungeons)
+static constexpr uint32_t SKILL_VET_ASURAN_BODYGUARD    = 2548;
+static constexpr uint32_t SKILL_VET_DWARVEN_RAIDER      = 2549;
+static constexpr uint32_t SKILL_VET_VANGUARD_PATROL     = 2550;
+static constexpr uint32_t SKILL_VET_NORN_HUNTING_PARTY  = 2551;
+// Title display IDs for SetActiveTitle packet (0x58)
+// AutoIt: $ID_DWARF_TITLE=0x27, matches GWCA TitleID::Deldrimor
+static constexpr uint32_t TITLE_DISPLAY_DELDRIMOR = 0x27;
+// Dialog ID for accepting a blessing from a shrine NPC
+static constexpr uint32_t DIALOG_ACCEPT_BLESSING  = 0x84;
 static constexpr uint32_t SKILL_ARMOR_OF_SALVATION = 2053; // conset
 static constexpr uint32_t SKILL_ESSENCE_CELERITY  = 2054; // conset
 static constexpr uint32_t SKILL_GRAIL_OF_MIGHT    = 2055; // conset
@@ -2277,10 +2301,17 @@ static uint32_t GetPlayerEffectCount() {
 static bool HasBlessing() {
     if (Offsets::MyID <= 0x10000) return false;
     uint32_t myId = *reinterpret_cast<uint32_t*>(Offsets::MyID);
-    return EffectMgr::HasEffect(myId, SKILL_DWARVEN_BLESSING) ||
-           EffectMgr::HasEffect(myId, SKILL_ASURAN_BLESSING) ||
-           EffectMgr::HasEffect(myId, SKILL_NORN_BLESSING) ||
-           EffectMgr::HasEffect(myId, SKILL_VANGUARD_BLESSING);
+    // Overworld blessings
+    if (EffectMgr::HasEffect(myId, SKILL_DWARVEN_BLESSING) ||
+        EffectMgr::HasEffect(myId, SKILL_ASURAN_BLESSING) ||
+        EffectMgr::HasEffect(myId, SKILL_NORN_BLESSING) ||
+        EffectMgr::HasEffect(myId, SKILL_VANGUARD_BLESSING)) return true;
+    // Dungeon veteran blessings
+    if (EffectMgr::HasEffect(myId, SKILL_VET_ASURAN_BODYGUARD) ||
+        EffectMgr::HasEffect(myId, SKILL_VET_DWARVEN_RAIDER) ||
+        EffectMgr::HasEffect(myId, SKILL_VET_VANGUARD_PATROL) ||
+        EffectMgr::HasEffect(myId, SKILL_VET_NORN_HUNTING_PARTY)) return true;
+    return false;
 }
 
 static bool HasConset() {
@@ -2289,6 +2320,66 @@ static bool HasConset() {
     return EffectMgr::HasEffect(myId, SKILL_ARMOR_OF_SALVATION) &&
            EffectMgr::HasEffect(myId, SKILL_ESSENCE_CELERITY) &&
            EffectMgr::HasEffect(myId, SKILL_GRAIL_OF_MIGHT);
+}
+
+// ===== Dungeon Blessing Grab =====
+// Mirrors AutoIt BotsHub pattern: SetDisplayedTitle → GoNearestNPCToCoords → Dialog(0x84)
+// Must disable DialogMgr StoC hooks during interaction — StringEncoding::DecodeStr
+// times out in Bogroot dungeons and crashes the game via StoC callback corruption.
+
+static void GrabDungeonBlessing(float shrineX, float shrineY) {
+    if (HasBlessing()) {
+        LogBot("Blessing: already active, skipping");
+        return;
+    }
+
+    // Set Deldrimor title (required for Bogroot shrine to offer blessing)
+    uint32_t currentTitle = PlayerMgr::GetActiveTitleId();
+    if (currentTitle == 0) {
+        LogBot("Blessing: setting Deldrimor title (0x%X)", TITLE_DISPLAY_DELDRIMOR);
+        PlayerMgr::SetActiveTitle(TITLE_DISPLAY_DELDRIMOR);
+        WaitMs(1000);
+    }
+
+    // Find the blessing NPC near the shrine coordinates
+    uint32_t npcId = FindNearestNpcByAllegiance(shrineX, shrineY, 2000.0f);
+    if (npcId == 0) {
+        LogBot("Blessing: no NPC found near (%.0f, %.0f)", shrineX, shrineY);
+        return;
+    }
+    LogBot("Blessing: found NPC agent=%u near shrine", npcId);
+
+    // Move close to the NPC
+    auto* npc = AgentMgr::GetAgentByID(npcId);
+    if (npc) {
+        MoveToAndWait(npc->x, npc->y, 120.0f);
+    }
+
+    // Disable DialogMgr StoC hooks to prevent StringEncoding crash in dungeon
+    DialogMgr::Shutdown();
+
+    // GoNPC (0x39) x3 — matches AutoIt GoNearestNPCToCoords retry pattern
+    AgentMgr::ChangeTarget(npcId);
+    WaitMs(500);
+    for (int attempt = 1; attempt <= 3; ++attempt) {
+        CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
+        WaitMs(1000);
+    }
+
+    // Dialog (0x3B, 0x84) — AutoIt DIALOG_SEND header, not DIALOG_SEND_LIVING
+    CtoS::SendPacket(2, Packets::DIALOG_SEND, DIALOG_ACCEPT_BLESSING);
+    LogBot("Blessing: sent Dialog(0x%X)", DIALOG_ACCEPT_BLESSING);
+    WaitMs(2000);
+
+    // Re-enable DialogMgr
+    DialogMgr::Initialize();
+
+    // Verify
+    if (HasBlessing()) {
+        LogBot("Blessing: confirmed active");
+    } else {
+        LogBot("Blessing: effect not detected after interaction");
+    }
 }
 
 // ===== Conset Crafting (GWA3-104) =====
@@ -2654,6 +2745,12 @@ BotState HandleDungeon(BotConfig& cfg) {
         MoveToAndWait(12470, 25036);
         AgentMgr::Move(12968, 26219);
         WaitMs(1000);
+
+        // Suspend hooks before dungeon zone transition to prevent
+        // stale-context crashes from CtoS engine hook and DialogMgr StoC hooks.
+        CtoS::SuspendEngineHook();
+        DialogMgr::Shutdown();
+
         // Enter dungeon
         DWORD start = GetTickCount();
         while ((GetTickCount() - start) < 60000) {
@@ -2662,6 +2759,10 @@ BotState HandleDungeon(BotConfig& cfg) {
             if (MapMgr::GetMapId() == MAP_BOGROOT_LVL1) break;
         }
         WaitMs(3000);
+
+        // Resume hooks now that we're stable inside Bogroot
+        CtoS::ResumeEngineHook();
+        DialogMgr::Initialize();
     }
 
     mapId = MapMgr::GetMapId();
