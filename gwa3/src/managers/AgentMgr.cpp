@@ -144,17 +144,15 @@ void Move(float x, float y) {
         return;  // silently skip — caller will retry on next tick
     }
 
-    // Always dispatch through GameThread so the native move function runs on
-    // the game thread. Calling from a non-game thread still moves the character
-    // but doesn't trigger the walking animation (causes "floating" movement).
-    auto fn = s_moveFn;
-    GameThread::EnqueuePost([fn, x, y]() {
-        static MoveData md;
-        md.x = x;
-        md.y = y;
-        md.plane = 0;
-        fn(&md);
-    });
+    // Call native move function directly. Callers that need the walking
+    // animation should wrap the call in GameThread::EnqueuePost themselves
+    // (MovePlayerNear, HandleDungeon zone loops already do this).
+    // Direct calls from the game thread (via Enqueue callbacks) work correctly.
+    static MoveData s_moveData;
+    s_moveData.x = x;
+    s_moveData.y = y;
+    s_moveData.plane = 0;
+    s_moveFn(&s_moveData);
 }
 
 void ChangeTarget(uint32_t agentId) {
