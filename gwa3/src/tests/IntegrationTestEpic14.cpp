@@ -1031,19 +1031,19 @@ static bool RunBogrootBlessingProof() {
     Sleep(500);
     IntReport("  ChangeTarget to agent=%u", npcId);
 
-    // Step 2: GoNPC (0x39) — dispatched via engine hook (crash-protected)
-    CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
-    IntReport("  Sent GoNPC (0x39) to agent=%u", npcId);
+    // Step 2: GoNPC (0x39) x3 with retry — matches AutoIt GoNearestNPCToCoords loop.
+    // AutoIt sends GoNPC, waits, re-sends if not close enough. We do 3 attempts.
+    for (int attempt = 1; attempt <= 3; ++attempt) {
+        CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
+        IntReport("  Sent GoNPC (0x39) attempt %d to agent=%u", attempt, npcId);
+        Sleep(1000);
+    }
 
-    // Step 3: Wait then send Dialog (0x84) — matches AutoIt timing
-    Sleep(1500);
-
-    // Step 4: Dialog via native QuestMgr::Dialog on GameThread
-    GameThread::EnqueuePost([]() {
-        QuestMgr::Dialog(DIALOG_ACCEPT_BLESSING);
-    });
-    IntReport("  Sent QuestMgr::Dialog(0x%X) via GameThread", DIALOG_ACCEPT_BLESSING);
-    Sleep(2000);
+    // Step 3: Dialog (0x3B, 0x84) — AutoIt header, matches BotsHub exactly.
+    // BotsHub Raptors: GoNearestNPCToCoords → Sleep(1000) → Dialog(0x84) → Sleep(1000)
+    CtoS::SendPacket(2, Packets::DIALOG_SEND, DIALOG_ACCEPT_BLESSING);
+    IntReport("  Sent Dialog (0x3B, 0x%X)", DIALOG_ACCEPT_BLESSING);
+    Sleep(2000); // Wait for blessing effect to register
 
     // Re-enable DialogMgr for future use
     DialogMgr::Initialize();
