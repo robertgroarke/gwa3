@@ -1018,9 +1018,11 @@ static bool RunBogrootBlessingProof() {
     // GoNPC must go through GameThread (direct CtoS crashes after Bogroot map transition).
     // Dialog uses the AutoIt header 0x3B (DIALOG_SEND), not 0x3A (DIALOG_SEND_LIVING).
 
-    // EngineDispatchOne now has __try/__except crash protection.
-    // Use GameThread::EnqueuePost so packets dispatch from the game thread
-    // (required for 0x39 NPC interaction to trigger dialogs).
+    // Shut down DialogMgr hooks before interacting with the blessing NPC.
+    // The StoC dialog callbacks trigger StringEncoding::DecodeStr which times out
+    // in Bogroot dungeons and may corrupt game state, causing subsequent crashes.
+    DialogMgr::Shutdown();
+    IntReport("  Disabled DialogMgr StoC hooks for blessing interaction");
 
     // Step 1: ChangeTarget
     GameThread::EnqueuePost([npcId]() {
@@ -1029,21 +1031,23 @@ static bool RunBogrootBlessingProof() {
     Sleep(500);
     IntReport("  ChangeTarget to agent=%u", npcId);
 
-    // Step 2: GoNPC (0x39) — dispatched via engine hook (now crash-protected)
+    // Step 2: GoNPC (0x39) — dispatched via engine hook (crash-protected)
     CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
     IntReport("  Sent GoNPC (0x39) to agent=%u", npcId);
-    Sleep(3000);
 
-    // Check dialog state
-    bool dialogOpened = DialogMgr::IsDialogOpen();
-    IntReport("  After GoNPC: dialogOpen=%d sender=%u buttons=%u",
-              dialogOpened, DialogMgr::GetDialogSenderAgentId(),
-              DialogMgr::GetButtonCount());
+    // Step 3: Wait then send Dialog (0x84) — matches AutoIt timing
+    Sleep(1500);
 
-    // Step 3: Dialog (0x3B, 0x84) — AutoIt header
-    CtoS::SendPacket(2, Packets::DIALOG_SEND, DIALOG_ACCEPT_BLESSING);
-    IntReport("  Sent Dialog (0x3B, 0x%X)", DIALOG_ACCEPT_BLESSING);
+    // Step 4: Dialog via native QuestMgr::Dialog on GameThread
+    GameThread::EnqueuePost([]() {
+        QuestMgr::Dialog(DIALOG_ACCEPT_BLESSING);
+    });
+    IntReport("  Sent QuestMgr::Dialog(0x%X) via GameThread", DIALOG_ACCEPT_BLESSING);
     Sleep(2000);
+
+    // Re-enable DialogMgr for future use
+    DialogMgr::Initialize();
+    IntReport("  Re-enabled DialogMgr StoC hooks");
 
     // Verify blessing effect appeared
     bool blessed = false;
