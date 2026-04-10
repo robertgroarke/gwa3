@@ -22,6 +22,7 @@
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/managers/DialogMgr.h>
 #include <gwa3/managers/QuestMgr.h>
+#include <gwa3/managers/MaintenanceMgr.h>
 #include <gwa3/packets/CtoSHook.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
@@ -2841,11 +2842,25 @@ static int RunFroggyFeatureTestImpl(bool isolatedExplorableFlaggingMode) {
                 }
             }
 
+            // Run maintenance to clear inventory space before buy/sell test.
+            // This sells junk and deposits gold so the buy has room to succeed.
+            {
+                uint32_t freeBefore = MaintenanceMgr::CountFreeSlots();
+                IntReport("  Free inventory slots before maintenance: %u", freeBefore);
+                if (freeBefore < 5) {
+                    IntReport("  Running maintenance to free up inventory space...");
+                    MaintenanceMgr::PerformMaintenance();
+                    uint32_t freeAfter = MaintenanceMgr::CountFreeSlots();
+                    IntReport("  Free inventory slots after maintenance: %u", freeAfter);
+                }
+            }
+
             const uint32_t goldBeforeBuy = ItemMgr::GetGoldCharacter();
             const uint32_t salvBeforeBuy = CountInventoryModel(MODEL_SALVAGE_KIT);
             InventoryEntrySnapshot invBefore[128] = {};
             const uint32_t invBeforeCount = SnapshotInventory(invBefore, _countof(invBefore));
-            IntReport("  Buying one salvage kit: gold=%u salvageKits=%u", goldBeforeBuy, salvBeforeBuy);
+            IntReport("  Buying one salvage kit: gold=%u salvageKits=%u freeSlots=%u",
+                      goldBeforeBuy, salvBeforeBuy, MaintenanceMgr::CountFreeSlots());
             const bool buyQueued = TradeMgr::BuyMerchantItemByPosition(2, 1, 100);
             IntCheck("Merchant buy request queued", buyQueued);
 

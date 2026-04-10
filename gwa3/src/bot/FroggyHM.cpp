@@ -12,6 +12,7 @@
 #include <gwa3/managers/ChatMgr.h>
 #include <gwa3/managers/DialogMgr.h>
 #include <gwa3/managers/PlayerMgr.h>
+#include <gwa3/managers/MaintenanceMgr.h>
 #include <gwa3/packets/CtoSHook.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
@@ -2639,6 +2640,32 @@ BotState HandleTownSetup(BotConfig& cfg) {
         MapMgr::Travel(MAP_GADDS_ENCAMPMENT);
         WaitMs(10000);
         return BotState::InTown;
+    }
+
+    // Run maintenance if needed (sell junk, deposit gold, buy kits)
+    if (MaintenanceMgr::NeedsMaintenance()) {
+        LogBot("Maintenance needed — running before dungeon entry");
+
+        // Move to merchant and open window
+        static constexpr float kGaddsMerchantX = -8374.0f;
+        static constexpr float kGaddsMerchantY = -22491.0f;
+        MoveToAndWait(kGaddsMerchantX, kGaddsMerchantY, 350.0f);
+        uint32_t merchantId = FindNearestNpcByAllegiance(kGaddsMerchantX, kGaddsMerchantY, 900.0f);
+        if (merchantId) {
+            auto* npc = AgentMgr::GetAgentByID(merchantId);
+            if (npc) MoveToAndWait(npc->x, npc->y, 120.0f);
+            if (OpenMerchantContextWithVariants(merchantId)) {
+                MaintenanceMgr::PerformMaintenance();
+                AgentMgr::CancelAction();
+                WaitMs(500);
+            } else {
+                LogBot("Maintenance: merchant window failed to open, skipping");
+            }
+        } else {
+            LogBot("Maintenance: merchant NPC not found, skipping sell/buy");
+            // Still deposit gold even without merchant
+            MaintenanceMgr::DepositGold(10000);
+        }
     }
 
     // Load hero config from file (adds heroes + loads their skillbars)

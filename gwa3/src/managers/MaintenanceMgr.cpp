@@ -34,6 +34,44 @@ static bool IsKit(uint32_t modelId) {
            modelId == MODEL_ID_KIT;
 }
 
+// Basic material model IDs — from AutoIt GWA2_ID.au3
+static constexpr uint32_t MAT_BONE              = 921;
+static constexpr uint32_t MAT_IRON_INGOT        = 948;
+static constexpr uint32_t MAT_TANNED_HIDE       = 940;
+static constexpr uint32_t MAT_SCALE             = 953;
+static constexpr uint32_t MAT_CHITIN            = 954;
+static constexpr uint32_t MAT_BOLT_OF_CLOTH     = 925;
+static constexpr uint32_t MAT_WOOD_PLANK        = 946;
+static constexpr uint32_t MAT_GRANITE_SLAB      = 955;
+static constexpr uint32_t MAT_GLITTERING_DUST   = 929;
+static constexpr uint32_t MAT_PLANT_FIBER       = 934;
+static constexpr uint32_t MAT_FEATHER           = 933;
+
+// Materials to KEEP for conset crafting (AutoIt $KEEP_MATERIALS)
+static bool IsKeepMaterial(uint32_t modelId) {
+    return modelId == MAT_IRON_INGOT ||
+           modelId == MAT_GLITTERING_DUST ||
+           modelId == MAT_BONE ||
+           modelId == MAT_FEATHER ||
+           modelId == MAT_GRANITE_SLAB ||
+           modelId == MAT_PLANT_FIBER ||
+           modelId == MAT_SCALE;
+}
+
+// Materials to always SELL (AutoIt $SELL_MATERIALS)
+static bool IsSellMaterial(uint32_t modelId) {
+    return modelId == MAT_BOLT_OF_CLOTH ||
+           modelId == MAT_TANNED_HIDE ||
+           modelId == MAT_WOOD_PLANK ||
+           modelId == MAT_CHITIN;
+}
+
+// Check if an item is a basic material (type 11 = materials in GW)
+static bool IsBasicMaterial(Item* item) {
+    if (!item) return false;
+    return item->type == 11; // GW material type
+}
+
 // ===== Helpers =====
 
 static void WaitMs(uint32_t ms) { Sleep(ms); }
@@ -198,19 +236,36 @@ uint32_t SellJunkItems() {
             Item* item = bag->items.buffer[i];
             if (!item || item->model_id == 0) continue;
 
-            // Skip kits
+            // Never sell kits
             if (IsKit(item->model_id)) continue;
 
-            // Only sell identified items with a sell value
+            // Only sell items with a sell value
             if (item->value == 0) continue;
 
-            // Check rarity — sell whites, blues, purples
-            uint8_t rarity = GetItemRarity(item);
-            if (rarity == 0 || rarity > 3) continue; // skip unknown and golds
+            bool shouldSell = false;
+
+            // Sell non-keep materials (AutoIt ShouldSellMaterialForMaintenance)
+            if (IsBasicMaterial(item)) {
+                if (IsKeepMaterial(item->model_id)) continue; // keep for consets
+                shouldSell = true;
+            }
+
+            // Sell explicitly-listed materials regardless of type
+            if (IsSellMaterial(item->model_id)) {
+                shouldSell = true;
+            }
+
+            // Sell identified weapons/armor: whites, blues, purples
+            if (!shouldSell) {
+                uint8_t rarity = GetItemRarity(item);
+                if (rarity >= 1 && rarity <= 3) shouldSell = true;
+            }
+
+            if (!shouldSell) continue;
 
             uint32_t qty = (item->quantity > 0) ? item->quantity : 1;
-            Log::Info("MaintenanceMgr: Selling item=%u model=%u value=%u qty=%u rarity=%u",
-                      item->item_id, item->model_id, item->value, qty, rarity);
+            Log::Info("MaintenanceMgr: Selling item=%u model=%u value=%u qty=%u type=%u",
+                      item->item_id, item->model_id, item->value, qty, item->type);
             TradeMgr::SellMerchantItem(item->item_id, qty, item->value * qty);
             WaitMs(300);
             soldCount++;
