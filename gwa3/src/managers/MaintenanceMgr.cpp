@@ -24,6 +24,45 @@ static constexpr uint32_t MODEL_ALT_ID_KIT        = 235;
 static constexpr uint32_t MODEL_ALT_SALVAGE_KIT   = 243;
 static constexpr uint32_t MODEL_ID_KIT            = 2991; // Regular ID Kit
 
+// ===== Rare Skin Detection (GWA3-176) =====
+// Ported from AutoIt RareSkins.au3 — ~200 model IDs that should never be sold or salvaged.
+bool IsRareSkin(uint32_t modelId) {
+    // Sorted array of rare skin model IDs for binary search
+    static const uint32_t kRareSkins[] = {
+        114, 117, 118, 127, 205, 332, 333, 336, 341, 342, 344, 391, 399, 528,
+        773, 776, 777, 778, 789, 854, 855, 856, 858, 860, 861, 862, 874, 875,
+        928, 942, 943, 944, 945, 947, 949, 951, 952, 953, 954, 955, 956, 958,
+        959, 960, 985, 1022, 1052, 1195, 1271, 1315, 1316, 1320, 1321, 1350,
+        1452, 1536, 1557, 1953, 1956, 1957, 1958, 1959, 1960, 1961, 1962,
+        1963, 1964, 1965, 1966, 1967, 1968, 1969, 1970, 1971, 1972, 1973,
+        1974, 1975, 1977, 1985, 1987, 1988, 1989, 1990, 1991, 1992, 1993,
+        1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
+        2005, 2006, 2007, 2008, 2009, 2039, 2058, 2062, 2129, 2236, 2237,
+        2295, 2296, 2331, 2385, 2386, 2387, 2388, 2389, 2421, 2422, 2423,
+        2435, 2436, 2437, 2438, 2439, 2440, 2441, 2442, 2443, 2444, 2472,
+        2474, 3270, 5901, 5902, 5914, 5916, 5919, 5947, 5949, 6309, 6996,
+        7995, 8003, 8084, 8085, 8257, 8431, 8509, 8515, 8547, 8554, 8555,
+        8640, 8641, 8785, 11521, 15239, 19219, 19266, 19273, 19286, 19302,
+        19310, 19323, 19337, 19338, 19344, 19364, 19379, 19380, 19382, 19385,
+        19388, 19400, 19410, 19412, 19413, 19420, 19424, 19429, 21264, 21265,
+        21267, 21271, 21272, 21273, 21280, 25918, 26901, 26902, 26910, 26925,
+        26930, 26931, 26936, 26956, 26958, 26974, 26986, 26987, 26988, 27001,
+        27005, 27006, 27017, 27022, 27030, 27031, 28314, 29110, 29113, 29114,
+        29115, 29117, 29119, 30218, 30231, 31167, 35131, 35134, 35136, 35137,
+        35139, 35141, 35142, 35143, 35145, 36676, 36985
+    };
+    static constexpr size_t kCount = sizeof(kRareSkins) / sizeof(kRareSkins[0]);
+    // Binary search
+    size_t lo = 0, hi = kCount;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (kRareSkins[mid] < modelId) lo = mid + 1;
+        else if (kRareSkins[mid] > modelId) hi = mid;
+        else return true;
+    }
+    return false;
+}
+
 // Kit and special item model IDs to never sell
 static bool IsKit(uint32_t modelId) {
     return modelId == MODEL_SALVAGE_KIT ||
@@ -402,13 +441,15 @@ uint32_t SellJunkItems() {
             }
 
             // 3. Sell identified weapons/armor of white/blue/purple/gold rarity
-            // AutoIt: IsWeapon → GetRarity → check identified → sell
+            // AutoIt: IsWeapon → GetRarity → check rare skin → check identified → sell
             if (!shouldSell && (IsWeapon(item) || IsArmor(item))) {
-                uint16_t rarity = GetRarity(item);
-                if (rarity == RARITY_WHITE || rarity == RARITY_BLUE ||
-                    rarity == RARITY_PURPLE || rarity == RARITY_GOLD) {
-                    if (IsIdentified(item)) {
-                        shouldSell = true;
+                if (!IsRareSkin(item->model_id)) {
+                    uint16_t rarity = GetRarity(item);
+                    if (rarity == RARITY_WHITE || rarity == RARITY_BLUE ||
+                        rarity == RARITY_PURPLE || rarity == RARITY_GOLD) {
+                        if (IsIdentified(item)) {
+                            shouldSell = true;
+                        }
                     }
                 }
             }

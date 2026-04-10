@@ -19,6 +19,12 @@ namespace GWA3::MaintenanceMgr {
         uint32_t maintenanceTown    = 638; // Gadd's Encampment
     };
 
+    // ===== Rare Skin Detection =====
+
+    // Check if a weapon/armor model ID is a rare skin (should not be sold or salvaged).
+    // Ported from AutoIt RareSkins.au3 — ~200 known rare weapon skins.
+    bool IsRareSkin(uint32_t modelId);
+
     // ===== Diagnostics =====
 
     // Check if maintenance is needed (free slots, kit counts, gold).
