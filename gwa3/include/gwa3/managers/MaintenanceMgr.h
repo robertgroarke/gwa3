@@ -38,6 +38,15 @@ namespace GWA3::MaintenanceMgr {
     // Withdraw gold from storage up to `amount`.
     void WithdrawGold(uint32_t amount);
 
+    // ===== Storage Deposit =====
+
+    // Deposit basic materials from backpack (bags 1-4) to material storage (bag 6).
+    // Requires Xunlai chest to be open. Returns number of stacks deposited.
+    uint32_t DepositMaterialsToStorage();
+
+    // Open the Xunlai chest NPC at given coordinates (move to, interact).
+    void OpenXunlaiChest(float chestX, float chestY);
+
     // ===== Sell Items =====
 
     // Sell all junk items to the currently-open merchant.

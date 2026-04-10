@@ -193,6 +193,99 @@ void WithdrawGold(uint32_t amount) {
     WaitMs(500);
 }
 
+// ===== Xunlai Chest Interaction =====
+
+void OpenXunlaiChest(float chestX, float chestY) {
+    // Move to the Xunlai chest NPC
+    // Uses AgentMgr::Move + wait loop (not MoveToAndWait which is in FroggyHM)
+    GameThread::EnqueuePost([chestX, chestY]() {
+        AgentMgr::Move(chestX, chestY);
+    });
+    // Wait to arrive
+    for (int tick = 0; tick < 30; tick++) {
+        WaitMs(500);
+        auto* me = AgentMgr::GetMyAgent();
+        if (me && AgentMgr::GetDistance(me->x, me->y, chestX, chestY) < 350.0f) break;
+    }
+
+    // Find and interact with the Xunlai NPC
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    float bestDist = 900.0f * 900.0f;
+    uint32_t chestId = 0;
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (living->allegiance != 6 || living->hp <= 0.0f) continue;
+        float d = AgentMgr::GetSquaredDistance(chestX, chestY, living->x, living->y);
+        if (d < bestDist) { bestDist = d; chestId = living->agent_id; }
+    }
+
+    if (!chestId) {
+        Log::Warn("MaintenanceMgr: No Xunlai chest NPC found near (%.0f, %.0f)", chestX, chestY);
+        return;
+    }
+
+    Log::Info("MaintenanceMgr: Opening Xunlai chest (agent=%u)", chestId);
+    AgentMgr::InteractNPC(chestId);
+    WaitMs(1500);
+}
+
+// ===== Material Storage Deposit =====
+
+// Material storage slot mapping (bag 6) — from AutoIt MATERIALS_DOUBLE_ARRAY
+// Maps model_id → slot index in material storage bag.
+static int GetMaterialStorageSlot(uint32_t modelId) {
+    switch (modelId) {
+        case MAT_BONE:            return 1;
+        case MAT_IRON_INGOT:      return 2;
+        case MAT_TANNED_HIDE:     return 3;
+        case MAT_SCALE:           return 4;
+        case MAT_CHITIN:          return 5;
+        case MAT_BOLT_OF_CLOTH:   return 6;
+        case MAT_WOOD_PLANK:      return 7;
+        // slot 8 = not used for basic materials
+        case MAT_GRANITE_SLAB:    return 9;
+        case MAT_GLITTERING_DUST: return 10;
+        case MAT_PLANT_FIBER:     return 11;
+        case MAT_FEATHER:         return 12;
+        default: return -1; // not a basic material with known slot
+    }
+}
+
+uint32_t DepositMaterialsToStorage() {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    uint32_t deposited = 0;
+    for (uint32_t bagIdx = 1; bagIdx <= 4; bagIdx++) {
+        Bag* bag = inv->bags[bagIdx];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t i = 0; i < bag->items.size; i++) {
+            Item* item = bag->items.buffer[i];
+            if (!item || item->model_id == 0) continue;
+
+            // Only deposit basic materials (type 11 = material)
+            if (item->type != 11) continue;
+
+            int slot = GetMaterialStorageSlot(item->model_id);
+            if (slot < 0) continue; // not a known basic material
+
+            // AutoIt uses 1-based slot, but MoveItem packet needs 0-based (slot - 1)
+            int packetSlot = slot - 1;
+            Log::Info("MaintenanceMgr: Depositing material=%u model=%u qty=%u to bag 6 slot %d (packet=%d)",
+                      item->item_id, item->model_id, item->quantity, slot, packetSlot);
+            ItemMgr::MoveItem(item->item_id, 6, packetSlot);
+            WaitMs(300);
+            deposited++;
+        }
+    }
+    if (deposited > 0) {
+        Log::Info("MaintenanceMgr: Deposited %u material stacks to storage", deposited);
+    }
+    return deposited;
+}
+
 // ===== Item Classification (matches AutoIt GWA2_ID_Items.au3) =====
 
 // Rarity constants from name_enc first ushort (AutoIt GWA2_ID_Items.au3)
@@ -400,14 +493,48 @@ void PerformMaintenance(const Config& cfg) {
         DepositGold(10000);
     }
 
-    // Step 2: Sell junk items (requires merchant to be open)
+    // Step 2: Deposit materials to material storage (bag 6)
+    // Requires Xunlai chest to be open — move there and interact first.
+    // Gadd's Encampment Xunlai chest coordinates.
+    static constexpr float kXunlaiX = -10481.0f;
+    static constexpr float kXunlaiY = -22787.0f;
+
+    // Check if there are any materials to deposit before moving to chest
+    bool hasMaterials = false;
+    {
+        Inventory* inv = ItemMgr::GetInventory();
+        if (inv) {
+            for (uint32_t b = 1; b <= 4 && !hasMaterials; b++) {
+                Bag* bag = inv->bags[b];
+                if (!bag || !bag->items.buffer) continue;
+                for (uint32_t s = 0; s < bag->items.size; s++) {
+                    Item* item = bag->items.buffer[s];
+                    if (item && item->type == 11 && GetMaterialStorageSlot(item->model_id) >= 0) {
+                        hasMaterials = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (hasMaterials) {
+        OpenXunlaiChest(kXunlaiX, kXunlaiY);
+        uint32_t deposited = DepositMaterialsToStorage();
+        if (deposited > 0) {
+            WaitMs(1000 + deposited * 200);
+            Log::Info("MaintenanceMgr: After deposit: freeSlots=%u", CountFreeSlots());
+        }
+    }
+
+    // Step 3: Sell junk items (requires merchant to be open)
     uint32_t sold = SellJunkItems();
     if (sold > 0) WaitMs(500);
 
-    // Step 3: Buy kits to target (requires merchant to be open)
+    // Step 4: Buy kits to target (requires merchant to be open)
     BuyKitsToTarget(cfg);
 
-    // Step 4: Final gold deposit
+    // Step 5: Final gold deposit
     charGold = ItemMgr::GetGoldCharacter();
     if (charGold > 10000) {
         DepositGold(5000);
