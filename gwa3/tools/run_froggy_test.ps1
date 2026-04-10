@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $script:RepoRoot = Split-Path -Parent $PSScriptRoot
 $script:BinDir = Join-Path $script:RepoRoot "build\bin\Release"
 $script:InjectorPath = Join-Path $script:BinDir "injector.exe"
-$script:DllPath = Join-Path $script:BinDir "gwa3.dll"
+$script:DllPath = Join-Path $script:BinDir "gwa3_beastrit.dll"
 $script:LogPath = Join-Path $script:BinDir "gwa3_log.txt"
 $script:FroggyFlagPath = Join-Path $script:BinDir "gwa3_test_froggy.flag"
 $script:ScreenshotDir = Join-Path $script:BinDir "screenshots"
@@ -175,8 +175,13 @@ Write-Host "Waiting for GW window (PID $gwPid) to be ready..."
 Start-Sleep -Seconds $LaunchTimeoutSeconds
 Wait-ForGwReady -ProcessId $gwPid -TimeoutSeconds 30
 
-Write-Host "Injecting froggy test into PID $gwPid..."
-& $script:InjectorPath --pid $gwPid --test-froggy
+# Update log path to PID-specific file (avoids contention with other agents)
+$script:LogPath = Join-Path $script:BinDir "gwa3_log_$gwPid.txt"
+Write-Host "Log path: $($script:LogPath)"
+
+$dllName = Split-Path $script:DllPath -Leaf
+Write-Host "Injecting froggy test into PID $gwPid (DLL: $dllName)..."
+& $script:InjectorPath --pid $gwPid --dll $dllName --test-froggy
 if ($LASTEXITCODE -ne 0) { throw "Injection failed." }
 
 $crashDialogSeen = $false

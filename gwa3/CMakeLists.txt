@@ -98,11 +98,13 @@ target_compile_definitions(gwa3_core PUBLIC CRASH_TEST=${CRASH_TEST})
 target_link_libraries(gwa3_core PUBLIC minhook version nlohmann_json::nlohmann_json)
 
 # --- gwa3.dll ---
+set(GWA3_DLL_NAME "gwa3" CACHE STRING "Output DLL name (change for multi-agent builds)")
 add_library(gwa3 SHARED
     src/dllmain.cpp
     src/utils/StringEncoding.cpp
     $<TARGET_OBJECTS:gwa3_core>
 )
+set_target_properties(gwa3 PROPERTIES OUTPUT_NAME "${GWA3_DLL_NAME}")
 
 target_include_directories(gwa3 PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -112,7 +114,7 @@ target_compile_definitions(gwa3 PRIVATE CRASH_TEST=${CRASH_TEST})
 target_link_libraries(gwa3 PRIVATE minhook version)
 
 set_target_properties(gwa3 PROPERTIES
-    OUTPUT_NAME "gwa3"
+    OUTPUT_NAME "${GWA3_DLL_NAME}"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 

@@ -62,10 +62,13 @@ void Initialize() {
     );
     GetModuleFileNameA(hSelf, dllPath, MAX_PATH);
 
-    // Strip filename, append log name
+    // Strip filename, append PID-specific log name to avoid contention
+    // when multiple GW clients are running with injected DLLs.
     char* lastSlash = strrchr(dllPath, '\\');
     if (lastSlash) *(lastSlash + 1) = '\0';
-    strcat_s(dllPath, "gwa3_log.txt");
+    char logName[64];
+    sprintf_s(logName, "gwa3_log_%u.txt", GetCurrentProcessId());
+    strcat_s(dllPath, logName);
 
     fopen_s(&g_logFile, dllPath, "a");
 

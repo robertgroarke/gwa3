@@ -69,12 +69,15 @@ static std::vector<GWProcess> FindGWProcesses() {
 
 // ===== DLL Path =====
 
+static std::string s_dllNameOverride; // set by --dll flag
+
 static std::string GetDllPath() {
     char exePath[MAX_PATH];
     GetModuleFileNameA(nullptr, exePath, MAX_PATH);
     char* lastSlash = strrchr(exePath, '\\');
     if (lastSlash) *(lastSlash + 1) = '\0';
-    return std::string(exePath) + "gwa3.dll";
+    std::string name = s_dllNameOverride.empty() ? "gwa3.dll" : s_dllNameOverride;
+    return std::string(exePath) + name;
 }
 
 // ===== Remote Module Lookup =====
@@ -202,7 +205,11 @@ static void ClearTestModeFlags() {
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_workflow.flag", dir);
     DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_froggy.flag", dir);
+    DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_llm_mode.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_llm_advisory.flag", dir);
     DeleteFileA(path);
 }
 
@@ -217,9 +224,10 @@ static bool InjectDll(DWORD pid, const char* dllPath) {
     }
 
     // Check if already injected
-    HMODULE existing = GetRemoteModuleHandle(hProcess, "gwa3.dll");
+    std::string dllFileName = s_dllNameOverride.empty() ? "gwa3.dll" : s_dllNameOverride;
+    HMODULE existing = GetRemoteModuleHandle(hProcess, dllFileName.c_str());
     if (existing) {
-        printf("[!] gwa3.dll already loaded at 0x%08X in PID %lu\n",
+        printf("[!] %s already loaded at 0x%08X in PID %lu\n", dllFileName.c_str(),
                (unsigned)(uintptr_t)existing, pid);
         CloseHandle(hProcess);
         return false;
@@ -263,11 +271,11 @@ static bool InjectDll(DWORD pid, const char* dllPath) {
     CloseHandle(hThread);
     VirtualFreeEx(hProcess, remotePath, 0, MEM_RELEASE);
 
-    HMODULE hRemoteDll = GetRemoteModuleHandle(hProcess, "gwa3.dll");
+    HMODULE hRemoteDll = GetRemoteModuleHandle(hProcess, dllFileName.c_str());
     CloseHandle(hProcess);
 
     if (hRemoteDll) {
-        printf("[+] SUCCESS: gwa3.dll loaded at 0x%08X in PID %lu\n",
+        printf("[+] SUCCESS: %s loaded at 0x%08X in PID %lu\n", dllFileName.c_str(),
                (unsigned)(uintptr_t)hRemoteDll, pid);
         return true;
     } else {
@@ -382,6 +390,8 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--pid") == 0 && i + 1 < argc) {
             targetPid = static_cast<DWORD>(atol(argv[++i]));
+        } else if (strcmp(argv[i], "--dll") == 0 && i + 1 < argc) {
+            s_dllNameOverride = argv[++i];
         } else if (strcmp(argv[i], "--list") == 0) {
             doList = true;
         } else if (strcmp(argv[i], "--all") == 0) {
