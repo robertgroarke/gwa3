@@ -8,5 +8,7 @@ namespace GWA3::LLM::EventPush {
     bool Initialize();
 
     void Shutdown();
+n    // Flush queued events to IPC (call from bridge thread, not StoC callbacks)
+    void FlushEvents();
 
 } // namespace GWA3::LLM::EventPush

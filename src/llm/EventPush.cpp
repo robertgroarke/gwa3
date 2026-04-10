@@ -5,6 +5,8 @@
 
 #include <nlohmann/json.hpp>
 #include <string>
+#include <mutex>
+#include <vector>
 
 using json = nlohmann::json;
 
@@ -101,11 +103,15 @@ namespace GWA3::LLM::EventPush {
     static StoC::HookEntry g_hookQuestRemove;
     static StoC::HookEntry g_hookDungeonReward;
 
+    // --- Event queue (non-blocking from StoC callbacks) ---
+    static std::mutex g_eventMutex;
+    static std::vector<std::string> g_eventQueue;
+
     // --- Send helper ---
     static void SendEvent(const json& j) {
-        if (!IpcServer::IsClientConnected()) return;
         std::string s = j.dump();
-        IpcServer::Send(s.c_str(), static_cast<uint32_t>(s.size()));
+        std::lock_guard<std::mutex> lock(g_eventMutex);
+        g_eventQueue.push_back(std::move(s));
     }
 
     // --- Callbacks ---
@@ -223,6 +229,17 @@ namespace GWA3::LLM::EventPush {
     }
 
     // --- Lifecycle ---
+
+    void FlushEvents() {
+        std::vector<std::string> local;
+        {
+            std::lock_guard<std::mutex> lock(g_eventMutex);
+            local.swap(g_eventQueue);
+        }
+        for (auto& s : local) {
+            IpcServer::Send(s.c_str(), static_cast<uint32_t>(s.size()));
+        }
+    }
 
     bool Initialize() {
         bool ok = true;

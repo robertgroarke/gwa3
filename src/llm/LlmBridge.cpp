@@ -125,6 +125,7 @@ namespace GWA3::LLM {
 
                 // Process inbound actions
                 ProcessInboundMessages();
+                EventPush::FlushEvents();
             } else {
                 // Client disconnected — drain stale queued actions
                 IpcServer::DrainInbound();

@@ -422,6 +422,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
 
     if (merchantShellTest) {
         GWA3::Log::Info("=== MERCHANT SHELL TEST MODE ===");
+        // TODO: implement RunMerchantShellTest — currently shares RunMerchantQuoteTest
         int failures = GWA3::SmokeTest::RunMerchantQuoteTest();
         GWA3::Log::Info("Merchant shell test complete: %d failures", failures);
         return static_cast<DWORD>(failures);
