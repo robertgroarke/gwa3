@@ -3976,3 +3976,27 @@ GWA3-162 (DDoor)  --/                     \--> GWA3-170 (Boss ranges)
 5. **GWA3-166** (Conset renewal) -- one-line change, big survivability
 6. **GWA3-164** (Return path) -- needed if Travel fails from dungeon
 7. **GWA3-165** (Loop verify) -- confirms autonomous farming
+
+### Phase 8d: Item Identification, Salvage & Rare Skin Detection (GWA3-176..183)
+
+> Prerequisite for full autonomous farming: items must be identified before sell,
+> and non-rare items should be salvaged for materials.
+
+| ID | Title | Status | Est | Depends | Notes |
+|----|-------|--------|-----|---------|-------|
+| GWA3-176 | Rare skin detection — port $aRareSkin lookup table from RareSkins.au3 | ready | M | -- | ~150 model IDs in a static array/set. IsRareSkin(modelId) returns bool |
+| GWA3-177 | Item rarity + type classification in MaintenanceMgr | done | S | -- | Already done: GetRarity from complete_name_enc, IsWeapon/IsArmor/IsIdentified |
+| GWA3-178 | Identify unidentified items — scan bags, skip rare skins, use ID kit | ready | M | 176 | IdentifyItem packet (0x6C) already in ItemMgr. Need: find kit, iterate bags, skip rare skins |
+| GWA3-179 | Salvage non-rare items — SalvageSessionOpen + SalvageMaterials flow | ready | L | 176,178 | Open session (0x77), wait, SalvageMaterials (0x7A), handle gold/purple validation |
+| GWA3-180 | Salvage Amphibian Tongues specifically | ready | S | 179 | Model 27036, salvage all for materials. AutoIt does this first in maintenance |
+| GWA3-181 | Wire identify + salvage into PerformMaintenance | ready | M | 178,179 | After deposit gold, before sell: identify all → salvage whites/blues → sell remainder |
+| GWA3-182 | Test: item rarity detection across all rarity tiers | ready | M | 177 | Scan inventory, log rarity for each item, verify white/blue/purple/gold/green classification |
+| GWA3-183 | Test: identify + salvage round-trip in Gadd's outpost | ready | L | 178,179 | Buy ID kit, identify unid item, salvage it, verify material gained and item removed |
+
+### Priority Order (identification/salvage)
+
+1. **GWA3-176** (Rare skins) — blocking everything; need to know what NOT to salvage
+2. **GWA3-178** (Identify) — must identify before selling/salvaging
+3. **GWA3-179** (Salvage) — turns junk into materials, frees more inventory space
+4. **GWA3-181** (Wire into maintenance) — completes the full maintenance pipeline
+5. **GWA3-182/183** (Tests) — proves the system works end-to-end
