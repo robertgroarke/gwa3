@@ -90,28 +90,37 @@ function Launch-GwAccount {
     Write-Host "GW launched for character: $($acct.character)"
 }
 
-function Wait-ForGwWindow {
-    param([int]$TimeoutSeconds)
+function Wait-ForNewGwProcess {
+    param([int]$TimeoutSeconds, [int[]]$ExistingPids)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
-        $listing = & $script:InjectorPath --list 2>&1
-        if ($LASTEXITCODE -eq 0 -and ($listing -match "PID")) {
-            $gw = Get-Process Gw -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($gw) { return $gw.Id }
+        $allGw = Get-Process Gw -ErrorAction SilentlyContinue
+        if ($allGw) {
+            foreach ($proc in $allGw) {
+                if ($ExistingPids -notcontains $proc.Id) {
+                    Write-Host "Found new GW process: PID $($proc.Id) (existing PIDs: $($ExistingPids -join ', '))"
+                    return $proc.Id
+                }
+            }
         }
         Start-Sleep -Seconds 1
     }
-    throw "Timed out waiting for Guild Wars window."
+    throw "Timed out waiting for new Guild Wars process."
 }
 
 # === Main ===
-Stop-Process -Name "Gw" -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 2
+# Record existing GW PIDs so we don't kill or inject into another agent's client
+$existingGwPids = @()
+$existingGw = Get-Process Gw -ErrorAction SilentlyContinue
+if ($existingGw) {
+    $existingGwPids = @($existingGw | ForEach-Object { $_.Id })
+    Write-Host "Existing GW processes (will not touch): $($existingGwPids -join ', ')"
+}
 
 New-Item -ItemType File -Force -Path $script:FroggyFlagPath | Out-Null
 
 Launch-GwAccount
-$gwPid = Wait-ForGwWindow -TimeoutSeconds $LaunchTimeoutSeconds
+$gwPid = Wait-ForNewGwProcess -TimeoutSeconds $LaunchTimeoutSeconds -ExistingPids $existingGwPids
 
 Write-Host "Injecting froggy test into PID $gwPid..."
 & $script:InjectorPath --pid $gwPid --test-froggy
@@ -132,7 +141,9 @@ while (((Get-Date) - $startTime).TotalSeconds -lt $RunTimeoutSeconds) {
         Write-Host "CRASH_DIALOG_DETECTED: $shot"
         break
     }
-    if (-not (Get-Process Gw -ErrorAction SilentlyContinue)) { break }
+    # Check if OUR GW process is still alive (don't check other agents' processes)
+    $ourGw = Get-Process -Id $gwPid -ErrorAction SilentlyContinue
+    if (-not $ourGw -or $ourGw.HasExited) { break }
 
     if (-not $merchantShot -and (Test-Path $script:LogPath)) {
         $merchantMarkerSeen = Select-String -Path $script:LogPath -Pattern "MERCHANT_SCREENSHOT_NOW" -Quiet -ErrorAction SilentlyContinue
@@ -162,7 +173,8 @@ while (((Get-Date) - $startTime).TotalSeconds -lt $RunTimeoutSeconds) {
 
 $endShot = Capture-RunScreenshot -Tag "end"
 Write-Host "END_SCREENSHOT: $endShot"
-Stop-Process -Name Gw -Force -ErrorAction SilentlyContinue
+# Only kill OUR GW process, not other agents' clients
+Stop-Process -Id $gwPid -Force -ErrorAction SilentlyContinue
 
 $froggyBlock = @()
 for ($i = 0; $i -lt 5; $i++) {

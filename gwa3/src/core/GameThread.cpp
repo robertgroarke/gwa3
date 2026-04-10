@@ -79,16 +79,7 @@ static void __cdecl DrainQueuesOnGameThread(float, int) {
         Log::Info("GameThread: Drain pre[%u] invoke=0x%08X", idx,
                   reinterpret_cast<uintptr_t>(s_preQueue[idx].invoke));
         LeaveCriticalSection(&s_cs);
-        __try {
-            s_preQueue[idx]();
-        } __except(
-            Log::Error("GameThread: EXCEPTION 0x%08X in Drain pre[%u] invoke=0x%08X",
-                GetExceptionCode(), idx,
-                reinterpret_cast<uintptr_t>(s_preQueue[idx].invoke)),
-            EXCEPTION_EXECUTE_HANDLER
-        ) {
-            // Swallow — game thread must not crash from our callbacks
-        }
+        s_preQueue[idx]();
         s_preQueue[idx].invoke = nullptr;
         Log::Info("GameThread: Drain pre[%u] done", idx);
         EnterCriticalSection(&s_cs);
