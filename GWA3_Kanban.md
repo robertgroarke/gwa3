@@ -4000,3 +4000,33 @@ GWA3-162 (DDoor)  --/                     \--> GWA3-170 (Boss ranges)
 3. **GWA3-179** (Salvage) — turns junk into materials, frees more inventory space
 4. **GWA3-181** (Wire into maintenance) — completes the full maintenance pipeline
 5. **GWA3-182/183** (Tests) — proves the system works end-to-end
+
+### Phase 9: Game Command Queue (SafeEnqueue) Infrastructure (GWA3-184..186)
+
+> The AutoIt bot dispatches ALL game commands through a shared memory command queue
+> that the game processes on its own thread. Our CtoS engine hook is a parallel path
+> that works for most packets but crashes on operations requiring internal game state
+> (salvage, some dialog interactions). Implementing the command queue unlocks salvage
+> and improves reliability of all game interactions.
+
+| ID | Title | Status | Est | Depends | Notes |
+|----|-------|--------|-----|---------|-------|
+| GWA3-184 | Implement game command queue (SafeEnqueue) | ready | XL | -- | Port AutoIt GWA2_Assembly.au3 command queue: find queue base addr, counter, write 256-byte command structs. Same mechanism as AutoIt's Enqueue/SafeEnqueue |
+| GWA3-185 | Port CommandSalvage through command queue | ready | M | 184 | Write {CommandSalvage ptr, item_id, kit_id, session_id} to queue. Replaces CtoS 0x77 and UI message approaches |
+| GWA3-186 | Port remaining commands to command queue as fallback | ready | L | 184 | Move, GoNPC, Dialog, Buy, Sell — use command queue when CtoS engine hook is unreliable (dungeons, dialogs) |
+
+### Why This Matters
+
+AutoIt commands work reliably because they go through the game's OWN command dispatcher:
+1. External process writes command struct to shared memory queue
+2. Game's render/update loop polls the queue each frame
+3. Game's command handler executes the command in the correct internal context
+4. No hook conflicts, no dialog state corruption, no agent invalidation
+
+Our CtoS engine hook intercepts the packet send function and dispatches from within
+the hooked code path — a fundamentally different execution context that lacks the
+game's internal state setup for complex operations like salvage.
+
+The command queue approach would also fix:
+- Blessing dialog crash in Bogroot (before we added DialogMgr cycling workaround)
+- Any future operations that need game-thread internal context

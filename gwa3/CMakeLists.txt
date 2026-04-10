@@ -3,6 +3,8 @@ project(gwa3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(GWA3_DLL_NAME "gwa3" CACHE STRING "Output DLL name (change for multi-agent builds)")
+set(GWA3_PIPE_NAME "\\\\.\\pipe\\gwa3_llm" CACHE STRING "Named pipe used by the LLM bridge")
 
 # --- MSVC flags ---
 if(MSVC)
@@ -92,13 +94,13 @@ target_include_directories(gwa3_core PUBLIC
 # Crash investigation test selector (0=normal, 1=remove JMP after bootstrap, 2=disable GameThread)
 set(CRASH_TEST 0 CACHE STRING "Crash test mode")
 target_compile_definitions(gwa3_core PUBLIC CRASH_TEST=${CRASH_TEST})
+target_compile_definitions(gwa3_core PUBLIC GWA3_PIPE_NAME="${GWA3_PIPE_NAME}")
 
 # gwa3_core needs MinHook headers (for GameThread.cpp), version.lib (for MemoryMgr),
 # and nlohmann_json (for LLM bridge serialization)
 target_link_libraries(gwa3_core PUBLIC minhook version nlohmann_json::nlohmann_json)
 
 # --- gwa3.dll ---
-set(GWA3_DLL_NAME "gwa3" CACHE STRING "Output DLL name (change for multi-agent builds)")
 add_library(gwa3 SHARED
     src/dllmain.cpp
     src/utils/StringEncoding.cpp
