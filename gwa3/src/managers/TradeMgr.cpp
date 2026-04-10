@@ -5,6 +5,7 @@
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/game/Item.h>
+#include <gwa3/managers/ItemMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 
@@ -253,12 +254,29 @@ bool BuyMerchantItemByPosition(uint32_t itemPosition, uint32_t quantity, uint32_
     return true;
 }
 
+bool BuyMerchantItem(uint32_t itemId, uint32_t quantity) {
+    Item* item = GetMerchantItemPtrByItemId(itemId);
+    if (!item || quantity == 0) return false;
+
+    // Merchant item->value is the resale value. The native merchant buy path
+    // expects the purchase total, which is 2x the resale value for the normal
+    // merchant stock we exercise in Froggy/bridge tests.
+    const uint32_t unitValue = item->value * 2;
+    if (unitValue == 0 || !Offsets::Transaction) return false;
+
+    const uint32_t totalValue = unitValue * quantity;
+    GameThread::Enqueue([itemId, quantity, totalValue]() {
+        TransactionBuyNative(quantity, itemId, totalValue);
+    });
+    return true;
+}
+
 bool BuyMerchantItemByModelId(uint32_t modelId, uint32_t quantity) {
     Item* item = GetMerchantItemByModelId(modelId);
     if (!item || quantity == 0) return false;
 
     const uint32_t itemId = item->item_id;
-    const uint32_t unitValue = item->value;
+    const uint32_t unitValue = item->value * 2;
     if (!itemId || unitValue == 0 || !Offsets::Transaction) return false;
 
     const uint32_t totalValue = unitValue * quantity;
@@ -272,6 +290,18 @@ bool SellMerchantItem(uint32_t itemId, uint32_t quantity, uint32_t totalValue) {
     if (!itemId || !Offsets::Transaction) return false;
     GameThread::Enqueue([itemId, quantity, totalValue]() {
         TransactionSellNative(quantity, itemId, totalValue);
+    });
+    return true;
+}
+
+bool SellInventoryItem(uint32_t itemId, uint32_t quantity) {
+    Item* item = ItemMgr::GetItemById(itemId);
+    if (!item || !Offsets::Transaction) return false;
+
+    const uint32_t qty = quantity ? quantity : item->quantity;
+    const uint32_t totalValue = item->value * qty;
+    GameThread::Enqueue([itemId, qty, totalValue]() {
+        TransactionSellNative(qty, itemId, totalValue);
     });
     return true;
 }

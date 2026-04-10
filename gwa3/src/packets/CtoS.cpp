@@ -115,16 +115,7 @@ static void __stdcall EngineDispatchOne() {
     }
 
     InterlockedIncrement(&s_engineCallTest);
-    __try {
-        t.fn(reinterpret_cast<void*>(loc), t.sizeBytes, t.data);
-    } __except(
-        Log::Error("CtoS: [ENGINE] EXCEPTION 0x%08X dispatching hdr=0x%X sizeBytes=%u loc=0x%08X fn=0x%08X",
-            GetExceptionCode(), t.data[0], t.sizeBytes, static_cast<unsigned>(loc),
-            static_cast<unsigned>(reinterpret_cast<uintptr_t>(t.fn))),
-        EXCEPTION_EXECUTE_HANDLER
-    ) {
-        // Swallow and continue — game thread must not crash
-    }
+    t.fn(reinterpret_cast<void*>(loc), t.sizeBytes, t.data);
 }
 
 static __declspec(naked) void EngineDetourNaked() {
