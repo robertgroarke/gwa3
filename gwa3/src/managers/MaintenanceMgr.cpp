@@ -6,6 +6,7 @@
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/TradeMgr.h>
+#include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/GameThread.h>
@@ -560,54 +561,79 @@ uint32_t SalvageJunkItems() {
         return 0;
     }
 
-    Inventory* inv = ItemMgr::GetInventory();
-    if (!inv) return 0;
+    // Phase 1: Collect item IDs to salvage (DON'T modify inventory during scan)
+    uint32_t toSalvage[64];
+    uint32_t toSalvageCount = 0;
+    {
+        Inventory* inv = ItemMgr::GetInventory();
+        if (!inv) return 0;
 
-    uint32_t salvaged = 0;
-    for (uint32_t b = 1; b <= 4; b++) {
-        Bag* bag = inv->bags[b];
-        if (!bag || !bag->items.buffer) continue;
-        for (uint32_t s = 0; s < bag->items.size; s++) {
-            Item* item = bag->items.buffer[s];
-            if (!item || item->model_id == 0) continue;
-            if (IsKit(item->model_id)) continue;
-            if (IsRareSkin(item->model_id)) continue;
-            if (!IsIdentified(item)) continue;
-            if (!(IsWeapon(item) || IsArmor(item))) continue;
+        for (uint32_t b = 1; b <= 4 && toSalvageCount < 64; b++) {
+            Bag* bag = inv->bags[b];
+            if (!bag || !bag->items.buffer) continue;
+            for (uint32_t s = 0; s < bag->items.size && toSalvageCount < 64; s++) {
+                Item* item = bag->items.buffer[s];
+                if (!item || item->model_id == 0) continue;
+                if (IsKit(item->model_id)) continue;
+                if (IsRareSkin(item->model_id)) continue;
+                if (!IsIdentified(item)) continue;
+                if (!(IsWeapon(item) || IsArmor(item))) continue;
 
-            // Only salvage white/blue — purple/gold sell for more than salvage yields
-            uint16_t rarity = GetRarity(item);
-            if (rarity != RARITY_WHITE && rarity != RARITY_BLUE) continue;
+                uint16_t rarity = GetRarity(item);
+                if (rarity != RARITY_WHITE && rarity != RARITY_BLUE) continue;
+                if (item->is_material_salvageable == 0) continue;
 
-            // Item is material-salvageable? Check the flag.
-            if (item->is_material_salvageable == 0) continue;
-
-            Log::Info("MaintenanceMgr: Salvaging item=%u model=%u rarity=%u with kit=%u",
-                      item->item_id, item->model_id, rarity, kit->item_id);
-
-            // Open salvage session
-            ItemMgr::SalvageSessionOpen(kit->item_id, item->item_id);
-            WaitMs(800);
-
-            // Salvage for materials
-            ItemMgr::SalvageMaterials();
-            WaitMs(500);
-
-            // Done
-            ItemMgr::SalvageSessionDone();
-            WaitMs(300);
-
-            salvaged++;
-
-            // Re-find kit
-            kit = FindSalvageKit();
-            if (!kit) {
-                Log::Warn("MaintenanceMgr: Salvage kit exhausted after %u salvages", salvaged);
-                return salvaged;
+                toSalvage[toSalvageCount++] = item->item_id;
             }
         }
     }
-    Log::Info("MaintenanceMgr: Salvaged %u items", salvaged);
+
+    if (toSalvageCount == 0) {
+        Log::Info("MaintenanceMgr: No items to salvage");
+        return 0;
+    }
+    // Cap at 10 per maintenance run to avoid long delays
+    if (toSalvageCount > 10) toSalvageCount = 10;
+    Log::Info("MaintenanceMgr: Salvaging %u items (capped at 10)", toSalvageCount);
+
+    // Phase 2: Salvage each item by ID (inventory is modified between each)
+    uint32_t salvaged = 0;
+    for (uint32_t i = 0; i < toSalvageCount; i++) {
+        uint32_t itemId = toSalvage[i];
+        kit = FindSalvageKit();
+        if (!kit) {
+            Log::Warn("MaintenanceMgr: Salvage kit exhausted after %u salvages", salvaged);
+            break;
+        }
+
+        // Verify item still exists (might have been consumed by previous salvage materials)
+        Item* item = ItemMgr::GetItemById(itemId);
+        if (!item || item->model_id == 0) continue;
+
+        Log::Info("MaintenanceMgr: Salvaging [%u/%u] item=%u model=%u with kit=%u",
+                  i + 1, toSalvageCount, itemId, item->model_id, kit->item_id);
+
+        // Start salvage via UI message (GWCA kPreStartSalvage = 0x10000102)
+        uint32_t kitId = kit->item_id;
+        struct { uint32_t item_id; uint32_t kit_id; } salvageParams = { itemId, kitId };
+        GameThread::EnqueuePost([salvageParams]() {
+            UIMgr::SendUIMessage(0x10000102, (void*)&salvageParams, nullptr);
+        });
+        WaitMs(1500);
+
+        // Salvage for materials
+        ItemMgr::SalvageMaterials();
+        WaitMs(1000);
+
+        // Done
+        ItemMgr::SalvageSessionDone();
+        WaitMs(500);
+
+        salvaged++;
+    }
+    // Wait for game to settle after salvage operations
+    if (salvaged > 0) WaitMs(2000);
+    Log::Info("MaintenanceMgr: Salvaged %u items (freeSlots now=%u)", salvaged, CountFreeSlots());
     return salvaged;
 }
 
