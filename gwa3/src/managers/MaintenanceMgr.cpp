@@ -193,26 +193,85 @@ void WithdrawGold(uint32_t amount) {
     WaitMs(500);
 }
 
-// ===== Sell Items =====
+// ===== Item Classification (matches AutoIt GWA2_ID_Items.au3) =====
 
-// Item rarity from name_enc first ushort (matches AutoIt pattern)
-static uint8_t GetItemRarity(Item* item) {
-    if (!item || !item->name_enc) return 0;
-    uint16_t first = item->name_enc[0];
-    // GW rarity encoding: 0xA40 = white, 0xA41 = blue, 0xA42 = purple, 0xA43 = gold
-    switch (first) {
-        case 0x0108: return 1; // white
-        case 0x010A: return 2; // blue
-        case 0x010B: return 3; // purple
-        case 0x010C: return 4; // gold
-        default:     return 0; // unknown
+// Rarity constants from name_enc first ushort (AutoIt GWA2_ID_Items.au3)
+static constexpr uint16_t RARITY_WHITE  = 2621;
+static constexpr uint16_t RARITY_GRAY   = 2622;
+static constexpr uint16_t RARITY_BLUE   = 2623;
+static constexpr uint16_t RARITY_GOLD   = 2624;
+static constexpr uint16_t RARITY_PURPLE = 2626;
+static constexpr uint16_t RARITY_GREEN  = 2627;
+
+// Item type IDs (AutoIt GWA2_ID_Items.au3)
+static constexpr uint8_t TYPE_AXE       = 2;
+static constexpr uint8_t TYPE_FOOT      = 4;
+static constexpr uint8_t TYPE_BOW       = 5;
+static constexpr uint8_t TYPE_CHEST     = 7;
+static constexpr uint8_t TYPE_MATERIAL  = 11;
+static constexpr uint8_t TYPE_OFFHAND   = 12;
+static constexpr uint8_t TYPE_HAND      = 13;
+static constexpr uint8_t TYPE_HAMMER    = 15;
+static constexpr uint8_t TYPE_HEAD      = 16;
+static constexpr uint8_t TYPE_LEG       = 19;
+static constexpr uint8_t TYPE_WAND      = 22;
+static constexpr uint8_t TYPE_SHIELD    = 24;
+static constexpr uint8_t TYPE_STAFF     = 26;
+static constexpr uint8_t TYPE_SWORD     = 27;
+static constexpr uint8_t TYPE_DAGGER    = 32;
+static constexpr uint8_t TYPE_SCYTHE    = 35;
+static constexpr uint8_t TYPE_SPEAR     = 36;
+
+// GetRarity: reads name_enc first ushort (AutoIt GetRarity at offset +56)
+// Our Item struct has name_enc at offset +0x34 = 52, but complete_name_enc at +0x38 = 56
+// AutoIt reads ptr at offset 56 (complete_name_enc), then reads ushort at that ptr.
+static uint16_t GetRarity(Item* item) {
+    if (!item) return 0;
+    // AutoIt: MemoryRead(GetItemPtr($aItem) + 56, "ptr") → name string → ushort
+    // In our struct: +56 = 0x38 = complete_name_enc
+    wchar_t* nameStr = item->complete_name_enc;
+    if (!nameStr) nameStr = item->name_enc; // fallback
+    if (!nameStr) return 0;
+    return static_cast<uint16_t>(nameStr[0]);
+}
+
+// IsIdentified: checks interaction field bit 0 (AutoIt: Interaction & 0x1)
+static bool IsIdentified(Item* item) {
+    if (!item) return false;
+    return (item->interaction & 0x1) != 0;
+}
+
+// IsWeapon: checks if item type is a weapon type
+static bool IsWeapon(Item* item) {
+    if (!item) return false;
+    switch (item->type) {
+        case TYPE_AXE: case TYPE_BOW: case TYPE_OFFHAND: case TYPE_HAMMER:
+        case TYPE_WAND: case TYPE_SHIELD: case TYPE_STAFF: case TYPE_SWORD:
+        case TYPE_DAGGER: case TYPE_SCYTHE: case TYPE_SPEAR:
+            return true;
+        default: return false;
     }
 }
 
+// IsArmor: checks if item type is an armor type
+static bool IsArmor(Item* item) {
+    if (!item) return false;
+    switch (item->type) {
+        case TYPE_FOOT: case TYPE_CHEST: case TYPE_HAND: case TYPE_HEAD: case TYPE_LEG:
+            return true;
+        default: return false;
+    }
+}
+
+// ===== Sell Items =====
+
+// ShouldSellItemForMaintenance — mirrors AutoIt Utils-Maintenance.au3 line 750
+// Sells: identified weapons of white/blue/purple/gold rarity (not rare skins)
+//        + materials in the SELL list
+// Keeps: kits, unidentified items, green/red items, rare skins
 bool ShouldSellItem(uint32_t modelId, uint16_t value, uint8_t type) {
     (void)value;
     (void)type;
-    // Never sell kits
     if (IsKit(modelId)) return false;
     return true;
 }
@@ -221,7 +280,6 @@ uint32_t SellJunkItems() {
     Inventory* inv = ItemMgr::GetInventory();
     if (!inv) return 0;
 
-    // Check merchant is open
     uint32_t merchantItems = TradeMgr::GetMerchantItemCount();
     if (merchantItems == 0) {
         Log::Warn("MaintenanceMgr: SellJunkItems — merchant not open");
@@ -235,38 +293,44 @@ uint32_t SellJunkItems() {
         for (uint32_t i = 0; i < bag->items.size; i++) {
             Item* item = bag->items.buffer[i];
             if (!item || item->model_id == 0) continue;
-
-            // Never sell kits
-            if (IsKit(item->model_id)) continue;
-
-            // Only sell items with a sell value
             if (item->value == 0) continue;
+            if (IsKit(item->model_id)) continue;
 
             bool shouldSell = false;
 
-            // Sell non-keep materials (AutoIt ShouldSellMaterialForMaintenance)
-            if (IsBasicMaterial(item)) {
-                if (IsKeepMaterial(item->model_id)) continue; // keep for consets
-                shouldSell = true;
-            }
-
-            // Sell explicitly-listed materials regardless of type
+            // 1. Sell materials in the SELL list (cloth, hide, wood, chitin)
             if (IsSellMaterial(item->model_id)) {
                 shouldSell = true;
             }
 
-            // Sell identified weapons/armor: whites, blues, purples
-            if (!shouldSell) {
-                uint8_t rarity = GetItemRarity(item);
-                if (rarity >= 1 && rarity <= 3) shouldSell = true;
+            // 2. Sell non-keep basic materials
+            if (!shouldSell && IsBasicMaterial(item) && !IsKeepMaterial(item->model_id)) {
+                shouldSell = true;
+            }
+
+            // 3. Sell identified weapons/armor of white/blue/purple/gold rarity
+            // AutoIt: IsWeapon → GetRarity → check identified → sell
+            if (!shouldSell && (IsWeapon(item) || IsArmor(item))) {
+                uint16_t rarity = GetRarity(item);
+                if (rarity == RARITY_WHITE || rarity == RARITY_BLUE ||
+                    rarity == RARITY_PURPLE || rarity == RARITY_GOLD) {
+                    if (IsIdentified(item)) {
+                        shouldSell = true;
+                    }
+                }
+            }
+
+            // 4. Sell trophies (type 30) — common dungeon drops
+            if (!shouldSell && item->type == 30 && item->value > 0) {
+                shouldSell = true;
             }
 
             if (!shouldSell) continue;
 
             uint32_t qty = (item->quantity > 0) ? item->quantity : 1;
-            Log::Info("MaintenanceMgr: Selling item=%u model=%u value=%u qty=%u type=%u",
-                      item->item_id, item->model_id, item->value, qty, item->type);
-            TradeMgr::SellMerchantItem(item->item_id, qty, item->value * qty);
+            Log::Info("MaintenanceMgr: Selling item=%u model=%u value=%u qty=%u type=%u rarity=%u",
+                      item->item_id, item->model_id, item->value, qty, item->type, GetRarity(item));
+            TradeMgr::SellInventoryItem(item->item_id, qty);
             WaitMs(300);
             soldCount++;
         }
