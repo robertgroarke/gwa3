@@ -1404,6 +1404,8 @@ static int GetWipeRestartWaypoint(const Waypoint* wps, int count) {
 }
 
 static void GrabDungeonBlessing(float shrineX, float shrineY); // forward decl
+static void OpenDungeonDoorAt(float doorX, float doorY);       // forward decl
+static uint32_t FindNearestNpcByAllegiance(float x, float y, float maxDist); // forward decl
 static void FollowWaypoints(const Waypoint* wps, int count) {
     int startIdx = GetNearestWaypointIndex(wps, count);
     uint32_t mapId = MapMgr::GetMapId();
@@ -1488,24 +1490,101 @@ static void FollowWaypoints(const Waypoint* wps, int count) {
         }
         if (strcmp(wps[i].label, "Dungeon Door") == 0) {
             AggroMoveToEx(wps[i].x, wps[i].y, wps[i].fightRange);
-            // Open door interaction
-            AgentMgr::InteractSignpost(AgentMgr::GetTargetId());
-            WaitMs(2000);
+            OpenDungeonDoorAt(wps[i].x, wps[i].y);
+            continue;
+        }
+        if (strcmp(wps[i].label, "Dungeon Door Checkpoint") == 0) {
+            // GWA3-162: Move to checkpoint, verify we advanced past it
+            if (wps[i].fightRange > 0 && IsMapLoaded()) {
+                AggroMoveToEx(wps[i].x, wps[i].y, wps[i].fightRange);
+            } else {
+                MoveToAndWait(wps[i].x, wps[i].y);
+            }
+            int newNearest = GetNearestWaypointIndex(wps, count);
+            if (newNearest <= i) {
+                // Door didn't open — backtrack 3 waypoints and retry
+                LogBot("Dungeon Door Checkpoint failed at wp %d, backtracking", i);
+                int backtrack = (i > 3) ? i - 3 : 0;
+                for (int j = i - 1; j >= backtrack; j--) {
+                    if (wps[j].fightRange > 0 && IsMapLoaded()) {
+                        AggroMoveToEx(wps[j].x, wps[j].y, wps[j].fightRange);
+                    } else {
+                        MoveToAndWait(wps[j].x, wps[j].y);
+                    }
+                }
+                i = GetNearestWaypointIndex(wps, count) - 1; // retry from nearest
+            }
+            continue;
+        }
+        if (strcmp(wps[i].label, "Quest Door Checkpoint") == 0) {
+            // GWA3-161: Move to checkpoint, verify we advanced past it
+            if (wps[i].fightRange > 0 && IsMapLoaded()) {
+                AggroMoveToEx(wps[i].x, wps[i].y, wps[i].fightRange);
+            } else {
+                MoveToAndWait(wps[i].x, wps[i].y);
+            }
+            int newNearest = GetNearestWaypointIndex(wps, count);
+            if (newNearest <= i) {
+                // Quest door failed — backtrack and abort to Sparkfly
+                LogBot("Quest Door Checkpoint failed at wp %d — aborting run", i);
+                s_failCount++;
+                for (int j = i - 1; j >= i - 3 && j >= 0; j--) {
+                    if (wps[j].fightRange > 0 && IsMapLoaded()) {
+                        AggroMoveToEx(wps[j].x, wps[j].y, wps[j].fightRange);
+                    } else {
+                        MoveToAndWait(wps[j].x, wps[j].y);
+                    }
+                }
+                // Reverse to Sparkfly (AutoIt ReverseToSparkflySwamp)
+                MoveToAndWait(14747, 480);
+                DWORD exitStart = GetTickCount();
+                while ((GetTickCount() - exitStart) < 60000) {
+                    AgentMgr::Move(14747, 480);
+                    WaitMs(250);
+                    if (MapMgr::GetMapId() == MAP_SPARKFLY_SWAMP) break;
+                }
+                return;
+            }
             continue;
         }
         if (strcmp(wps[i].label, "Boss") == 0) {
+            // GWA3-163: Full boss encounter
             AggroMoveToEx(wps[i].x, wps[i].y, wps[i].fightRange);
-            // Boss encounter — fight then loot
+            // Fight + first loot sweep
             WaitMs(3000);
             PickupNearbyLoot(1500.0f);
-            // Open chest
+
+            // Open chest (find nearest signpost near chest coords)
             MoveToAndWait(14876, -19033);
-            OpenNearbyChest(1000.0f);
+            OpenNearbyChest(1500.0f);
             WaitMs(2000);
+            PickupNearbyLoot(1500.0f);
+
+            // Second chest attempt (AutoIt does double open)
+            OpenNearbyChest(1500.0f);
+            WaitMs(1000);
             PickupNearbyLoot(1000.0f);
-            // Talk to Tekk for reward (with retry)
+
+            // Talk to Tekk for quest reward
+            // Use GoNPC pattern: find NPC, move close, interact, dialog
             MoveToAndWait(14618, -17828);
-            SendDialogWithRetry(DIALOG_QUEST_REWARD, 3, 1000);
+            uint32_t tekksId = FindNearestNpcByAllegiance(14618, -17828, 1500.0f);
+            if (tekksId) {
+                auto* npc = AgentMgr::GetAgentByID(tekksId);
+                if (npc) MoveToAndWait(npc->x, npc->y, 120.0f);
+                AgentMgr::ChangeTarget(tekksId);
+                WaitMs(250);
+                // GoNPC interaction
+                for (int go = 0; go < 3; ++go) {
+                    CtoS::SendPacket(3, Packets::INTERACT_NPC, tekksId, 0u);
+                    WaitMs(500);
+                }
+                WaitMs(1000);
+                SendDialogWithRetry(DIALOG_QUEST_REWARD, 3, 1000);
+            } else {
+                LogBot("Boss: Tekk NPC not found — sending reward dialog directly");
+                SendDialogWithRetry(DIALOG_QUEST_REWARD, 3, 1000);
+            }
             return;
         }
 
@@ -2012,6 +2091,61 @@ static uint32_t FindNearestNpcByAllegiance(float x, float y, float maxDist) {
         }
     }
     return bestId;
+}
+
+// Find the nearest signpost/gadget agent (type 0x200) near given coordinates.
+static uint32_t FindNearestSignpost(float x, float y, float maxDist) {
+    uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    if (maxAgents == 0) return 0;
+
+    float bestDist = maxDist * maxDist;
+    uint32_t bestId = 0;
+
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a) continue;
+        if (a->type != 0x200) continue; // signpost/gadget only
+        float d = AgentMgr::GetSquaredDistance(x, y, a->x, a->y);
+        if (d < bestDist) {
+            bestDist = d;
+            bestId = a->agent_id;
+        }
+    }
+    return bestId;
+}
+
+// Open a dungeon door at given coordinates.
+// Mirrors AutoIt OpenDungeonDoor(): move to coords, find signpost, interact multiple times.
+static void OpenDungeonDoorAt(float doorX, float doorY) {
+    LogBot("OpenDungeonDoor at (%.0f, %.0f)", doorX, doorY);
+
+    // Find the nearest signpost (door) near the coordinates
+    uint32_t doorId = FindNearestSignpost(doorX, doorY, 1500.0f);
+    if (doorId == 0) {
+        LogBot("OpenDungeonDoor: no signpost found near door coords");
+        return;
+    }
+    LogBot("OpenDungeonDoor: found signpost agent=%u", doorId);
+
+    // Move close to the door
+    auto* door = AgentMgr::GetAgentByID(doorId);
+    if (door) {
+        MoveToAndWait(door->x, door->y, 120.0f);
+    }
+
+    // Interact with the door multiple times (AutoIt does ActionInteract x6)
+    // We use InteractSignpost which sends the SIGNPOST_RUN (0x51) packet
+    for (int attempt = 1; attempt <= 3; ++attempt) {
+        LogBot("OpenDungeonDoor: interact attempt %d", attempt);
+        AgentMgr::InteractSignpost(doorId);
+        WaitMs(500);
+        AgentMgr::InteractSignpost(doorId);
+        WaitMs(1000);
+    }
+
+    // Move to door coords to push through (AutoIt does MoveTo after each interact set)
+    MoveToAndWait(doorX, doorY, 200.0f);
+    WaitMs(500);
 }
 
 static bool WaitForMerchantContext(DWORD timeoutMs) {
@@ -2750,7 +2884,6 @@ BotState HandleTravel(BotConfig& cfg) {
 }
 
 BotState HandleDungeon(BotConfig& cfg) {
-    (void)cfg;
     uint32_t mapId = MapMgr::GetMapId();
 
     // Refresh combat cache on explorable entry rather than relying on town-setup state.
@@ -2760,6 +2893,9 @@ BotState HandleDungeon(BotConfig& cfg) {
         LogBot("State: Sparkfly Swamp — running to dungeon");
         s_runCount++;
         s_runStartTime = GetTickCount();
+
+        // GWA3-166: Renew consets at Sparkfly entry
+        UseConsumables(cfg);
 
         // Accept quest from Tekk
         MoveToAndWait(12396, 22407);
