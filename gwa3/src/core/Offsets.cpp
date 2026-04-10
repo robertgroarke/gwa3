@@ -8,6 +8,7 @@ namespace GWA3::Offsets {
 
 // ===== Storage =====
 uintptr_t BasePointer = 0;
+uintptr_t BasePointerScanAddr = 0; // Pre-deref address — for refreshing after WorldContext realloc
 uintptr_t Ping = 0;
 uintptr_t StatusCode = 0;
 uintptr_t PacketSend = 0;
@@ -105,6 +106,10 @@ uintptr_t InteractNPCFunc = 0;
 
 uintptr_t OfferTradeItem = 0;
 uintptr_t UpdateTradeCart = 0;
+uintptr_t TradeSendOffer = 0;
+uintptr_t TradeCancelOffer = 0;
+uintptr_t TradeAcceptOffer = 0;
+uintptr_t TradeRemoveItem = 0;
 
 uintptr_t SendChatFunc = 0;
 uintptr_t AddToChatLog = 0;
@@ -274,7 +279,9 @@ static const PatternDef s_patterns[] = {
 
     // ===== Trade GWCA (P2) =====
     PAT("OfferTradeItem",  OfferTradeItem,  "\x68\x49\x04\x00\x00\x89\x5D\xE4\xE8",       "xxxxxxxxx",  -0x6B, Priority::P2, PatternType::Func),
-    PAT("UpdateTradeCart",  UpdateTradeCart, "\x57\x8B\x7D\x0C\x3D\xEF\x00\x00\x10",       "xxxxxxxxx",  -0x24, Priority::P2, PatternType::Func),
+    // GWCA's older UpdateTradeCart anchor drifted from ...3D EF 00 00 10...
+    // to ...3D F1 00 00 10 0F 87 B8... on the current client build.
+    PAT("UpdateTradeCart",  UpdateTradeCart, "\x57\x8B\x7D\x0C\x3D\xF1\x00\x00\x10\x0F\x87\xB8", "xxxxxxxxxxxx",  -0x24, Priority::P2, PatternType::Func),
 
     // ===== Chat GWCA (P2) =====
     PAT("SendChatFunc",  SendChatFunc,  "\x8D\x85\xE0\xFE\xFF\xFF\x50\x68\x1C\x01",     "xxxxxxxxx",  -0x3E, Priority::P2, PatternType::Func),
@@ -381,7 +388,7 @@ static void PostProcessOffsets() {
     Log::Info("Offsets: Post-processing (dereferencing ptr-type patterns)...");
 
     // Core pointers: scan result contains address of code that references the data pointer
-    if (BasePointer)    BasePointer    = Deref(BasePointer);
+    if (BasePointer) { BasePointerScanAddr = BasePointer; BasePointer = Deref(BasePointer); }
     if (Ping)           Ping           = Deref(Ping);
     if (StatusCode)     StatusCode     = Deref(StatusCode);
     if (PacketLocation) PacketLocation = Deref(PacketLocation);
@@ -505,6 +512,51 @@ static void PostProcessOffsets() {
     // Quest: RequestQuestInfo scan result contains E8 near call
     if (RequestQuestInfo) RequestQuestInfo = Scanner::FunctionFromNearCall(RequestQuestInfo);
 
+    // Trade UI follow-up functions from the same GWCA anchors used by TradeMgr.
+    {
+        uintptr_t actionBase = Scanner::Find("\x8B\x41\x04\x83\xF8\x0E\x0F\x87\x82\x02\x00\x00", "xxxxxxxxxxxx", -0xC);
+        if (actionBase > 0x10000) {
+            TradeCancelOffer = Scanner::FunctionFromNearCall(actionBase + 0xA6);
+            TradeSendOffer = Scanner::FunctionFromNearCall(actionBase + 0x101);
+            if (TradeCancelOffer > 0x10000) {
+                Log::Info("Offsets: TradeCancelOffer = 0x%08X", TradeCancelOffer);
+            } else {
+                Log::Warn("Offsets: TradeCancelOffer resolution failed");
+            }
+            if (TradeSendOffer > 0x10000) {
+                Log::Info("Offsets: TradeSendOffer = 0x%08X", TradeSendOffer);
+            } else {
+                Log::Warn("Offsets: TradeSendOffer resolution failed");
+            }
+        } else {
+            Log::Warn("Offsets: Trade action base scan failed");
+        }
+
+        uintptr_t acceptBase = Scanner::Find("\x83\xC4\x04\xF7\x40\x0C\x00\x00\x00\x40", "xxxxxxxxxx", -0x85);
+        if (acceptBase > 0x10000) {
+            TradeAcceptOffer = Scanner::FunctionFromNearCall(acceptBase);
+            if (TradeAcceptOffer > 0x10000) {
+                Log::Info("Offsets: TradeAcceptOffer = 0x%08X", TradeAcceptOffer);
+            } else {
+                Log::Warn("Offsets: TradeAcceptOffer resolution failed");
+            }
+        } else {
+            Log::Warn("Offsets: Trade accept base scan failed");
+        }
+
+        uintptr_t removeCall = Scanner::Find("\x8B\x46\x14\x8B\x00\x85\xC0", "xxxxxxx", 0xA);
+        if (removeCall > 0x10000) {
+            TradeRemoveItem = Scanner::FunctionFromNearCall(removeCall);
+            if (TradeRemoveItem > 0x10000) {
+                Log::Info("Offsets: TradeRemoveItem = 0x%08X", TradeRemoveItem);
+            } else {
+                Log::Warn("Offsets: TradeRemoveItem resolution failed");
+            }
+        } else {
+            Log::Warn("Offsets: Trade remove-item scan failed");
+        }
+    }
+
     // FriendList: scan result contains embedded pointer, deref to get FriendList struct
     if (FriendListAddr) FriendListAddr = Deref(FriendListAddr);
 
@@ -536,5 +588,15 @@ static void PostProcessOffsets() {
 bool IsResolved()       { return s_resolved; }
 int GetResolvedCount()  { return s_resolvedCount; }
 int GetFailedCount()    { return s_failedCount; }
+
+void RefreshBasePointer() {
+    if (BasePointerScanAddr) {
+        uintptr_t newVal = Deref(BasePointerScanAddr);
+        if (newVal && newVal != BasePointer) {
+            Log::Info("Offsets: BasePointer refreshed 0x%08X -> 0x%08X", BasePointer, newVal);
+            BasePointer = newVal;
+        }
+    }
+}
 
 } // namespace GWA3::Offsets

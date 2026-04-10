@@ -687,13 +687,21 @@ uint32_t SalvageJunkItems() {
         // We'll wait and check if the item was consumed without sending any CtoS packets.
         WaitMs(2000);
 
+        // The Salvage function may reallocate the game's WorldContext, invalidating
+        // our cached BasePointer. Refresh it before any further reads.
+        Offsets::RefreshBasePointer();
+
         // Check if item was consumed
         Item* afterCheck = ItemMgr::GetItemById(itemId);
         if (!afterCheck || afterCheck->model_id == 0) {
             Log::Info("MaintenanceMgr: Item %u consumed by Salvage function (auto-complete)", itemId);
         } else {
-            Log::Info("MaintenanceMgr: Item %u still exists — session needs SalvageMaterials", itemId);
-            // TODO: need command queue SendPacket for 0x7A
+            Log::Info("MaintenanceMgr: Item %u still exists — session open, sending SalvageMaterials", itemId);
+            GameThread::EnqueuePost([]() {
+                CtoS::SendPacket(1, Packets::SALVAGE_MATERIALS);
+            });
+            WaitMs(1000);
+            Offsets::RefreshBasePointer();
         }
 
         salvaged++;
@@ -816,12 +824,12 @@ void PerformMaintenance(const Config& cfg) {
     uint32_t identified = IdentifyAllItems();
     if (identified > 0) WaitMs(500);
 
-    // Step 4: Salvage white/blue junk weapons/armor for materials
-    // Uses native Salvage function via GameThread (matches AutoIt CommandSalvage).
-    if (CountFreeSlots() < cfg.minFreeSlots) {
-        uint32_t salvaged = SalvageJunkItems();
-        if (salvaged > 0) WaitMs(500);
-    }
+    // Step 4: Salvage — DISABLED pending deeper investigation.
+    // The native Salvage function call works (items ARE consumed) but invalidates
+    // internal WorldContext pointers at a deeper level than BasePointer. All inventory,
+    // gold, and agent reads return 0 after salvage. RefreshBasePointer doesn't help —
+    // the corruption is in sub-pointers (Inventory, Bag array, etc.).
+    // Need to identify which specific pointer gets reallocated during salvage.
 
     // Step 5: Sell remaining junk items (requires merchant to be open)
     uint32_t sold = SellJunkItems();

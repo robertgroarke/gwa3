@@ -17,6 +17,10 @@ namespace GWA3::Offsets {
     // Check if offsets are resolved.
     bool IsResolved();
 
+    // Re-read BasePointer from its scan address. Call after operations that may
+    // reallocate the game's WorldContext (salvage, map transitions, etc.).
+    void RefreshBasePointer();
+
     // Get count of resolved/failed patterns.
     int GetResolvedCount();
     int GetFailedCount();
@@ -141,6 +145,10 @@ namespace GWA3::Offsets {
     // ===== Trade (GWCA) =====
     extern uintptr_t OfferTradeItem;     // func — __fastcall offer item in trade window
     extern uintptr_t UpdateTradeCart;    // func — trade cart update (captures window context)
+    extern uintptr_t TradeSendOffer;     // func — submit current trade offer / offered gold
+    extern uintptr_t TradeCancelOffer;   // func — retract submitted offer to modify it
+    extern uintptr_t TradeAcceptOffer;   // func — accept current player trade
+    extern uintptr_t TradeRemoveItem;    // func — remove offered item by slot
 
     // ===== Chat (GWCA) =====
     extern uintptr_t SendChatFunc;       // func — native chat send

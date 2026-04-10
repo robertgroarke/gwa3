@@ -2,26 +2,74 @@
 
 ## Overview
 
-Tests **gracefully skip** when preconditions aren't met — they never crash or give false failures. However, many tests will **always skip** unless the character is in the right game state.
+Tests **gracefully skip** when preconditions are not met - they never crash or give false failures. However, many tests will **always skip** unless the character is in the right game state.
 
-**Important:** The test infrastructure does NOT travel between locations or set up game state automatically. You must position the character before running tests.
+**Important:** The test infrastructure does not travel between locations or set up game state automatically unless you use the orchestrated suite or the fresh-session soak wrapper.
+
+## Multi-Agent Execution Rules
+
+When multiple agents are working at once:
+
+- always launch through `GWLauncher`
+- always inject only the exact launcher-returned PID
+- never share one mutable `gwa3/build`
+- never share one DLL name
+- never share one bridge pipe name
+
+Recommended isolated lanes:
+
+- Disco Panic: `build_disco`, `gwa3_disco.dll`, `\\.\pipe\gwa3_llm_disco`
+- BEASTRIT: `build_beastrit`, `gwa3_beastrit.dll`, `\\.\pipe\gwa3_llm_beastrit`
+- Trade harness: `build_trade`, `gwa3_trade.dll`, `\\.\pipe\gwa3_llm_trade`
+
+Build them with:
+
+```bash
+cd gwa3
+cmake --preset disco
+cmake --build --preset disco --target injector --target gwa3
+```
+
+or:
+
+```bash
+cd gwa3
+cmake --preset trade
+cmake --build --preset trade --target injector --target gwa3
+```
+
+## Recommended Validation Account
+
+Use `D I S C O P A N I C` for bridge validation when possible.
+
+Why Disco Panic:
+- uses the standard hero setup
+- reduces variance in party-related assertions
+- is a good baseline for outpost, merchant, and explorable bridge tests
+
+Current populated account source:
+- [GWA Censured/Accounts.json](/c:/Users/Robert/Documents/GWA%20Censured%20X%20BotsHub/GWA%20Censured/Accounts.json)
+
+Important note:
+- repo-root [Accounts.json](/c:/Users/Robert/Documents/GWA%20Censured%20X%20BotsHub/Accounts.json) is currently empty
+- bridge/injector automation should standardize which account source is authoritative before full automation is considered done
 
 ## Test Tiers by Game State
 
 ### Tier 1: Always Run (any state)
-These pass regardless — outpost, explorable, loading screen.
+These pass regardless - outpost, explorable, loading screen.
 
-**C++ (injector.exe --test-froggy):**
-- Skill classifiers (IsHardInterruptId, IsCondRemovalId, etc.)
+**C++ (`injector.exe --test-froggy`):**
+- Skill classifiers (`IsHardInterruptId`, `IsCondRemovalId`, and related helpers)
 - Role bitmask operations, combined masks, unique bit checks
-- Item filtering (IsAlwaysPickupModel, IsQuestPickupModel, type constants)
-- Chest tracking (IsChestOpened / MarkChestOpened with fake data)
-- Waypoint checkpoint logic (GetWipeRestartWaypoint with fake array)
-- Template decoding (Base64CharToVal, DecodeSkillTemplate)
+- Item filtering (`IsAlwaysPickupModel`, `IsQuestPickupModel`, type constants)
+- Chest tracking (`IsChestOpened` / `MarkChestOpened` with fake data)
+- Waypoint checkpoint logic (`GetWipeRestartWaypoint` with fake array)
+- Template decoding (`Base64CharToVal`, `DecodeSkillTemplate`)
 - Combat timeout / Zephyr multiplier constants (pure math)
 - Combat mode enum
 
-**Python (python -m bridge.tests):**
+**Python (`python -m bridge.tests`):**
 - IPC protocol (connect, heartbeat, snapshots, rate limiter)
 - Snapshot structure (required keys per tier)
 - Action error validation (missing params, invalid IDs, unknown actions)
@@ -30,14 +78,14 @@ These pass regardless — outpost, explorable, loading screen.
 Character logged in, standing in an outpost. Merchants and NPCs are accessible here.
 
 **C++ tests:**
-- Inventory scanning (CountFreeSlots, CountItemByModel)
-- Effect detection (HasConset, HasBlessing, HasEffect returns false for bogus ID)
-- Skillbar caching (CacheSkillBar + role assignment)
-- CanCast returns true (alive, loaded, not defeated)
-- CanUseSkill gates: heal blocked at full HP, survival blocked at high HP, binding blocked (no enemies)
-- Hero flagging (FlagAllHeroes / UnflagAllHeroes)
+- Inventory scanning (`CountFreeSlots`, `CountItemByModel`)
+- Effect detection (`HasConset`, `HasBlessing`, `HasEffect` returns false for bogus ID)
+- Skillbar caching (`CacheSkillBar` + role assignment)
+- `CanCast` returns true (alive, loaded, not defeated)
+- `CanUseSkill` gates: heal blocked at full HP, survival blocked at high HP, binding blocked (no enemies)
+- Hero flagging (`FlagAllHeroes` / `UnflagAllHeroes`)
 - Distance calculations
-- Enemy finders return 0 (verified — no enemies in outpost)
+- Enemy finders return `0` in outpost
 
 **Python tests:**
 - Player state, party, map, skillbar, inventory, storage, effects
@@ -46,7 +94,7 @@ Character logged in, standing in an outpost. Merchants and NPCs are accessible h
 - Hero skillbars (if heroes added to party)
 - Merchant/dialog observation (walk to merchant NPC and interact first)
 - Craft/trade actions (with merchant window open)
-- NPC interaction (interact_npc with nearby NPCs)
+- NPC interaction (`interact_npc` with nearby NPCs)
 - Quest state, titles, morale
 
 ### Tier 3: Explorable (with enemies nearby)
@@ -55,41 +103,50 @@ Character in an explorable area (Sparkfly Swamp, Bogroot Growths) with live enem
 **How to set up:** Enter explorable from outpost, find a group of enemies.
 
 **C++ tests:**
-- GetUnhexedEnemy, GetCastingEnemy, GetEnchantedEnemy return valid agent IDs
-- ResolveSkillTarget(hex) returns actual unhexed enemy
-- GetMeleeRangeEnemy returns foe within 250 units
+- `GetUnhexedEnemy`, `GetCastingEnemy`, `GetEnchantedEnemy` return valid agent IDs
+- `ResolveSkillTarget(hex)` returns an actual unhexed enemy
+- `GetMeleeRangeEnemy` returns a foe within 250 units
 
 **Python tests:**
-- test_attack_success (requires alive foe)
+- `test_attack_success` (requires alive foe)
 - Foe agent fields with actual data (hp, casting skill, hex/enchant flags)
-- StoC events (skill_activated, agent_died — generated by combat)
+- StoC events (`skill_activated`, `agent_died`) generated by combat
 
 ### Tier 4: Advisory Mode
 Must inject with `injector.exe --llm-advisory` instead of `--llm`.
 
 **Python tests:**
-- test_advisory_bot_running
-- test_advisory_bot_has_active_state
-- test_advisory_llm_and_bot_coexist
-- test_advisory_state_override_and_restore
+- `test_advisory_bot_running`
+- `test_advisory_bot_has_active_state`
+- `test_advisory_llm_and_bot_coexist`
+- `test_advisory_state_override_and_restore`
 
 ## Recommended Execution
 
-### Quick pass (outpost only — covers ~80% of tests):
+### Quick pass (outpost only - covers ~80% of tests)
 ```bash
-# 1. Launch GW, log into character, stand in Gadd's Encampment
-# 2. C++ tests
-injector.exe --test-froggy
-# 3. Python tests
-injector.exe --llm
+# 1. Launch Disco Panic through GWLauncher and record the returned PID
+# 2. Build the Disco lane
+cmake --preset disco
+cmake --build --preset disco --target injector --target gwa3
+
+# 3. Inject only that PID
+cd gwa3/build_disco/bin/Release
+injector.exe --pid 12345 --dll gwa3_disco.dll --llm
+
+# 4. Point Python at the matching isolated pipe
+cd ../../
+set GWA3_PIPE_NAME=\\.\pipe\gwa3_llm_disco
 python -m bridge.tests
 ```
 
-### Full pass (outpost + explorable):
+### Full pass (outpost + explorable)
 ```bash
 # 1. Outpost pass (same as above)
-injector.exe --test-froggy
-injector.exe --llm
+cd gwa3/build_disco/bin/Release
+injector.exe --pid 12345 --dll gwa3_disco.dll --llm
+cd ../../
+set GWA3_PIPE_NAME=\\.\pipe\gwa3_llm_disco
 python -m bridge.tests
 
 # 2. Manually enter Sparkfly Swamp, find enemies
@@ -102,20 +159,65 @@ injector.exe --llm-advisory
 python -m bridge.tests --filter "test_advisory*"
 ```
 
+### Recommended Disco Panic Execution Order
+
+```bash
+# 1. Outpost baseline
+cd gwa3/build_disco/bin/Release
+injector.exe --pid 12345 --dll gwa3_disco.dll --llm
+cd ../../
+set GWA3_PIPE_NAME=\\.\pipe\gwa3_llm_disco
+python -m bridge.tests --filter "test_(pipe|heartbeat|snapshot|change_target|move_to|add_hero|set_hero_behavior)"
+
+# 2. Merchant workflow after moving to merchant area if needed
+python -m bridge.tests --filter "test_(merchant|dialog|buy|quote|transact|orchestrated_phase3)"
+
+# 3. Explorable workflow after entering Sparkfly
+python -m bridge.tests --filter "test_(attack|use_skill|event|orchestrated_phase4)"
+
+# 4. Advisory validation
+cd gwa3/build_disco/bin/Release
+injector.exe --pid 12345 --dll gwa3_disco.dll --llm-advisory
+cd ../../
+python -m bridge.tests --filter "test_advisory*"
+```
+
+### Repeated Fresh-Session Soak
+
+Use this when validating the launcher-based Disco Panic baseline across multiple clean sessions:
+
+```bash
+set GWA3_BUILD_DIR=c:\Users\Robert\Documents\GWA Censured X BotsHub\gwa3\build_disco
+set GWA3_DLL_NAME=gwa3_disco.dll
+set GWA3_PIPE_NAME=\\.\pipe\gwa3_llm_disco
+python -m bridge.tests --soak --iterations 3
+```
+
+Prerequisite:
+- run the command from an elevated Administrator shell because the GWLauncher AutoIt script is marked `#RequireAdmin`
+
+Notes:
+- `--soak` launches Disco Panic through `GWLauncher`
+- it injects only the exact launcher-returned PID
+- it uses the configured isolated build dir, DLL name, and pipe name
+- it runs the orchestrated bridge suite on each fresh session
+- it records per-run pass/fail/skip counts and basic process-liveness events
+- it tears down the launched client before the next iteration
+
 ## What Skips Are Normal
 
 | Location | Expected Skips |
 |----------|----------------|
 | Outpost | Combat tests (no enemies), dialog tests (no dialog open), event tests (no gameplay) |
-| Explorable | Merchant tests (no merchant), advisory tests (need --llm-advisory) |
-| Advisory | None — all advisory tests should run |
+| Explorable | Merchant tests (no merchant), advisory tests (need `--llm-advisory`) |
+| Advisory | None - all advisory tests should run |
 
-A test run from an outpost with no merchant open will show ~30-40 skips out of ~178 tests. This is normal. If you see **failures** (not skips), those are real bugs.
+A test run from an outpost with no merchant open will show roughly 30-40 skips out of roughly 178 tests. This is normal. If you see **failures** instead of skips, those are real bugs.
 
 ## Test Counts
 
 | Category | Tests |
 |----------|-------|
 | Python bridge (total) | 178 |
-| C++ unit checks (RunFroggyUnitTests) | ~100 |
-| C++ integration checks (RunFroggyFeatureTest) | ~15 |
+| C++ unit checks (`RunFroggyUnitTests`) | ~100 |
+| C++ integration checks (`RunFroggyFeatureTest`) | ~15 |
