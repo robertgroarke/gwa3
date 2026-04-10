@@ -111,6 +111,8 @@ namespace GWA3::LLM::EventPush {
     static void SendEvent(const json& j) {
         std::string s = j.dump();
         std::lock_guard<std::mutex> lock(g_eventMutex);
+        if (!IpcServer::IsClientConnected()) return; // no client — drop
+        if (g_eventQueue.size() >= 256) g_eventQueue.erase(g_eventQueue.begin()); // cap at 256
         g_eventQueue.push_back(std::move(s));
     }
 
