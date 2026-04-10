@@ -2,15 +2,19 @@ param(
     [int]$AccountIndex = 0,
     [int]$LaunchTimeoutSeconds = 45,
     [int]$RunTimeoutSeconds = 180,
-    [string]$AccountsPath = "C:\Users\Robert\Documents\GWA Censured X BotsHub\GWA Censured\Accounts.json"
+    [string]$AccountsPath = "C:\Users\Robert\Documents\GWA Censured X BotsHub\GWA Censured\Accounts.json",
+    [string]$BuildDir = $env:GWA3_BUILD_DIR,
+    [string]$DllName = $env:GWA3_DLL_NAME
 )
 
 $ErrorActionPreference = "Stop"
 
 $script:RepoRoot = Split-Path -Parent $PSScriptRoot
-$script:BinDir = Join-Path $script:RepoRoot "build\bin\Release"
+$resolvedBuildDir = if ($BuildDir) { $BuildDir } else { Join-Path $script:RepoRoot "build" }
+$resolvedDllName = if ($DllName) { $DllName } else { "gwa3.dll" }
+$script:BinDir = Join-Path $resolvedBuildDir "bin\Release"
 $script:InjectorPath = Join-Path $script:BinDir "injector.exe"
-$script:DllPath = Join-Path $script:BinDir "gwa3_beastrit.dll"
+$script:DllPath = Join-Path $script:BinDir $resolvedDllName
 $script:LogPath = Join-Path $script:BinDir "gwa3_log.txt"
 $script:FroggyFlagPath = Join-Path $script:BinDir "gwa3_test_froggy.flag"
 $script:ScreenshotDir = Join-Path $script:BinDir "screenshots"

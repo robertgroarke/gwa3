@@ -580,22 +580,30 @@ static uint32_t GetSalvageSessionId() {
     }
 }
 
-// Call the native Salvage function on the game thread.
-// Mirrors AutoIt CommandSalvage: write to SalvageGlobal, then call Salvage(sessionId, kitId, itemId).
-static void NativeSalvage(uint32_t itemId, uint32_t kitId, uint32_t sessionId) {
+// Execute a salvage command matching the AutoIt CommandSalvage shellcode exactly.
+// AutoIt's command queue calls with eax = pointer to data block:
+//   [eax+0] = command function ptr (cleared to 0 before call)
+//   [eax+4] = item_id
+//   [eax+8] = kit_id
+//   [eax+C] = session_id
+// CommandSalvage reads these, writes item_id/kit_id to SalvageGlobal,
+// then calls Salvage(session_id, kit_id, item_id) via push/call.
+static void ExecuteSalvageCommand(uint32_t itemId, uint32_t kitId, uint32_t sessionId) {
     if (!Offsets::Salvage || !Offsets::SalvageGlobal) return;
 
-    // Write item_id and kit_id to SalvageGlobal (matches AutoIt shellcode)
+    // Write item_id and kit_id to SalvageGlobal (matches AutoIt shellcode lines 1976-1981)
     uint32_t* global = reinterpret_cast<uint32_t*>(Offsets::SalvageGlobal);
     global[0] = itemId;
     global[1] = kitId;
 
-    // Call Salvage(sessionId, kitId, itemId) — cdecl, 3 args
+    // Call Salvage function with 3 args on stack (matches AutoIt lines 1982-1989)
+    // push item_id; push kit_id; push session_id; call Salvage; add esp, 0xC
     uintptr_t fn = Offsets::Salvage;
+    uint32_t sId = sessionId, kId = kitId, iId = itemId;
     __asm {
-        push itemId
-        push kitId
-        push sessionId
+        push iId
+        push kId
+        push sId
         call fn
         add esp, 0xC
     }
@@ -665,25 +673,27 @@ uint32_t SalvageJunkItems() {
         Log::Info("MaintenanceMgr: Salvaging [%u/%u] item=%u model=%u kit=%u session=%u",
                   i + 1, toSalvageCount, itemId, item->model_id, kitId, sessionId);
 
-        // For basic salvage kits on white/blue items: just send the session open
-        // packet. Basic kits auto-salvage for materials with no dialog/confirmation.
-        // The CtoS SALVAGE_SESSION_OPEN (0x77) takes (kitId, itemId).
-        Log::Info("MaintenanceMgr: Sending SALVAGE_SESSION_OPEN (kit=%u, item=%u)", kitId, itemId);
-        CtoS::SendPacket(3, Packets::SALVAGE_SESSION_OPEN, kitId, itemId);
-        WaitMs(1500);
+        // Call the native Salvage function directly on the game thread.
+        // This matches AutoIt's CommandSalvage: writes to SalvageGlobal, then
+        // calls Salvage(session_id, kit_id, item_id). The function handles
+        // opening the session AND auto-completing for basic kits.
+        GameThread::EnqueuePost([itemId, kitId, sessionId]() {
+            ExecuteSalvageCommand(itemId, kitId, sessionId);
+        });
 
-        // For basic kits the salvage auto-completes. No SalvageMaterials needed.
-        // Just verify the item was consumed.
-        Item* check = ItemMgr::GetItemById(itemId);
-        if (!check || check->model_id == 0) {
-            Log::Info("MaintenanceMgr: Item %u salvaged successfully (removed from inventory)", itemId);
+        // Wait for the Salvage function to process.
+        // For basic kits, the Salvage function opens the session.
+        // AutoIt then sends SalvageMaterials (0x7A) but through its own command queue.
+        // We'll wait and check if the item was consumed without sending any CtoS packets.
+        WaitMs(2000);
+
+        // Check if item was consumed
+        Item* afterCheck = ItemMgr::GetItemById(itemId);
+        if (!afterCheck || afterCheck->model_id == 0) {
+            Log::Info("MaintenanceMgr: Item %u consumed by Salvage function (auto-complete)", itemId);
         } else {
-            // Item still exists — may need SalvageMaterials for this kit type
-            Log::Info("MaintenanceMgr: Item %u still exists after session open, sending SalvageMaterials", itemId);
-            CtoS::SendPacket(1, Packets::SALVAGE_MATERIALS);
-            WaitMs(1000);
-            CtoS::SendPacket(1, Packets::SALVAGE_SESSION_DONE);
-            WaitMs(500);
+            Log::Info("MaintenanceMgr: Item %u still exists — session needs SalvageMaterials", itemId);
+            // TODO: need command queue SendPacket for 0x7A
         }
 
         salvaged++;
@@ -806,13 +816,12 @@ void PerformMaintenance(const Config& cfg) {
     uint32_t identified = IdentifyAllItems();
     if (identified > 0) WaitMs(500);
 
-    // Step 4: Salvage — DISABLED.
-    // CtoS SALVAGE_SESSION_OPEN (0x77) crashes GW when dispatched through the engine hook.
-    // The UI message kPreStartSalvage (0x10000102) corrupts agent/inventory state.
-    // The native Salvage function call also crashes.
-    // All three approaches fail — salvage requires the AutoIt-style SafeEnqueue to the
-    // game's internal command queue, which is a separate implementation project.
-    // For now, sell identified weapons instead of salvaging them.
+    // Step 4: Salvage white/blue junk weapons/armor for materials
+    // Uses native Salvage function via GameThread (matches AutoIt CommandSalvage).
+    if (CountFreeSlots() < cfg.minFreeSlots) {
+        uint32_t salvaged = SalvageJunkItems();
+        if (salvaged > 0) WaitMs(500);
+    }
 
     // Step 5: Sell remaining junk items (requires merchant to be open)
     uint32_t sold = SellJunkItems();
