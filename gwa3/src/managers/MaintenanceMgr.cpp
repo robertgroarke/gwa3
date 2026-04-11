@@ -6,6 +6,7 @@
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/DialogMgr.h>
+#include <gwa3/managers/StoCMgr.h>
 #include <gwa3/managers/TradeMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
@@ -711,21 +712,53 @@ uint32_t SalvageJunkItems() {
         Log::Info("MaintenanceMgr: Salvaging [%u/%u] item=%u model=%u kit=%u session=%u",
                   i + 1, toSalvageCount, itemId, item->model_id, kitId, sessionId);
 
+        // Temporarily restore ALL original StoC handlers so the game's own
+        // inventory update handler can process the salvage response.
+        // Our StoC dispatcher replacement may be preventing the response
+        // from reaching the game's internal inventory rebuild code.
+        StoC::Shutdown();
+
+        // Save bags pointer before salvage — we'll restore it if the game NULLs it
+        uintptr_t savedBags = 0;
+        {
+            uintptr_t bp = Offsets::BasePointer;
+            uintptr_t ctx = bp ? *reinterpret_cast<uintptr_t*>(bp) : 0;
+            uintptr_t p1 = ctx ? *reinterpret_cast<uintptr_t*>(ctx + 0x18) : 0;
+            uintptr_t p2 = p1 ? *reinterpret_cast<uintptr_t*>(p1 + 0x40) : 0;
+            savedBags = p2 ? *reinterpret_cast<uintptr_t*>(p2 + 0xF8) : 0;
+            Log::Info("MaintenanceMgr: Saved bags pointer 0x%08X before salvage", savedBags);
+        }
+
         // Open the salvage session on game thread
         GameThread::EnqueuePost([itemId, kitId, sessionId]() {
             ExecuteSalvageCommand(itemId, kitId, sessionId);
         });
-        // Wait for session to stabilize before sending SalvageMaterials
+        WaitMs(1500);
+
+        // Restore bags pointer if it was NULLed
+        {
+            uintptr_t bp = Offsets::BasePointer;
+            uintptr_t ctx = bp ? *reinterpret_cast<uintptr_t*>(bp) : 0;
+            uintptr_t p1 = ctx ? *reinterpret_cast<uintptr_t*>(ctx + 0x18) : 0;
+            uintptr_t p2 = p1 ? *reinterpret_cast<uintptr_t*>(p1 + 0x40) : 0;
+            if (p2) {
+                uintptr_t currentBags = *reinterpret_cast<uintptr_t*>(p2 + 0xF8);
+                if (currentBags == 0 && savedBags != 0) {
+                    *reinterpret_cast<uintptr_t*>(p2 + 0xF8) = savedBags;
+                    Log::Info("MaintenanceMgr: RESTORED bags pointer 0x%08X", savedBags);
+                }
+            }
+        }
+
+        // Send SalvageMaterials — triggers server to process salvage
+        CtoS::SendPacket(1, Packets::SALVAGE_MATERIALS);
         WaitMs(2000);
 
-        // Send SalvageMaterials — via CtoS ring buffer.
-        // This triggers the server to process the salvage and send back
-        // StoC inventory updates that restore the bags pointer.
-        CtoS::SendPacket(1, Packets::SALVAGE_MATERIALS);
-
-        // Wait for server response to rebuild bags pointer (up to 3s)
-        WaitMs(1000);
+        // Wait for server response
         WaitForBagsPointerRestore();
+
+        // Re-enable StoC hooks
+        StoC::Initialize();
 
         salvaged++;
     }
@@ -851,11 +884,12 @@ void PerformMaintenance(const Config& cfg) {
     uint32_t sold = SellJunkItems();
     if (sold > 0) WaitMs(500);
 
-    // Step 5: Salvage — temporarily disabled while investigating crash rate spike.
-    // if (CountFreeSlots() >= 2) {
-    //     uint32_t salvaged = SalvageJunkItems();
-    //     if (salvaged > 0) WaitMs(500);
-    // }
+    // Step 5: Salvage — DISABLED.
+    // The Salvage() function frees and reallocates the inventory bags array.
+    // The old bags pointer at p2+0xF8 is NULLed because the memory is freed.
+    // The game rebuilds it via StoC response, but that response never arrives
+    // because our PacketSend dispatch path doesn't trigger the correct
+    // server-side processing. Requires AutoIt SafeEnqueue (GWA3-184/185).
 
     // Step 6: Buy kits to target (requires merchant to be open)
     BuyKitsToTarget(cfg);

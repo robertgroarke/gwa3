@@ -1,6 +1,6 @@
 param(
     [int]$AccountIndex = 0,
-    [int]$LaunchTimeoutSeconds = 45,
+    [int]$LaunchTimeoutSeconds = 60,
     [int]$RunTimeoutSeconds = 180,
     [string]$AccountsPath = "C:\Users\Robert\Documents\GWA Censured X BotsHub\GWA Censured\Accounts.json",
     [string]$BuildDir = $env:GWA3_BUILD_DIR,
