@@ -166,12 +166,38 @@ Implementation: `ChatMgr::SendChat(L"/whisper recipient,message", L'/')` or dedi
 
 ## Phase 3: Kamadan Trade Chat History (Python Bridge)
 
+### Data Sources
+
+Two complementary Kamadan trade chat APIs are available:
+
+| Source | URL | Strength | Use Case |
+|--------|-----|----------|----------|
+| **GWToolbox** | `wss://kamadan.gwtoolbox.com` / `https://kamadan.gwtoolbox.com` | Live stream + recent search | Real-time trade chat, current listings |
+| **decltype.org** | `https://kamadan.decltype.org` | Deep historical archive | Price trends over weeks/months, historical price analysis |
+
+Both use the same message format: `{"s": "player_name", "m": "message", "t": timestamp}`
+
+#### GWToolbox API
+- **WebSocket** `wss://kamadan.gwtoolbox.com` — live trade chat stream
+- **Search** via WS: send `{"query": "ecto"}` → `{"results": [...], "num_results": N}`
+- **REST** `GET /m` — latest messages (supports `If-None-Match` ETag caching)
+- **REST** `GET /s/<search_term>` — search messages
+- **REST** `GET /u/<player_name>` — messages by player
+- **REST** `GET /trader_quotes` — material trader buy/sell prices (updated every ~5 min)
+- Also supports Ascalon AE1: `wss://ascalon.gwtoolbox.com`
+
+#### decltype.org API
+- **REST** `GET /s/<search_term>` — deep historical search (months/years of data)
+- **REST** `GET /u/<player_name>` — player message history
+- Response format: `[{"s": "name", "m": "text", "t": timestamp, "h": hash}, ...]`
+- Significantly deeper archive than gwtoolbox — essential for price trend analysis
+
 ### 3a. KamadanClient class
 New file: `gwa3/bridge/kamadan_client.py`
 - WebSocket connection to `wss://kamadan.gwtoolbox.com` for live trade chat
-- HTTP GET to `https://kamadan.gwtoolbox.com` for historical search
-- Message format: `{"s": "player_name", "m": "message", "t": timestamp_ms}`
-- Search query format: `{"query": "search_string"}` → `{"results": [...], "num_results": N}`
+- HTTP GET to both `kamadan.gwtoolbox.com` and `kamadan.decltype.org` for search
+- ETag caching on REST endpoints to reduce bandwidth
+- Rate limiting: respect 30s cooldown on WS reconnects
 
 ### 3b. Price lookup tool
 ```python
@@ -180,15 +206,33 @@ LOOKUP_TRADE_PRICES = {
     "description": "Search Kamadan trade chat history for recent listings of an item. Returns seller names, messages, and timestamps.",
     "parameters": {
         "item_name": {"type": "string", "description": "Item name to search for (e.g. 'Ecto', 'Glob of Ectoplasm')"},
-        "max_results": {"type": "integer", "default": 10}
+        "max_results": {"type": "integer", "default": 10},
+        "source": {"type": "string", "enum": ["recent", "historical", "both"], "default": "both",
+                   "description": "recent=gwtoolbox (live/current), historical=decltype.org (deep archive), both=merge results"}
     }
 }
 ```
+- `recent` queries `kamadan.gwtoolbox.com` — fast, current listings
+- `historical` queries `kamadan.decltype.org` — deep archive for price trends
+- `both` merges results, deduplicates by hash/timestamp
 - Handled entirely in Python bridge (no C++ needed)
-- Returns recent trade messages mentioning the item
-- LLM interprets prices from message text (WTS/WTB patterns)
+- Returns trade messages with parsed WTS/WTB prices where possible
 
-### 3c. Live trade chat feed
+### 3c. Trader quotes tool
+```python
+GET_TRADER_QUOTES = {
+    "name": "get_trader_quotes",
+    "description": "Get current material trader buy/sell prices from Kamadan. Updated every ~5 minutes.",
+    "parameters": {
+        "material": {"type": "string", "description": "Optional material name filter (e.g. 'Ecto', 'Iron'). Omit for all prices.", "optional": true}
+    }
+}
+```
+- Fetches from `https://kamadan.gwtoolbox.com/trader_quotes`
+- Returns structured prices: `{"sell": {"item": {"p": price}}, "buy": {...}}`
+- Useful for NPC trader price awareness (complements player trade price discovery)
+
+### 3d. Live trade chat feed
 - Option A: Merge Kamadan WS messages into the chat snapshot (add `"source": "kamadan"` field)
 - Option B: Separate `kamadan_trade_chat` field in snapshot
 - Prefer Option B to avoid confusion with in-game trade chat
@@ -240,8 +284,11 @@ OFFER_SENT → (change_trade_offer) → OFFERING (retract to modify)
 
 | Test | Description |
 |------|-------------|
-| `test_kamadan_search` | Mock HTTP response, verify parsing of search results |
+| `test_gwtoolbox_search` | Mock HTTP response from gwtoolbox.com, verify parsing |
+| `test_decltype_search` | Mock HTTP response from decltype.org, verify parsing |
 | `test_kamadan_ws_message` | Mock WS message, verify JSON parsing |
+| `test_merged_search_dedup` | Verify `source="both"` merges and deduplicates results |
+| `test_trader_quotes_parsing` | Mock trader_quotes response, verify material price extraction |
 | `test_trade_tool_schema` | Validate all new tool definitions have required fields |
 | `test_whisper_format` | Verify whisper message formatting |
 | `test_price_extraction` | Parse WTS/WTB prices from sample trade messages |
@@ -288,10 +335,13 @@ OFFER_SENT → (change_trade_offer) → OFFERING (retract to modify)
 | T-11 | Wire `HandleRemoveTradeItem` in ActionExecutor.cpp | P2 | S |
 | T-12 | Add all player trade tools to tool_schema.py | P2 | S |
 | T-13 | Add `send_whisper` tool to tool_schema.py + ActionExecutor | P2 | S |
-| T-14 | Implement `kamadan_client.py` — WebSocket live feed | P3 | L |
-| T-15 | Implement `kamadan_client.py` — HTTP search/history | P3 | M |
-| T-16 | Add `lookup_trade_prices` tool to tool_schema.py | P3 | S |
-| T-17 | Wire price lookup handler in Python bridge (no C++ needed) | P3 | M |
+| T-14 | Implement `kamadan_client.py` — WebSocket live feed (`wss://kamadan.gwtoolbox.com`) | P3 | L |
+| T-15 | Implement `kamadan_client.py` — gwtoolbox.com REST search (`GET /s/<term>`, `GET /m`) | P3 | M |
+| T-15b | Implement `kamadan_client.py` — decltype.org deep history search (`GET /s/<term>`) | P3 | M |
+| T-15c | Implement merged search with deduplication (`source=both`) | P3 | M |
+| T-16 | Add `lookup_trade_prices` tool to tool_schema.py (with `source` param) | P3 | S |
+| T-16b | Add `get_trader_quotes` tool — material trader prices from gwtoolbox.com `/trader_quotes` | P3 | S |
+| T-17 | Wire price lookup + trader quotes handlers in Python bridge (no C++ needed) | P3 | M |
 | T-18 | Add Kamadan trade feed to snapshot or dedicated field | P3 | M |
 | T-19 | Update LLM system prompt with trade protocol + safety rules | P4 | M |
 | T-20 | Implement trade value guard (max value without confirmation) | P5 | M |
@@ -301,8 +351,11 @@ OFFER_SENT → (change_trade_offer) → OFFERING (retract to modify)
 ### Test Tasks
 | ID | Task | Phase | Type |
 |----|------|-------|------|
-| TT-01 | Unit test: Kamadan search response parsing | P3 | Unit |
+| TT-01 | Unit test: gwtoolbox.com search response parsing | P3 | Unit |
+| TT-01b | Unit test: decltype.org search response parsing | P3 | Unit |
+| TT-01c | Unit test: merged search deduplication | P3 | Unit |
 | TT-02 | Unit test: Kamadan WS message parsing | P3 | Unit |
+| TT-02b | Unit test: trader_quotes response parsing | P3 | Unit |
 | TT-03 | Unit test: trade tool schema validation | P2 | Unit |
 | TT-04 | Unit test: whisper message formatting | P2 | Unit |
 | TT-05 | Unit test: WTS/WTB price extraction from trade messages | P3 | Unit |
@@ -322,7 +375,7 @@ OFFER_SENT → (change_trade_offer) → OFFERING (retract to modify)
 ### Priority Order
 1. **P1** (T-01 → T-04, TT-06, TT-15) — Trade state observation. Foundation for everything.
 2. **P2** (T-05 → T-13, TT-03/04/07-12/13/17) — Trade action tools. Gemma can trade.
-3. **P3** (T-14 → T-18, TT-01/02/05/14) — Kamadan price history. Gemma knows prices.
+3. **P3** (T-14 → T-18, TT-01/01b/01c/02/02b/05/14) — Kamadan price history (gwtoolbox live + decltype.org deep archive). Gemma knows prices.
 4. **P4** (T-19) — LLM prompting. Gemma understands trade protocol.
 5. **P5** (T-20 → T-22, TT-16) — Safety rails. Production-ready.
 
