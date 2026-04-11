@@ -7,6 +7,14 @@ namespace GWA3::CtoS {
     // Initialize: resolve PacketSend and PacketLocation from Offsets.
     bool Initialize();
 
+    // ===== Game Command Queue (GWA3-184) =====
+    // Enqueue a game command to execute in the Engine hook context.
+    // This runs in the same hook point as AutoIt's command queue —
+    // the correct context for operations like Salvage that need
+    // the game's internal state.
+    typedef void (*GameCommandFn)(void* params);
+    void EnqueueGameCommand(GameCommandFn fn, const void* params, size_t paramSize);
+
     // Temporarily unhook/rehook the engine inline hook.
     // Use around map transitions to prevent stale-trampoline crashes.
     void SuspendEngineHook();

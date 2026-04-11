@@ -97,9 +97,32 @@ static DWORD WINAPI PacketSenderThread(LPVOID) {
 // Packet transport instrumentation.
 // s_engineCallTest tracks engine-thread dispatch observations for debugging.
 
-// Pointers used by the dispatch path â€” set during Initialize from Offsets
+// Pointers used by the dispatch path — set during Initialize from Offsets
 static volatile LONG s_engineCallTest = 0;
 static void (__stdcall* s_engineDispatchOnePtr)() = nullptr;
+
+// ===== Game Command Queue (GWA3-184) =====
+// Secondary ring buffer for game function calls that must execute in the
+// Engine hook context (same hook point as AutoIt's command queue).
+// Used for operations like Salvage that need the game's internal context.
+typedef void (*GameCommandFn)(void* params);
+struct GameCommand {
+    GameCommandFn fn;
+    uint8_t params[248]; // 256 - 8 bytes for fn + padding
+};
+static GameCommand s_cmdRing[16];
+static volatile LONG s_cmdHead = 0;
+static volatile LONG s_cmdTail = 0;
+
+static void __stdcall EngineDispatchCommand() {
+    if (s_cmdTail == s_cmdHead) return;
+    LONG idx = s_cmdTail % 16;
+    GameCommand cmd = s_cmdRing[idx];
+    InterlockedIncrement(&s_cmdTail);
+    if (cmd.fn) {
+        cmd.fn(cmd.params);
+    }
+}
 
 static void __stdcall EngineDispatchOne() {
     if (s_pktTail == s_pktHead) return;
@@ -118,6 +141,8 @@ static void __stdcall EngineDispatchOne() {
     t.fn(reinterpret_cast<void*>(loc), t.sizeBytes, t.data);
 }
 
+static void (__stdcall* s_engineDispatchCmdPtr)() = nullptr;
+
 static __declspec(naked) void EngineDetourNaked() {
     __asm {
         pushad
@@ -125,6 +150,12 @@ static __declspec(naked) void EngineDetourNaked() {
 
         inc dword ptr [s_heartbeat]
 
+        // Dispatch game commands (salvage, etc.) — same context as AutoIt command queue
+        mov eax, dword ptr [s_cmdTail]
+        cmp eax, dword ptr [s_cmdHead]
+        je no_command
+        call dword ptr [s_engineDispatchCmdPtr]
+    no_command:
 
         // Check if normal packets pending — if so, dispatch one from game thread
         mov eax, dword ptr [s_pktTail]
@@ -192,6 +223,7 @@ static bool InstallEngineHook() {
     FlushInstructionCache(GetCurrentProcess(), t, 10);
     s_engineReplayTrampoline = reinterpret_cast<uintptr_t>(tramp);
     s_engineDispatchOnePtr = &EngineDispatchOne;
+    s_engineDispatchCmdPtr = &EngineDispatchCommand;
 
     // Write 5-byte JMP to our detour
     DWORD oldProtect;
@@ -225,6 +257,23 @@ static bool InstallEngineHook() {
     return true;
 }
 
+
+void EnqueueGameCommand(GameCommandFn fn, const void* params, size_t paramSize) {
+    if (!s_engineInitialized || !fn) return;
+    if (paramSize > sizeof(GameCommand::params)) {
+        Log::Warn("CtoS: EnqueueGameCommand param too large (%u > %u)",
+                  (uint32_t)paramSize, (uint32_t)sizeof(GameCommand::params));
+        return;
+    }
+    LONG idx = InterlockedIncrement(&s_cmdHead) - 1;
+    GameCommand& cmd = s_cmdRing[idx % 16];
+    cmd.fn = fn;
+    if (params && paramSize > 0) {
+        memcpy(cmd.params, params, paramSize);
+    }
+    Log::Info("CtoS: EnqueueGameCommand fn=0x%08X paramSize=%u idx=%ld",
+              reinterpret_cast<uintptr_t>(fn), (uint32_t)paramSize, idx);
+}
 
 void SuspendEngineHook() {
     if (!s_engineInitialized || !s_engineHookAddr) return;

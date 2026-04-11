@@ -5,6 +5,7 @@
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/AgentMgr.h>
+#include <gwa3/managers/DialogMgr.h>
 #include <gwa3/managers/TradeMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
@@ -710,23 +711,21 @@ uint32_t SalvageJunkItems() {
         Log::Info("MaintenanceMgr: Salvaging [%u/%u] item=%u model=%u kit=%u session=%u",
                   i + 1, toSalvageCount, itemId, item->model_id, kitId, sessionId);
 
-        // Call the native Salvage function directly on the game thread.
-        // This matches AutoIt's CommandSalvage: writes to SalvageGlobal, then
-        // calls Salvage(session_id, kit_id, item_id). The function handles
-        // opening the session AND auto-completing for basic kits.
-        GameThread::EnqueuePost([itemId, kitId, sessionId]() {
-            ExecuteSalvageCommand(itemId, kitId, sessionId);
-        });
+        // Call salvage directly on test thread, then send SalvageMaterials,
+        // then wait for the server's StoC inventory update to restore bags pointer.
+        // Disable DialogMgr StoC hooks to avoid interference with inventory handlers.
+        GWA3::DialogMgr::Shutdown();
 
-        // Wait for the Salvage function to process.
-        // For basic kits, the Salvage function opens the session.
-        // AutoIt then sends SalvageMaterials (0x7A) but through its own command queue.
-        // We'll wait and check if the item was consumed without sending any CtoS packets.
-        WaitMs(2000);
+        ExecuteSalvageCommand(itemId, kitId, sessionId);
+        WaitMs(1000);
 
-        // The Salvage function zeroes the bags array pointer at p2+0xF8.
-        // Wait for the game to repopulate it before reading inventory again.
+        CtoS::SendPacket(1, Packets::SALVAGE_MATERIALS);
+        WaitMs(1000);
+
+        // Wait up to 5s for the bags pointer to restore (StoC inventory update)
         WaitForBagsPointerRestore();
+
+        GWA3::DialogMgr::Initialize();
 
         salvaged++;
     }
@@ -849,13 +848,11 @@ void PerformMaintenance(const Config& cfg) {
     if (identified > 0) WaitMs(500);
 
     // Step 4: Salvage — DISABLED.
-    // The native Salvage function permanently NULLs the bags array pointer at
-    // WorldContext+0x18+0x40+0xF8. The pointer never restores (waited 3s+).
-    // This happens because the Salvage function expects to be called from within
-    // the game's command queue infrastructure, which manages inventory context.
-    // When called from our GameThread hook, the inventory rebuild doesn't trigger.
-    // Requires implementing the full AutoIt command queue (SafeEnqueue) to fix.
-    // Items are sold instead of salvaged for now.
+    // The native Salvage function permanently NULLs bags array pointer (p2+0xF8).
+    // Tried: GameThread, Engine hook command queue, direct call, with/without
+    // DialogMgr shutdown. The bags pointer never restores — the game's StoC
+    // inventory update handler doesn't fire or doesn't rebuild bags in our context.
+    // Sell items instead of salvaging for now.
 
     // Step 5: Sell remaining junk items (requires merchant to be open)
     uint32_t sold = SellJunkItems();
