@@ -1472,6 +1472,7 @@ void CancelTrade() {
 void AcceptTrade() {
     if (Offsets::TradeAcceptOffer > 0x10000) {
         TradeVoidNative fn = reinterpret_cast<TradeVoidNative>(Offsets::TradeAcceptOffer);
+        Log::Info("TradeMgr: AcceptTrade native call fn=0x%08X", static_cast<unsigned>(Offsets::TradeAcceptOffer));
         fn();
         return;
     }
@@ -1904,8 +1905,7 @@ void SubmitOffer(uint32_t gold) {
     if (Offsets::TradeSendOffer > 0x10000) {
         TradeDoActionNative fn = reinterpret_cast<TradeDoActionNative>(Offsets::TradeSendOffer);
         Log::Info("TradeMgr: SubmitOffer native call fn=0x%08X gold=%u",
-                  static_cast<unsigned>(Offsets::TradeSendOffer),
-                  gold);
+                  static_cast<unsigned>(Offsets::TradeSendOffer), gold);
         fn(gold);
         Log::Info("TradeMgr: SubmitOffer native call returned");
         return;

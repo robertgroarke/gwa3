@@ -1821,24 +1821,19 @@ bool CraftConsumableViaUiClick(const char* targetLabel, uint32_t targetModelId, 
         StartMerchantStoCTap(tap);
         CtoS::ResetPacketTap();
 
-        // Click the Craft button
+        // Click the Craft button — force-click even if marked hidden.
+        // AutoIt's ClickFrameByPtr doesn't check hidden state and works.
+        // The "hidden" flag may not mean visually hidden in crafter context.
         const uintptr_t craftTarget = craftButtonFrame;
         bool craftBtnClicked = false;
-        if (craftTarget >= 0x10000 && !UIMgr::IsFrameHidden(craftTarget)) {
+        if (craftTarget >= 0x10000) {
+            const bool isHidden = UIMgr::IsFrameHidden(craftTarget);
+            IntReport("  Craft button: frame=0x%08X hash=%u hidden=%u — clicking anyway (AutoIt style)",
+                      static_cast<unsigned>(craftTarget), UIMgr::GetFrameHash(craftTarget), isHidden ? 1u : 0u);
             craftBtnClicked = UIMgr::ButtonClick(craftTarget);
-            IntReport("  Craft button click: frame=0x%08X clicked=%u",
-                      static_cast<unsigned>(craftTarget), craftBtnClicked ? 1u : 0u);
+            IntReport("  Craft button click result: clicked=%u", craftBtnClicked ? 1u : 0u);
         } else {
-            IntReport("  Craft button not available: frame=0x%08X hidden=%u — trying UIMessage TransactItem directly",
-                      static_cast<unsigned>(craftTarget),
-                      (craftTarget >= 0x10000 && UIMgr::IsFrameHidden(craftTarget)) ? 1u : 0u);
-
-            // Craft button hidden — try the UIMessage TransactItem path directly.
-            // This doesn't need the Craft button to be visible.
-            const bool nativeCrafted = CraftConsumableNatively(
-                targetLabel, targetModelId, targetItemId, merchantItemPosition, beforeCount, afterCount, detail, detailSize);
-            StopMerchantStoCTap(tap);
-            if (nativeCrafted) return true;
+            IntReport("  Craft button not resolved: frame=0x%08X", static_cast<unsigned>(craftTarget));
         }
 
         if (craftBtnClicked) {
