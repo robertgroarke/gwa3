@@ -527,9 +527,18 @@ bool CraftConsumableNatively(const char* targetLabel, uint32_t targetModelId, ui
                                  TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
                                  beforeCount, beforeCount, 1, detail ? detail : "");
 
-    IntReport("  TransactItems(3, 1, %u) — proven FroggyHM/Gemma craft path", targetItemId);
-    TradeMgr::TransactItems(3, 1, targetItemId);
-    const bool craftQueued = true; // TransactItems is fire-and-forget via SendPacket
+    // Dispatch TransactItems on the game thread — matching FroggyHM's GameThread::Enqueue path.
+    // Direct calls to TransactItems from the test thread crash (SendPacket goes through
+    // the CtoS sender thread, wrong execution context for merchant transactions).
+    struct CraftTransactTask { uint32_t item_id; };
+    static auto CraftTransactInvoker = [](void* storage) {
+        auto* t = reinterpret_cast<CraftTransactTask*>(storage);
+        if (t && t->item_id) TradeMgr::TransactItems(3, 1, t->item_id);
+    };
+    CraftTransactTask craftTask{targetItemId};
+    IntReport("  TransactItems(3, 1, %u) via GameThread — proven FroggyHM/Gemma craft path", targetItemId);
+    GameThread::EnqueueRaw(CraftTransactInvoker, &craftTask, sizeof(craftTask));
+    const bool craftQueued = true;
     if (detail && detailSize) {
         sprintf_s(detail, detailSize,
                   "transact_craft_queued itemPos=%u itemId=%u gold=%u",

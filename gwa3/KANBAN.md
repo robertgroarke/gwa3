@@ -76,6 +76,27 @@
 
 ---
 
+## Backlog — Consumable Crafting
+
+### GWA3-110: Consumable craft via GameThread TransactItems
+**Priority**: High — proven working path exists but not wired into the consumable harness
+**Context**: FroggyHM `CraftConsetsIfNeeded` and Gemma `craft_item` both use `GameThread::Enqueue([](){ TradeMgr::TransactItems(3, qty, itemId); })` and this works. The consumable harness currently tries direct `TransactItems` calls from the test thread which crash (wrong execution context — sender thread vs game thread). Wire the harness to use `GameThread::EnqueueRaw` for the `TransactItems(3, 1, merchantItemId)` call.
+**Commits**: `c049be5` (FroggyHM craft), `66220d7` (Gemma craft_item)
+
+### GWA3-111: Embark Beach crafter pathing — stuck detection and avoidance
+**Priority**: Medium — movement to Eyja frequently fails due to NPC body-blocking
+**Context**: The walk from spawn to Eyja's position (3414, 644) gets stuck on other NPCs in the path. Current `MoveTo` has no stuck detection. Needs: periodic position sampling to detect lack of progress, then random perpendicular movement to get around the obstruction before retrying the target waypoint.
+
+### GWA3-112: UIMessage crafter TransactItem investigation
+**Priority**: Low — shelved, working packet path exists
+**Context**: `SendUIMessageAsm(0x30000007, MerchantTransactItemMessage*, nullptr)` dispatches successfully on the game thread (confirmed via logging) but produces `ctoS=none`. The struct layout matches GWCA exactly. The `InlineTask::storage` size bug (64 < 80 bytes) was found and fixed — the invoker now executes. But the game's UIMessage handler for `kSendMerchantTransactItem` doesn't emit an outbound packet in consumable crafter context. Possible causes: wrong item ID format (merchant item ID vs inventory item ID), missing merchant session state, or the UIMessage handler is only active when GWCA hooks are installed. Investigate if the working `TransactItems` packet path makes this moot.
+
+### GWA3-113: Merchant frame row selection via context-linked children
+**Priority**: Medium — row selection is nondeterministic, blocks UI-based craft flow
+**Context**: `UIMgr::GetChildFrameCount(merchantRoot)` returns 0 because the merchant frame uses context-based child linking, not parent-relation child arrays. `NavigateSortedChildPath` always fails. Items and buttons are found via `GetFrameByContextAndChildOffset(merchantContext, childOffset, ...)` but the item row childOffset numbering is unknown. Need to enumerate all frames sharing the merchant context, identify item rows by hash or state pattern, and build a reliable row-selection path. The Craft button (childOffset 125) is consistently found but marked as hidden after row selection.
+
+---
+
 ## Backlog — Bugs / Investigation
 
 ### GWA3-090: Debug CallTarget native function resolution
