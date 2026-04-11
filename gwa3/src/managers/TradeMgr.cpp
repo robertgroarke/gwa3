@@ -897,19 +897,46 @@ static void __cdecl CraftMerchantItemInvoker(void* storage) {
         return;
     }
 
-    // Always use the direct function call for crafter transactions.
-    // UIMessage kSendMerchantTransactItem is a proven no-op in crafter context —
-    // it queues successfully but produces no outbound CtoS packet, no gold delta,
-    // and no inventory delta. The direct TransactionFunction call matches
-    // GWA2 CommandCraftItemEx2 / CommandCraftExecute behavior.
-    if (Offsets::Transaction > 0x10000) {
-        Log::Info("TradeMgr: CraftMerchantItem using direct function call (item=%u qty=%u gold=%u mats=%u)",
-                  task->item_id, task->quantity, task->total_value, task->material_count);
-        CraftMerchantItemDirectInvoker(storage);
+    const uintptr_t scratch = AcquireScratchBlock(s_crafterTransactScratch, &s_crafterTransactScratchIndex, kCrafterTransactScratchSize);
+    if (scratch < 0x10000) return;
+
+    auto* packet = reinterpret_cast<MerchantTransactItemMessage*>(scratch);
+    auto* scratchU32 = reinterpret_cast<uint32_t*>(scratch + sizeof(*packet));
+    uint32_t* materialItemIds = scratchU32;
+    uint32_t* materialQuantities = materialItemIds + kCrafterMaxMaterials;
+    uint32_t* recvItemIds = materialQuantities + kCrafterMaxMaterials;
+    uint32_t* recvQuantities = recvItemIds + 1;
+
+    memset(packet, 0, sizeof(*packet));
+    memcpy(materialItemIds, task->material_item_ids, sizeof(task->material_item_ids));
+    memcpy(materialQuantities, task->material_quantities, sizeof(task->material_quantities));
+    recvItemIds[0] = task->item_id;
+    recvQuantities[0] = task->quantity;
+
+    packet->type = 3u;
+    packet->gold_give = task->total_value;
+    packet->gold_recv = 0u;
+    packet->give.item_count = task->material_count;
+    packet->give.item_ids = materialItemIds;
+    packet->give.item_quantities = materialQuantities;
+    packet->recv.item_count = 1u;
+    packet->recv.item_ids = recvItemIds;
+    packet->recv.item_quantities = recvQuantities;
+
+    Log::Info("TradeMgr: CraftMerchantItem via UIMessage (item=%u qty=%u gold=%u mats=%u matIds=[%u,%u] matQtys=[%u,%u] recvId=%u recvQty=%u UIMsg=0x%08X)",
+              task->item_id, task->quantity, task->total_value, task->material_count,
+              materialItemIds[0], materialItemIds[1], materialQuantities[0], materialQuantities[1],
+              recvItemIds[0], recvQuantities[0], kUiSendMerchantTransactItem);
+
+    if (Offsets::UIMessage > 0x10000) {
+        UIMgr::SendUIMessageAsm(kUiSendMerchantTransactItem, packet, nullptr);
+        Log::Info("TradeMgr: CraftMerchantItem UIMessage dispatched");
         return;
     }
 
-    Log::Warn("TradeMgr: CraftMerchantItem has no viable path (Transaction offset unresolved)");
+    // Fallback to direct function call if UIMessage not available
+    Log::Info("TradeMgr: CraftMerchantItem falling back to direct function call");
+    CraftMerchantItemDirectInvoker(storage);
 }
 
 bool Initialize() {
@@ -1705,37 +1732,6 @@ bool ConfirmTradeQuantityPromptValue(uint32_t quantity) {
     }
     DebugDumpTradeQuantityPromptTree(frame, "trade-quantity-value");
 
-    // For default quantity (1): try focusing the value control and pressing
-    // Enter without modifying the value.  The popup displays "1" by default;
-    // Enter should commit that value through the game's normal input path.
-    if (quantity == 1u) {
-        const uintptr_t valFrame1 = UIMgr::GetChildFrameByOffset(frame, kTradeQuantityPromptValueChildOffsetId);
-        if (valFrame1 > 0x10000) {
-            Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue default-enter path focus+return on frame=0x%08X",
-                      static_cast<unsigned>(valFrame1));
-            UIMgr::ButtonClick(valFrame1);
-            Sleep(80);
-            UIMgr::KeyPress(valFrame1, VK_RETURN);
-            Sleep(200);
-            if (!IsTradeQuantityPromptOpen()) {
-                Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue default-enter path closed prompt");
-                return true;
-            }
-            // Also try Enter on the popup root.
-            frame = FindTradeQuantityPromptFrame();
-            if (frame > 0x10000) {
-                UIMgr::KeyPress(frame, VK_RETURN);
-                Sleep(200);
-                if (!IsTradeQuantityPromptOpen()) {
-                    Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue default-enter on root closed prompt");
-                    return true;
-                }
-            }
-            frame = FindTradeQuantityPromptFrame();
-            if (frame < 0x10000) return true;
-        }
-    }
-
     if (quantity > 1u && TryPromptSpinnerAdjust(frame, quantity)) {
         uintptr_t okButtons[4] = {};
         const size_t okButtonCount = CollectPromptOkButtons(frame, okButtons, _countof(okButtons));
@@ -1762,31 +1758,6 @@ bool ConfirmTradeQuantityPromptValue(uint32_t quantity) {
 
     const uintptr_t directValueFrame = UIMgr::GetChildFrameByOffset(frame, kTradeQuantityPromptValueChildOffsetId);
     if (directValueFrame > 0x10000 && EnterPromptQuantityByKeypress(directValueFrame, quantity)) {
-        // Try VK_RETURN on the value control first — this is how a real user
-        // would confirm: type a number and press Enter.
-        Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue trying VK_RETURN on value frame=0x%08X quantity=%u",
-                  static_cast<unsigned>(directValueFrame), quantity);
-        UIMgr::KeyPress(directValueFrame, VK_RETURN);
-        Sleep(200);
-        if (!IsTradeQuantityPromptOpen()) {
-            Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue VK_RETURN on value frame closed prompt quantity=%u", quantity);
-            return true;
-        }
-        // Try VK_RETURN on the popup root frame as well.
-        frame = FindTradeQuantityPromptFrame();
-        if (frame > 0x10000) {
-            Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue trying VK_RETURN on popup root frame=0x%08X quantity=%u",
-                      static_cast<unsigned>(frame), quantity);
-            UIMgr::KeyPress(frame, VK_RETURN);
-            Sleep(200);
-            if (!IsTradeQuantityPromptOpen()) {
-                Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue VK_RETURN on popup root closed prompt quantity=%u", quantity);
-                return true;
-            }
-        }
-        // Fall through to OK button clicking if Enter did not close the prompt.
-        frame = FindTradeQuantityPromptFrame();
-        if (frame < 0x10000) return true;
         uintptr_t okButtons[4] = {};
         const size_t okButtonCount = CollectPromptOkButtons(frame, okButtons, _countof(okButtons));
         for (size_t okIndex = 0; okIndex < okButtonCount; ++okIndex) {
