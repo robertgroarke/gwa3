@@ -1,9 +1,10 @@
 """Configuration for the GWA3 LLM Bridge."""
 
 import argparse
+import os
 
 # Named pipe path (must match gwa3 DLL)
-PIPE_NAME = r"\\.\pipe\gwa3_llm"
+PIPE_NAME = os.environ.get("GWA3_PIPE_NAME", r"\\.\pipe\gwa3_llm")
 
 # Default LLM settings
 DEFAULT_LLM_URL = "http://localhost:8000/v1"
@@ -47,5 +48,17 @@ def parse_args():
         "--objective",
         default=None,
         help="Standing objective for autonomous play (e.g., 'Farm Bogroot Growths HM repeatedly')",
+    )
+    parser.add_argument(
+        "--kamadan-timeout",
+        type=float,
+        default=10.0,
+        help="Per-source Kamadan HTTP/WebSocket timeout in seconds (default: 10.0)",
+    )
+    parser.add_argument(
+        "--kamadan-cache-ttl",
+        type=float,
+        default=120.0,
+        help="Kamadan search cache TTL in seconds (default: 120.0)",
     )
     return parser.parse_args()

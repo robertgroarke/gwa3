@@ -2,6 +2,12 @@
 
 An autonomous AI agent that plays Guild Wars using a local LLM (Gemma 4). Give it an objective, walk away, come back to loot.
 
+Important for multi-agent work:
+- always launch Guild Wars through `GWLauncher`
+- always inject only the exact launcher-returned PID
+- always use an isolated build dir, DLL name, and pipe name per agent
+- never share one mutable `gwa3/build` + `gwa3.dll` + `\\.\pipe\gwa3_llm` setup across multiple agents
+
 ## How It Works
 
 ```
@@ -23,6 +29,9 @@ GW.exe (gwa3.dll)  <--Named Pipe-->  Python Bridge  <--HTTP-->  Ollama (Gemma 4)
 cd gwa3/bridge
 pip install -r requirements.txt
 
+# Optional: enables faster Kamadan WebSocket searches before player trades
+pip install websockets>=12.0
+
 # Pull Gemma 4 model (one-time download, ~16GB for quantized 27B)
 ollama pull gemma4:27b
 ```
@@ -35,26 +44,55 @@ Open a terminal and leave it running:
 ollama serve
 ```
 
-### Step 3: Launch Guild Wars
+### Step 3: Configure an isolated agent build
 
-Launch GW normally (GW Launcher, shortcut, etc.). Get to the character select screen or log into a character.
+Use one preset per active agent. Recommended presets:
 
-### Step 4: Inject gwa3 in LLM mode
+- `disco` -> `build_disco`, `gwa3_disco.dll`, `\\.\pipe\gwa3_llm_disco`
+- `beastrit` -> `build_beastrit`, `gwa3_beastrit.dll`, `\\.\pipe\gwa3_llm_beastrit`
+- `trade` -> `build_trade`, `gwa3_trade.dll`, `\\.\pipe\gwa3_llm_trade`
 
-```bash
-cd gwa3/build/bin/Release
-injector.exe --llm
-```
-
-This auto-detects GW, sets the LLM mode flag, and injects. gwa3 handles character select automatically, waits for map load, then starts the named pipe server.
-
-### Step 5: Launch the agent
+Example for Disco Panic:
 
 ```bash
 cd gwa3
+cmake --preset disco
+cmake --build --preset disco --target injector --target gwa3
+```
+
+### Step 4: Launch Guild Wars with GWLauncher
+
+Use the account-specific AutoIt launcher script in `GWA Censured/debug_scripts/` and capture the exact PID it returns.
+
+Do not:
+- launch `Gw.exe` directly
+- inject by "first GW process"
+- reuse another agent's PID
+
+### Step 5: Inject the isolated DLL in LLM mode
+
+Example for Disco Panic after GWLauncher returns a PID:
+
+```bash
+cd gwa3/build_disco/bin/Release
+injector.exe --pid 12345 --dll gwa3_disco.dll --llm
+```
+
+This sets the PID-scoped LLM mode flag and injects only the requested client. gwa3 handles character select automatically, waits for map load, then starts the named pipe server for that build.
+
+### Step 6: Launch the agent on the matching pipe
+
+Example for Disco Panic:
+
+```bash
+cd gwa3
+set GWA3_PIPE_NAME=\\.\pipe\gwa3_llm_disco
 python -m bridge \
+  --pipe \\.\pipe\gwa3_llm_disco \
   --llm-url http://localhost:11434/v1 \
   --model gemma4:27b \
+  --kamadan-timeout 10 \
+  --kamadan-cache-ttl 120 \
   --objective "Farm Bogroot Growths HM repeatedly. Sell loot when inventory is full."
 ```
 
@@ -111,6 +149,8 @@ The `--objective` flag tells Gemma what to do. It stays in context across the en
 
 If no objective is provided, Gemma defaults to: *"Farm continuously. Complete dungeon/mission runs, sell loot when inventory is full, restock consumables, and repeat."*
 
+For player-to-player trading objectives, Gemma also uses recent Kamadan archive searches to estimate the current buy/sell range before agreeing to deals.
+
 ## Talking to Gemma (Optional)
 
 While Gemma plays, you can type messages in the terminal to adjust its behavior:
@@ -129,10 +169,12 @@ This is entirely optional. Gemma will play for hours without any input.
 ### Injector
 
 ```bash
-injector.exe --llm              # Inject in LLM mode (auto-detect GW)
-injector.exe --llm --pid 12345  # Inject specific PID in LLM mode
-injector.exe --llm --all        # Inject ALL GW instances in LLM mode
+injector.exe --pid 12345 --dll gwa3_disco.dll --llm
+injector.exe --pid 12345 --dll gwa3_trade.dll --llm
+injector.exe --pid 12345 --dll gwa3_beastrit.dll --llm-advisory
 ```
+
+Prefer explicit `--pid` + `--dll` in multi-client environments.
 
 ### Bridge
 
@@ -146,7 +188,48 @@ python -m bridge [options]
 | `--model` | `gemma-4-32b-it` | Model name (check `ollama list`) |
 | `--objective` | Generic farming | What Gemma should do |
 | `--autonomy` | `tactical` | `advisory`, `tactical`, or `full` |
-| `--pipe` | `\\.\pipe\gwa3_llm` | Named pipe path |
+| `--pipe` | `\\.\pipe\gwa3_llm` | Named pipe path; use an isolated per-agent pipe like `\\.\pipe\gwa3_llm_disco` |
+| `--kamadan-timeout` | `10.0` | Per-source timeout in seconds for Kamadan HTTP/WebSocket price searches |
+| `--kamadan-cache-ttl` | `120.0` | Cache TTL in seconds for Kamadan search results |
+
+## Per-Agent Workflow
+
+### Disco Panic bridge work
+
+```bash
+cd gwa3
+cmake --preset disco
+cmake --build --preset disco --target injector --target gwa3
+cd build_disco/bin/Release
+injector.exe --pid 12345 --dll gwa3_disco.dll --llm
+cd ../../
+set GWA3_PIPE_NAME=\\.\pipe\gwa3_llm_disco
+python -m bridge --pipe \\.\pipe\gwa3_llm_disco
+```
+
+### BEASTRIT Froggy work
+
+```bash
+cd gwa3
+cmake --preset beastrit
+cmake --build --preset beastrit --target injector --target gwa3
+powershell -ExecutionPolicy Bypass -File tools/run_froggy_test.ps1 `
+  -AccountIndex 0 `
+  -BuildDir "c:\Users\Robert\Documents\GWA Censured X BotsHub\gwa3\build_beastrit" `
+  -DllName "gwa3_beastrit.dll"
+```
+
+### Trade harness work
+
+```bash
+cd gwa3
+cmake --preset trade
+cmake --build --preset trade --target injector --target gwa3
+set GWA3_BUILD_DIR=c:\Users\Robert\Documents\GWA Censured X BotsHub\gwa3\build_trade
+set GWA3_DLL_NAME=gwa3_trade.dll
+set GWA3_PIPE_NAME=\\.\pipe\gwa3_llm_trade
+python -m bridge.tests --filter "test_player_trade*"
+```
 
 ## Autonomy Modes
 
@@ -170,7 +253,7 @@ Gemma sees three tiers of data, sent at different frequencies:
 
 All skill IDs, item IDs, and profession IDs are resolved to human-readable names before Gemma sees them.
 
-## Available Actions (40 tools)
+## Available Actions (52 tools)
 
 **Movement (3):** `move_to`, `change_target`, `cancel_action`
 
@@ -190,9 +273,11 @@ To clear a party, issue repeated `kick_hero` actions for the currently present h
 
 **Skillbar (1):** `load_skillbar`
 
-**Trade (3):** `buy_materials`, `request_quote`, `transact_items`
+**Trade and Crafting (11):** `buy_materials`, `request_quote`, `transact_items`, `craft_item`, `initiate_trade`, `offer_trade_item`, `submit_trade_offer`, `accept_trade`, `cancel_trade`, `change_trade_offer`, `remove_trade_item`
 
-**Utility (4):** `send_chat`, `drop_gold`, `wait`
+**Bot Control (2):** `set_combat_mode`, `set_bot_state`
+
+**Utility (5):** `send_chat`, `send_whisper`, `drop_gold`, `resign`, `wait`
 
 All actions are validated (agent exists? skill recharged? item found?) and rate-limited to 10/second.
 
@@ -220,7 +305,8 @@ Error recovery is built in:
 ## Troubleshooting
 
 **"Could not connect to gwa3 pipe"**
-- Is GW running? Did you run `injector.exe --llm`?
+- Is GW running? Did you inject the correct PID with the correct `--dll`?
+- Does `--pipe` match the build's pipe name?
 - Check gwa3 log for `[LLM-Bridge] Initialized`
 - GW must be past character select (map loaded)
 
@@ -239,6 +325,12 @@ Error recovery is built in:
 - Common: "map_not_loaded", "agent_not_found", "skill_on_recharge"
 - Rate limiter blocks if >10 actions/sec
 
+**Another agent is using another character**
+- do not reuse `gwa3/build`
+- do not reuse `gwa3.dll`
+- do not reuse `\\.\pipe\gwa3_llm`
+- build and run in a separate preset lane instead
+
 ## File Structure
 
 ```
@@ -253,12 +345,13 @@ gwa3/
 │   ├── chat_interface.py        # Optional user chat
 │   ├── config.py                # CLI args
 │   ├── ipc_client.py            # Named pipe client
-│   └── requirements.txt         # httpx, pywin32
+│   └── requirements.txt         # httpx, pywin32, optional websockets
 ├── include/gwa3/llm/            # C++ headers
 │   ├── IpcServer.h              # Named pipe server
 │   ├── GameSnapshot.h           # State serialization
 │   ├── ActionExecutor.h         # Action validation + dispatch
 │   └── LlmBridge.h             # Coordinator
+├── CMakePresets.json            # Per-agent isolated build presets
 └── src/llm/                     # C++ implementation
     ├── IpcServer.cpp
     ├── GameSnapshot.cpp

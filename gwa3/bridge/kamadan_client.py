@@ -11,6 +11,7 @@ for price discovery before engaging in player-to-player trades.
 from __future__ import annotations
 
 import asyncio
+import html as html_lib
 import json
 import re
 import time
@@ -66,6 +67,73 @@ _DECLTYPE_WS_URL = "wss://kamadan.decltype.org/ws"
 _DECLTYPE_HTTP_URL = "https://kamadan.decltype.org"
 
 
+def _parse_trade_html(
+    html: str,
+    source: str,
+    count: int,
+) -> tuple[list[TradeMessage], int]:
+    """Parse Kamadan HTML search results into trade messages and total count."""
+    messages: list[TradeMessage] = []
+    total = 0
+
+    total_match = re.search(r"out of about\s+([\d,]+)\s+results", html)
+    if total_match:
+        total = int(total_match.group(1).replace(",", ""))
+    else:
+        total_match = re.search(r"(\d[\d,]*)\s+results?", html)
+        if total_match:
+            total = int(total_match.group(1).replace(",", ""))
+
+    row_matches = re.findall(
+        r'<tr[^>]*class="[^"]*\brow\b[^"]*"[^>]*?(?:data-timestamp="(\d+)")?[^>]*>'
+        r'.*?<div[^>]*class="[^"]*\bname\b[^"]*"[^>]*>(.*?)</div>'
+        r'.*?<td[^>]*class="[^"]*\bmessage\b[^"]*"[^>]*>(.*?)</td>',
+        html,
+        re.DOTALL,
+    )
+    for timestamp_raw, name_html, msg_html in row_matches[:count]:
+        name = html_lib.unescape(re.sub(r"<[^>]+>", "", name_html)).strip()
+        message = html_lib.unescape(re.sub(r"<[^>]+>", "", msg_html)).strip()
+        timestamp = 0
+        if timestamp_raw:
+            try:
+                timestamp = int(timestamp_raw)
+                if timestamp > 10_000_000_000:
+                    timestamp //= 1000
+            except ValueError:
+                timestamp = 0
+        if name and message:
+            messages.append(TradeMessage(
+                seller=name,
+                message=message,
+                timestamp=timestamp,
+                source=source,
+            ))
+
+    if not messages:
+        legacy_rows = re.findall(
+            r'<td[^>]*class="[^"]*name[^"]*"[^>]*>(.*?)</td>'
+            r'.*?<td[^>]*class="[^"]*message[^"]*"[^>]*>(.*?)</td>',
+            html,
+            re.DOTALL,
+        )
+        for name_html, msg_html in legacy_rows[:count]:
+            name = html_lib.unescape(re.sub(r"<[^>]+>", "", name_html)).strip()
+            message = html_lib.unescape(re.sub(r"<[^>]+>", "", msg_html)).strip()
+            if name and message:
+                messages.append(TradeMessage(
+                    seller=name,
+                    message=message,
+                    timestamp=0,
+                    source=source,
+                ))
+
+    if total == 0 and messages:
+        total = len(messages)
+
+    return messages, total
+
+
 async def _search_decltype_ws(
     query: str,
     count: int = 25,
@@ -115,9 +183,6 @@ async def _search_decltype_http(
     timeout: float = 10.0,
 ) -> tuple[list[TradeMessage], int, str | None]:
     """Fallback: scrape kamadan.decltype.org search results via HTTP."""
-    import re as _re
-
-    url = f"{_DECLTYPE_HTTP_URL}/search/{httpx.URL(query).raw_path.decode() if False else query}/0"
     messages: list[TradeMessage] = []
     total = 0
     try:
@@ -128,30 +193,7 @@ async def _search_decltype_http(
             )
             resp.raise_for_status()
             html = resp.text
-
-            # Parse total from "1-25 out of about N results"
-            m = _re.search(r"out of about\s+([\d,]+)\s+results", html)
-            if m:
-                total = int(m.group(1).replace(",", ""))
-
-            # Parse message rows -- each result is in a table row or list item
-            # The HTML uses <td> elements: name, timestamp, message
-            rows = _re.findall(
-                r'<td[^>]*class="[^"]*name[^"]*"[^>]*>(.*?)</td>'
-                r'.*?<td[^>]*class="[^"]*message[^"]*"[^>]*>(.*?)</td>',
-                html,
-                _re.DOTALL,
-            )
-            for name_html, msg_html in rows[:count]:
-                name = _re.sub(r"<[^>]+>", "", name_html).strip()
-                message = _re.sub(r"<[^>]+>", "", msg_html).strip()
-                if name and message:
-                    messages.append(TradeMessage(
-                        seller=name,
-                        message=message,
-                        timestamp=0,
-                        source="decltype",
-                    ))
+            messages, total = _parse_trade_html(html, source="decltype", count=count)
 
         return messages, total, None
     except Exception as e:
@@ -180,7 +222,7 @@ async def _search_gwtoolbox(
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             resp = await client.get(
-                f"{_GWTOOLBOX_URL}/search/{query}/0",
+                f"{_GWTOOLBOX_URL}/search/{query}",
                 headers={
                     "User-Agent": "gwa3-bridge/1.0",
                     "Accept": "application/json, text/html",
@@ -200,28 +242,8 @@ async def _search_gwtoolbox(
                         source="gwtoolbox",
                     ))
             else:
-                # HTML response -- parse similarly to decltype
                 html = resp.text
-                m = re.search(r"(\d[\d,]*)\s+results?", html)
-                if m:
-                    total = int(m.group(1).replace(",", ""))
-
-                rows = re.findall(
-                    r'<td[^>]*class="[^"]*name[^"]*"[^>]*>(.*?)</td>'
-                    r'.*?<td[^>]*class="[^"]*message[^"]*"[^>]*>(.*?)</td>',
-                    html,
-                    re.DOTALL,
-                )
-                for name_html, msg_html in rows[:count]:
-                    name = re.sub(r"<[^>]+>", "", name_html).strip()
-                    message = re.sub(r"<[^>]+>", "", msg_html).strip()
-                    if name and message:
-                        messages.append(TradeMessage(
-                            seller=name,
-                            message=message,
-                            timestamp=0,
-                            source="gwtoolbox",
-                        ))
+                messages, total = _parse_trade_html(html, source="gwtoolbox", count=count)
 
         return messages, total, None
     except Exception as e:

@@ -6,6 +6,7 @@ to adjust behavior, but no input is required.
 """
 
 import asyncio
+import httpx
 import json
 import uuid
 import time
@@ -73,6 +74,11 @@ act on your own judgment to pursue your current objective.
 ## Communication
 If the user sends a message, respond briefly and adjust your objective if asked. \
 Then resume autonomous play. The user's messages are optional — you don't need them to operate.
+## Price Discovery
+Before agreeing to player-to-player trades, use search_trade_prices("item name") to check
+recent Kamadan trade chat history. Look for WTS (want to sell) and WTB (want to buy) offers
+to understand the current market price range. This prevents you from overpaying or underselling.
+Example: search_trade_prices("Ecto") returns recent offers so you know Ectos trade around 4e each.
 """
 
 
@@ -91,13 +97,14 @@ class AgentLoop:
         llm: LLMClient,
         autonomy: str = "tactical",
         objective: str | None = None,
+        kamadan_client: KamadanClient | None = None,
     ):
         self.ipc = ipc
         self.llm = llm
         self.autonomy = autonomy
         self.objective = objective or DEFAULT_OBJECTIVE
         self.observations = ObservationWindow()
-        self.kamadan = KamadanClient()
+        self.kamadan = kamadan_client or KamadanClient()
         self.history: list[dict] = []
         self.max_history = 40
         self._running = False
@@ -187,7 +194,7 @@ class AgentLoop:
                 try:
                     data = await self.kamadan.search_for_llm(query, count=count)
                     content = json.dumps(data)
-                except Exception as e:
+                except (asyncio.TimeoutError, httpx.HTTPError, OSError, ValueError) as e:
                     content = json.dumps({"error": str(e)})
                 self.history.append({
                     "role": "tool",

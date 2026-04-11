@@ -28,16 +28,20 @@ Run with:  python -m unittest bridge.tests.test_g_kamadan -v
 
 import asyncio
 import json
+import os
 import sys
 import time
 import types
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+
 from ..kamadan_client import (
     KamadanClient,
     SearchResult,
     TradeMessage,
+    _parse_trade_html,
     _search_decltype_http,
     _search_decltype_ws,
     _search_gwtoolbox,
@@ -47,6 +51,11 @@ from ..kamadan_client import (
 def _run(coro):
     """Run an async coroutine synchronously."""
     return asyncio.run(coro)
+
+
+def _run_with_timeout(coro, timeout=15):
+    """Run an async coroutine synchronously with an overall timeout."""
+    return asyncio.run(asyncio.wait_for(coro, timeout=timeout))
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +278,16 @@ class TestDectypeWebSocket(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestDectypeHttp(unittest.TestCase):
+    def test_parse_trade_html_helper(self):
+        """PASS: shared HTML parser extracts rows, source, total, and honors count."""
+        msgs, total = _parse_trade_html(DECLTYPE_HTML, source="decltype", count=2)
+
+        self.assertEqual(total, 5432)
+        self.assertEqual(len(msgs), 2)
+        self.assertEqual(msgs[0].seller, "Player One")
+        self.assertEqual(msgs[0].source, "decltype")
+        self.assertEqual(msgs[1].message, "WTB Ectos 3.5e each, buying 100")
+
     @patch("bridge.kamadan_client.httpx.AsyncClient")
     def test_parses_html_results(self, mock_cls):
         """PASS: parses 3 results from HTML, total=5432, source=decltype."""
@@ -794,7 +813,7 @@ class TestAgentLoopDispatch(unittest.TestCase):
         loop, mock_ipc, _ = self._make_loop()
 
         # Make search_for_llm raise
-        loop.kamadan.search_for_llm = AsyncMock(side_effect=RuntimeError("network down"))
+        loop.kamadan.search_for_llm = AsyncMock(side_effect=ValueError("network down"))
 
         response = LLMResponse(
             content=None,
@@ -815,6 +834,52 @@ class TestAgentLoopDispatch(unittest.TestCase):
 
         # ipc.send_action must NOT have been called
         mock_ipc.send_action.assert_not_called()
+
+
+@unittest.skipUnless(
+    os.environ.get("GWA3_KAMADAN_LIVE_TESTS") == "1",
+    "live API tests disabled",
+)
+class TestLiveAPI(unittest.TestCase):
+    def test_live_decltype_search(self):
+        """Live: decltype search returns at least one populated result for Ecto."""
+        msgs, total, err = _run_with_timeout(
+            _search_decltype_http("Ecto", count=5, timeout=15.0),
+            timeout=15,
+        )
+
+        self.assertIsNone(err)
+        self.assertGreater(total, 0)
+        self.assertGreaterEqual(len(msgs), 1)
+        for msg in msgs:
+            self.assertTrue(msg.seller)
+            self.assertTrue(msg.message)
+
+    def test_live_gwtoolbox_search(self):
+        """Live: gwtoolbox search returns at least one populated result for Ecto."""
+        msgs, total, err = _run_with_timeout(
+            _search_gwtoolbox("Ecto", count=5, timeout=15.0),
+            timeout=15,
+        )
+
+        if err and ("403" in err or "timeout" in err.lower() or "timed out" in err.lower()):
+            self.skipTest(f"gwtoolbox live test skipped: {err}")
+
+        self.assertIsNone(err)
+        self.assertGreater(total, 0)
+        self.assertGreaterEqual(len(msgs), 1)
+        for msg in msgs:
+            self.assertTrue(msg.seller)
+            self.assertTrue(msg.message)
+
+    def test_live_full_client_search(self):
+        """Live: full client search returns at least one result from either source."""
+        client = KamadanClient(timeout=15.0, cache_ttl=0.0)
+        result = _run_with_timeout(client.search("Ecto", count=5), timeout=15)
+
+        self.assertGreaterEqual(len(result.results), 1)
+        self.assertTrue(any(msg.source in {"decltype", "gwtoolbox"} for msg in result.results))
+        self.assertGreater(result.total_results, 0)
 
 
 if __name__ == "__main__":

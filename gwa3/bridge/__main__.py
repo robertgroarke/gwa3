@@ -14,6 +14,7 @@ from .ipc_client import IpcClient
 from .llm_client import LLMClient
 from .agent_loop import AgentLoop
 from .chat_interface import chat_input_loop
+from .kamadan_client import KamadanClient
 
 
 async def main():
@@ -44,8 +45,20 @@ async def main():
     # Create LLM client
     llm = LLMClient(args.llm_url, args.model)
 
+    # Create Kamadan client from CLI-configured search settings
+    kamadan = KamadanClient(
+        timeout=args.kamadan_timeout,
+        cache_ttl=args.kamadan_cache_ttl,
+    )
+
     # Create agent loop with objective
-    agent = AgentLoop(ipc, llm, autonomy=args.autonomy, objective=args.objective)
+    agent = AgentLoop(
+        ipc,
+        llm,
+        autonomy=args.autonomy,
+        objective=args.objective,
+        kamadan_client=kamadan,
+    )
 
     # Run agent loop and optional chat interface concurrently
     try:
