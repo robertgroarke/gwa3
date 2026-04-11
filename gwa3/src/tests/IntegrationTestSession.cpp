@@ -514,38 +514,30 @@ bool CraftConsumableNatively(const char* targetLabel, uint32_t targetModelId, ui
     StartMerchantStoCTap(tap);
     CtoS::ResetPacketTap();
 
-    // Skip the quote step — consumable crafters have no quote.
-    // Go directly to CraftMerchantItemByPosition (TransactItems via UIMessage).
-    const uint32_t totalValue = recipe.fee;
-
-    uint32_t materialIds[2] = {};
-    uint32_t materialQuantities[2] = {};
-    for (uint32_t i = 0; i < recipe.materialCount; ++i) {
-        materialIds[i] = recipe.materials[i].modelId;
-        materialQuantities[i] = recipe.materials[i].quantity;
-    }
-
+    // Use the proven working craft path from FroggyHM CraftConsetsIfNeeded / Gemma craft_item:
+    // TransactItems(type=3, quantity=1, merchantItemId) — simple TRANSACT_ITEMS packet.
+    // No quote, no UIMessage struct, no material arrays.
+    // The game resolves materials and gold cost internally from the merchant context.
     if (detail && detailSize) {
         sprintf_s(detail, detailSize,
-                  "native_craft_start itemPos=%u totalValue=%u mat0=%u:%u mat1=%u:%u gold=%u",
-                  merchantItemPosition, totalValue,
-                  materialIds[0], materialQuantities[0], materialIds[1], materialQuantities[1], goldBefore);
+                  "transact_craft_start itemPos=%u itemId=%u gold=%u",
+                  merchantItemPosition, targetItemId, goldBefore);
     }
-    WriteConsumableHarnessStatus("native_craft_start", targetLabel, ReadMapId(), 0,
+    WriteConsumableHarnessStatus("transact_craft_start", targetLabel, ReadMapId(), 0,
                                  TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
                                  beforeCount, beforeCount, 1, detail ? detail : "");
 
-    const bool craftQueued = TradeMgr::CraftMerchantItemByPosition(
-        merchantItemPosition, 1u, totalValue, materialIds, materialQuantities, recipe.materialCount);
+    IntReport("  TransactItems(3, 1, %u) — proven FroggyHM/Gemma craft path", targetItemId);
+    TradeMgr::TransactItems(3, 1, targetItemId);
+    const bool craftQueued = true; // TransactItems is fire-and-forget via SendPacket
     if (detail && detailSize) {
         sprintf_s(detail, detailSize,
-                  "native_craft_queued=%u itemPos=%u totalValue=%u mat0=%u:%u mat1=%u:%u",
-                  craftQueued ? 1u : 0u, merchantItemPosition, totalValue,
-                  materialIds[0], materialQuantities[0], materialIds[1], materialQuantities[1]);
+                  "transact_craft_queued itemPos=%u itemId=%u gold=%u",
+                  merchantItemPosition, targetItemId, goldBefore);
     }
-    WriteConsumableHarnessStatus("native_craft_queued", targetLabel, ReadMapId(), 0,
+    WriteConsumableHarnessStatus("transact_craft_queued", targetLabel, ReadMapId(), 0,
                                  TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
-                                 beforeCount, beforeCount, craftQueued ? 1u : 0u, detail ? detail : "");
+                                 beforeCount, beforeCount, 1, detail ? detail : "");
     if (!craftQueued) {
         StopMerchantStoCTap(tap);
         return false;
