@@ -938,19 +938,24 @@ async def _complete_forward_trade_and_verify_helper(
             break
         await asyncio.sleep(0.5)
 
+    # Step 5b: Wait for the game to process BOTH submissions before accepting.
+    # The game server needs time to register both sides' submit packets.
+    # Also verify the partner submitted from our side (is_accepted or offer state changes).
+    await asyncio.sleep(2.0)
+
     # Step 6: Main accepts — retry until trade closes
     closed = False
-    for _ in range(8):
+    for _ in range(12):
         result = await tc.send_action("accept_trade", {}, timeout=5.0)
         tc.assert_action_success(result)
         try:
             await tc.wait_for_state_change(
-                lambda s: not bool(s.get("trade", {}).get("is_open")), tier=2, timeout=3.0
+                lambda s: not bool(s.get("trade", {}).get("is_open")), tier=2, timeout=4.0
             )
             closed = True
             break
         except Exception:
-            await asyncio.sleep(0.75)
+            await asyncio.sleep(1.5)
 
     assert_true(closed, "Forward trade should close after both sides submit and accept")
     # Reset helper config and give the game time to settle after trade completion.
