@@ -2140,9 +2140,14 @@ bool CraftMerchantItem(uint32_t itemId, uint32_t quantity, uint32_t totalValue,
                        const uint32_t* materialModelIds, const uint32_t* materialQuantities,
                        uint32_t materialCount) {
     if (!Offsets::Transaction || !GameThread::IsInitialized() || itemId == 0 || quantity == 0 || totalValue == 0) {
+        Log::Warn("TradeMgr: CraftMerchantItem early reject Transaction=0x%08X GameThread=%u item=%u qty=%u gold=%u",
+                  static_cast<unsigned>(Offsets::Transaction), GameThread::IsInitialized() ? 1u : 0u,
+                  itemId, quantity, totalValue);
         return false;
     }
     if (!materialModelIds || !materialQuantities || materialCount == 0 || materialCount > kCrafterMaxMaterials) {
+        Log::Warn("TradeMgr: CraftMerchantItem material args invalid mats=%p qtys=%p count=%u",
+                  materialModelIds, materialQuantities, materialCount);
         return false;
     }
 
@@ -2168,6 +2173,9 @@ bool CraftMerchantItem(uint32_t itemId, uint32_t quantity, uint32_t totalValue,
         task.material_quantities[i] = needed;
     }
 
+    Log::Info("TradeMgr: CraftMerchantItem dispatching via GameThread::EnqueueRaw (item=%u qty=%u gold=%u mats=%u matItemIds=[%u,%u])",
+              task.item_id, task.quantity, task.total_value, task.material_count,
+              task.material_item_ids[0], task.material_item_ids[1]);
     GameThread::EnqueueRaw(&CraftMerchantItemInvoker, &task, sizeof(task));
     return true;
 }

@@ -510,54 +510,13 @@ bool CraftConsumableNatively(const char* targetLabel, uint32_t targetModelId, ui
     }
 
     const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
-    const uint32_t quoteBefore = TraderHook::GetQuoteId();
     MerchantStoCTap tap{};
     StartMerchantStoCTap(tap);
     CtoS::ResetPacketTap();
-    if (detail && detailSize) {
-        sprintf_s(detail, detailSize,
-                  "native_quote_start itemPos=%u targetModel=%u targetItem=%u feeFallback=%u quoteBefore=%u",
-                  merchantItemPosition, targetModelId, targetItemId, recipe.fee, quoteBefore);
-    }
-    WriteConsumableHarnessStatus("native_quote_start", targetLabel, ReadMapId(), 0,
-                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
-                                 beforeCount, beforeCount, 1, detail ? detail : "");
 
-    const bool quoteQueued = TradeMgr::RequestCrafterQuoteByPosition(merchantItemPosition);
-    if (detail && detailSize) {
-        sprintf_s(detail, detailSize,
-                  "native_quote_queued=%u itemPos=%u targetItem=%u",
-                  quoteQueued ? 1u : 0u, merchantItemPosition, targetItemId);
-    }
-    WriteConsumableHarnessStatus("native_quote_queued", targetLabel, ReadMapId(), 0,
-                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
-                                 beforeCount, beforeCount, quoteQueued ? 1u : 0u, detail ? detail : "");
-    if (!quoteQueued) {
-        StopMerchantStoCTap(tap);
-        return false;
-    }
-
-    const bool quoteObserved = WaitFor("crafter quote response", 3000, [quoteBefore]() {
-        return TraderHook::GetQuoteId() != quoteBefore || TraderHook::GetCostValue() > 0;
-    });
-    const uint32_t quoteAfter = TraderHook::GetQuoteId();
-    const uint32_t costItemId = TraderHook::GetCostItemId();
-    const uint32_t quotedCost = TraderHook::GetCostValue();
-    const uint32_t totalValue = quotedCost ? quotedCost : recipe.fee;
-    char stoCSummary[256] = {};
-    char ctoSSummary[256] = {};
-    FormatMerchantStoCTapSummary(stoCSummary, sizeof(stoCSummary), tap);
-    FormatCtoSPacketTapSummary(ctoSSummary, sizeof(ctoSSummary), CtoS::GetPacketTapSnapshot());
-    if (detail && detailSize) {
-        sprintf_s(detail, detailSize,
-                  "native_quote_complete observed=%u quoteBefore=%u quoteAfter=%u costItem=%u costValue=%u totalValue=%u stoC=%s ctoS=%s",
-                  quoteObserved ? 1u : 0u, quoteBefore, quoteAfter, costItemId, quotedCost, totalValue, stoCSummary, ctoSSummary);
-    }
-    WriteConsumableHarnessStatus("native_quote_complete", targetLabel, ReadMapId(), 0,
-                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
-                                 beforeCount, beforeCount,
-                                 (quoteObserved && costItemId == targetItemId && totalValue > 0) ? 1u : 0u,
-                                 detail ? detail : "");
+    // Skip the quote step — consumable crafters have no quote.
+    // Go directly to CraftMerchantItemByPosition (TransactItems via UIMessage).
+    const uint32_t totalValue = recipe.fee;
 
     uint32_t materialIds[2] = {};
     uint32_t materialQuantities[2] = {};
@@ -565,6 +524,16 @@ bool CraftConsumableNatively(const char* targetLabel, uint32_t targetModelId, ui
         materialIds[i] = recipe.materials[i].modelId;
         materialQuantities[i] = recipe.materials[i].quantity;
     }
+
+    if (detail && detailSize) {
+        sprintf_s(detail, detailSize,
+                  "native_craft_start itemPos=%u totalValue=%u mat0=%u:%u mat1=%u:%u gold=%u",
+                  merchantItemPosition, totalValue,
+                  materialIds[0], materialQuantities[0], materialIds[1], materialQuantities[1], goldBefore);
+    }
+    WriteConsumableHarnessStatus("native_craft_start", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 beforeCount, beforeCount, 1, detail ? detail : "");
 
     const bool craftQueued = TradeMgr::CraftMerchantItemByPosition(
         merchantItemPosition, 1u, totalValue, materialIds, materialQuantities, recipe.materialCount);
@@ -589,6 +558,8 @@ bool CraftConsumableNatively(const char* targetLabel, uint32_t targetModelId, ui
     });
     afterCount = CountInventoryModelQuantity(targetModelId);
     const uint32_t goldAfter = ItemMgr::GetGoldCharacter();
+    char stoCSummary[256] = {};
+    char ctoSSummary[256] = {};
     FormatMerchantStoCTapSummary(stoCSummary, sizeof(stoCSummary), tap);
     FormatCtoSPacketTapSummary(ctoSSummary, sizeof(ctoSSummary), CtoS::GetPacketTapSnapshot());
     StopMerchantStoCTap(tap);
@@ -964,7 +935,8 @@ void WriteTradeHelperStatus(uint32_t mapId, uint32_t region, uint32_t district, 
                             uint32_t tradePartnerLastEcx, uint32_t tradePartnerLastEdx,
                             uint32_t tradeUiPlayerUpdatedCount, uint32_t tradeUiSessionStartCount,
                             uint32_t tradeUiSessionUpdatedCount, uint32_t tradeUiLastSessionStartState,
-                            uint32_t tradeUiLastSessionStartPlayerNumber) {
+                            uint32_t tradeUiLastSessionStartPlayerNumber,
+                            const char* partnerItemsJson = "[]") {
     char path[MAX_PATH];
     HMODULE hSelf = nullptr;
     GetModuleHandleExA(
@@ -975,10 +947,11 @@ void WriteTradeHelperStatus(uint32_t mapId, uint32_t region, uint32_t district, 
     if (slash) *(slash + 1) = '\0';
     strcat_s(path, "trade_helper_status.json");
 
-    char buf[1280];
+    char buf[2048];
     sprintf_s(buf,
-              "{\"map_id\":%u,\"region\":%u,\"district\":%u,\"my_id\":%u,\"x\":%.1f,\"y\":%.1f,\"trade_flags\":%u,\"trade_open_count\":%u,\"last_open_flags\":%u,\"submit_attempt_count\":%u,\"accept_attempt_count\":%u,\"player_gold\":%u,\"partner_gold\":%u,\"player_item_count\":%u,\"partner_item_count\":%u,\"trade_partner_hook_hits\":%u,\"trade_partner_last_eax\":%u,\"trade_partner_last_ecx\":%u,\"trade_partner_last_edx\":%u,\"trade_ui_player_updated_count\":%u,\"trade_ui_session_start_count\":%u,\"trade_ui_session_updated_count\":%u,\"trade_ui_last_session_start_state\":%u,\"trade_ui_last_session_start_player_number\":%u}\n",
+              "{\"map_id\":%u,\"region\":%u,\"district\":%u,\"my_id\":%u,\"x\":%.1f,\"y\":%.1f,\"trade_flags\":%u,\"trade_open_count\":%u,\"last_open_flags\":%u,\"submit_attempt_count\":%u,\"accept_attempt_count\":%u,\"player_gold\":%u,\"partner_gold\":%u,\"player_item_count\":%u,\"partner_item_count\":%u,\"partner_items\":%s,\"trade_partner_hook_hits\":%u,\"trade_partner_last_eax\":%u,\"trade_partner_last_ecx\":%u,\"trade_partner_last_edx\":%u,\"trade_ui_player_updated_count\":%u,\"trade_ui_session_start_count\":%u,\"trade_ui_session_updated_count\":%u,\"trade_ui_last_session_start_state\":%u,\"trade_ui_last_session_start_player_number\":%u}\n",
               mapId, region, district, myId, x, y, tradeFlags, tradeOpenCount, lastOpenFlags, submitAttemptCount, acceptAttemptCount, playerGold, partnerGold, playerItemCount, partnerItemCount,
+              partnerItemsJson ? partnerItemsJson : "[]",
               tradePartnerHookHits, tradePartnerLastEax, tradePartnerLastEcx, tradePartnerLastEdx,
               tradeUiPlayerUpdatedCount, tradeUiSessionStartCount, tradeUiSessionUpdatedCount,
               tradeUiLastSessionStartState, tradeUiLastSessionStartPlayerNumber);
@@ -1062,6 +1035,12 @@ static uint32_t ReadTradeFlagsForHelper() {
     }
 }
 
+struct HelperPartnerItemInfo {
+    uint32_t item_id;
+    uint32_t model_id;
+    uint32_t quantity;
+};
+
 static bool ReadTradeStateForHelper(uint32_t& playerGold, uint32_t& partnerGold,
                                     uint32_t& playerItemCount, uint32_t& partnerItemCount) {
     playerGold = 0;
@@ -1082,6 +1061,49 @@ static bool ReadTradeStateForHelper(uint32_t& playerGold, uint32_t& partnerGold,
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+}
+
+static size_t ReadTradePartnerItemsForHelper(HelperPartnerItemInfo* out, size_t capacity) {
+    if (!out || capacity == 0) return 0;
+    uintptr_t gc = ResolveGameContextForTradeHelper();
+    if (!gc) return 0;
+    __try {
+        uintptr_t trade = *reinterpret_cast<uintptr_t*>(gc + 0x58);
+        if (trade <= 0x10000) return 0;
+        auto* ctx = reinterpret_cast<HelperTradeContextView*>(trade);
+        const uint32_t count = ctx->partner.items.size;
+        const auto* items = ctx->partner.items.buffer;
+        if (!items || count == 0) return 0;
+        size_t written = 0;
+        for (uint32_t i = 0; i < count && written < capacity; ++i) {
+            const uint32_t itemId = items[i].item_id;
+            const uint32_t qty = items[i].quantity;
+            uint32_t modelId = 0;
+            auto* fullItem = ItemMgr::GetItemById(itemId);
+            if (fullItem) modelId = fullItem->model_id;
+            out[written++] = {itemId, modelId, qty};
+        }
+        return written;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static uint32_t FindHelperInventoryItemByModel(uint32_t modelId) {
+    if (modelId == 0) return 0;
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+    for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
+        Bag* bag = ItemMgr::GetBag(bagIdx);
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t slot = 0; slot < bag->items.size; ++slot) {
+            Item* item = bag->items.buffer[slot];
+            if (item && item->model_id == modelId && item->item_id > 0) {
+                return item->item_id;
+            }
+        }
+    }
+    return 0;
 }
 
 static uint32_t ReadTradeHelperSubmitGoldConfig() {
@@ -1140,6 +1162,35 @@ static bool ReadTradeHelperAutoSubmitConfig() {
     if (!colon) return false;
     while (*colon == ':' || *colon == ' ' || *colon == '\t') ++colon;
     return _strnicmp(colon, "true", 4) == 0 || *colon == '1';
+}
+
+static uint32_t ReadTradeHelperOfferItemModelConfig() {
+    char path[MAX_PATH];
+    HMODULE hSelf = nullptr;
+    GetModuleHandleExA(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCSTR>(&ReadTradeHelperOfferItemModelConfig), &hSelf);
+    GetModuleFileNameA(hSelf, path, MAX_PATH);
+    char* slash = strrchr(path, '\\');
+    if (slash) *(slash + 1) = '\0';
+    strcat_s(path, "trade_helper_config.json");
+
+    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+
+    char buf[256] = {};
+    DWORD read = 0;
+    const BOOL ok = ReadFile(h, buf, sizeof(buf) - 1, &read, nullptr);
+    CloseHandle(h);
+    if (!ok || read == 0) return 0;
+    buf[read] = '\0';
+
+    const char* key = strstr(buf, "\"offer_item_model_id\"");
+    if (!key) return 0;
+    const char* colon = strchr(key, ':');
+    if (!colon) return 0;
+    unsigned long value = strtoul(colon + 1, nullptr, 10);
+    return static_cast<uint32_t>(value);
 }
 
 uintptr_t GetAgentPtrRaw(uint32_t agentId) {
@@ -1659,8 +1710,16 @@ bool CraftConsumableViaUiClick(const char* targetLabel, uint32_t targetModelId, 
                                          TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
                                          beforeCount, afterCount, 1, rowFailDetail);
 
-            // The first item in the crafter list is pre-selected when the
-            // crafter opens. Just try clicking the Craft button directly.
+            // First try the UIMessage TransactItem path directly — this doesn't
+            // need row selection or the Craft button. It sends the crafter transaction
+            // via the game's internal UIMessage dispatch.
+            {
+                const bool nativeCrafted = CraftConsumableNatively(
+                    targetLabel, targetModelId, targetItemId, merchantItemPosition, beforeCount, afterCount, detail, detailSize);
+                if (nativeCrafted) return true;
+            }
+
+            // If UIMessage TransactItem failed, try clicking the Craft button directly.
             // Try both action125 and action126 since we're not sure which is Craft vs Goodbye.
             const uintptr_t candidates[] = { actionPrimaryByContext, actionAltByContext };
             const char* candidateLabels[] = { "action125", "action126" };
@@ -1769,9 +1828,16 @@ bool CraftConsumableViaUiClick(const char* targetLabel, uint32_t targetModelId, 
             IntReport("  Craft button click: frame=0x%08X clicked=%u",
                       static_cast<unsigned>(craftTarget), craftBtnClicked ? 1u : 0u);
         } else {
-            IntReport("  Craft button not available: frame=0x%08X hidden=%u",
+            IntReport("  Craft button not available: frame=0x%08X hidden=%u — trying UIMessage TransactItem directly",
                       static_cast<unsigned>(craftTarget),
                       (craftTarget >= 0x10000 && UIMgr::IsFrameHidden(craftTarget)) ? 1u : 0u);
+
+            // Craft button hidden — try the UIMessage TransactItem path directly.
+            // This doesn't need the Craft button to be visible.
+            const bool nativeCrafted = CraftConsumableNatively(
+                targetLabel, targetModelId, targetItemId, merchantItemPosition, beforeCount, afterCount, detail, detailSize);
+            StopMerchantStoCTap(tap);
+            if (nativeCrafted) return true;
         }
 
         if (craftBtnClicked) {
@@ -2936,7 +3002,9 @@ int RunTradeHelperMode() {
     uint32_t acceptAttemptCount = 0;
     bool submittedThisOpen = false;
     bool acceptedThisOpen = false;
+    bool offeredItemThisOpen = false;
     uint32_t submitGoldThisOpen = 0;
+    uint32_t offerModelThisOpen = 0;
 
     while (GetTickCount() - start < 10 * 60 * 1000) {
         const DWORD now = GetTickCount();
@@ -2951,8 +3019,10 @@ int RunTradeHelperMode() {
             lastOpenFlags = tradeFlags;
             submittedThisOpen = false;
             acceptedThisOpen = false;
+            offeredItemThisOpen = false;
             submitGoldThisOpen = ReadTradeHelperSubmitGoldConfig();
-            IntReport("  Helper observed player trade open (flags=%u)", tradeFlags);
+            offerModelThisOpen = ReadTradeHelperOfferItemModelConfig();
+            IntReport("  Helper observed player trade open (flags=%u offerModel=%u)", tradeFlags, offerModelThisOpen);
         }
 
         if (!tradeOpen) {
@@ -2961,12 +3031,29 @@ int RunTradeHelperMode() {
             lastAcceptAttemptAt = 0;
             submittedThisOpen = false;
             acceptedThisOpen = false;
+            offeredItemThisOpen = false;
             submitGoldThisOpen = 0;
+            offerModelThisOpen = 0;
         }
 
         const bool autoSubmitEnabled = ReadTradeHelperAutoSubmitConfig();
 
-        if (tradeOpen && autoSubmitEnabled && !submittedThisOpen && tradeOpenedAt != 0 && now - tradeOpenedAt > 750) {
+        // Auto-offer item if configured, before submitting.
+        if (tradeOpen && autoSubmitEnabled && !offeredItemThisOpen && offerModelThisOpen > 0
+            && tradeOpenedAt != 0 && now - tradeOpenedAt > 500) {
+            const uint32_t itemId = FindHelperInventoryItemByModel(offerModelThisOpen);
+            if (itemId > 0) {
+                IntReport("  Helper auto-offering item=%u model=%u (flags=%u)", itemId, offerModelThisOpen, tradeFlags);
+                GameThread::Enqueue([itemId]() { TradeMgr::OfferItemPromptMax(itemId); });
+                offeredItemThisOpen = true;
+            } else {
+                IntReport("  Helper offer_item_model_id=%u not found in inventory", offerModelThisOpen);
+                offeredItemThisOpen = true;
+            }
+        }
+
+        if (tradeOpen && autoSubmitEnabled && !submittedThisOpen && tradeOpenedAt != 0 && now - tradeOpenedAt > 750
+            && (offerModelThisOpen == 0 || offeredItemThisOpen)) {
             const uint32_t gold = submitGoldThisOpen;
             IntReport("  Helper auto-submitting offer gold=%u (flags=%u)", gold, tradeFlags);
             GameThread::Enqueue([gold]() { TradeMgr::SubmitOffer(gold); });
@@ -3001,6 +3088,8 @@ int RunTradeHelperMode() {
         uint32_t playerItemCount = 0;
         uint32_t partnerItemCount = 0;
         ReadTradeStateForHelper(playerGold, partnerGold, playerItemCount, partnerItemCount);
+        HelperPartnerItemInfo partnerItems[8] = {};
+        const size_t partnerItemDetailCount = ReadTradePartnerItemsForHelper(partnerItems, 8);
         const uint32_t tradePartnerHookHits = TradePartnerHook::GetHitCount();
         const uint32_t tradePartnerLastEax = TradePartnerHook::GetLastEax();
         const uint32_t tradePartnerLastEcx = TradePartnerHook::GetLastEcx();
@@ -3010,11 +3099,26 @@ int RunTradeHelperMode() {
         const uint32_t tradeUiSessionUpdatedCount = TradeMgr::GetTradeUiSessionUpdatedCount();
         const uint32_t tradeUiLastSessionStartState = TradeMgr::GetTradeUiLastSessionStartState();
         const uint32_t tradeUiLastSessionStartPlayerNumber = TradeMgr::GetTradeUiLastSessionStartPlayerNumber();
+        // Build partner items JSON fragment for status
+        char partnerItemsJson[512] = "[]";
+        if (partnerItemDetailCount > 0) {
+            char* p = partnerItemsJson;
+            *p++ = '[';
+            for (size_t pi = 0; pi < partnerItemDetailCount; ++pi) {
+                if (pi > 0) *p++ = ',';
+                p += sprintf_s(p, static_cast<size_t>(partnerItemsJson + sizeof(partnerItemsJson) - p),
+                               "{\"item_id\":%u,\"model_id\":%u,\"quantity\":%u}",
+                               partnerItems[pi].item_id, partnerItems[pi].model_id, partnerItems[pi].quantity);
+            }
+            *p++ = ']';
+            *p = '\0';
+        }
         WriteTradeHelperStatus(mapId, region, district, ReadMyId(), x, y, tradeFlags, tradeOpenCount, lastOpenFlags,
                              submitAttemptCount, acceptAttemptCount, playerGold, partnerGold, playerItemCount, partnerItemCount,
                              tradePartnerHookHits, tradePartnerLastEax, tradePartnerLastEcx, tradePartnerLastEdx,
                              tradeUiPlayerUpdatedCount, tradeUiSessionStartCount, tradeUiSessionUpdatedCount,
-                             tradeUiLastSessionStartState, tradeUiLastSessionStartPlayerNumber);
+                             tradeUiLastSessionStartState, tradeUiLastSessionStartPlayerNumber,
+                             partnerItemsJson);
 
         if (now - lastLog >= 3000) {
             IntReport("  Helper heartbeat: map=%u region=%u district=%u myId=%u pos=(%.1f, %.1f) tradeFlags=%u",

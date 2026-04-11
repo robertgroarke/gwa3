@@ -38,7 +38,7 @@ static constexpr uint32_t kMaxQueue = 256;
 struct InlineTask {
     using Invoker = void(*)(void* storage);
     Invoker invoke;
-    alignas(8) char storage[64]; // 64 bytes: fits CtoS packet captures (60 bytes)
+    alignas(8) char storage[96]; // 96 bytes: fits CrafterTransactionTask (80 bytes) and CtoS captures (60 bytes)
 
     void operator()() { if (invoke) invoke(storage); }
     explicit operator bool() const { return invoke != nullptr; }
@@ -355,7 +355,12 @@ void Enqueue(Callback task) {
 
 void EnqueueRaw(InlineTask::Invoker invoker, const void* data, size_t dataSize) {
     if (!s_initialized || !invoker) return;
-    if (dataSize > sizeof(InlineTask::storage)) return;
+    if (dataSize > sizeof(InlineTask::storage)) {
+        Log::Warn("GameThread: EnqueueRaw REJECTED — payload %u bytes exceeds storage %u bytes (invoke=0x%08X)",
+                  static_cast<uint32_t>(dataSize), static_cast<uint32_t>(sizeof(InlineTask::storage)),
+                  reinterpret_cast<uintptr_t>(invoker));
+        return;
+    }
 
     EnterCriticalSection(&s_cs);
 
