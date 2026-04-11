@@ -11,6 +11,7 @@ import uuid
 import time
 
 from .ipc_client import IpcClient
+from .kamadan_client import KamadanClient
 from .llm_client import LLMClient, LLMResponse
 from .tool_schema import ALL_TOOLS
 from .observation import ObservationWindow
@@ -96,6 +97,7 @@ class AgentLoop:
         self.autonomy = autonomy
         self.objective = objective or DEFAULT_OBJECTIVE
         self.observations = ObservationWindow()
+        self.kamadan = KamadanClient()
         self.history: list[dict] = []
         self.max_history = 40
         self._running = False
@@ -175,6 +177,22 @@ class AgentLoop:
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": json.dumps({"success": True}),
+                })
+                continue
+
+            # Handle price lookup locally (HTTP, not game pipe)
+            if tc.name == "search_trade_prices":
+                query = params.get("query", "")
+                count = min(params.get("count", 10), 25)
+                try:
+                    data = await self.kamadan.search_for_llm(query, count=count)
+                    content = json.dumps(data)
+                except Exception as e:
+                    content = json.dumps({"error": str(e)})
+                self.history.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": content,
                 })
                 continue
 

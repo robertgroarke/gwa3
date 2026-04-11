@@ -116,6 +116,17 @@ INTERACT_NPC = _tool(
     },
 )
 
+OPEN_MERCHANT = _tool(
+    "open_merchant",
+    "Open a merchant window using the proven merchant-specific GoNPC interaction cadence.",
+    {
+        "properties": {
+            "agent_id": {"type": "integer", "description": "Merchant NPC agent ID"},
+        },
+        "required": ["agent_id"],
+    },
+)
+
 INTERACT_PLAYER = _tool(
     "interact_player",
     "Interact with another player.",
@@ -475,6 +486,70 @@ CRAFT_ITEM = _tool(
     },
 )
 
+INITIATE_TRADE = _tool(
+    "initiate_trade",
+    "Initiate a player-to-player trade with another player agent.",
+    {
+        "properties": {
+            "agent_id": {"type": "integer", "description": "Target player agent ID"},
+            "player_number": {"type": "integer", "description": "Optional target player number from snapshot"},
+        },
+        "required": ["agent_id"],
+    },
+)
+
+OFFER_TRADE_ITEM = _tool(
+    "offer_trade_item",
+    "Offer an inventory item into the current player trade window.",
+    {
+        "properties": {
+            "item_id": {"type": "integer", "description": "Inventory item ID to offer"},
+            "quantity": {"type": "integer", "description": "Quantity to offer (default 1)"},
+        },
+        "required": ["item_id"],
+    },
+)
+
+SUBMIT_TRADE_OFFER = _tool(
+    "submit_trade_offer",
+    "Submit your current player-trade offer, optionally with gold.",
+    {
+        "properties": {
+            "gold": {"type": "integer", "description": "Gold to include in the offer (default 0)"},
+        },
+        "required": [],
+    },
+)
+
+ACCEPT_TRADE = _tool(
+    "accept_trade",
+    "Accept the current player trade after both sides have submitted.",
+    {"properties": {}, "required": []},
+)
+
+CANCEL_TRADE = _tool(
+    "cancel_trade",
+    "Cancel or close the current player trade.",
+    {"properties": {}, "required": []},
+)
+
+CHANGE_TRADE_OFFER = _tool(
+    "change_trade_offer",
+    "Cancel a previously submitted player-trade offer so it can be edited.",
+    {"properties": {}, "required": []},
+)
+
+REMOVE_TRADE_ITEM = _tool(
+    "remove_trade_item",
+    "Remove an item from the current player trade offer.",
+    {
+        "properties": {
+            "slot_or_item_id": {"type": "integer", "description": "Trade slot index or current trade item identifier"},
+        },
+        "required": ["slot_or_item_id"],
+    },
+)
+
 # --- Utility ---
 
 SEND_CHAT = _tool(
@@ -489,6 +564,18 @@ SEND_CHAT = _tool(
             },
         },
         "required": ["message", "channel"],
+    },
+)
+
+SEND_WHISPER = _tool(
+    "send_whisper",
+    "Send a private whisper to a specific player by character name.",
+    {
+        "properties": {
+            "recipient": {"type": "string", "description": "Exact character name to whisper"},
+            "message": {"type": "string", "description": "Whisper message text"},
+        },
+        "required": ["recipient", "message"],
     },
 )
 
@@ -546,6 +633,30 @@ WAIT = _tool(
     },
 )
 
+# --- Price Discovery ---
+
+SEARCH_TRADE_PRICES = _tool(
+    "search_trade_prices",
+    "Search Kamadan trade chat history for recent buy/sell offers. "
+    "Use this BEFORE trading to understand current market prices. "
+    "Returns recent trade messages mentioning the item. "
+    "Look for WTS (want to sell) and WTB (want to buy) patterns and "
+    "extract price ranges from the messages.",
+    {
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Item name to search for (e.g., 'Ecto', 'Armbraces', 'Diamond')",
+            },
+            "count": {
+                "type": "integer",
+                "description": "Max results to return (default 10, max 25)",
+            },
+        },
+        "required": ["query"],
+    },
+)
+
 
 # All tools in a single list for passing to the LLM
 ALL_TOOLS = [
@@ -560,6 +671,7 @@ ALL_TOOLS = [
     USE_HERO_SKILL,
     # Interaction
     INTERACT_NPC,
+    OPEN_MERCHANT,
     INTERACT_PLAYER,
     INTERACT_SIGNPOST,
     DIALOG,
@@ -595,12 +707,22 @@ ALL_TOOLS = [
     REQUEST_QUOTE,
     TRANSACT_ITEMS,
     CRAFT_ITEM,
+    INITIATE_TRADE,
+    OFFER_TRADE_ITEM,
+    SUBMIT_TRADE_OFFER,
+    ACCEPT_TRADE,
+    CANCEL_TRADE,
+    CHANGE_TRADE_OFFER,
+    REMOVE_TRADE_ITEM,
     # Bot control (advisory mode)
     SET_COMBAT_MODE,
     SET_BOT_STATE,
     # Utility
     SEND_CHAT,
+    SEND_WHISPER,
     DROP_GOLD,
     RESIGN,
     WAIT,
+    # Price Discovery
+    SEARCH_TRADE_PRICES,
 ]
