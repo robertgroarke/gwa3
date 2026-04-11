@@ -711,20 +711,20 @@ uint32_t SalvageJunkItems() {
         Log::Info("MaintenanceMgr: Salvaging [%u/%u] item=%u model=%u kit=%u session=%u",
                   i + 1, toSalvageCount, itemId, item->model_id, kitId, sessionId);
 
-        // Two-step salvage via GameThread (matches AutoIt flow):
-        // 1. ExecuteSalvageCommand opens the salvage session (bags go NULL)
-        // 2. SalvageMaterials CtoS packet tells server to process
-        // 3. Server sends StoC inventory update → game rebuilds bags
+        // Open the salvage session on game thread
         GameThread::EnqueuePost([itemId, kitId, sessionId]() {
             ExecuteSalvageCommand(itemId, kitId, sessionId);
         });
-        WaitMs(1000);
+        // Wait for session to stabilize before sending SalvageMaterials
+        WaitMs(2000);
 
-        // Send SalvageMaterials
+        // Send SalvageMaterials — via CtoS ring buffer.
+        // This triggers the server to process the salvage and send back
+        // StoC inventory updates that restore the bags pointer.
         CtoS::SendPacket(1, Packets::SALVAGE_MATERIALS);
-        WaitMs(500);
 
-        // Wait for server response to rebuild bags pointer
+        // Wait for server response to rebuild bags pointer (up to 3s)
+        WaitMs(1000);
         WaitForBagsPointerRestore();
 
         salvaged++;
@@ -851,13 +851,11 @@ void PerformMaintenance(const Config& cfg) {
     uint32_t sold = SellJunkItems();
     if (sold > 0) WaitMs(500);
 
-    // Step 5: Salvage white/blue junk IF we now have free slots for salvage materials.
-    // Must have free slots — salvage produces materials that need bag space.
-    // Must run AFTER sell so there's room for the output materials.
-    if (CountFreeSlots() >= 2) {
-        uint32_t salvaged = SalvageJunkItems();
-        if (salvaged > 0) WaitMs(500);
-    }
+    // Step 5: Salvage — temporarily disabled while investigating crash rate spike.
+    // if (CountFreeSlots() >= 2) {
+    //     uint32_t salvaged = SalvageJunkItems();
+    //     if (salvaged > 0) WaitMs(500);
+    // }
 
     // Step 6: Buy kits to target (requires merchant to be open)
     BuyKitsToTarget(cfg);
