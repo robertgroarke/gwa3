@@ -711,21 +711,21 @@ uint32_t SalvageJunkItems() {
         Log::Info("MaintenanceMgr: Salvaging [%u/%u] item=%u model=%u kit=%u session=%u",
                   i + 1, toSalvageCount, itemId, item->model_id, kitId, sessionId);
 
-        // Call salvage directly on test thread, then send SalvageMaterials,
-        // then wait for the server's StoC inventory update to restore bags pointer.
-        // Disable DialogMgr StoC hooks to avoid interference with inventory handlers.
-        GWA3::DialogMgr::Shutdown();
-
-        ExecuteSalvageCommand(itemId, kitId, sessionId);
+        // Two-step salvage via GameThread (matches AutoIt flow):
+        // 1. ExecuteSalvageCommand opens the salvage session (bags go NULL)
+        // 2. SalvageMaterials CtoS packet tells server to process
+        // 3. Server sends StoC inventory update → game rebuilds bags
+        GameThread::EnqueuePost([itemId, kitId, sessionId]() {
+            ExecuteSalvageCommand(itemId, kitId, sessionId);
+        });
         WaitMs(1000);
 
+        // Send SalvageMaterials
         CtoS::SendPacket(1, Packets::SALVAGE_MATERIALS);
-        WaitMs(1000);
+        WaitMs(500);
 
-        // Wait up to 5s for the bags pointer to restore (StoC inventory update)
+        // Wait for server response to rebuild bags pointer
         WaitForBagsPointerRestore();
-
-        GWA3::DialogMgr::Initialize();
 
         salvaged++;
     }
