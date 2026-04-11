@@ -5,6 +5,7 @@
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/RenderHook.h>
 #include <gwa3/core/TargetLogHook.h>
+#include <gwa3/core/TradePartnerHook.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/managers/StoCMgr.h>
 #include <gwa3/packets/CtoSHook.h>
@@ -15,6 +16,8 @@
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 
+#include <string>
+
 namespace GWA3::SmokeTest {
 
 namespace {
@@ -24,6 +27,12 @@ struct MerchantStoCTap {
     LONG counts[0x200]{};
     bool active = false;
 };
+
+void WriteConsumableHarnessStatus(const char* stage, const char* targetLabel, uint32_t mapId, uint32_t npcId,
+                                  uint32_t merchantItemCount, uint32_t targetModelId, uint32_t targetItemId,
+                                  uint32_t beforeCount, uint32_t afterCount, uint32_t success,
+                                  const char* detail);
+uint32_t CountInventoryModelQuantity(uint32_t modelId);
 
 void StartMerchantStoCTap(MerchantStoCTap& tap) {
     if (tap.active) return;
@@ -60,6 +69,52 @@ void ReportMerchantStoCTap(const char* label, MerchantStoCTap& tap) {
     }
 }
 
+void FormatMerchantStoCTapSummary(char* out, size_t outSize, MerchantStoCTap& tap) {
+    if (!out || !outSize) return;
+    out[0] = '\0';
+    size_t used = 0;
+    bool any = false;
+    for (uint32_t header = 0; header < 0x200 && used < outSize; ++header) {
+        const LONG count = tap.counts[header];
+        if (count <= 0) continue;
+        any = true;
+        const int written = sprintf_s(out + used, outSize - used, "%s0x%03X=%ld",
+                                      used ? " " : "", header, count);
+        if (written < 0) break;
+        used += written;
+    }
+    if (!any) {
+        sprintf_s(out, outSize, "none");
+    }
+}
+
+void FormatCtoSPacketTapSummary(char* out, size_t outSize, const CtoS::PacketTapSnapshot& tap) {
+    if (!out || !outSize) return;
+    out[0] = '\0';
+    if (tap.total_packets == 0 || tap.unique_headers == 0) {
+        sprintf_s(out, outSize, "none");
+        return;
+    }
+
+    size_t used = 0;
+    int written = sprintf_s(out, outSize, "total=%u", tap.total_packets);
+    if (written <= 0) {
+        sprintf_s(out, outSize, "format_error");
+        return;
+    }
+    used = static_cast<size_t>(written);
+
+    for (uint32_t i = 0; i < 8 && used < outSize; ++i) {
+        if (tap.headers[i] == 0 || tap.counts[i] == 0) continue;
+        written = sprintf_s(out + used, outSize - used, "%s0x%03X=%u",
+                            used > 0 ? " " : "",
+                            tap.headers[i],
+                            tap.counts[i]);
+        if (written <= 0) break;
+        used += static_cast<size_t>(written);
+    }
+}
+
 enum class MerchantDialogVariant {
     StandardId,
     StandardPtr,
@@ -79,6 +134,31 @@ enum class MerchantIsolationStage {
     InteractOnly,
 };
 
+enum class ConsumableHarnessStage {
+    Full,
+    TravelOnly,
+    OpenOnly,
+    ListOnly,
+    CraftOnly,
+};
+
+enum class ConsumableHarnessTarget {
+    All,
+    Grail,
+    Essence,
+    Armor,
+};
+
+enum class ConsumableHarnessClickMode {
+    AltOnly,
+    PathOnly,
+    RowOnly,
+    RowChild0Only,
+    RowChild1Only,
+    RootOnly,
+    Both,
+};
+
 bool CheckLocalFlagFile(const char* flagFile) {
     char path[MAX_PATH];
     HMODULE hSelf = nullptr;
@@ -88,6 +168,19 @@ bool CheckLocalFlagFile(const char* flagFile) {
     GetModuleFileNameA(hSelf, path, MAX_PATH);
     char* slash = strrchr(path, '\\');
     if (slash) *(slash + 1) = '\0';
+    const size_t baseLen = strlen(path);
+    const DWORD pid = GetCurrentProcessId();
+    const char* ext = strrchr(flagFile, '.');
+    if (ext && _stricmp(ext, ".flag") == 0) {
+        std::string stem(flagFile, ext - flagFile);
+        snprintf(path + baseLen, MAX_PATH - baseLen, "%s_%lu.flag", stem.c_str(), pid);
+        const DWORD scopedAttr = GetFileAttributesA(path);
+        if (scopedAttr != INVALID_FILE_ATTRIBUTES) {
+            DeleteFileA(path);
+            return true;
+        }
+        path[baseLen] = '\0';
+    }
     strcat_s(path, flagFile);
     const DWORD attr = GetFileAttributesA(path);
     if (attr != INVALID_FILE_ATTRIBUTES) {
@@ -167,13 +260,887 @@ const char* DescribeMerchantIsolationStage(MerchantIsolationStage stage) {
     }
 }
 
+ConsumableHarnessStage GetConsumableHarnessStage() {
+    if (CheckLocalFlagFile("gwa3_test_consumables_stage_travel_only.flag")) {
+        return ConsumableHarnessStage::TravelOnly;
+    }
+    if (CheckLocalFlagFile("gwa3_test_consumables_stage_open_only.flag")) {
+        return ConsumableHarnessStage::OpenOnly;
+    }
+    if (CheckLocalFlagFile("gwa3_test_consumables_stage_list_only.flag")) {
+        return ConsumableHarnessStage::ListOnly;
+    }
+    if (CheckLocalFlagFile("gwa3_test_consumables_stage_craft_only.flag")) {
+        return ConsumableHarnessStage::CraftOnly;
+    }
+    return ConsumableHarnessStage::Full;
+}
+
+const char* DescribeConsumableHarnessStage(ConsumableHarnessStage stage) {
+    switch (stage) {
+    case ConsumableHarnessStage::Full: return "travel + open + list + craft";
+    case ConsumableHarnessStage::TravelOnly: return "travel only";
+    case ConsumableHarnessStage::OpenOnly: return "travel + open";
+    case ConsumableHarnessStage::ListOnly: return "travel + open + list";
+    case ConsumableHarnessStage::CraftOnly: return "travel + open + list + craft";
+    default: return "unknown";
+    }
+}
+
+ConsumableHarnessTarget GetConsumableHarnessTarget() {
+    if (CheckLocalFlagFile("gwa3_test_consumables_target_grail.flag")) {
+        return ConsumableHarnessTarget::Grail;
+    }
+    if (CheckLocalFlagFile("gwa3_test_consumables_target_essence.flag")) {
+        return ConsumableHarnessTarget::Essence;
+    }
+    if (CheckLocalFlagFile("gwa3_test_consumables_target_armor.flag")) {
+        return ConsumableHarnessTarget::Armor;
+    }
+    return ConsumableHarnessTarget::All;
+}
+
+const char* DescribeConsumableHarnessTarget(ConsumableHarnessTarget target) {
+    switch (target) {
+    case ConsumableHarnessTarget::All: return "all consumable crafters";
+    case ConsumableHarnessTarget::Grail: return "Eyja / Grail of Might";
+    case ConsumableHarnessTarget::Essence: return "Kwat / Essence of Celerity";
+    case ConsumableHarnessTarget::Armor: return "Alcus / Armor of Salvation";
+    default: return "unknown";
+    }
+}
+
+ConsumableHarnessClickMode GetConsumableHarnessClickMode() {
+    if (CheckLocalFlagFile("gwa3_test_consumables_click_path_only.flag")) {
+        return ConsumableHarnessClickMode::PathOnly;
+    }
+    if (CheckLocalFlagFile("gwa3_test_consumables_click_row_only.flag")) {
+        return ConsumableHarnessClickMode::RowOnly;
+    }
+    if (CheckLocalFlagFile("gwa3_test_consumables_click_row_child0_only.flag")) {
+        return ConsumableHarnessClickMode::RowChild0Only;
+    }
+    if (CheckLocalFlagFile("gwa3_test_consumables_click_row_child1_only.flag")) {
+        return ConsumableHarnessClickMode::RowChild1Only;
+    }
+    if (CheckLocalFlagFile("gwa3_test_consumables_click_root_only.flag")) {
+        return ConsumableHarnessClickMode::RootOnly;
+    }
+    if (CheckLocalFlagFile("gwa3_test_consumables_click_both.flag")) {
+        return ConsumableHarnessClickMode::Both;
+    }
+    return ConsumableHarnessClickMode::AltOnly;
+}
+
+const char* DescribeConsumableHarnessClickMode(ConsumableHarnessClickMode mode) {
+    switch (mode) {
+    case ConsumableHarnessClickMode::AltOnly: return "row + action126";
+    case ConsumableHarnessClickMode::PathOnly: return "row + actionPath";
+    case ConsumableHarnessClickMode::RowOnly: return "row only";
+    case ConsumableHarnessClickMode::RowChild0Only: return "row child 0 only";
+    case ConsumableHarnessClickMode::RowChild1Only: return "row child 1 only";
+    case ConsumableHarnessClickMode::RootOnly: return "row + action125";
+    case ConsumableHarnessClickMode::Both: return "row + action125 + action126";
+    default: return "unknown";
+    }
+}
+
 constexpr uint32_t kMerchantRootHash = 3613855137u;
+constexpr uint32_t kMerchantActionButtonPrimaryHash = 3422277079u;
+constexpr uint32_t kMerchantActionButtonAltHash = 1687064728u;
+constexpr uint32_t kMerchantItemRowHash = 1852904459u;
+constexpr uint32_t kTradeQuantityPromptChildOffsetId = 2u;
 constexpr uint32_t kMapEmbarkBeach = 857u;
 constexpr uint32_t kMapGadds = 638u;
+constexpr uint32_t kMapLongeyesLedge = 650u;
+constexpr uint32_t kTradeTestRegion = 4u;
+constexpr uint32_t kTradeTestDistrict = 99u;
+constexpr uint32_t kTradeFallbackDistrict = 1u;
+constexpr uint32_t kTradeTestLanguage = 8u;
 constexpr float kEmbarkEyjaX = 3336.0f;
 constexpr float kEmbarkEyjaY = 627.0f;
+constexpr float kEmbarkKwatX = 3596.0f;
+constexpr float kEmbarkKwatY = 107.0f;
+constexpr float kEmbarkAlcusX = 3704.0f;
+constexpr float kEmbarkAlcusY = -163.0f;
 constexpr float kGaddsMerchantX = -8374.0f;
 constexpr float kGaddsMerchantY = -22491.0f;
+constexpr uint32_t kModelArmorSalvation = 24860u;
+constexpr uint32_t kModelEssenceCelerity = 24859u;
+constexpr uint32_t kModelGrailOfMight = 24861u;
+constexpr uint32_t kMaterialBone = 921u;
+constexpr uint32_t kMaterialDust = 929u;
+constexpr uint32_t kMaterialFeather = 933u;
+constexpr uint32_t kMaterialPlantFiber = 934u;
+constexpr uint32_t kMaterialIronIngot = 948u;
+constexpr uint32_t kMaterialScale = 953u;
+constexpr uint32_t kMaterialGraniteSlab = 955u;
+
+struct ConsumableMaterialCounter {
+    const char* label;
+    uint32_t modelId;
+    uint32_t bags14 = 0;
+    uint32_t storage = 0;
+};
+
+struct ConsumableRecipeMaterial {
+    uint32_t modelId;
+    uint32_t quantity;
+};
+
+struct ConsumableCraftRecipe {
+    uint32_t fee = 0;
+    uint32_t materialCount = 0;
+    ConsumableRecipeMaterial materials[2]{};
+};
+
+uint32_t CountBagModelQuantity(uint32_t modelId, uint32_t bagStart, uint32_t bagEnd) {
+    uint32_t total = 0;
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    for (uint32_t bagIndex = bagStart; bagIndex <= bagEnd; ++bagIndex) {
+        Bag* bag = inv->bags[bagIndex];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t slot = 0; slot < bag->items.size; ++slot) {
+            Item* item = bag->items.buffer[slot];
+            if (item && item->model_id == modelId) {
+                total += item->quantity;
+            }
+        }
+    }
+    return total;
+}
+
+void FillConsumableMaterialCounters(ConsumableMaterialCounter (&counters)[7]) {
+    counters[0] = {"iron", kMaterialIronIngot};
+    counters[1] = {"dust", kMaterialDust};
+    counters[2] = {"bone", kMaterialBone};
+    counters[3] = {"feather", kMaterialFeather};
+    counters[4] = {"granite", kMaterialGraniteSlab};
+    counters[5] = {"fiber", kMaterialPlantFiber};
+    counters[6] = {"scale", kMaterialScale};
+
+    for (auto& counter : counters) {
+        counter.bags14 = CountBagModelQuantity(counter.modelId, 1u, 4u);
+        counter.storage = CountBagModelQuantity(counter.modelId, 6u, 6u);
+    }
+}
+
+void FormatConsumableMaterialSnapshot(char* out, size_t outSize,
+                                      const ConsumableMaterialCounter (&before)[7],
+                                      const ConsumableMaterialCounter (&after)[7]) {
+    if (!out || !outSize) return;
+    const uint32_t goldChar = ItemMgr::GetGoldCharacter();
+    const uint32_t goldStorage = ItemMgr::GetGoldStorage();
+    sprintf_s(
+        out, outSize,
+        "goldChar=%u goldStorage=%u %s=%u/%u->%u/%u %s=%u/%u->%u/%u %s=%u/%u->%u/%u %s=%u/%u->%u/%u %s=%u/%u->%u/%u %s=%u/%u->%u/%u %s=%u/%u->%u/%u",
+        goldChar, goldStorage,
+        before[0].label, before[0].bags14, before[0].storage, after[0].bags14, after[0].storage,
+        before[1].label, before[1].bags14, before[1].storage, after[1].bags14, after[1].storage,
+        before[2].label, before[2].bags14, before[2].storage, after[2].bags14, after[2].storage,
+        before[3].label, before[3].bags14, before[3].storage, after[3].bags14, after[3].storage,
+        before[4].label, before[4].bags14, before[4].storage, after[4].bags14, after[4].storage,
+        before[5].label, before[5].bags14, before[5].storage, after[5].bags14, after[5].storage,
+        before[6].label, before[6].bags14, before[6].storage, after[6].bags14, after[6].storage);
+}
+
+void FormatPromptChildSnapshot(char* out, size_t outSize, uintptr_t promptFrame, uint32_t maxChildren = 6u) {
+    if (!out || !outSize) return;
+    if (promptFrame < 0x10000) {
+        sprintf_s(out, outSize, "prompt=0x%08X childCount=0", static_cast<unsigned>(promptFrame));
+        return;
+    }
+
+    const uint32_t childCount = UIMgr::GetChildFrameCount(promptFrame);
+    const uint32_t emitCount = childCount < maxChildren ? childCount : maxChildren;
+    int written = sprintf_s(out, outSize, "prompt=0x%08X childCount=%u",
+                            static_cast<unsigned>(promptFrame), childCount);
+    if (written < 0) return;
+
+    for (uint32_t i = 0; i < emitCount && static_cast<size_t>(written) < outSize; ++i) {
+        const uintptr_t child = UIMgr::GetChildFrameByIndex(promptFrame, i);
+        const int appended = sprintf_s(
+            out + written, outSize - written,
+            " i%u=0x%08X/h%u/o%u/s%X/c%u",
+            i,
+            static_cast<unsigned>(child),
+            UIMgr::GetFrameHash(child),
+            UIMgr::GetChildOffsetId(child),
+            UIMgr::GetFrameState(child),
+            UIMgr::GetChildFrameCount(child));
+        if (appended < 0) break;
+        written += appended;
+    }
+}
+
+bool TryGetConsumableCraftRecipe(uint32_t targetModelId, ConsumableCraftRecipe& recipe) {
+    ZeroMemory(&recipe, sizeof(recipe));
+    switch (targetModelId) {
+    case kModelGrailOfMight:
+        recipe.fee = 250u;
+        recipe.materialCount = 2u;
+        recipe.materials[0] = {kMaterialIronIngot, 50u};
+        recipe.materials[1] = {kMaterialDust, 50u};
+        return true;
+    case kModelEssenceCelerity:
+        recipe.fee = 250u;
+        recipe.materialCount = 2u;
+        recipe.materials[0] = {kMaterialFeather, 50u};
+        recipe.materials[1] = {kMaterialDust, 50u};
+        return true;
+    case kModelArmorSalvation:
+        recipe.fee = 250u;
+        recipe.materialCount = 2u;
+        recipe.materials[0] = {kMaterialIronIngot, 50u};
+        recipe.materials[1] = {kMaterialBone, 50u};
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool CraftConsumableNatively(const char* targetLabel, uint32_t targetModelId, uint32_t targetItemId,
+                             uint32_t merchantItemPosition, uint32_t beforeCount,
+                             uint32_t& afterCount, char* detail, size_t detailSize) {
+    ConsumableCraftRecipe recipe{};
+    if (!TryGetConsumableCraftRecipe(targetModelId, recipe) || merchantItemPosition == UINT32_MAX || merchantItemPosition == 0u) {
+        return false;
+    }
+
+    const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
+    const uint32_t quoteBefore = TraderHook::GetQuoteId();
+    MerchantStoCTap tap{};
+    StartMerchantStoCTap(tap);
+    CtoS::ResetPacketTap();
+    if (detail && detailSize) {
+        sprintf_s(detail, detailSize,
+                  "native_quote_start itemPos=%u targetModel=%u targetItem=%u feeFallback=%u quoteBefore=%u",
+                  merchantItemPosition, targetModelId, targetItemId, recipe.fee, quoteBefore);
+    }
+    WriteConsumableHarnessStatus("native_quote_start", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 beforeCount, beforeCount, 1, detail ? detail : "");
+
+    const bool quoteQueued = TradeMgr::RequestCrafterQuoteByPosition(merchantItemPosition);
+    if (detail && detailSize) {
+        sprintf_s(detail, detailSize,
+                  "native_quote_queued=%u itemPos=%u targetItem=%u",
+                  quoteQueued ? 1u : 0u, merchantItemPosition, targetItemId);
+    }
+    WriteConsumableHarnessStatus("native_quote_queued", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 beforeCount, beforeCount, quoteQueued ? 1u : 0u, detail ? detail : "");
+    if (!quoteQueued) {
+        StopMerchantStoCTap(tap);
+        return false;
+    }
+
+    const bool quoteObserved = WaitFor("crafter quote response", 3000, [quoteBefore]() {
+        return TraderHook::GetQuoteId() != quoteBefore || TraderHook::GetCostValue() > 0;
+    });
+    const uint32_t quoteAfter = TraderHook::GetQuoteId();
+    const uint32_t costItemId = TraderHook::GetCostItemId();
+    const uint32_t quotedCost = TraderHook::GetCostValue();
+    const uint32_t totalValue = quotedCost ? quotedCost : recipe.fee;
+    char stoCSummary[256] = {};
+    char ctoSSummary[256] = {};
+    FormatMerchantStoCTapSummary(stoCSummary, sizeof(stoCSummary), tap);
+    FormatCtoSPacketTapSummary(ctoSSummary, sizeof(ctoSSummary), CtoS::GetPacketTapSnapshot());
+    if (detail && detailSize) {
+        sprintf_s(detail, detailSize,
+                  "native_quote_complete observed=%u quoteBefore=%u quoteAfter=%u costItem=%u costValue=%u totalValue=%u stoC=%s ctoS=%s",
+                  quoteObserved ? 1u : 0u, quoteBefore, quoteAfter, costItemId, quotedCost, totalValue, stoCSummary, ctoSSummary);
+    }
+    WriteConsumableHarnessStatus("native_quote_complete", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 beforeCount, beforeCount,
+                                 (quoteObserved && costItemId == targetItemId && totalValue > 0) ? 1u : 0u,
+                                 detail ? detail : "");
+
+    uint32_t materialIds[2] = {};
+    uint32_t materialQuantities[2] = {};
+    for (uint32_t i = 0; i < recipe.materialCount; ++i) {
+        materialIds[i] = recipe.materials[i].modelId;
+        materialQuantities[i] = recipe.materials[i].quantity;
+    }
+
+    const bool craftQueued = TradeMgr::CraftMerchantItemByPosition(
+        merchantItemPosition, 1u, totalValue, materialIds, materialQuantities, recipe.materialCount);
+    if (detail && detailSize) {
+        sprintf_s(detail, detailSize,
+                  "native_craft_queued=%u itemPos=%u totalValue=%u mat0=%u:%u mat1=%u:%u",
+                  craftQueued ? 1u : 0u, merchantItemPosition, totalValue,
+                  materialIds[0], materialQuantities[0], materialIds[1], materialQuantities[1]);
+    }
+    WriteConsumableHarnessStatus("native_craft_queued", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 beforeCount, beforeCount, craftQueued ? 1u : 0u, detail ? detail : "");
+    if (!craftQueued) {
+        StopMerchantStoCTap(tap);
+        return false;
+    }
+
+    CtoS::ResetPacketTap();
+    const bool craftObserved = WaitFor("native crafter transaction", 4000, [targetModelId, beforeCount, goldBefore]() {
+        return CountInventoryModelQuantity(targetModelId) > beforeCount
+            || ItemMgr::GetGoldCharacter() < goldBefore;
+    });
+    afterCount = CountInventoryModelQuantity(targetModelId);
+    const uint32_t goldAfter = ItemMgr::GetGoldCharacter();
+    FormatMerchantStoCTapSummary(stoCSummary, sizeof(stoCSummary), tap);
+    FormatCtoSPacketTapSummary(ctoSSummary, sizeof(ctoSSummary), CtoS::GetPacketTapSnapshot());
+    StopMerchantStoCTap(tap);
+    if (detail && detailSize) {
+        sprintf_s(detail, detailSize,
+                  "native_craft_complete observed=%u before=%u after=%u gold=%u->%u stoC=%s ctoS=%s",
+                  craftObserved ? 1u : 0u, beforeCount, afterCount, goldBefore, goldAfter, stoCSummary, ctoSSummary);
+    }
+    WriteConsumableHarnessStatus("native_craft_complete", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 beforeCount, afterCount, afterCount > beforeCount ? 1u : 0u,
+                                 detail ? detail : "");
+    return afterCount > beforeCount;
+}
+
+bool CraftConsumableByPacket(const char* targetLabel, uint32_t targetModelId, uint32_t targetItemId,
+                             uint32_t merchantItemPosition, uint32_t beforeCount,
+                             uint32_t& afterCount, char* detail, size_t detailSize) {
+    // Raw SendPacket(0x4C) and SendPacket(0x4D) crash the GW client in crafter context.
+    // Both SendPacketViaGameCommand (PID 37560) and normal SendPacket (PID 30232) caused
+    // Gw.exe crash dialogs. The game expects these operations to go through native
+    // RequestQuoteFunction / TransactionFunction, not raw packet injection.
+    // This path is disabled; CraftConsumableNatively now uses direct function calls.
+    IntReport("  CraftConsumableByPacket DISABLED — raw 0x4C/0x4D packets crash the client");
+    WriteConsumableHarnessStatus("packet_path_disabled", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 beforeCount, beforeCount, 0,
+                                 "raw_packet_quote_transact_crashes_client");
+    return false;
+    ConsumableCraftRecipe recipe{};
+    if (!TryGetConsumableCraftRecipe(targetModelId, recipe) || merchantItemPosition == UINT32_MAX || merchantItemPosition == 0u) {
+        return false;
+    }
+
+    const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
+    const uint32_t quoteBefore = TraderHook::GetQuoteId();
+    MerchantStoCTap tap{};
+    StartMerchantStoCTap(tap);
+    CtoS::ResetPacketTap();
+    if (detail && detailSize) {
+        sprintf_s(detail, detailSize,
+                  "packet_quote_start itemPos=%u targetModel=%u targetItem=%u quoteBefore=%u",
+                  merchantItemPosition, targetModelId, targetItemId, quoteBefore);
+    }
+    WriteConsumableHarnessStatus("packet_quote_start", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 beforeCount, beforeCount, 1, detail ? detail : "");
+
+    const bool quoteQueued = TradeMgr::RequestCrafterQuoteByPositionPacket(merchantItemPosition);
+    if (detail && detailSize) {
+        sprintf_s(detail, detailSize,
+                  "packet_quote_queued=%u itemPos=%u targetItem=%u",
+                  quoteQueued ? 1u : 0u, merchantItemPosition, targetItemId);
+    }
+    WriteConsumableHarnessStatus("packet_quote_queued", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 beforeCount, beforeCount, quoteQueued ? 1u : 0u, detail ? detail : "");
+    if (!quoteQueued) {
+        StopMerchantStoCTap(tap);
+        return false;
+    }
+
+    const bool quoteObserved = WaitFor("packet crafter quote response", 3000, [quoteBefore]() {
+        return TraderHook::GetQuoteId() != quoteBefore || TraderHook::GetCostValue() > 0;
+    });
+    const uint32_t quoteAfter = TraderHook::GetQuoteId();
+    const uint32_t costItemId = TraderHook::GetCostItemId();
+    const uint32_t quotedCost = TraderHook::GetCostValue();
+    char stoCSummary[256] = {};
+    char ctoSSummary[256] = {};
+    FormatMerchantStoCTapSummary(stoCSummary, sizeof(stoCSummary), tap);
+    FormatCtoSPacketTapSummary(ctoSSummary, sizeof(ctoSSummary), CtoS::GetPacketTapSnapshot());
+    if (detail && detailSize) {
+        sprintf_s(detail, detailSize,
+                  "packet_quote_complete observed=%u quoteBefore=%u quoteAfter=%u costItem=%u costValue=%u stoC=%s ctoS=%s",
+                  quoteObserved ? 1u : 0u, quoteBefore, quoteAfter, costItemId, quotedCost, stoCSummary, ctoSSummary);
+    }
+    WriteConsumableHarnessStatus("packet_quote_complete", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 beforeCount, beforeCount,
+                                 (quoteObserved && costItemId == targetItemId) ? 1u : 0u,
+                                 detail ? detail : "");
+
+    CtoS::ResetPacketTap();
+    const bool craftQueued = TradeMgr::CraftMerchantItemByPositionPacket(merchantItemPosition, 1u);
+    if (detail && detailSize) {
+        sprintf_s(detail, detailSize,
+                  "packet_craft_queued=%u itemPos=%u targetItem=%u",
+                  craftQueued ? 1u : 0u, merchantItemPosition, targetItemId);
+    }
+    WriteConsumableHarnessStatus("packet_craft_queued", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 beforeCount, beforeCount, craftQueued ? 1u : 0u, detail ? detail : "");
+    if (!craftQueued) {
+        StopMerchantStoCTap(tap);
+        return false;
+    }
+
+    const bool craftObserved = WaitFor("packet crafter transaction", 4000, [targetModelId, beforeCount, goldBefore]() {
+        return CountInventoryModelQuantity(targetModelId) > beforeCount
+            || ItemMgr::GetGoldCharacter() < goldBefore;
+    });
+    afterCount = CountInventoryModelQuantity(targetModelId);
+    const uint32_t goldAfter = ItemMgr::GetGoldCharacter();
+    FormatMerchantStoCTapSummary(stoCSummary, sizeof(stoCSummary), tap);
+    FormatCtoSPacketTapSummary(ctoSSummary, sizeof(ctoSSummary), CtoS::GetPacketTapSnapshot());
+    StopMerchantStoCTap(tap);
+    if (detail && detailSize) {
+        sprintf_s(detail, detailSize,
+                  "packet_craft_complete observed=%u before=%u after=%u gold=%u->%u stoC=%s ctoS=%s",
+                  craftObserved ? 1u : 0u, beforeCount, afterCount, goldBefore, goldAfter, stoCSummary, ctoSSummary);
+    }
+    WriteConsumableHarnessStatus("packet_craft_complete", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 beforeCount, afterCount, afterCount > beforeCount ? 1u : 0u,
+                                 detail ? detail : "");
+    return afterCount > beforeCount;
+}
+
+void FormatPromptNestedChildSnapshot(char* out, size_t outSize, uintptr_t promptFrame,
+                                     uint32_t parentChildIndex, uint32_t maxChildren = 6u) {
+    if (!out || !outSize) return;
+    const uintptr_t parent = UIMgr::GetChildFrameByIndex(promptFrame, parentChildIndex);
+    if (parent < 0x10000) {
+        sprintf_s(out, outSize, "prompt=0x%08X parentIndex=%u parent=0x%08X",
+                  static_cast<unsigned>(promptFrame),
+                  parentChildIndex,
+                  static_cast<unsigned>(parent));
+        return;
+    }
+
+    const uint32_t childCount = UIMgr::GetChildFrameCount(parent);
+    const uint32_t emitCount = childCount < maxChildren ? childCount : maxChildren;
+    int written = sprintf_s(out, outSize,
+                            "prompt=0x%08X parentIndex=%u parent=0x%08X hash=%u childCount=%u",
+                            static_cast<unsigned>(promptFrame),
+                            parentChildIndex,
+                            static_cast<unsigned>(parent),
+                            UIMgr::GetFrameHash(parent),
+                            childCount);
+    if (written < 0) return;
+
+    for (uint32_t i = 0; i < emitCount && static_cast<size_t>(written) < outSize; ++i) {
+        const uintptr_t child = UIMgr::GetChildFrameByIndex(parent, i);
+        const int appended = sprintf_s(
+            out + written, outSize - written,
+            " i%u=0x%08X/h%u/o%u/s%X/c%u",
+            i,
+            static_cast<unsigned>(child),
+            UIMgr::GetFrameHash(child),
+            UIMgr::GetChildOffsetId(child),
+            UIMgr::GetFrameState(child),
+            UIMgr::GetChildFrameCount(child));
+        if (appended < 0) break;
+        written += appended;
+    }
+}
+
+void FormatPromptNestedGrandchildSnapshot(char* out, size_t outSize, uintptr_t promptFrame,
+                                          uint32_t parentChildIndex, uint32_t childIndex,
+                                          uint32_t maxChildren = 6u) {
+    if (!out || !outSize) return;
+    const uintptr_t parent = UIMgr::GetChildFrameByIndex(promptFrame, parentChildIndex);
+    const uintptr_t child = UIMgr::GetChildFrameByIndex(parent, childIndex);
+    if (child < 0x10000) {
+        sprintf_s(out, outSize, "prompt=0x%08X parentIndex=%u childIndex=%u child=0x%08X",
+                  static_cast<unsigned>(promptFrame), parentChildIndex, childIndex, static_cast<unsigned>(child));
+        return;
+    }
+    size_t used = 0;
+    const uint32_t childCount = UIMgr::GetChildFrameCount(child);
+    used += sprintf_s(out + used, outSize - used,
+                      "prompt=0x%08X parentIndex=%u childIndex=%u node=0x%08X hash=%u childCount=%u",
+                      static_cast<unsigned>(promptFrame),
+                      parentChildIndex,
+                      childIndex,
+                      static_cast<unsigned>(child),
+                      UIMgr::GetFrameHash(child),
+                      childCount);
+    const uint32_t capped = childCount < maxChildren ? childCount : maxChildren;
+    for (uint32_t i = 0; i < capped && used < outSize; ++i) {
+        const uintptr_t nested = UIMgr::GetChildFrameByIndex(child, i);
+        used += sprintf_s(out + used, outSize - used,
+                          " i%u=0x%08X/h%u/o%u/s%X/c%u",
+                          i,
+                          static_cast<unsigned>(nested),
+                          UIMgr::GetFrameHash(nested),
+                          UIMgr::GetChildOffsetId(nested),
+                          UIMgr::GetFrameState(nested),
+                          UIMgr::GetChildFrameCount(nested));
+    }
+}
+
+bool ConfirmCrafterQuantityPromptOneDirect(const char* targetLabel, uint32_t targetModelId, uint32_t targetItemId,
+                                           uint32_t beforeCount) {
+    const uintptr_t promptFrame = TradeMgr::GetTradeQuantityPromptFrame();
+    if (promptFrame < 0x10000) return false;
+
+    const uintptr_t promptButtonBar = UIMgr::GetChildFrameByIndex(promptFrame, 5u);
+    const uintptr_t promptChild2 = UIMgr::GetChildFrameByIndex(promptFrame, 2u);
+    const uintptr_t candidates[] = {
+        UIMgr::GetChildFrameByIndex(promptChild2, 0u),
+        UIMgr::GetChildFrameByIndex(promptButtonBar, 2u),
+        UIMgr::GetChildFrameByIndex(promptButtonBar, 1u),
+        UIMgr::GetChildFrameByIndex(promptFrame, 3u),
+    };
+    const char* labels[] = {
+        "child2[0]",
+        "bar[5][2]",
+        "bar[5][1]",
+        "root[3]",
+    };
+
+    for (size_t i = 0; i < _countof(candidates); ++i) {
+        const uintptr_t candidate = candidates[i];
+        if (candidate < 0x10000 || UIMgr::IsFrameHidden(candidate)) continue;
+
+        char detail[192] = {};
+        sprintf_s(detail, "direct_prompt_click_start candidate=%s frame=0x%08X", labels[i], static_cast<unsigned>(candidate));
+        WriteConsumableHarnessStatus("quantity_prompt_direct_click_start", targetLabel, ReadMapId(), 0,
+                                     TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                     beforeCount, CountInventoryModelQuantity(targetModelId), 1, detail);
+
+        const bool clicked = UIMgr::ButtonClick(candidate);
+        Sleep(250 + ChatMgr::GetPing());
+        const bool closed = !TradeMgr::IsTradeQuantityPromptOpen();
+        sprintf_s(detail, "direct_prompt_click_complete candidate=%s frame=0x%08X clicked=%u closed=%u",
+                  labels[i], static_cast<unsigned>(candidate), clicked ? 1u : 0u, closed ? 1u : 0u);
+        WriteConsumableHarnessStatus("quantity_prompt_direct_click_complete", targetLabel, ReadMapId(), 0,
+                                     TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                     beforeCount, CountInventoryModelQuantity(targetModelId), closed ? 1u : 0u, detail);
+        if (clicked && closed) return true;
+    }
+
+    if (promptChild2 >= 0x10000) {
+        const uintptr_t child20 = UIMgr::GetChildFrameByIndex(promptChild2, 0u);
+        const uintptr_t child200 = UIMgr::GetChildFrameByIndex(child20, 0u);
+        const uintptr_t commitButtons[] = {
+            UIMgr::GetChildFrameByIndex(promptButtonBar, 2u),
+            UIMgr::GetChildFrameByIndex(promptButtonBar, 1u),
+        };
+        const char* commitLabels[] = { "bar[5][2]", "bar[5][1]" };
+        const wchar_t quantityBuf[] = L"1";
+
+        const auto trySetAndCommit = [&](const char* mode, bool setOk) -> bool {
+            char detail[224] = {};
+            sprintf_s(detail, "direct_prompt_set_%s child2[0]=0x%08X parent=0x%08X setOk=%u",
+                      mode, static_cast<unsigned>(child20), static_cast<unsigned>(promptChild2), setOk ? 1u : 0u);
+            WriteConsumableHarnessStatus("quantity_prompt_set_start", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), setOk ? 1u : 0u, detail);
+            if (!setOk) return false;
+
+            for (size_t i = 0; i < _countof(commitButtons); ++i) {
+                const uintptr_t commit = commitButtons[i];
+                if (commit < 0x10000 || UIMgr::IsFrameHidden(commit)) continue;
+                const bool clicked = UIMgr::ButtonClick(commit);
+                Sleep(250 + ChatMgr::GetPing());
+                const bool closed = !TradeMgr::IsTradeQuantityPromptOpen();
+                sprintf_s(detail, "direct_prompt_set_%s_commit candidate=%s frame=0x%08X clicked=%u closed=%u",
+                          mode, commitLabels[i], static_cast<unsigned>(commit), clicked ? 1u : 0u, closed ? 1u : 0u);
+                WriteConsumableHarnessStatus("quantity_prompt_set_commit_complete", targetLabel, ReadMapId(), 0,
+                                             TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                             beforeCount, CountInventoryModelQuantity(targetModelId), closed ? 1u : 0u, detail);
+                if (clicked && closed) return true;
+            }
+            return false;
+        };
+
+        if (child20 >= 0x10000 && trySetAndCommit("editable", UIMgr::SetEditableTextValue(child20, quantityBuf, promptChild2))) {
+            return true;
+        }
+        if (child20 >= 0x10000 && trySetAndCommit("numeric", UIMgr::SetNumericFrameValue(child20, 1u, promptChild2))) {
+            return true;
+        }
+        if (child200 >= 0x10000 && trySetAndCommit("editable_nested", UIMgr::SetEditableTextValue(child200, quantityBuf, child20))) {
+            return true;
+        }
+        if (child200 >= 0x10000 && trySetAndCommit("numeric_nested", UIMgr::SetNumericFrameValue(child200, 1u, child20))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool WaitForConsumableTravelState(const char* waitStage, const char* targetLabel,
+                                  uint32_t expectedMapId, uint32_t expectedRegion, uint32_t expectedDistrict,
+                                  uint32_t timeoutMs) {
+    const DWORD start = GetTickCount();
+    DWORD lastStatusTick = 0;
+    DWORD loadedOtherDistrictSince = 0;
+    while ((GetTickCount() - start) < timeoutMs) {
+        const uint32_t mapId = ReadMapId();
+        const uint32_t myId = ReadMyId();
+        const uint32_t region = MapMgr::GetRegion();
+        const uint32_t district = MapMgr::GetDistrict();
+        const uint32_t loading = MapMgr::GetLoadingState();
+        const bool matched =
+            mapId == expectedMapId &&
+            region == expectedRegion &&
+            district == expectedDistrict &&
+            myId > 0;
+        if (matched) return true;
+
+        const bool loadedTargetOtherDistrict =
+            mapId == expectedMapId &&
+            region == expectedRegion &&
+            district != expectedDistrict &&
+            myId > 0 &&
+            loading == 1;
+        if (loadedTargetOtherDistrict) {
+            if (loadedOtherDistrictSince == 0) {
+                loadedOtherDistrictSince = GetTickCount();
+            } else if ((GetTickCount() - loadedOtherDistrictSince) >= 3000) {
+                return false;
+            }
+        } else {
+            loadedOtherDistrictSince = 0;
+        }
+
+        const DWORD now = GetTickCount();
+        if (lastStatusTick == 0 || (now - lastStatusTick) >= 1000) {
+            char detail[192] = {};
+            sprintf_s(detail,
+                      "waiting map=%u region=%u district=%u myId=%u loading=%u expectedMap=%u expectedRegion=%u expectedDistrict=%u elapsedMs=%lu",
+                      mapId,
+                      region,
+                      district,
+                      myId,
+                      loading,
+                      expectedMapId,
+                      expectedRegion,
+                      expectedDistrict,
+                      static_cast<unsigned long>(now - start));
+            WriteConsumableHarnessStatus(waitStage, targetLabel, mapId, 0, 0, 0, 0, 0, 0, 0, detail);
+            lastStatusTick = now;
+        }
+        Sleep(250);
+    }
+    return false;
+}
+
+template <typename T>
+struct HelperArrayView {
+    T* buffer;
+    uint32_t capacity;
+    uint32_t size;
+    uint32_t param;
+};
+
+struct HelperTradeContextView {
+    struct Item {
+        uint32_t item_id;
+        uint32_t quantity;
+    };
+    struct Trader {
+        uint32_t gold;
+        HelperArrayView<Item> items;
+    };
+    uint32_t flags;
+    uint32_t h0004[3];
+    Trader player;
+    Trader partner;
+};
+
+void WriteTradeHelperStatus(uint32_t mapId, uint32_t region, uint32_t district, uint32_t myId, float x, float y,
+                            uint32_t tradeFlags, uint32_t tradeOpenCount, uint32_t lastOpenFlags,
+                            uint32_t submitAttemptCount, uint32_t acceptAttemptCount,
+                            uint32_t playerGold, uint32_t partnerGold,
+                            uint32_t playerItemCount, uint32_t partnerItemCount,
+                            uint32_t tradePartnerHookHits, uint32_t tradePartnerLastEax,
+                            uint32_t tradePartnerLastEcx, uint32_t tradePartnerLastEdx,
+                            uint32_t tradeUiPlayerUpdatedCount, uint32_t tradeUiSessionStartCount,
+                            uint32_t tradeUiSessionUpdatedCount, uint32_t tradeUiLastSessionStartState,
+                            uint32_t tradeUiLastSessionStartPlayerNumber) {
+    char path[MAX_PATH];
+    HMODULE hSelf = nullptr;
+    GetModuleHandleExA(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCSTR>(&WriteTradeHelperStatus), &hSelf);
+    GetModuleFileNameA(hSelf, path, MAX_PATH);
+    char* slash = strrchr(path, '\\');
+    if (slash) *(slash + 1) = '\0';
+    strcat_s(path, "trade_helper_status.json");
+
+    char buf[1280];
+    sprintf_s(buf,
+              "{\"map_id\":%u,\"region\":%u,\"district\":%u,\"my_id\":%u,\"x\":%.1f,\"y\":%.1f,\"trade_flags\":%u,\"trade_open_count\":%u,\"last_open_flags\":%u,\"submit_attempt_count\":%u,\"accept_attempt_count\":%u,\"player_gold\":%u,\"partner_gold\":%u,\"player_item_count\":%u,\"partner_item_count\":%u,\"trade_partner_hook_hits\":%u,\"trade_partner_last_eax\":%u,\"trade_partner_last_ecx\":%u,\"trade_partner_last_edx\":%u,\"trade_ui_player_updated_count\":%u,\"trade_ui_session_start_count\":%u,\"trade_ui_session_updated_count\":%u,\"trade_ui_last_session_start_state\":%u,\"trade_ui_last_session_start_player_number\":%u}\n",
+              mapId, region, district, myId, x, y, tradeFlags, tradeOpenCount, lastOpenFlags, submitAttemptCount, acceptAttemptCount, playerGold, partnerGold, playerItemCount, partnerItemCount,
+              tradePartnerHookHits, tradePartnerLastEax, tradePartnerLastEcx, tradePartnerLastEdx,
+              tradeUiPlayerUpdatedCount, tradeUiSessionStartCount, tradeUiSessionUpdatedCount,
+              tradeUiLastSessionStartState, tradeUiLastSessionStartPlayerNumber);
+
+    HANDLE h = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD written = 0;
+    WriteFile(h, buf, static_cast<DWORD>(strlen(buf)), &written, nullptr);
+    CloseHandle(h);
+}
+
+void WriteConsumableHarnessStatus(const char* stage, const char* targetLabel, uint32_t mapId, uint32_t npcId,
+                                  uint32_t merchantItemCount, uint32_t targetModelId, uint32_t targetItemId,
+                                  uint32_t beforeCount, uint32_t afterCount, uint32_t success,
+                                  const char* detail) {
+    char dirPath[MAX_PATH];
+    HMODULE hSelf = nullptr;
+    GetModuleHandleExA(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCSTR>(&WriteConsumableHarnessStatus), &hSelf);
+    GetModuleFileNameA(hSelf, dirPath, MAX_PATH);
+    char* slash = strrchr(dirPath, '\\');
+    if (slash) *(slash + 1) = '\0';
+
+    const char* safeStage = stage ? stage : "";
+    const char* safeTarget = targetLabel ? targetLabel : "";
+    const char* safeDetail = detail ? detail : "";
+    const DWORD pid = GetCurrentProcessId();
+    static const DWORD runTag = GetTickCount();
+
+    char buf[1152];
+    sprintf_s(buf,
+              "{\"pid\":%lu,\"run_tag\":%lu,\"stage\":\"%s\",\"target\":\"%s\",\"map_id\":%u,\"npc_id\":%u,\"merchant_item_count\":%u,\"target_model_id\":%u,\"target_item_id\":%u,\"before_count\":%u,\"after_count\":%u,\"success\":%u,\"detail\":\"%s\"}\n",
+              pid, runTag, safeStage, safeTarget, mapId, npcId, merchantItemCount, targetModelId, targetItemId,
+              beforeCount, afterCount, success, safeDetail);
+
+    char statusPath[MAX_PATH];
+    strcpy_s(statusPath, dirPath);
+    strcat_s(statusPath, "consumable_harness_status.json");
+
+    HANDLE h = CreateFileA(statusPath, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(h, buf, static_cast<DWORD>(strlen(buf)), &written, nullptr);
+        CloseHandle(h);
+    }
+
+    char historyPath[MAX_PATH];
+    strcpy_s(historyPath, dirPath);
+    strcat_s(historyPath, "consumable_harness_history.jsonl");
+    HANDLE hh = CreateFileA(historyPath, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hh != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(hh, buf, static_cast<DWORD>(strlen(buf)), &written, nullptr);
+        CloseHandle(hh);
+    }
+}
+
+static uintptr_t ResolveGameContextForTradeHelper() {
+    if (Offsets::BasePointer <= 0x10000) return 0;
+    __try {
+        uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+        if (ctx <= 0x10000) return 0;
+        uintptr_t gc = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
+        if (gc <= 0x10000) return 0;
+        return gc;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static uint32_t ReadTradeFlagsForHelper() {
+    uintptr_t gc = ResolveGameContextForTradeHelper();
+    if (!gc) return 0;
+    __try {
+        uintptr_t trade = *reinterpret_cast<uintptr_t*>(gc + 0x58);
+        if (trade <= 0x10000) return 0;
+        return *reinterpret_cast<uint32_t*>(trade + 0x0);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static bool ReadTradeStateForHelper(uint32_t& playerGold, uint32_t& partnerGold,
+                                    uint32_t& playerItemCount, uint32_t& partnerItemCount) {
+    playerGold = 0;
+    partnerGold = 0;
+    playerItemCount = 0;
+    partnerItemCount = 0;
+    uintptr_t gc = ResolveGameContextForTradeHelper();
+    if (!gc) return false;
+    __try {
+        uintptr_t trade = *reinterpret_cast<uintptr_t*>(gc + 0x58);
+        if (trade <= 0x10000) return false;
+        auto* ctx = reinterpret_cast<HelperTradeContextView*>(trade);
+        playerGold = ctx->player.gold;
+        partnerGold = ctx->partner.gold;
+        playerItemCount = ctx->player.items.size;
+        partnerItemCount = ctx->partner.items.size;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static uint32_t ReadTradeHelperSubmitGoldConfig() {
+    char path[MAX_PATH];
+    HMODULE hSelf = nullptr;
+    GetModuleHandleExA(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCSTR>(&ReadTradeHelperSubmitGoldConfig), &hSelf);
+    GetModuleFileNameA(hSelf, path, MAX_PATH);
+    char* slash = strrchr(path, '\\');
+    if (slash) *(slash + 1) = '\0';
+    strcat_s(path, "trade_helper_config.json");
+
+    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+
+    char buf[256] = {};
+    DWORD read = 0;
+    const BOOL ok = ReadFile(h, buf, sizeof(buf) - 1, &read, nullptr);
+    CloseHandle(h);
+    if (!ok || read == 0) return 0;
+    buf[read] = '\0';
+
+    const char* key = strstr(buf, "\"submit_gold\"");
+    if (!key) return 0;
+    const char* colon = strchr(key, ':');
+    if (!colon) return 0;
+    unsigned long value = strtoul(colon + 1, nullptr, 10);
+    return static_cast<uint32_t>(value);
+}
+
+static bool ReadTradeHelperAutoSubmitConfig() {
+    char path[MAX_PATH];
+    HMODULE hSelf = nullptr;
+    GetModuleHandleExA(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCSTR>(&ReadTradeHelperAutoSubmitConfig), &hSelf);
+    GetModuleFileNameA(hSelf, path, MAX_PATH);
+    char* slash = strrchr(path, '\\');
+    if (slash) *(slash + 1) = '\0';
+    strcat_s(path, "trade_helper_config.json");
+
+    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+
+    char buf[256] = {};
+    DWORD read = 0;
+    const BOOL ok = ReadFile(h, buf, sizeof(buf) - 1, &read, nullptr);
+    CloseHandle(h);
+    if (!ok || read == 0) return false;
+    buf[read] = '\0';
+
+    const char* key = strstr(buf, "\"auto_submit\"");
+    if (!key) return false;
+    const char* colon = strchr(key, ':');
+    if (!colon) return false;
+    while (*colon == ':' || *colon == ' ' || *colon == '\t') ++colon;
+    return _strnicmp(colon, "true", 4) == 0 || *colon == '1';
+}
 
 uintptr_t GetAgentPtrRaw(uint32_t agentId) {
     if (Offsets::AgentBase <= 0x10000 || agentId == 0 || agentId >= 5000) return 0;
@@ -273,6 +1240,48 @@ void ReportMerchantTradeState(const char* label) {
               TraderHook::GetCostValue());
 }
 
+void ReportMerchantInventoryList(const char* label, uint32_t limit = 16) {
+    const uint32_t merchantCount = TradeMgr::GetMerchantItemCount();
+    IntReport("  %s: merchant item count=%u", label, merchantCount);
+    const uint32_t capped = (merchantCount < limit) ? merchantCount : limit;
+    for (uint32_t i = 0; i < capped; ++i) {
+        Item* item = TradeMgr::GetMerchantItemByPosition(i);
+        if (!item) {
+            IntReport("    [%u] <null>", i);
+            continue;
+        }
+        IntReport("    [%u] item=%u model=%u type=%u value=%u quantity=%u", i,
+                  item->item_id, item->model_id, item->type, item->value, item->quantity);
+    }
+    if (merchantCount > capped) {
+        IntReport("    ... %u more merchant items not shown", merchantCount - capped);
+    }
+}
+
+void BuildMerchantInventorySummary(char* out, size_t outSize, uint32_t limit = 8) {
+    if (!out || outSize == 0) return;
+    out[0] = '\0';
+
+    const uint32_t merchantCount = TradeMgr::GetMerchantItemCount();
+    char tmp[64];
+    sprintf_s(tmp, "count=%u models=", merchantCount);
+    strcat_s(out, outSize, tmp);
+
+    const uint32_t capped = (merchantCount < limit) ? merchantCount : limit;
+    for (uint32_t i = 0; i < capped; ++i) {
+        Item* item = TradeMgr::GetMerchantItemByPosition(i);
+        if (!item) {
+            strcat_s(out, outSize, "null");
+        } else {
+            sprintf_s(tmp, "%u", item->model_id);
+            strcat_s(out, outSize, tmp);
+        }
+        if (i + 1 < capped) {
+            strcat_s(out, outSize, ",");
+        }
+    }
+}
+
 uint32_t FindNearestNpcLikeAgentToCoords(float targetX, float targetY, float maxDistance) {
     if (Offsets::AgentBase <= 0x10000) return 0;
     const uint32_t myId = ReadMyId();
@@ -307,6 +1316,718 @@ uint32_t FindNearestNpcLikeAgentToCoords(float targetX, float targetY, float max
     }
 
     return bestId;
+}
+
+uint32_t CountInventoryModelQuantity(uint32_t modelId) {
+    return CountBagModelQuantity(modelId, 1u, 4u);
+}
+
+uint32_t FindMerchantItemPositionByModelId(uint32_t modelId) {
+    const uint32_t merchantCount = TradeMgr::GetMerchantItemCount();
+    for (uint32_t i = 0; i < merchantCount; ++i) {
+        Item* item = TradeMgr::GetMerchantItemByPosition(i);
+        if (item && item->model_id == modelId) return i;
+    }
+    return UINT32_MAX;
+}
+
+uintptr_t ResolveMerchantSortedPathFrame(uintptr_t merchantFrame, const uint32_t* path, uint32_t pathLen, const char* label) {
+    const uintptr_t frame = UIMgr::NavigateSortedChildPath(merchantFrame, path, pathLen);
+    IntReport("  Merchant path %s: frame=0x%08X hash=%u childOffset=%u childCount=%u context=0x%08X",
+              label ? label : "",
+              static_cast<unsigned>(frame),
+              UIMgr::GetFrameHash(frame),
+              UIMgr::GetChildOffsetId(frame),
+              UIMgr::GetChildFrameCount(frame),
+              static_cast<unsigned>(UIMgr::GetFrameContext(frame)));
+    return frame;
+}
+
+uintptr_t ResolveMerchantRowClickTarget(uintptr_t itemRowFrame, ConsumableHarnessClickMode clickMode) {
+    if (itemRowFrame < 0x10000) return 0;
+    if (clickMode == ConsumableHarnessClickMode::RowChild0Only) {
+        return UIMgr::GetChildFrameByIndex(itemRowFrame, 0u);
+    }
+    if (clickMode == ConsumableHarnessClickMode::RowChild1Only) {
+        return UIMgr::GetChildFrameByIndex(itemRowFrame, 1u);
+    }
+    return itemRowFrame;
+}
+
+void DumpFrameChildren(uintptr_t frame, const char* label, uint32_t maxChildren = 16) {
+    IntReport("  Frame children dump %s: frame=0x%08X hash=%u childCount=%u context=0x%08X",
+              label ? label : "",
+              static_cast<unsigned>(frame),
+              UIMgr::GetFrameHash(frame),
+              UIMgr::GetChildFrameCount(frame),
+              static_cast<unsigned>(UIMgr::GetFrameContext(frame)));
+    const uint32_t childCount = UIMgr::GetChildFrameCount(frame);
+    const uint32_t capped = (childCount < maxChildren) ? childCount : maxChildren;
+    for (uint32_t i = 0; i < capped; ++i) {
+        const uintptr_t child = UIMgr::GetChildFrameByIndex(frame, i);
+        IntReport("    [%u] frame=0x%08X hash=%u state=0x%X frameId=%u childOffset=%u context=0x%08X",
+                  i,
+                  static_cast<unsigned>(child),
+                  UIMgr::GetFrameHash(child),
+                  UIMgr::GetFrameState(child),
+                  UIMgr::GetFrameId(child),
+                  UIMgr::GetChildOffsetId(child),
+                  static_cast<unsigned>(UIMgr::GetFrameContext(child)));
+    }
+}
+
+void AppendConsumableFrameDumpLine(const char* line) {
+    if (!line) return;
+    char path[MAX_PATH];
+    HMODULE hSelf = nullptr;
+    GetModuleHandleExA(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCSTR>(&AppendConsumableFrameDumpLine), &hSelf);
+    GetModuleFileNameA(hSelf, path, MAX_PATH);
+    char* slash = strrchr(path, '\\');
+    if (slash) *(slash + 1) = '\0';
+    strcat_s(path, "consumable_harness_frame_dump.txt");
+    HANDLE h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD written = 0;
+    WriteFile(h, line, static_cast<DWORD>(strlen(line)), &written, nullptr);
+    CloseHandle(h);
+}
+
+void AppendConsumableFrameDumpMarker(const char* label) {
+    char line[256];
+    const DWORD pid = GetCurrentProcessId();
+    static const DWORD runTag = GetTickCount();
+    sprintf_s(line, "pid=%lu run_tag=%lu marker=%s\r\n", pid, runTag, label ? label : "(null)");
+    AppendConsumableFrameDumpLine(line);
+}
+
+void DumpConsumableFrameSummary(const char* label, uintptr_t frame) {
+    char line[512];
+    if (frame < 0x10000) {
+        sprintf_s(line, "  %s frame=0x00000000\r\n", label ? label : "(null)");
+        AppendConsumableFrameDumpLine(line);
+        return;
+    }
+    const uint32_t childCount = UIMgr::GetChildFrameCount(frame);
+    sprintf_s(line,
+              "  %s frame=0x%08X hash=%u state=0x%X frameId=%u childOffset=%u childCount=%u context=0x%08X\r\n",
+              label ? label : "(null)",
+              static_cast<unsigned>(frame),
+              UIMgr::GetFrameHash(frame),
+              UIMgr::GetFrameState(frame),
+              UIMgr::GetFrameId(frame),
+              UIMgr::GetChildOffsetId(frame),
+              childCount,
+              static_cast<unsigned>(UIMgr::GetFrameContext(frame)));
+    AppendConsumableFrameDumpLine(line);
+}
+
+void DumpConsumableFrameTree(uintptr_t merchantFrame, uint32_t merchantItemPosition, uint32_t targetModelId, uint32_t targetItemId) {
+    const DWORD pid = GetCurrentProcessId();
+    static const DWORD runTag = GetTickCount();
+    char line[512];
+    sprintf_s(line, "pid=%lu run_tag=%lu merchant=0x%08X target_model=%u target_item=%u item_pos=%u\r\n",
+              pid, runTag, static_cast<unsigned>(merchantFrame), targetModelId, targetItemId, merchantItemPosition);
+    AppendConsumableFrameDumpLine(line);
+
+    const uintptr_t merchantContext = UIMgr::GetFrameContext(merchantFrame);
+    sprintf_s(line, "  merchant_context=0x%08X\r\n", static_cast<unsigned>(merchantContext));
+    AppendConsumableFrameDumpLine(line);
+
+    AppendConsumableFrameDumpMarker("dump_root_0_begin");
+    const uintptr_t root0 = UIMgr::GetChildFrameByIndex(merchantFrame, 0u);
+    DumpConsumableFrameSummary("root[0]", root0);
+
+    AppendConsumableFrameDumpMarker("dump_root_0_1_begin");
+    const uintptr_t root01 = UIMgr::GetChildFrameByIndex(root0, 1u);
+    DumpConsumableFrameSummary("root[0][1]", root01);
+
+    const uint32_t branchIndices[] = { 2u, 3u };
+    for (uint32_t branchIndex = 0; branchIndex < _countof(branchIndices); ++branchIndex) {
+        const uint32_t childIndex = branchIndices[branchIndex];
+        sprintf_s(line, "dump_root_0_1_%u_begin", childIndex);
+        AppendConsumableFrameDumpMarker(line);
+
+        const uintptr_t branch = UIMgr::GetChildFrameByIndex(root01, childIndex);
+        char label[64];
+        sprintf_s(label, "root[0][1][%u]", childIndex);
+        DumpConsumableFrameSummary(label, branch);
+        if (branch < 0x10000) continue;
+
+        const uint32_t branchChildCount = UIMgr::GetChildFrameCount(branch);
+        const uint32_t branchChildCapped = (branchChildCount < 8u) ? branchChildCount : 8u;
+        for (uint32_t child = 0; child < branchChildCapped; ++child) {
+            const uintptr_t row = UIMgr::GetChildFrameByIndex(branch, child);
+            sprintf_s(label, "root[0][1][%u][%u]", childIndex, child);
+            DumpConsumableFrameSummary(label, row);
+
+            if (row < 0x10000) continue;
+            const uint32_t rowChildCount = UIMgr::GetChildFrameCount(row);
+            const uint32_t rowChildCapped = (rowChildCount < 4u) ? rowChildCount : 4u;
+            for (uint32_t leaf = 0; leaf < rowChildCapped; ++leaf) {
+                const uintptr_t leafFrame = UIMgr::GetChildFrameByIndex(row, leaf);
+                sprintf_s(label, "root[0][1][%u][%u][%u]", childIndex, child, leaf);
+                DumpConsumableFrameSummary(label, leafFrame);
+            }
+
+            if (childIndex == 3u && child == 0u) {
+                AppendConsumableFrameDumpMarker("dump_root_0_1_3_0_full_begin");
+                const uint32_t fullChildCapped = (rowChildCount < 8u) ? rowChildCount : 8u;
+                for (uint32_t fullLeaf = rowChildCapped; fullLeaf < fullChildCapped; ++fullLeaf) {
+                    const uintptr_t leafFrame = UIMgr::GetChildFrameByIndex(row, fullLeaf);
+                    sprintf_s(label, "root[0][1][3][0][%u]", fullLeaf);
+                    DumpConsumableFrameSummary(label, leafFrame);
+                }
+            }
+        }
+    }
+}
+
+bool CraftConsumableViaUiClick(const char* targetLabel, uint32_t targetModelId, uint32_t targetItemId,
+                               ConsumableHarnessClickMode clickMode,
+                               uint32_t& beforeCount, uint32_t& afterCount,
+                                char* detail, size_t detailSize) {
+    if (detail && detailSize) detail[0] = '\0';
+
+    WriteConsumableHarnessStatus("ui_probe_start", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 0, 0, 1, "resolving_merchant_frames");
+
+    const uintptr_t merchantFrame = UIMgr::GetFrameByHash(kMerchantRootHash);
+    {
+        char probeDetail[192] = {};
+        sprintf_s(probeDetail, "merchantFrame=0x%08X", static_cast<unsigned>(merchantFrame));
+        WriteConsumableHarnessStatus("ui_probe_merchant_frame", targetLabel, ReadMapId(), 0,
+                                     TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                     0, 0, merchantFrame >= 0x10000 ? 1u : 0u, probeDetail);
+    }
+    const uintptr_t merchantContext = UIMgr::GetFrameContext(merchantFrame);
+    const uint32_t merchantItemPosition = FindMerchantItemPositionByModelId(targetModelId);
+    {
+        char probeDetail[192] = {};
+        sprintf_s(probeDetail, "merchantContext=0x%08X itemPos=%u",
+                  static_cast<unsigned>(merchantContext),
+                  merchantItemPosition == UINT32_MAX ? 0xFFFFFFFFu : merchantItemPosition);
+        WriteConsumableHarnessStatus("ui_probe_item_position", targetLabel, ReadMapId(), 0,
+                                     TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                     0, 0, merchantItemPosition != UINT32_MAX ? 1u : 0u, probeDetail);
+    }
+    const uint32_t itemRowPath[] = {
+        0u, 1u, 3u, 0u,
+        merchantItemPosition == UINT32_MAX || merchantItemPosition == 0u ? 0u : (merchantItemPosition - 1u)
+    };
+    const uint32_t itemRowFallbackPath[] = { 0u, 1u, 2u, 4u };
+    const uint32_t actionButtonPath[] = { 0u, 1u, 1u };
+    uintptr_t itemRowFrame = merchantItemPosition == UINT32_MAX
+        ? 0u
+        : ResolveMerchantSortedPathFrame(merchantFrame, itemRowPath, _countof(itemRowPath), "item[0,1,3,0,index-1]");
+    if (itemRowFrame < 0x10000 && merchantItemPosition != UINT32_MAX) {
+        itemRowFrame = ResolveMerchantSortedPathFrame(merchantFrame, itemRowFallbackPath, _countof(itemRowFallbackPath),
+                                                      "item[0,1,2,4]-fallback");
+    }
+    const uintptr_t rowClickFrame = ResolveMerchantRowClickTarget(itemRowFrame, clickMode);
+    const uintptr_t pathActionFrame = ResolveMerchantSortedPathFrame(merchantFrame, actionButtonPath, _countof(actionButtonPath), "action[0,1,1]");
+    const uintptr_t actionPrimaryByContext = merchantContext >= 0x10000
+        ? UIMgr::GetFrameByContextAndChildOffset(merchantContext, 125u, merchantFrame)
+        : 0u;
+    const uintptr_t actionAltByContext = merchantContext >= 0x10000
+        ? UIMgr::GetFrameByContextAndChildOffset(merchantContext, 126u, merchantFrame)
+        : 0u;
+    // Craft is the left button (childOffset 125 in merchant context).
+    // Goodbye is the right button (childOffset 126).
+    // Always prefer the context-based action125 lookup over the path-based resolution,
+    // because pathActionFrame {0,1,1} can resolve to a sub-element with a different
+    // context that doesn't trigger the craft action when clicked.
+    const uintptr_t craftButtonFrame = actionPrimaryByContext
+        ? actionPrimaryByContext
+        : (pathActionFrame
+            ? pathActionFrame
+            : (actionAltByContext ? actionAltByContext : UIMgr::GetFrameByHash(kMerchantActionButtonAltHash)));
+    {
+        char probeDetail[256] = {};
+        sprintf_s(probeDetail,
+                  "row=0x%08X rowClick=0x%08X actionPath=0x%08X action125=0x%08X action126=0x%08X craftButton=0x%08X",
+                  static_cast<unsigned>(itemRowFrame),
+                  static_cast<unsigned>(rowClickFrame),
+                  static_cast<unsigned>(pathActionFrame),
+                  static_cast<unsigned>(actionPrimaryByContext),
+                  static_cast<unsigned>(actionAltByContext),
+                  static_cast<unsigned>(craftButtonFrame));
+        WriteConsumableHarnessStatus("ui_probe_frames_resolved", targetLabel, ReadMapId(), 0,
+                                     TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                     0, 0, 1, probeDetail);
+    }
+
+    const uintptr_t rowContext = UIMgr::GetFrameContext(itemRowFrame);
+    const uintptr_t rowClickContext = UIMgr::GetFrameContext(rowClickFrame);
+    IntReport("  UI craft probe for %s: clickMode=%s merchantFrame=0x%08X context=0x%08X row=0x%08X rowHash=%u rowChildOffset=%u rowContext=0x%08X rowClick=0x%08X rowClickHash=%u rowClickChildOffset=%u rowClickContext=0x%08X actionPath=0x%08X action125=0x%08X action126=0x%08X craftButton=0x%08X targetModel=%u item=%u itemPos=%u",
+              targetLabel ? targetLabel : "",
+              DescribeConsumableHarnessClickMode(clickMode),
+              static_cast<unsigned>(merchantFrame),
+              static_cast<unsigned>(merchantContext),
+              static_cast<unsigned>(itemRowFrame),
+              UIMgr::GetFrameHash(itemRowFrame),
+              UIMgr::GetChildOffsetId(itemRowFrame),
+              static_cast<unsigned>(rowContext),
+              static_cast<unsigned>(rowClickFrame),
+              UIMgr::GetFrameHash(rowClickFrame),
+              UIMgr::GetChildOffsetId(rowClickFrame),
+              static_cast<unsigned>(rowClickContext),
+              static_cast<unsigned>(pathActionFrame),
+              static_cast<unsigned>(actionPrimaryByContext),
+              static_cast<unsigned>(actionAltByContext),
+              static_cast<unsigned>(craftButtonFrame),
+              targetModelId,
+              targetItemId,
+              merchantItemPosition == UINT32_MAX ? 0xFFFFFFFFu : merchantItemPosition);
+
+    // Avoid broad frame-dump traversal during live craft runs; it has been a
+    // recurring crash source while the harness is trying to reach the row click.
+
+    ConsumableMaterialCounter materialsBefore[7]{};
+    FillConsumableMaterialCounters(materialsBefore);
+    beforeCount = CountInventoryModelQuantity(targetModelId);
+
+    char materialDetail[512] = {};
+    FormatConsumableMaterialSnapshot(materialDetail, sizeof(materialDetail), materialsBefore, materialsBefore);
+    WriteConsumableHarnessStatus("material_snapshot_before", targetLabel, ReadMapId(), 0,
+                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                 beforeCount, beforeCount, 1, materialDetail);
+
+    bool rowClicked = false;
+    if (itemRowFrame >= 0x10000) {
+        if (detail && detailSize) {
+            sprintf_s(detail, detailSize,
+                      "row_click_start mode=%s row=0x%08X rowClick=0x%08X itemPos=%u actionPath=0x%08X action125=0x%08X action126=0x%08X before=%u",
+                      DescribeConsumableHarnessClickMode(clickMode),
+                      static_cast<unsigned>(itemRowFrame),
+                      static_cast<unsigned>(rowClickFrame),
+                      merchantItemPosition == UINT32_MAX ? 0xFFFFFFFFu : merchantItemPosition,
+                      static_cast<unsigned>(pathActionFrame),
+                      static_cast<unsigned>(actionPrimaryByContext),
+                      static_cast<unsigned>(actionAltByContext),
+                      beforeCount);
+            WriteConsumableHarnessStatus("row_click_start", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, beforeCount, 1, detail);
+        }
+        rowClicked = UIMgr::ButtonClick(rowClickFrame ? rowClickFrame : itemRowFrame);
+        Sleep(500 + ChatMgr::GetPing());
+        const uint32_t afterRowCount = CountInventoryModelQuantity(targetModelId);
+        if (detail && detailSize) {
+            sprintf_s(detail, detailSize,
+                      "row_click_complete rowClicked=%u mode=%s row=0x%08X rowClick=0x%08X afterRow=%u",
+                      rowClicked ? 1u : 0u,
+                      DescribeConsumableHarnessClickMode(clickMode),
+                      static_cast<unsigned>(itemRowFrame),
+                      static_cast<unsigned>(rowClickFrame),
+                      afterRowCount);
+            WriteConsumableHarnessStatus("row_click_complete", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, afterRowCount, rowClicked ? 1u : 0u, detail);
+        }
+    }
+    if (!rowClicked) {
+        afterCount = CountInventoryModelQuantity(targetModelId);
+        char rowFailDetail[256] = {};
+        sprintf_s(rowFailDetail,
+                  "row_click_failed mode=%s row=0x%08X rowClick=0x%08X itemPos=%u merchantFrame=0x%08X actionPath=0x%08X action125=0x%08X action126=0x%08X",
+                  DescribeConsumableHarnessClickMode(clickMode),
+                  static_cast<unsigned>(itemRowFrame),
+                  static_cast<unsigned>(rowClickFrame),
+                  merchantItemPosition == UINT32_MAX ? 0xFFFFFFFFu : merchantItemPosition,
+                  static_cast<unsigned>(merchantFrame),
+                  static_cast<unsigned>(pathActionFrame),
+                  static_cast<unsigned>(actionPrimaryByContext),
+                  static_cast<unsigned>(actionAltByContext));
+        WriteConsumableHarnessStatus("row_click_failed", targetLabel, ReadMapId(), 0,
+                                     TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                     beforeCount, afterCount, 0, rowFailDetail);
+
+        // Row resolution via NavigateSortedChildPath failed. Try walking the merchant
+        // frame's child tree directly (GWA2 style) to find and click the item row,
+        // then click the Craft button.
+        const bool allowDirectWalkFallback =
+            merchantItemPosition != UINT32_MAX
+            && merchantFrame >= 0x10000
+            && clickMode != ConsumableHarnessClickMode::RowOnly
+            && clickMode != ConsumableHarnessClickMode::RowChild0Only
+            && clickMode != ConsumableHarnessClickMode::RowChild1Only;
+        if (allowDirectWalkFallback) {
+            WriteConsumableHarnessStatus("direct_walk_fallback_start", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, afterCount, 1, rowFailDetail);
+
+            // The first item in the crafter list is pre-selected when the
+            // crafter opens. Just try clicking the Craft button directly.
+            // Try both action125 and action126 since we're not sure which is Craft vs Goodbye.
+            const uintptr_t candidates[] = { actionPrimaryByContext, actionAltByContext };
+            const char* candidateLabels[] = { "action125", "action126" };
+            for (uint32_t ci = 0; ci < 2; ++ci) {
+                const uintptr_t craftBtn = candidates[ci];
+                if (craftBtn < 0x10000 || UIMgr::IsFrameHidden(craftBtn)) continue;
+
+                const uint32_t goldBefore2 = ItemMgr::GetGoldCharacter();
+                MerchantStoCTap tap2{};
+                StartMerchantStoCTap(tap2);
+                CtoS::ResetPacketTap();
+
+                const bool craftClicked2 = UIMgr::ButtonClick(craftBtn);
+                IntReport("  Fallback %s click: frame=0x%08X hash=%u clicked=%u gold=%u",
+                          candidateLabels[ci], static_cast<unsigned>(craftBtn),
+                          UIMgr::GetFrameHash(craftBtn), craftClicked2 ? 1u : 0u, goldBefore2);
+
+                if (craftClicked2) {
+                    WriteConsumableHarnessStatus("fallback_craft_clicked", targetLabel, ReadMapId(), 0,
+                                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                                 beforeCount, beforeCount, 1, candidateLabels[ci]);
+                    const bool craftObserved2 = WaitFor("fallback craft result", 3000, [targetModelId, beforeCount, goldBefore2]() {
+                        return CountInventoryModelQuantity(targetModelId) > beforeCount
+                            || ItemMgr::GetGoldCharacter() < goldBefore2;
+                    });
+                    afterCount = CountInventoryModelQuantity(targetModelId);
+                    const uint32_t goldAfter2 = ItemMgr::GetGoldCharacter();
+                    char stoCSummary2[256] = {};
+                    char ctoSSummary2[256] = {};
+                    FormatMerchantStoCTapSummary(stoCSummary2, sizeof(stoCSummary2), tap2);
+                    FormatCtoSPacketTapSummary(ctoSSummary2, sizeof(ctoSSummary2), CtoS::GetPacketTapSnapshot());
+                    StopMerchantStoCTap(tap2);
+                    if (detail && detailSize) {
+                        sprintf_s(detail, detailSize,
+                                  "fallback_%s observed=%u before=%u after=%u gold=%u->%u stoC=%s ctoS=%s",
+                                  candidateLabels[ci], craftObserved2 ? 1u : 0u,
+                                  beforeCount, afterCount, goldBefore2, goldAfter2, stoCSummary2, ctoSSummary2);
+                    }
+                    WriteConsumableHarnessStatus("fallback_craft_result", targetLabel, ReadMapId(), 0,
+                                                 TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                                 beforeCount, afterCount, afterCount > beforeCount ? 1u : 0u,
+                                                 detail ? detail : "");
+                    if (afterCount > beforeCount) {
+                        IntReport("  FALLBACK %s CRAFT SUCCESS: before=%u after=%u gold=%u->%u",
+                                  candidateLabels[ci], beforeCount, afterCount, goldBefore2, goldAfter2);
+                        return true;
+                    }
+                    IntReport("  Fallback %s: no delta (before=%u after=%u gold=%u->%u stoC=%s ctoS=%s)",
+                              candidateLabels[ci], beforeCount, afterCount, goldBefore2, goldAfter2, stoCSummary2, ctoSSummary2);
+                } else {
+                    StopMerchantStoCTap(tap2);
+                }
+            }
+        }
+
+        if (detail && detailSize) {
+            sprintf_s(detail, detailSize,
+                      "ui rowClicked=0 craftClicked=0 mode=%s row=0x%08X rowClick=0x%08X itemPos=%u before=%u after=%u",
+                      DescribeConsumableHarnessClickMode(clickMode),
+                      static_cast<unsigned>(itemRowFrame),
+                      static_cast<unsigned>(rowClickFrame),
+                      merchantItemPosition == UINT32_MAX ? 0xFFFFFFFFu : merchantItemPosition,
+                      beforeCount,
+                      afterCount);
+        }
+        return false;
+    }
+
+    bool craftClicked = false;
+    if (clickMode == ConsumableHarnessClickMode::RowOnly
+        || clickMode == ConsumableHarnessClickMode::RowChild0Only
+        || clickMode == ConsumableHarnessClickMode::RowChild1Only) {
+        afterCount = CountInventoryModelQuantity(targetModelId);
+        if (detail && detailSize) {
+            sprintf_s(detail, detailSize,
+                      "ui rowClicked=%u craftClicked=0 mode=%s frame=0x%08X row=0x%08X rowClick=0x%08X itemPos=%u actionPath=0x%08X action125=0x%08X action126=0x%08X before=%u after=%u",
+                      rowClicked ? 1u : 0u,
+                      DescribeConsumableHarnessClickMode(clickMode),
+                      static_cast<unsigned>(merchantFrame),
+                      static_cast<unsigned>(itemRowFrame),
+                      static_cast<unsigned>(rowClickFrame),
+                      merchantItemPosition == UINT32_MAX ? 0xFFFFFFFFu : merchantItemPosition,
+                      static_cast<unsigned>(pathActionFrame),
+                      static_cast<unsigned>(actionPrimaryByContext),
+                      static_cast<unsigned>(actionAltByContext),
+                      beforeCount,
+                      afterCount);
+        }
+        return rowClicked;
+    }
+
+    // Consumable crafter flow: row is selected, now click the "Craft" button.
+    // There is no quote step — the crafter UI is "select item, click Craft".
+    // The craft button is at merchant frame path {0,1,1} (same as GWA2 FrameUI).
+    {
+        const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
+        MerchantStoCTap tap{};
+        StartMerchantStoCTap(tap);
+        CtoS::ResetPacketTap();
+
+        // Click the Craft button
+        const uintptr_t craftTarget = craftButtonFrame;
+        bool craftBtnClicked = false;
+        if (craftTarget >= 0x10000 && !UIMgr::IsFrameHidden(craftTarget)) {
+            craftBtnClicked = UIMgr::ButtonClick(craftTarget);
+            IntReport("  Craft button click: frame=0x%08X clicked=%u",
+                      static_cast<unsigned>(craftTarget), craftBtnClicked ? 1u : 0u);
+        } else {
+            IntReport("  Craft button not available: frame=0x%08X hidden=%u",
+                      static_cast<unsigned>(craftTarget),
+                      (craftTarget >= 0x10000 && UIMgr::IsFrameHidden(craftTarget)) ? 1u : 0u);
+        }
+
+        if (craftBtnClicked) {
+            WriteConsumableHarnessStatus("craft_button_clicked", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, beforeCount, 1, "craft_button_clicked");
+
+            // Wait for inventory or gold change
+            const bool craftObserved = WaitFor("craft button result", 3000, [targetModelId, beforeCount, goldBefore]() {
+                return CountInventoryModelQuantity(targetModelId) > beforeCount
+                    || ItemMgr::GetGoldCharacter() < goldBefore;
+            });
+            afterCount = CountInventoryModelQuantity(targetModelId);
+            const uint32_t goldAfter = ItemMgr::GetGoldCharacter();
+            char stoCSummary[256] = {};
+            char ctoSSummary[256] = {};
+            FormatMerchantStoCTapSummary(stoCSummary, sizeof(stoCSummary), tap);
+            FormatCtoSPacketTapSummary(ctoSSummary, sizeof(ctoSSummary), CtoS::GetPacketTapSnapshot());
+            StopMerchantStoCTap(tap);
+
+            if (detail && detailSize) {
+                sprintf_s(detail, detailSize,
+                          "craft_button_result observed=%u before=%u after=%u gold=%u->%u stoC=%s ctoS=%s",
+                          craftObserved ? 1u : 0u, beforeCount, afterCount, goldBefore, goldAfter, stoCSummary, ctoSSummary);
+            }
+            WriteConsumableHarnessStatus("craft_button_result", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, afterCount, afterCount > beforeCount ? 1u : 0u,
+                                         detail ? detail : "");
+
+            if (afterCount > beforeCount) {
+                IntReport("  CRAFT SUCCESS: before=%u after=%u gold=%u->%u", beforeCount, afterCount, goldBefore, goldAfter);
+                return true;
+            }
+            IntReport("  Craft button clicked but no delta: before=%u after=%u gold=%u->%u stoC=%s ctoS=%s",
+                      beforeCount, afterCount, goldBefore, goldAfter, stoCSummary, ctoSSummary);
+        } else {
+            StopMerchantStoCTap(tap);
+        }
+    }
+
+    if (detail && detailSize) {
+        sprintf_s(detail, detailSize,
+                  "native_packet_fallback mode=%s actionPath=0x%08X pathHidden=%u action125=0x%08X hidden125=%u action126=0x%08X hidden126=%u",
+                  DescribeConsumableHarnessClickMode(clickMode),
+                  static_cast<unsigned>(pathActionFrame),
+                  (pathActionFrame >= 0x10000 && UIMgr::IsFrameHidden(pathActionFrame)) ? 1u : 0u,
+                  static_cast<unsigned>(actionPrimaryByContext),
+                  (actionPrimaryByContext >= 0x10000 && UIMgr::IsFrameHidden(actionPrimaryByContext)) ? 1u : 0u,
+                  static_cast<unsigned>(actionAltByContext),
+                  (actionAltByContext >= 0x10000 && UIMgr::IsFrameHidden(actionAltByContext)) ? 1u : 0u);
+        WriteConsumableHarnessStatus("native_packet_fallback", targetLabel, ReadMapId(), 0,
+                                     TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                     beforeCount, beforeCount, 1, detail);
+    }
+
+    const auto clickAction = [&](uintptr_t frame, const char* stageLabel) -> bool {
+        if (frame < 0x10000 || UIMgr::IsFrameHidden(frame)) {
+            char localDetail[192] = {};
+            sprintf_s(localDetail, "action_click_skipped stage=%s frame=0x%08X hidden=%u hash=%u state=0x%X mode=%s",
+                      stageLabel ? stageLabel : "",
+                      static_cast<unsigned>(frame),
+                      (frame >= 0x10000 && UIMgr::IsFrameHidden(frame)) ? 1u : 0u,
+                      UIMgr::GetFrameHash(frame),
+                      UIMgr::GetFrameState(frame),
+                      DescribeConsumableHarnessClickMode(clickMode));
+            WriteConsumableHarnessStatus("action_click_skipped", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, beforeCount, 0, localDetail);
+            return false;
+        }
+        char localDetail[160] = {};
+        sprintf_s(localDetail, "action_click_start stage=%s frame=0x%08X mode=%s", stageLabel,
+                  static_cast<unsigned>(frame), DescribeConsumableHarnessClickMode(clickMode));
+        WriteConsumableHarnessStatus("action_click_start", targetLabel, ReadMapId(), 0,
+                                     TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                     beforeCount, beforeCount, 1, localDetail);
+        const bool clicked = UIMgr::ButtonClick(frame);
+        const int postClickDelaysMs[] = { 50, 150, 350 };
+        int accumulatedDelay = 0;
+        for (int delayMs : postClickDelaysMs) {
+            const int sleepMs = delayMs - accumulatedDelay;
+            if (sleepMs > 0) Sleep(sleepMs);
+            accumulatedDelay = delayMs;
+
+            const uintptr_t merchantFrameNow = UIMgr::GetFrameByHash(kMerchantRootHash);
+            const uintptr_t quantityPromptFrame = UIMgr::GetVisibleFrameByChildOffsetAndChildCount(
+                kTradeQuantityPromptChildOffsetId, 1u, 16u, merchantFrameNow);
+            const uintptr_t altActionNow = UIMgr::GetFrameByContextAndChildOffset(
+                merchantFrameNow >= 0x10000 ? UIMgr::GetFrameContext(merchantFrameNow) : 0u,
+                126u,
+                merchantFrameNow);
+            char probeDetail[256] = {};
+            sprintf_s(probeDetail,
+                      "post_action_probe stage=%s t=%d clicked=%u merchant=0x%08X items=%u qtyPrompt=0x%08X qtyChildCount=%u altAction=0x%08X altHidden=%u",
+                      stageLabel ? stageLabel : "",
+                      delayMs,
+                      clicked ? 1u : 0u,
+                      static_cast<unsigned>(merchantFrameNow),
+                      TradeMgr::GetMerchantItemCount(),
+                      static_cast<unsigned>(quantityPromptFrame),
+                      UIMgr::GetChildFrameCount(quantityPromptFrame),
+                      static_cast<unsigned>(altActionNow),
+                      (altActionNow >= 0x10000 && UIMgr::IsFrameHidden(altActionNow)) ? 1u : 0u);
+            WriteConsumableHarnessStatus("post_action_probe", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId),
+                                         quantityPromptFrame >= 0x10000 ? 1u : 0u, probeDetail);
+
+            if (quantityPromptFrame >= 0x10000) {
+                char dumpLabel[64] = {};
+                sprintf_s(dumpLabel, "consumable_post_%s_t%d_qty_prompt", stageLabel ? stageLabel : "action", delayMs);
+                UIMgr::DebugDumpChildFrames(quantityPromptFrame, dumpLabel, 12);
+            } else {
+                char dumpLabel[64] = {};
+                sprintf_s(dumpLabel, "consumable_post_%s_t%d_visible_child2", stageLabel ? stageLabel : "action", delayMs);
+                UIMgr::DebugDumpVisibleFramesByChildOffset(kTradeQuantityPromptChildOffsetId, dumpLabel, 12);
+            }
+        }
+        const bool quantityPromptOpen = TradeMgr::IsTradeQuantityPromptOpen();
+        if (quantityPromptOpen) {
+            const uint32_t promptFrameBeforeConfirm = TradeMgr::GetTradeQuantityPromptFrame();
+            const uint32_t promptChildCountBeforeConfirm = TradeMgr::GetTradeQuantityPromptChildCount();
+            char confirmDetail[256] = {};
+            sprintf_s(confirmDetail,
+                      "quantity_prompt_confirm_start stage=%s frame=0x%08X childCount=%u",
+                      stageLabel ? stageLabel : "",
+                      promptFrameBeforeConfirm,
+                      promptChildCountBeforeConfirm);
+            WriteConsumableHarnessStatus("quantity_prompt_confirm_start", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), 1, confirmDetail);
+            char promptDetail[768] = {};
+            FormatPromptChildSnapshot(promptDetail, sizeof(promptDetail), promptFrameBeforeConfirm);
+            WriteConsumableHarnessStatus("quantity_prompt_children_before_confirm", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), 1, promptDetail);
+            FormatPromptNestedChildSnapshot(promptDetail, sizeof(promptDetail), promptFrameBeforeConfirm, 4u);
+            WriteConsumableHarnessStatus("quantity_prompt_child4_before_confirm", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), 1, promptDetail);
+            FormatPromptNestedChildSnapshot(promptDetail, sizeof(promptDetail), promptFrameBeforeConfirm, 2u);
+            WriteConsumableHarnessStatus("quantity_prompt_child2_before_confirm", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), 1, promptDetail);
+            FormatPromptNestedGrandchildSnapshot(promptDetail, sizeof(promptDetail), promptFrameBeforeConfirm, 2u, 0u);
+            WriteConsumableHarnessStatus("quantity_prompt_child2_0_before_confirm", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), 1, promptDetail);
+            FormatPromptNestedChildSnapshot(promptDetail, sizeof(promptDetail), promptFrameBeforeConfirm, 5u);
+            WriteConsumableHarnessStatus("quantity_prompt_child5_before_confirm", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), 1, promptDetail);
+
+            bool confirmed = ConfirmCrafterQuantityPromptOneDirect(targetLabel, targetModelId, targetItemId, beforeCount);
+            if (!confirmed) {
+                confirmed = TradeMgr::ConfirmTradeQuantityPromptValue(1u);
+            }
+            sprintf_s(confirmDetail,
+                      "quantity_prompt_confirm_value_complete stage=%s confirmed=%u quantity=1 frame=0x%08X childCount=%u inventory=%u",
+                      stageLabel ? stageLabel : "",
+                      confirmed ? 1u : 0u,
+                      TradeMgr::GetTradeQuantityPromptFrame(),
+                      TradeMgr::GetTradeQuantityPromptChildCount(),
+                      CountInventoryModelQuantity(targetModelId));
+            WriteConsumableHarnessStatus("quantity_prompt_confirm_value_complete", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), confirmed ? 1u : 0u, confirmDetail);
+            if (!confirmed) {
+                confirmed = TradeMgr::ConfirmTradeQuantityPromptMax();
+            }
+            Sleep(250 + ChatMgr::GetPing());
+            const uint32_t promptFrameAfterConfirm = TradeMgr::GetTradeQuantityPromptFrame();
+            const uint32_t promptChildCountAfterConfirm = TradeMgr::GetTradeQuantityPromptChildCount();
+            ConsumableMaterialCounter materialsAfterConfirm[7]{};
+            FillConsumableMaterialCounters(materialsAfterConfirm);
+            sprintf_s(confirmDetail,
+                      "quantity_prompt_confirm_complete stage=%s confirmed=%u frameAfter=0x%08X childCountAfter=%u inventory=%u",
+                      stageLabel ? stageLabel : "",
+                      confirmed ? 1u : 0u,
+                      promptFrameAfterConfirm,
+                      promptChildCountAfterConfirm,
+                      CountInventoryModelQuantity(targetModelId));
+            WriteConsumableHarnessStatus("quantity_prompt_confirm_complete", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), confirmed ? 1u : 0u, confirmDetail);
+            FormatPromptChildSnapshot(promptDetail, sizeof(promptDetail), promptFrameAfterConfirm);
+            WriteConsumableHarnessStatus("quantity_prompt_children_after_confirm", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), confirmed ? 1u : 0u, promptDetail);
+            FormatPromptNestedChildSnapshot(promptDetail, sizeof(promptDetail), promptFrameAfterConfirm, 4u);
+            WriteConsumableHarnessStatus("quantity_prompt_child4_after_confirm", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), confirmed ? 1u : 0u, promptDetail);
+            FormatPromptNestedChildSnapshot(promptDetail, sizeof(promptDetail), promptFrameAfterConfirm, 2u);
+            WriteConsumableHarnessStatus("quantity_prompt_child2_after_confirm", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), confirmed ? 1u : 0u, promptDetail);
+            FormatPromptNestedGrandchildSnapshot(promptDetail, sizeof(promptDetail), promptFrameAfterConfirm, 2u, 0u);
+            WriteConsumableHarnessStatus("quantity_prompt_child2_0_after_confirm", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), confirmed ? 1u : 0u, promptDetail);
+            FormatPromptNestedChildSnapshot(promptDetail, sizeof(promptDetail), promptFrameAfterConfirm, 5u);
+            WriteConsumableHarnessStatus("quantity_prompt_child5_after_confirm", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), confirmed ? 1u : 0u, promptDetail);
+            FormatConsumableMaterialSnapshot(materialDetail, sizeof(materialDetail), materialsBefore, materialsAfterConfirm);
+            WriteConsumableHarnessStatus("material_snapshot_after_confirm", targetLabel, ReadMapId(), 0,
+                                         TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                         beforeCount, CountInventoryModelQuantity(targetModelId), confirmed ? 1u : 0u, materialDetail);
+        }
+        Sleep((900 + ChatMgr::GetPing()) - accumulatedDelay);
+        const uint32_t observedCount = CountInventoryModelQuantity(targetModelId);
+        ConsumableMaterialCounter materialsAfterAction[7]{};
+        FillConsumableMaterialCounters(materialsAfterAction);
+        FormatConsumableMaterialSnapshot(materialDetail, sizeof(materialDetail), materialsBefore, materialsAfterAction);
+        WriteConsumableHarnessStatus("material_snapshot_after_action", targetLabel, ReadMapId(), 0,
+                                     TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                     beforeCount, observedCount, clicked ? 1u : 0u, materialDetail);
+        sprintf_s(localDetail, "action_click_complete stage=%s clicked=%u frame=0x%08X mode=%s after=%u",
+                  stageLabel, clicked ? 1u : 0u, static_cast<unsigned>(frame),
+                  DescribeConsumableHarnessClickMode(clickMode), observedCount);
+        WriteConsumableHarnessStatus("action_click_complete", targetLabel, ReadMapId(), 0,
+                                     TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
+                                     beforeCount, observedCount, clicked ? 1u : 0u, localDetail);
+        return clicked;
+    };
+
+    if (clickMode == ConsumableHarnessClickMode::RootOnly || clickMode == ConsumableHarnessClickMode::Both) {
+        craftClicked = clickAction(actionPrimaryByContext, "action125") || craftClicked;
+    }
+    if (clickMode == ConsumableHarnessClickMode::PathOnly) {
+        craftClicked = clickAction(pathActionFrame, "actionPath") || craftClicked;
+    }
+    if (clickMode == ConsumableHarnessClickMode::AltOnly || clickMode == ConsumableHarnessClickMode::Both) {
+        craftClicked = clickAction(actionAltByContext ? actionAltByContext : craftButtonFrame, "action126") || craftClicked;
+    }
+
+    afterCount = CountInventoryModelQuantity(targetModelId);
+    if (detail && detailSize) {
+        sprintf_s(detail, detailSize,
+                  "ui rowClicked=%u craftClicked=%u frame=0x%08X row=0x%08X rowClick=0x%08X itemPos=%u actionPath=0x%08X action125=0x%08X action126=0x%08X craftButton=0x%08X before=%u after=%u",
+                  rowClicked ? 1u : 0u,
+                  craftClicked ? 1u : 0u,
+                  static_cast<unsigned>(merchantFrame),
+                  static_cast<unsigned>(itemRowFrame),
+                  static_cast<unsigned>(rowClickFrame),
+                  merchantItemPosition == UINT32_MAX ? 0xFFFFFFFFu : merchantItemPosition,
+                  static_cast<unsigned>(pathActionFrame),
+                  static_cast<unsigned>(actionPrimaryByContext),
+                  static_cast<unsigned>(actionAltByContext),
+                  static_cast<unsigned>(craftButtonFrame),
+                  beforeCount,
+                  afterCount);
+    }
+    return craftClicked;
 }
 
 size_t CollectNearestNpcLikeAgentsToCoords(float targetX, float targetY, float maxDistance, uint32_t* outIds, size_t capacity) {
@@ -810,6 +2531,514 @@ bool TestMapTravel() {
 
     IntReport("");
     return transitioned && myIdReady;
+}
+
+bool TestConsumableCrafting() {
+    IntReport("=== GWA3 Consumable Crafting Harness ===");
+
+    if (ReadMapId() == 0 || ReadMyId() == 0) {
+        IntSkip("Consumable crafting", "Not in game");
+        IntReport("");
+        return false;
+    }
+
+    const ConsumableHarnessStage stage = GetConsumableHarnessStage();
+    const ConsumableHarnessTarget selectedTarget = GetConsumableHarnessTarget();
+    const ConsumableHarnessClickMode clickMode = GetConsumableHarnessClickMode();
+    char detail[160] = {};
+    IntReport("  Consumable harness stage: %s", DescribeConsumableHarnessStage(stage));
+    IntReport("  Consumable harness target: %s", DescribeConsumableHarnessTarget(selectedTarget));
+    IntReport("  Consumable harness click mode: %s", DescribeConsumableHarnessClickMode(clickMode));
+    sprintf_s(detail, "map=%u region=%u district=%u",
+              ReadMapId(), MapMgr::GetRegion(), MapMgr::GetDistrict());
+    WriteConsumableHarnessStatus("starting", DescribeConsumableHarnessTarget(selectedTarget),
+                                 ReadMapId(), 0, 0, 0, 0, 0, 0, 0, detail);
+
+    if (ReadMapId() == kMapEmbarkBeach && MapMgr::GetRegion() == kTradeTestRegion && MapMgr::GetDistrict() == UINT32_MAX) {
+        IntReport("  Embark district is unresolved; waiting briefly for world state to settle before forcing travel");
+        const bool districtResolved = WaitFor("Embark district resolves before quiet-district travel", 10000, []() {
+            return ReadMyId() > 0 && MapMgr::GetDistrict() != UINT32_MAX;
+        });
+        IntReport("  Embark district settle result: resolved=%d district=%u", districtResolved ? 1 : 0, MapMgr::GetDistrict());
+    }
+
+    const bool alreadyInQuietEmbarkDistrict =
+        ReadMapId() == kMapEmbarkBeach &&
+        MapMgr::GetRegion() == kTradeTestRegion &&
+        MapMgr::GetDistrict() == kTradeTestDistrict;
+    if (!alreadyInQuietEmbarkDistrict) {
+        IntReport("  Traveling to Embark Beach (%u) in Asia/Japan district %u for consumable crafter diagnostics...",
+                  kMapEmbarkBeach, kTradeTestDistrict);
+        WriteConsumableHarnessStatus("traveling", DescribeConsumableHarnessTarget(selectedTarget),
+                                     ReadMapId(), 0, 0, 0, 0, 0, 0, 0, "requesting_quiet_embark_travel");
+        MapMgr::Travel(kMapEmbarkBeach, kTradeTestRegion, kTradeTestDistrict, kTradeTestLanguage);
+
+        bool atTargetMap = WaitForConsumableTravelState(
+            "travel_wait_preferred",
+            DescribeConsumableHarnessTarget(selectedTarget),
+            kMapEmbarkBeach,
+            kTradeTestRegion,
+            kTradeTestDistrict,
+            60000);
+        if (!atTargetMap) {
+            IntReport("  Preferred quiet district did not load; falling back to Asia/Japan district %u", kTradeFallbackDistrict);
+            char fallbackDetail[160] = {};
+            sprintf_s(fallbackDetail, "preferred_failed map=%u region=%u district=%u myId=%u loading=%u",
+                      ReadMapId(), MapMgr::GetRegion(), MapMgr::GetDistrict(), ReadMyId(), MapMgr::GetLoadingState());
+            WriteConsumableHarnessStatus("travel_fallback_start", DescribeConsumableHarnessTarget(selectedTarget),
+                                         ReadMapId(), 0, 0, 0, 0, 0, 0, 0, fallbackDetail);
+            if (ReadMapId() == kMapEmbarkBeach &&
+                MapMgr::GetRegion() == kTradeTestRegion &&
+                MapMgr::GetDistrict() == kTradeFallbackDistrict &&
+                ReadMyId() > 0 &&
+                MapMgr::GetLoadingState() == 1) {
+                WriteConsumableHarnessStatus("travel_fallback_already_loaded", DescribeConsumableHarnessTarget(selectedTarget),
+                                             ReadMapId(), 0, 0, 0, 0, 0, 0, 1, "already_loaded_in_fallback_district");
+                atTargetMap = true;
+            } else {
+                MapMgr::Travel(kMapEmbarkBeach, kTradeTestRegion, kTradeFallbackDistrict, kTradeTestLanguage);
+                atTargetMap = WaitForConsumableTravelState(
+                    "travel_wait_fallback",
+                    DescribeConsumableHarnessTarget(selectedTarget),
+                    kMapEmbarkBeach,
+                    kTradeTestRegion,
+                    kTradeFallbackDistrict,
+                    60000);
+            }
+        }
+        IntCheck("Reached quiet Embark Beach district", atTargetMap);
+        if (!atTargetMap) {
+            char failDetail[192] = {};
+            sprintf_s(failDetail, "failed_to_reach_quiet_embark_district map=%u region=%u district=%u myId=%u loading=%u",
+                      ReadMapId(), MapMgr::GetRegion(), MapMgr::GetDistrict(), ReadMyId(), MapMgr::GetLoadingState());
+            WriteConsumableHarnessStatus("travel_failed", DescribeConsumableHarnessTarget(selectedTarget),
+                                         ReadMapId(), 0, 0, 0, 0, 0, 0, 0, failDetail);
+            IntReport("");
+            return false;
+        }
+
+        const bool myIdReady = WaitFor("MyID valid after travel to quiet Embark district", 30000, []() {
+            return ReadMyId() > 0;
+        });
+        IntCheck("MyID valid after quiet Embark travel", myIdReady);
+        if (!myIdReady) {
+            WriteConsumableHarnessStatus("travel_failed", DescribeConsumableHarnessTarget(selectedTarget),
+                                         ReadMapId(), 0, 0, 0, 0, 0, 0, 0, "myid_not_ready_after_quiet_travel");
+            IntReport("");
+            return false;
+        }
+    }
+
+    sprintf_s(detail, "map=%u region=%u district=%u waiting_for_world_ready",
+              ReadMapId(), MapMgr::GetRegion(), MapMgr::GetDistrict());
+    WriteConsumableHarnessStatus("world_wait", DescribeConsumableHarnessTarget(selectedTarget),
+                                 ReadMapId(), 0, 0, 0, 0, 0, 0, 0, detail);
+    if (!WaitForPlayerWorldReady(10000)) {
+        WriteConsumableHarnessStatus("world_not_ready", DescribeConsumableHarnessTarget(selectedTarget),
+                                     ReadMapId(), 0, 0, 0, 0, 0, 0, 0, "player_world_state_not_ready");
+        IntSkip("Consumable crafting", "Player world state not ready");
+        IntReport("");
+        return false;
+    }
+    sprintf_s(detail, "map=%u region=%u district=%u world_ready",
+              ReadMapId(), MapMgr::GetRegion(), MapMgr::GetDistrict());
+    WriteConsumableHarnessStatus("world_ready", DescribeConsumableHarnessTarget(selectedTarget),
+                                 ReadMapId(), 0, 0, 0, 0, 0, 0, 1, detail);
+
+    struct ConsumableTarget {
+        const char* label;
+        float x;
+        float y;
+        uint32_t modelId;
+    };
+    const ConsumableTarget targets[] = {
+        {"Eyja", kEmbarkEyjaX, kEmbarkEyjaY, kModelGrailOfMight},
+        {"Kwat", kEmbarkKwatX, kEmbarkKwatY, kModelEssenceCelerity},
+        {"Alcus", kEmbarkAlcusX, kEmbarkAlcusY, kModelArmorSalvation},
+    };
+
+    bool anySuccess = false;
+    for (const auto& target : targets) {
+        if (selectedTarget == ConsumableHarnessTarget::Grail && target.modelId != kModelGrailOfMight) continue;
+        if (selectedTarget == ConsumableHarnessTarget::Essence && target.modelId != kModelEssenceCelerity) continue;
+        if (selectedTarget == ConsumableHarnessTarget::Armor && target.modelId != kModelArmorSalvation) continue;
+
+        IntReport("  --- %s crafter probe (model=%u) ---", target.label, target.modelId);
+        sprintf_s(detail, "approaching_target x=%.0f y=%.0f map=%u region=%u district=%u",
+                  target.x, target.y, ReadMapId(), MapMgr::GetRegion(), MapMgr::GetDistrict());
+        WriteConsumableHarnessStatus("approaching_target", target.label, ReadMapId(), 0, 0,
+                                     target.modelId, 0, 0, 0, 0, detail);
+        const bool nearTarget = MovePlayerNear(target.x, target.y, 350.0f, 25000);
+        IntCheck("Reached consumable crafter area", nearTarget);
+        if (!nearTarget) {
+            WriteConsumableHarnessStatus("approach_failed", target.label, ReadMapId(), 0, 0,
+                                         target.modelId, 0, 0, 0, 0, "failed_to_reach_crafter_area");
+            continue;
+        }
+
+        IntReport("  Nearby NPC candidates around %s:", target.label);
+        DumpNpcLikeAgentsNearCoords(target.x, target.y, 900.0f, 8);
+
+        if (stage == ConsumableHarnessStage::TravelOnly) {
+            WriteConsumableHarnessStatus("travel_only_complete", target.label, ReadMapId(), 0, 0,
+                                         target.modelId, 0, 0, 0, 1, "travel_only_stage_complete");
+            IntSkip("Consumable crafter open", "Travel-only consumable isolation stage");
+            IntReport("");
+            return true;
+        }
+
+        uint32_t candidateIds[8]{};
+        const size_t candidateCount = CollectNearestNpcLikeAgentsToCoords(target.x, target.y, 900.0f, candidateIds, _countof(candidateIds));
+        IntCheck("Found consumable crafter candidates", candidateCount > 0);
+        sprintf_s(detail, "candidate_count=%u map=%u region=%u district=%u",
+                  static_cast<unsigned>(candidateCount), ReadMapId(), MapMgr::GetRegion(), MapMgr::GetDistrict());
+        WriteConsumableHarnessStatus("candidate_scan", target.label, ReadMapId(), 0, 0,
+                                     target.modelId, 0, 0, 0, candidateCount > 0 ? 1u : 0u, detail);
+        if (candidateCount == 0) {
+            WriteConsumableHarnessStatus("candidate_failed", target.label, ReadMapId(), 0, 0,
+                                         target.modelId, 0, 0, 0, 0, "no_crafter_candidates_found");
+            continue;
+        }
+
+        bool merchantReady = false;
+        bool targetInventoryReady = false;
+        uint32_t crafterAgentId = 0;
+        uint32_t merchantItemCount = 0;
+        uint32_t crafterItemId = 0;
+        for (size_t i = 0; i < candidateCount && !targetInventoryReady; ++i) {
+            crafterAgentId = candidateIds[i];
+            if (!crafterAgentId) continue;
+
+            float npcX = 0.0f;
+            float npcY = 0.0f;
+            TryReadAgentPosition(crafterAgentId, npcX, npcY);
+            IntReport("    Candidate %u/%u: agent=%u pos=(%.0f, %.0f)",
+                      static_cast<unsigned>(i + 1),
+                      static_cast<unsigned>(candidateCount),
+                      crafterAgentId, npcX, npcY);
+            sprintf_s(detail, "candidate=%u/%u npc=(%.0f,%.0f)",
+                      static_cast<unsigned>(i + 1), static_cast<unsigned>(candidateCount), npcX, npcY);
+            WriteConsumableHarnessStatus("candidate_selected", target.label, ReadMapId(), crafterAgentId, 0,
+                                         target.modelId, 0, 0, 0, 1, detail);
+
+            const bool nearNpc = MovePlayerNear(npcX, npcY, 120.0f, 12000);
+            sprintf_s(detail, "near_npc=%u npc=(%.0f,%.0f)", nearNpc ? 1u : 0u, npcX, npcY);
+            WriteConsumableHarnessStatus("candidate_approach", target.label, ReadMapId(), crafterAgentId, 0,
+                                         target.modelId, 0, 0, 0, nearNpc ? 1u : 0u, detail);
+            if (!nearNpc) {
+                IntReport("      Could not get close enough to candidate %u; trying next candidate", crafterAgentId);
+                continue;
+            }
+            ReportMerchantPreInteractState("Consumable harness pre-interact snapshot", crafterAgentId, npcX, npcY);
+            ReportMerchantRuntimeContext("Consumable harness runtime context");
+            ReportMerchantTradeState("Consumable harness pre-interact trade state");
+
+            AgentMgr::ChangeTarget(crafterAgentId);
+            Sleep(250);
+            MerchantStoCTap tap{};
+            StartMerchantStoCTap(tap);
+            WriteConsumableHarnessStatus("interacting", target.label, ReadMapId(), crafterAgentId, 0,
+                                         target.modelId, 0, 0, 0, 1, "sending_interact_attempts");
+            for (int nativeAttempt = 1; nativeAttempt <= 3; ++nativeAttempt) {
+                IntReport("      AgentMgr::InteractNPC attempt %d", nativeAttempt);
+                AgentMgr::InteractNPC(crafterAgentId);
+                Sleep(500);
+            }
+            Sleep(2500);
+            StopMerchantStoCTap(tap);
+
+            ReportMerchantTradeState("Consumable harness post-interact trade state");
+            ReportMerchantStoCTap("Consumable harness StoC tap", tap);
+            merchantReady = WaitFor("consumable crafter merchant context", 2000, []() {
+                return UIMgr::GetFrameByHash(kMerchantRootHash) != 0 || TradeMgr::GetMerchantItemCount() > 0;
+            });
+            sprintf_s(detail, "merchant_ready=%u frame=0x%08X items=%u",
+                      merchantReady ? 1u : 0u,
+                      static_cast<unsigned>(UIMgr::GetFrameByHash(kMerchantRootHash)),
+                      TradeMgr::GetMerchantItemCount());
+            WriteConsumableHarnessStatus("open_probe", target.label, ReadMapId(), crafterAgentId,
+                                         TradeMgr::GetMerchantItemCount(), target.modelId, 0, 0, 0,
+                                         merchantReady ? 1u : 0u, detail);
+
+            if (!merchantReady) {
+                MerchantStoCTap rawTap{};
+                StartMerchantStoCTap(rawTap);
+                for (int packetAttempt = 1; packetAttempt <= 3; ++packetAttempt) {
+                    IntReport("      Raw GoNPC attempt %d", packetAttempt);
+                    CtoS::SendPacket(3, Packets::INTERACT_NPC, crafterAgentId, 0u);
+                    Sleep(500);
+                }
+                Sleep(2500);
+                StopMerchantStoCTap(rawTap);
+                ReportMerchantTradeState("Consumable harness post-raw-GoNPC trade state");
+                ReportMerchantStoCTap("Consumable harness raw-GoNPC StoC tap", rawTap);
+                merchantReady = WaitFor("consumable crafter merchant context after raw packet", 1500, []() {
+                    return UIMgr::GetFrameByHash(kMerchantRootHash) != 0 || TradeMgr::GetMerchantItemCount() > 0;
+                });
+                sprintf_s(detail, "merchant_ready=%u after_raw_packet frame=0x%08X items=%u",
+                          merchantReady ? 1u : 0u,
+                          static_cast<unsigned>(UIMgr::GetFrameByHash(kMerchantRootHash)),
+                          TradeMgr::GetMerchantItemCount());
+                WriteConsumableHarnessStatus("open_probe_raw", target.label, ReadMapId(), crafterAgentId,
+                                             TradeMgr::GetMerchantItemCount(), target.modelId, 0, 0, 0,
+                                             merchantReady ? 1u : 0u, detail);
+            }
+
+            if (!merchantReady) {
+                IntReport("      No merchant context observed for candidate %u; trying next candidate", crafterAgentId);
+                continue;
+            }
+
+            merchantItemCount = TradeMgr::GetMerchantItemCount();
+            ReportMerchantInventoryList("Consumable crafter inventory");
+            crafterItemId = TradeMgr::GetMerchantItemIdByModelId(target.modelId);
+            if (stage == ConsumableHarnessStage::ListOnly) {
+                WriteConsumableHarnessStatus("frame_dump_begin", target.label, ReadMapId(), crafterAgentId,
+                                             merchantItemCount, target.modelId, crafterItemId, 0, 0, 1,
+                                             "dumping_target_candidate_frame_tree");
+                DumpConsumableFrameTree(UIMgr::GetFrameByHash(kMerchantRootHash),
+                                        FindMerchantItemPositionByModelId(target.modelId),
+                                        target.modelId,
+                                        crafterItemId);
+                WriteConsumableHarnessStatus("frame_dump_complete", target.label, ReadMapId(), crafterAgentId,
+                                             merchantItemCount, target.modelId, crafterItemId, 0, 0, 1,
+                                             "target_candidate_frame_tree_dumped");
+            }
+            IntCheck("Consumable target model present in crafter inventory", crafterItemId != 0);
+            if (crafterItemId == 0) {
+                BuildMerchantInventorySummary(detail, sizeof(detail));
+                WriteConsumableHarnessStatus("list_failed", target.label, ReadMapId(), crafterAgentId,
+                                             merchantItemCount, target.modelId, 0, 0, 0, 0, detail);
+                merchantReady = false;
+                continue;
+            }
+
+            targetInventoryReady = true;
+        }
+
+        IntCheck("Consumable crafter merchant context available", targetInventoryReady);
+        if (!targetInventoryReady) {
+            WriteConsumableHarnessStatus("open_failed", target.label, ReadMapId(), crafterAgentId, 0,
+                                         target.modelId, 0, 0, 0, 0, "merchant_context_not_observed");
+            continue;
+        }
+
+        anySuccess = true;
+
+        if (stage == ConsumableHarnessStage::OpenOnly) {
+            WriteConsumableHarnessStatus("open_complete", target.label, ReadMapId(), crafterAgentId,
+                                         merchantItemCount, target.modelId, crafterItemId, 0, 0, 1,
+                                         "open_only_stage_complete");
+            IntSkip("Consumable inventory list", "Open-only consumable isolation stage");
+            IntReport("");
+            return true;
+        }
+
+        if (stage == ConsumableHarnessStage::ListOnly) {
+            WriteConsumableHarnessStatus("list_complete", target.label, ReadMapId(), crafterAgentId,
+                                         merchantItemCount, target.modelId, crafterItemId, 0, 0, 1,
+                                         "list_only_stage_complete");
+            IntSkip("Consumable craft transact", "List-only consumable isolation stage");
+            IntReport("");
+            return true;
+        }
+
+        uint32_t beforeInventoryCount = 0;
+        uint32_t afterInventoryCount = 0;
+        char uiDetail[160] = {};
+        IntReport("  Crafting one item for model=%u item=%u via UI row-selection path...", target.modelId, crafterItemId);
+        const bool uiClicked = CraftConsumableViaUiClick(target.label, target.modelId, crafterItemId, clickMode,
+                                                         beforeInventoryCount, afterInventoryCount,
+                                                         uiDetail, sizeof(uiDetail));
+        sprintf_s(detail, "uiClicked=%u legacyFallback=0 before=%u after=%u %s",
+                  uiClicked ? 1u : 0u,
+                  beforeInventoryCount,
+                  afterInventoryCount,
+                  uiDetail);
+
+        IntReport("  Consumable craft inventory delta for model=%u: before=%u after=%u detail=%s",
+                  target.modelId, beforeInventoryCount, afterInventoryCount, detail);
+        IntCheck("Consumable craft increased inventory count", afterInventoryCount > beforeInventoryCount);
+        WriteConsumableHarnessStatus("craft_complete", target.label, ReadMapId(), crafterAgentId,
+                                     merchantItemCount, target.modelId, crafterItemId,
+                                     beforeInventoryCount, afterInventoryCount,
+                                     afterInventoryCount > beforeInventoryCount ? 1u : 0u,
+                                     detail);
+
+        if (stage == ConsumableHarnessStage::CraftOnly || stage == ConsumableHarnessStage::Full) {
+            break;
+        }
+    }
+
+    if (!anySuccess) {
+        WriteConsumableHarnessStatus("complete", DescribeConsumableHarnessTarget(selectedTarget),
+                                     ReadMapId(), 0, 0, 0, 0, 0, 0, 0, "no_consumable_targets_succeeded");
+    }
+
+    IntReport("");
+    return anySuccess;
+}
+
+int RunTradeHelperMode() {
+    IntReport("=== GWA3 Player Trade Helper Mode ===");
+    // Helper mode is a long-lived idle/rendezvous loop rather than an assert-heavy
+    // integration suite. The generic watchdog's hung-window heuristic can false-fire
+    // here during map travel/load and kill the helper before the trade harness ever
+    // sees it. The harness already verifies helper liveness explicitly via PID and
+    // the status file, so keep helper mode watchdog-free.
+
+    const uint32_t startMapId = ReadMapId();
+    if (startMapId == 0) {
+        IntSkip("Trade helper", "Not in game");
+        return 1;
+    }
+
+    if (!TradePartnerHook::Initialize()) {
+        IntReport("  TradePartnerHook unavailable; helper will continue without partner-event telemetry");
+    } else {
+        TradePartnerHook::Reset();
+    }
+
+    if (startMapId != kMapLongeyesLedge || MapMgr::GetRegion() != kTradeTestRegion || MapMgr::GetDistrict() != kTradeTestDistrict) {
+        IntReport("  Traveling helper to Longeye's Ledge Asia/Japan district %u...", kTradeTestDistrict);
+        MapMgr::Travel(kMapLongeyesLedge, kTradeTestRegion, kTradeTestDistrict, kTradeTestLanguage);
+        bool traveled = WaitFor("Helper reaches Longeye's Ledge preferred district", 20000, []() {
+            return ReadMapId() == kMapLongeyesLedge
+                && ReadMyId() > 0
+                && MapMgr::GetRegion() == kTradeTestRegion
+                && MapMgr::GetDistrict() == kTradeTestDistrict;
+        });
+        if (!traveled) {
+            IntReport("  Preferred quiet Asia/Japan district did not load; falling back to Asia/Japan district %u", kTradeFallbackDistrict);
+            MapMgr::Travel(kMapLongeyesLedge, kTradeTestRegion, kTradeFallbackDistrict, kTradeTestLanguage);
+            traveled = WaitFor("Helper reaches Longeye's Ledge fallback district", 60000, []() {
+                return ReadMapId() == kMapLongeyesLedge
+                    && ReadMyId() > 0
+                    && MapMgr::GetRegion() == kTradeTestRegion
+                    && MapMgr::GetDistrict() == kTradeFallbackDistrict;
+            });
+        }
+        IntCheck("Helper reached Longeye's Ledge", traveled);
+        if (!traveled) {
+            return 1;
+        }
+    }
+    IntReport("  Helper staying near spawn in quiet trade district");
+
+    const DWORD start = GetTickCount();
+    DWORD lastLog = 0;
+    DWORD tradeOpenedAt = 0;
+    DWORD lastSubmitAttemptAt = 0;
+    DWORD lastAcceptAttemptAt = 0;
+    uint32_t tradeOpenCount = 0;
+    uint32_t lastOpenFlags = 0;
+    uint32_t submitAttemptCount = 0;
+    uint32_t acceptAttemptCount = 0;
+    bool submittedThisOpen = false;
+    bool acceptedThisOpen = false;
+    uint32_t submitGoldThisOpen = 0;
+
+    while (GetTickCount() - start < 10 * 60 * 1000) {
+        const DWORD now = GetTickCount();
+        const uint32_t tradeFlags = ReadTradeFlagsForHelper();
+        const bool tradeOpen = tradeFlags != 0;
+
+        if (tradeOpen && tradeOpenedAt == 0) {
+            tradeOpenedAt = now;
+            lastSubmitAttemptAt = 0;
+            lastAcceptAttemptAt = 0;
+            ++tradeOpenCount;
+            lastOpenFlags = tradeFlags;
+            submittedThisOpen = false;
+            acceptedThisOpen = false;
+            submitGoldThisOpen = ReadTradeHelperSubmitGoldConfig();
+            IntReport("  Helper observed player trade open (flags=%u)", tradeFlags);
+        }
+
+        if (!tradeOpen) {
+            tradeOpenedAt = 0;
+            lastSubmitAttemptAt = 0;
+            lastAcceptAttemptAt = 0;
+            submittedThisOpen = false;
+            acceptedThisOpen = false;
+            submitGoldThisOpen = 0;
+        }
+
+        const bool autoSubmitEnabled = ReadTradeHelperAutoSubmitConfig();
+
+        if (tradeOpen && autoSubmitEnabled && !submittedThisOpen && tradeOpenedAt != 0 && now - tradeOpenedAt > 750) {
+            const uint32_t gold = submitGoldThisOpen;
+            IntReport("  Helper auto-submitting offer gold=%u (flags=%u)", gold, tradeFlags);
+            GameThread::Enqueue([gold]() { TradeMgr::SubmitOffer(gold); });
+            ++submitAttemptCount;
+            submittedThisOpen = true;
+            lastSubmitAttemptAt = now;
+        }
+
+        if (tradeOpen && autoSubmitEnabled && submittedThisOpen && tradeOpenedAt != 0 && now - tradeOpenedAt > 1500) {
+            if (!acceptedThisOpen || now - lastAcceptAttemptAt > 1500) {
+                IntReport("  Helper auto-accepting incoming trade (flags=%u)", tradeFlags);
+                GameThread::Enqueue([]() { TradeMgr::AcceptTrade(); });
+                ++acceptAttemptCount;
+                acceptedThisOpen = true;
+                lastAcceptAttemptAt = now;
+            }
+        }
+
+        if (tradeOpen && tradeOpenedAt != 0 && now - tradeOpenedAt > 20000) {
+            IntReport("  Helper auto-canceling stale trade after 20s (flags=%u)", tradeFlags);
+            GameThread::Enqueue([]() { TradeMgr::CancelTrade(); });
+            tradeOpenedAt = 0;
+        }
+
+        float x = 0.0f, y = 0.0f;
+        TryReadAgentPosition(ReadMyId(), x, y);
+        const uint32_t mapId = ReadMapId();
+        const uint32_t region = MapMgr::GetRegion();
+        const uint32_t district = MapMgr::GetDistrict();
+        uint32_t playerGold = 0;
+        uint32_t partnerGold = 0;
+        uint32_t playerItemCount = 0;
+        uint32_t partnerItemCount = 0;
+        ReadTradeStateForHelper(playerGold, partnerGold, playerItemCount, partnerItemCount);
+        const uint32_t tradePartnerHookHits = TradePartnerHook::GetHitCount();
+        const uint32_t tradePartnerLastEax = TradePartnerHook::GetLastEax();
+        const uint32_t tradePartnerLastEcx = TradePartnerHook::GetLastEcx();
+        const uint32_t tradePartnerLastEdx = TradePartnerHook::GetLastEdx();
+        const uint32_t tradeUiPlayerUpdatedCount = TradeMgr::GetTradeUiPlayerUpdatedCount();
+        const uint32_t tradeUiSessionStartCount = TradeMgr::GetTradeUiSessionStartCount();
+        const uint32_t tradeUiSessionUpdatedCount = TradeMgr::GetTradeUiSessionUpdatedCount();
+        const uint32_t tradeUiLastSessionStartState = TradeMgr::GetTradeUiLastSessionStartState();
+        const uint32_t tradeUiLastSessionStartPlayerNumber = TradeMgr::GetTradeUiLastSessionStartPlayerNumber();
+        WriteTradeHelperStatus(mapId, region, district, ReadMyId(), x, y, tradeFlags, tradeOpenCount, lastOpenFlags,
+                             submitAttemptCount, acceptAttemptCount, playerGold, partnerGold, playerItemCount, partnerItemCount,
+                             tradePartnerHookHits, tradePartnerLastEax, tradePartnerLastEcx, tradePartnerLastEdx,
+                             tradeUiPlayerUpdatedCount, tradeUiSessionStartCount, tradeUiSessionUpdatedCount,
+                             tradeUiLastSessionStartState, tradeUiLastSessionStartPlayerNumber);
+
+        if (now - lastLog >= 3000) {
+            IntReport("  Helper heartbeat: map=%u region=%u district=%u myId=%u pos=(%.1f, %.1f) tradeFlags=%u",
+                      mapId, region, district, ReadMyId(), x, y, tradeFlags);
+            IntReport("    TradePartnerHook: hits=%u eax=%u ecx=%u edx=%u",
+                      tradePartnerHookHits, tradePartnerLastEax, tradePartnerLastEcx, tradePartnerLastEdx);
+            IntReport("    TradeUI: playerUpdated=%u sessionStart=%u sessionUpdated=%u lastState=%u lastPlayer=%u",
+                      tradeUiPlayerUpdatedCount, tradeUiSessionStartCount, tradeUiSessionUpdatedCount,
+                      tradeUiLastSessionStartState, tradeUiLastSessionStartPlayerNumber);
+            lastLog = now;
+        }
+
+        Sleep(250);
+    }
+
+    TradePartnerHook::Shutdown();
+    IntReport("  Helper timeout reached; exiting helper mode");
+    return 0;
+}
+
+int RunConsumableCraftingTest() {
+    int failures = 0;
+    if (!TestConsumableCrafting()) ++failures;
+    return failures;
 }
 
 } // namespace GWA3::SmokeTest
