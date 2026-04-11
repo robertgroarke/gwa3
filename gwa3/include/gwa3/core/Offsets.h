@@ -145,6 +145,7 @@ namespace GWA3::Offsets {
     // ===== Trade (GWCA) =====
     extern uintptr_t OfferTradeItem;     // func — __fastcall offer item in trade window
     extern uintptr_t UpdateTradeCart;    // func — trade cart update (captures window context)
+    extern uintptr_t TradeHackPatch;     // ptr — upstream ToggleTradePatch target (55 <-> C3)
     extern uintptr_t TradeSendOffer;     // func — submit current trade offer / offered gold
     extern uintptr_t TradeCancelOffer;   // func — retract submitted offer to modify it
     extern uintptr_t TradeAcceptOffer;   // func — accept current player trade

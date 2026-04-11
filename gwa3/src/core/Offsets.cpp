@@ -106,6 +106,7 @@ uintptr_t InteractNPCFunc = 0;
 
 uintptr_t OfferTradeItem = 0;
 uintptr_t UpdateTradeCart = 0;
+uintptr_t TradeHackPatch = 0;
 uintptr_t TradeSendOffer = 0;
 uintptr_t TradeCancelOffer = 0;
 uintptr_t TradeAcceptOffer = 0;
@@ -282,6 +283,8 @@ static const PatternDef s_patterns[] = {
     // GWCA's older UpdateTradeCart anchor drifted from ...3D EF 00 00 10...
     // to ...3D F1 00 00 10 0F 87 B8... on the current client build.
     PAT("UpdateTradeCart",  UpdateTradeCart, "\x57\x8B\x7D\x0C\x3D\xF1\x00\x00\x10\x0F\x87\xB8", "xxxxxxxxxxxx",  -0x24, Priority::P2, PatternType::Func),
+    // AutoIt ToggleTradePatch target: pattern omits the leading 0x55 so offset -1 lands on the prologue byte.
+    PAT("TradeHackPatch",   TradeHackPatch,  "\x8B\xEC\x8B\x45\x08\x83\xF8\x46",             "xxxxxxxx",      -0x1, Priority::P2, PatternType::Ptr),
 
     // ===== Chat GWCA (P2) =====
     PAT("SendChatFunc",  SendChatFunc,  "\x8D\x85\xE0\xFE\xFF\xFF\x50\x68\x1C\x01",     "xxxxxxxxx",  -0x3E, Priority::P2, PatternType::Func),

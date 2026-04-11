@@ -847,16 +847,17 @@ void PerformMaintenance(const Config& cfg) {
     uint32_t identified = IdentifyAllItems();
     if (identified > 0) WaitMs(500);
 
-    // Step 4: Salvage — DISABLED.
-    // The native Salvage function permanently NULLs bags array pointer (p2+0xF8).
-    // Tried: GameThread, Engine hook command queue, direct call, with/without
-    // DialogMgr shutdown. The bags pointer never restores — the game's StoC
-    // inventory update handler doesn't fire or doesn't rebuild bags in our context.
-    // Sell items instead of salvaging for now.
-
-    // Step 5: Sell remaining junk items (requires merchant to be open)
+    // Step 4: Sell junk items FIRST to free inventory space (requires merchant open)
     uint32_t sold = SellJunkItems();
     if (sold > 0) WaitMs(500);
+
+    // Step 5: Salvage white/blue junk IF we now have free slots for salvage materials.
+    // Must have free slots — salvage produces materials that need bag space.
+    // Must run AFTER sell so there's room for the output materials.
+    if (CountFreeSlots() >= 2) {
+        uint32_t salvaged = SalvageJunkItems();
+        if (salvaged > 0) WaitMs(500);
+    }
 
     // Step 6: Buy kits to target (requires merchant to be open)
     BuyKitsToTarget(cfg);
