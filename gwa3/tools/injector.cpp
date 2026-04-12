@@ -386,6 +386,7 @@ int main(int argc, char* argv[]) {
     bool doTestMerchant = false;
     bool doTestMerchantShell = false;
     bool doTestTradeHelper = false;
+    bool doTestConsumables = false;
     bool doLlm = false;
     bool doLlmAdvisory = false;
     const char* merchantVariantFlag = nullptr;
@@ -426,6 +427,20 @@ int main(int argc, char* argv[]) {
             doTestMerchantShell = true;
         } else if (strcmp(argv[i], "--test-trade-helper") == 0) {
             doTestTradeHelper = true;
+        } else if (strcmp(argv[i], "--test-consumables") == 0) {
+            doTestConsumables = true;
+        } else if (strcmp(argv[i], "--consumable-stage") == 0 && i + 1 < argc) {
+            const char* stage = argv[++i];
+            char flagName[128];
+            snprintf(flagName, sizeof(flagName), "gwa3_test_consumables_stage_%s.flag", stage);
+            // Replace hyphens with underscores in flag name
+            for (char* p = flagName; *p; ++p) if (*p == '-') *p = '_';
+            SetTestModeFlag(flagName);
+        } else if (strcmp(argv[i], "--consumable-target") == 0 && i + 1 < argc) {
+            const char* target = argv[++i];
+            char flagName[128];
+            snprintf(flagName, sizeof(flagName), "gwa3_test_consumables_target_%s.flag", target);
+            SetTestModeFlag(flagName);
         } else if (strcmp(argv[i], "--llm") == 0) {
             doLlm = true;
         } else if (strcmp(argv[i], "--llm-advisory") == 0) {
@@ -544,6 +559,7 @@ int main(int argc, char* argv[]) {
     if (doTestMerchant) SetTestModeFlag("gwa3_test_merchant_quote.flag");
     if (doTestMerchantShell) SetTestModeFlag("gwa3_test_merchant_shell.flag");
     if (doTestTradeHelper) SetTestModeFlag("gwa3_test_trade_helper.flag");
+    if (doTestConsumables) SetTestModeFlag("gwa3_test_consumables.flag");
     if (doTestMerchant && merchantVariantFlag) SetTestModeFlag(merchantVariantFlag);
     if (doTestMerchant && merchantStageFlag) SetTestModeFlag(merchantStageFlag);
     if (doLlm) SetTestModeFlag("gwa3_llm_mode.flag");

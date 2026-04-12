@@ -29,6 +29,9 @@ namespace GWA3::SmokeTest {
     // requests a quote without buying or selling anything.
     int RunMerchantQuoteTest();
 
+    // Run consumable crafting test (conset cycle: gold, materials, craft).
+    int RunConsumableCraftingTest();
+
     // Run advanced integration tests. Exercises PlayerMgr, CameraMgr,
     // MemoryMgr, deep inventory introspection, agent enumeration,
     // UI frame validation, AreaInfo, hero flagging, skillbar data,
