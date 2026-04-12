@@ -102,6 +102,12 @@ static volatile LONG s_engineCallTest = 0;
 static void (__stdcall* s_engineDispatchOnePtr)() = nullptr;
 static int (__stdcall* s_shouldDeferBotshubCommandsPtr)() = nullptr;
 
+// Cached offset pointers for the inline asm environment gate (avoids C++
+// function calls on the engine hook hot path — C++ calls corrupt EBP and
+// the game's frame context).
+static uintptr_t s_cachedBasePointer = 0;     // = Offsets::BasePointer
+static uintptr_t s_cachedEnvironment = 0;     // = Offsets::Environment
+
 // Diagnostic counters for HandleCase vs RegularFlow frequency
 static volatile LONG s_deferCount = 0;      // HandleCase ticks (command deferred)
 static volatile LONG s_deferWithCmd = 0;     // HandleCase ticks where a command was actually waiting
@@ -224,31 +230,9 @@ static __declspec(naked) void EngineDetourNaked() {
         pushad
         pushfd
 
-        // Save x87 FPU state so command stubs (Move uses floats) don't
-        // corrupt the FPU stack the game relies on after the trampoline's
-        // fld instruction.
-        fsave [s_fpuSaveArea]
-
         inc dword ptr [s_heartbeat]
 
-        call dword ptr [s_shouldDeferBotshubCommandsPtr]
-        test eax, eax
-        jz regular_flow
-
-        // HandleCase: game engine state says defer.
-        // Upstream GWA2/BotsHub drops the command here, but our C++ bot
-        // issues commands once (no automatic retry loop), so we DEFER
-        // instead of DROP — leave the command in the queue for the next
-        // tick when RegularFlow fires.
-        inc dword ptr [s_deferCount]
-        mov ecx, dword ptr [s_botshubCmdTail]
-        cmp ecx, dword ptr [s_botshubCmdHead]
-        je no_botshub_command
-        inc dword ptr [s_deferWithCmd]
-        jmp no_botshub_command
-
-    regular_flow:
-        // RegularFlow: execute the next queued botshub command if any.
+        // === Botshub command dispatch ===
         mov ecx, dword ptr [s_botshubCmdTail]
         cmp ecx, dword ptr [s_botshubCmdHead]
         je no_botshub_command
@@ -266,15 +250,12 @@ static __declspec(naked) void EngineDetourNaked() {
         jmp edx
     no_botshub_command:
 
-        // Dispatch game commands (salvage, etc.) — same context as AutoIt command queue
+        // Game command dispatch (rare — salvage etc.)
         mov eax, dword ptr [s_cmdTail]
         cmp eax, dword ptr [s_cmdHead]
         je no_command
         call dword ptr [s_engineDispatchCmdPtr]
     no_command:
-
-        // Restore x87 FPU state before returning to game code.
-        frstor [s_fpuSaveArea]
 
         popfd
         popad
@@ -336,7 +317,16 @@ static bool InstallEngineHook() {
     s_engineReplayTrampoline = reinterpret_cast<uintptr_t>(tramp);
     s_engineDispatchOnePtr = &EngineDispatchOne;
     s_engineDispatchCmdPtr = &EngineDispatchCommand;
-    s_shouldDeferBotshubCommandsPtr = &ShouldDeferBotshubCommands;
+
+    // Cache offset pointers for the inline asm environment gate.
+    // BasePointer is already dereferenced in PostProcessOffsets.
+    // Environment is a code address — read the embedded immediate to get the actual base.
+    s_cachedBasePointer = Offsets::BasePointer;
+    if (Offsets::Environment > 0x10000) {
+        s_cachedEnvironment = *reinterpret_cast<uintptr_t*>(Offsets::Environment);
+    }
+    Log::Info("CtoS: env gate cached BasePointer=0x%08X Environment=0x%08X",
+              s_cachedBasePointer, s_cachedEnvironment);
 
     // Write 5-byte JMP to our detour
     DWORD oldProtect;
@@ -688,6 +678,7 @@ void ResetPacketTap() {
 }
 
 } // namespace GWA3::CtoS
+
 
 
 
