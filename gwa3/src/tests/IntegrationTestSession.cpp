@@ -2890,19 +2890,9 @@ bool TestConsetCraftCycle() {
                 uint32_t npc = ConsetFindNearestNPC(kMaterialTraderX, kMaterialTraderY);
                 if (npc) {
                     IntReport("  Opening material trader NPC %u...", npc);
+                    // InteractNPC + GoNPC fallback, same as crafter open path
                     AgentMgr::InteractNPC(npc);
-                    Sleep(1500);
-                    // Dialog packet via GameThread (AutoIt does Dialog($npc) after GoToNPC)
-                    {
-                        struct DialogTask { uint32_t npcId; };
-                        static auto DialogInvoker = [](void* s) {
-                            auto* t = reinterpret_cast<DialogTask*>(s);
-                            if (t && t->npcId) CtoS::Dialog(t->npcId);
-                        };
-                        DialogTask dt{npc};
-                        GameThread::EnqueueRaw(DialogInvoker, &dt, sizeof(dt));
-                    }
-                    Sleep(1500);
+                    Sleep(2000);
                     if (TradeMgr::GetMerchantItemCount() == 0) {
                         struct GoNPCTask { uint32_t npcId; };
                         static auto GoNPCInvoker = [](void* storage) {
