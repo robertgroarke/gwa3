@@ -21,12 +21,39 @@ static __declspec(naked) void TraderDetourNaked() {
     __asm {
         mov dword ptr [s_debugEbx], ebx
         push eax
+
+        // Try reading from [ebp+0Ch] first — this is the function parameter
+        // that the original instruction assigns to ebx. The trader response
+        // struct pointer may be at this parameter, not in the current ebx.
+        mov eax, dword ptr [ebp+0Ch]
+        // If [eax+28] looks valid (non-null pointer), use it
+        cmp eax, 0x10000
+        jb use_ebx
+        push ecx
+        mov ecx, dword ptr [eax+28]
+        cmp ecx, 0x10000
+        pop ecx
+        jb use_ebx
+        // Use [ebp+0Ch] path
+        mov eax, dword ptr [eax+28]
+        mov dword ptr [s_costItemId], 0
+        push ecx
+        mov ecx, [eax]
+        mov dword ptr [s_costItemId], ecx
+        mov ecx, [eax+4]
+        mov dword ptr [s_costValue], ecx
+        pop ecx
+        jmp extract_done
+
+    use_ebx:
         mov eax, dword ptr [ebx+28]
         mov eax, [eax]
         mov dword ptr [s_costItemId], eax
         mov eax, dword ptr [ebx+28]
         mov eax, [eax+4]
         mov dword ptr [s_costValue], eax
+
+    extract_done:
         pop eax
         mov ebx, dword ptr [ebp+0Ch]
         mov esi, eax
