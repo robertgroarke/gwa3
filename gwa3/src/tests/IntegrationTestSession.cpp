@@ -3,6 +3,7 @@
 #include "IntegrationTestInternal.h"
 
 #include <gwa3/core/GameThread.h>
+#include <gwa3/core/Offsets.h>
 #include <gwa3/core/RenderHook.h>
 #include <gwa3/core/TargetLogHook.h>
 #include <gwa3/core/TradePartnerHook.h>
@@ -2659,6 +2660,45 @@ static uint32_t FindTraderVirtualItemId(uint32_t modelId) {
     return 0;
 }
 
+// Request a trader quote via GameThread — calls the native RequestQuote
+// function with type=0xC (TraderBuy). This avoids RenderHook shellcode
+// which may not be active after bootstrap.
+struct TraderQuoteTask { uint32_t itemId; };
+static uint32_t s_traderQuoteItemId = 0;
+
+static void __cdecl TraderQuoteInvoker(void* storage) {
+    auto* t = reinterpret_cast<TraderQuoteTask*>(storage);
+    if (!t || !t->itemId || !Offsets::RequestQuote) return;
+
+    s_traderQuoteItemId = t->itemId;
+    uint32_t* itemIdPtr = &s_traderQuoteItemId;
+    const uintptr_t fn = Offsets::RequestQuote;
+    __asm {
+        mov eax, itemIdPtr
+        push eax        // recv.item_ids
+        push 1          // recv.item_count
+        push 0          // recv.unknown
+        push 0          // give.item_ids
+        push 0          // give.item_count
+        push 0          // give.unknown
+        push 0          // unknown arg2
+        push 0xC        // type = TraderBuy (0xC)
+        xor ecx, ecx
+        mov edx, 2
+        mov eax, fn
+        call eax
+        add esp, 0x20
+    }
+}
+
+static bool RequestTraderQuoteViaGameThread(uint32_t itemId) {
+    if (!itemId || !Offsets::RequestQuote) return false;
+    TraderHook::Reset();
+    TraderQuoteTask task{itemId};
+    GameThread::EnqueueRaw(&TraderQuoteInvoker, &task, sizeof(task));
+    return true;
+}
+
 // Buy material packs from the material trader at Embark Beach.
 // Reproduces AutoIt BuyMaterialIfMissing: quote → buy → re-quote → buy loop.
 static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
@@ -2681,7 +2721,7 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
         // Request quote using the found item ID
         const uint32_t quoteBefore = TraderHook::GetQuoteId();
         TraderHook::Reset();
-        if (!TradeMgr::RequestTraderQuoteByItemId(traderItemId)) {
+        if (!RequestTraderQuoteViaGameThread(traderItemId)) {
             IntReport("  Quote request failed for item=%u model=%u", traderItemId, modelId);
             break;
         }
