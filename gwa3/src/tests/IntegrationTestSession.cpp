@@ -140,6 +140,7 @@ enum class ConsumableHarnessStage {
     OpenOnly,
     ListOnly,
     CraftOnly,
+    ConsetCycle,
 };
 
 enum class ConsumableHarnessTarget {
@@ -273,6 +274,9 @@ ConsumableHarnessStage GetConsumableHarnessStage() {
     if (CheckLocalFlagFile("gwa3_test_consumables_stage_craft_only.flag")) {
         return ConsumableHarnessStage::CraftOnly;
     }
+    if (CheckLocalFlagFile("gwa3_test_consumables_stage_conset_cycle.flag")) {
+        return ConsumableHarnessStage::ConsetCycle;
+    }
     return ConsumableHarnessStage::Full;
 }
 
@@ -283,6 +287,7 @@ const char* DescribeConsumableHarnessStage(ConsumableHarnessStage stage) {
     case ConsumableHarnessStage::OpenOnly: return "travel + open";
     case ConsumableHarnessStage::ListOnly: return "travel + open + list";
     case ConsumableHarnessStage::CraftOnly: return "travel + open + list + craft";
+    case ConsumableHarnessStage::ConsetCycle: return "full conset cycle: gold + materials + craft all 3";
     default: return "unknown";
     }
 }
@@ -363,6 +368,8 @@ constexpr float kEmbarkKwatX = 3596.0f;
 constexpr float kEmbarkKwatY = 107.0f;
 constexpr float kEmbarkAlcusX = 3704.0f;
 constexpr float kEmbarkAlcusY = -163.0f;
+constexpr float kEmbarkXunlaiX = 2283.0f;
+constexpr float kEmbarkXunlaiY = -2134.0f;
 constexpr float kGaddsMerchantX = -8374.0f;
 constexpr float kGaddsMerchantY = -22491.0f;
 constexpr uint32_t kModelArmorSalvation = 24860u;
@@ -2593,6 +2600,142 @@ bool TestMapTravel() {
     return transitioned && myIdReady;
 }
 
+// ===== CONSET CRAFT CYCLE =====
+
+static bool ConsetMoveToNPC(float x, float y, const char* label) {
+    IntReport("  Moving to %s at (%.0f, %.0f)...", label, x, y);
+    CtoS::MoveToCoord(x, y);
+    return WaitFor(label, 15000, [x, y]() {
+        auto* me = AgentMgr::GetMyAgent();
+        if (!me) return false;
+        const float dx = me->x - x, dy = me->y - y;
+        return (dx * dx + dy * dy) < 300.0f * 300.0f;
+    });
+}
+
+static uint32_t ConsetFindNearestNPC(float x, float y, float maxDist = 500.0f) {
+    const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    uint32_t bestId = 0;
+    float bestDistSq = maxDist * maxDist;
+    for (uint32_t i = 1; i < maxAgents; ++i) {
+        auto* agent = AgentMgr::GetAgentByID(i);
+        if (!agent || agent->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(agent);
+        if (living->allegiance != 6) continue;
+        const float distSq = AgentMgr::GetSquaredDistance(x, y, living->x, living->y);
+        if (distSq < bestDistSq) { bestDistSq = distSq; bestId = i; }
+    }
+    return bestId;
+}
+
+static bool ConsetCraftOneItem(const char* traderLabel, float traderX, float traderY, uint32_t targetModelId) {
+    IntReport("  --- Crafting at %s (model=%u) ---", traderLabel, targetModelId);
+    if (!ConsetMoveToNPC(traderX, traderY, traderLabel)) {
+        IntReport("  Failed to reach %s", traderLabel);
+        return false;
+    }
+    uint32_t npc = ConsetFindNearestNPC(traderX, traderY);
+    if (!npc) { IntReport("  No NPC near %s", traderLabel); return false; }
+    IntReport("  Interacting with NPC %u", npc);
+    CtoS::SendPacket(2, Packets::INTERACT_LIVING, npc);
+    Sleep(1500);
+    CtoS::SendPacket(2, 0x39, npc); // GoNPC fallback
+    Sleep(1500);
+    if (TradeMgr::GetMerchantItemCount() == 0) {
+        CtoS::SendPacket(2, 0x39, npc);
+        Sleep(2000);
+    }
+    if (TradeMgr::GetMerchantItemCount() == 0) {
+        IntReport("  Failed to open %s merchant", traderLabel);
+        return false;
+    }
+    IntReport("  %s merchant open: %u items", traderLabel, TradeMgr::GetMerchantItemCount());
+
+    const uint32_t itemPosition = FindMerchantItemPositionByModelId(targetModelId);
+    if (itemPosition == UINT32_MAX) { IntReport("  Model %u not found at %s", targetModelId, traderLabel); return false; }
+    Item* merchantItem = TradeMgr::GetMerchantItemByPosition(itemPosition);
+    if (!merchantItem) return false;
+
+    const uint32_t beforeCount = CountInventoryModelQuantity(targetModelId);
+    const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
+
+    const uintptr_t merchantFrame = UIMgr::GetFrameByHash(kMerchantRootHash);
+    const uintptr_t merchantContext = UIMgr::GetFrameContext(merchantFrame);
+    const uint32_t itemIndex = itemPosition - 1u;
+    const uint32_t itemPath[] = { 0u, 0u, itemIndex };
+    uintptr_t itemRowFrame = ResolveMerchantSortedPathFrame(merchantFrame, itemPath, 3, "item[0,0,index]");
+    if (itemRowFrame < 0x10000) { IntReport("  Item row not found"); return false; }
+
+    UIMgr::ButtonClick(itemRowFrame);
+    Sleep(500 + ChatMgr::GetPing());
+
+    const uintptr_t craftBtn = merchantContext >= 0x10000
+        ? UIMgr::GetFrameByContextAndChildOffset(merchantContext, 125u, merchantFrame) : 0u;
+    if (craftBtn < 0x10000) { IntReport("  Craft button not found"); return false; }
+
+    UIMgr::ButtonClick(craftBtn);
+    const bool crafted = WaitFor("craft completion", 5000, [targetModelId, beforeCount, goldBefore]() {
+        return CountInventoryModelQuantity(targetModelId) > beforeCount || ItemMgr::GetGoldCharacter() < goldBefore;
+    });
+    const uint32_t afterCount = CountInventoryModelQuantity(targetModelId);
+    IntReport("  Result: before=%u after=%u gold=%u->%u", beforeCount, afterCount, goldBefore, ItemMgr::GetGoldCharacter());
+    return afterCount > beforeCount;
+}
+
+bool TestConsetCraftCycle() {
+    IntReport("=== CONSET CRAFT CYCLE TEST ===");
+    WriteConsumableHarnessStatus("conset_cycle_start", "conset", ReadMapId(), 0, 0, 0, 0, 0, 0, 0, "starting");
+
+    // 1. Travel to Embark Beach
+    if (ReadMapId() != 857u) {
+        CtoS::SuspendEngineHook();
+        CtoS::MapTravel(857u, 4u, 1u, 0u);
+        Sleep(1000);
+        CtoS::ResumeEngineHook();
+        WaitFor("Embark Beach", 30000, []() { return ReadMapId() == 857u && MapMgr::GetLoadingState() == 0; });
+    }
+    if (!WaitForPlayerWorldReady(15000)) { IntReport("  Failed to reach Embark"); return false; }
+    IntReport("  In Embark Beach district=%u", MapMgr::GetDistrict());
+
+    // 2. Check gold
+    uint32_t gold = ItemMgr::GetGoldCharacter();
+    IntReport("  Gold: char=%u storage=%u", gold, ItemMgr::GetGoldStorage());
+    if (gold < 5000 && ItemMgr::GetGoldStorage() > 0) {
+        if (ConsetMoveToNPC(kEmbarkXunlaiX, kEmbarkXunlaiY, "Xunlai Chest")) {
+            uint32_t npc = ConsetFindNearestNPC(kEmbarkXunlaiX, kEmbarkXunlaiY);
+            if (npc) { CtoS::SendPacket(2, Packets::INTERACT_LIVING, npc); Sleep(1500); }
+            uint32_t toWithdraw = ItemMgr::GetGoldStorage() > 10000 ? 10000 : ItemMgr::GetGoldStorage();
+            ItemMgr::ChangeGold(gold + toWithdraw, ItemMgr::GetGoldStorage() - toWithdraw);
+            Sleep(500);
+            IntReport("  Gold after withdraw: char=%u", ItemMgr::GetGoldCharacter());
+        }
+    }
+
+    // 3. Check materials
+    uint32_t iron = CountInventoryModelQuantity(kMaterialIronIngot);
+    uint32_t dust = CountInventoryModelQuantity(kMaterialDust);
+    uint32_t bone = CountInventoryModelQuantity(kMaterialBone);
+    uint32_t feather = CountInventoryModelQuantity(kMaterialFeather);
+    IntReport("  Materials: Iron=%u Dust=%u Bone=%u Feather=%u", iron, dust, bone, feather);
+
+    bool canGrail = iron >= 50 && dust >= 50;
+    bool canEssence = feather >= 50 && dust >= (canGrail ? 100 : 50);
+    bool canArmor = iron >= (canGrail ? 100 : 50) && bone >= 50;
+    IntReport("  Can craft: Grail=%u Essence=%u Armor=%u", canGrail, canEssence, canArmor);
+
+    // 4. Craft
+    bool grailOk = false, essenceOk = false, armorOk = false;
+    if (canGrail) { grailOk = ConsetCraftOneItem("Eyja", kEmbarkEyjaX, kEmbarkEyjaY, kModelGrailOfMight); IntCheck("Crafted Grail", grailOk); }
+    if (canEssence) { essenceOk = ConsetCraftOneItem("Kwat", kEmbarkKwatX, kEmbarkKwatY, kModelEssenceCelerity); IntCheck("Crafted Essence", essenceOk); }
+    if (canArmor) { armorOk = ConsetCraftOneItem("Alcus", kEmbarkAlcusX, kEmbarkAlcusY, kModelArmorSalvation); IntCheck("Crafted Armor", armorOk); }
+
+    uint32_t total = (grailOk?1:0)+(essenceOk?1:0)+(armorOk?1:0);
+    char result[128]; sprintf_s(result, "grail=%u essence=%u armor=%u total=%u", grailOk, essenceOk, armorOk, total);
+    WriteConsumableHarnessStatus("conset_cycle_complete", "conset", ReadMapId(), 0, 0, 0, 0, 0, total, total>0?1:0, result);
+    IntReport("=== CONSET RESULT: %u/3 (%s) ===", total, result);
+    return total > 0;
+}
+
 bool TestConsumableCrafting() {
     IntReport("=== GWA3 Consumable Crafting Harness ===");
 
@@ -2603,10 +2746,15 @@ bool TestConsumableCrafting() {
     }
 
     const ConsumableHarnessStage stage = GetConsumableHarnessStage();
+    IntReport("  Consumable harness stage: %s", DescribeConsumableHarnessStage(stage));
+
+    if (stage == ConsumableHarnessStage::ConsetCycle) {
+        return TestConsetCraftCycle();
+    }
+
     const ConsumableHarnessTarget selectedTarget = GetConsumableHarnessTarget();
     const ConsumableHarnessClickMode clickMode = GetConsumableHarnessClickMode();
     char detail[160] = {};
-    IntReport("  Consumable harness stage: %s", DescribeConsumableHarnessStage(stage));
     IntReport("  Consumable harness target: %s", DescribeConsumableHarnessTarget(selectedTarget));
     IntReport("  Consumable harness click mode: %s", DescribeConsumableHarnessClickMode(clickMode));
     sprintf_s(detail, "map=%u region=%u district=%u",
