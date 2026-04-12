@@ -2627,6 +2627,38 @@ static uint32_t ConsetFindNearestNPC(float x, float y, float maxDist = 500.0f) {
     return bestId;
 }
 
+// Find a trader virtual item by model ID in the global item array.
+// AutoIt's TraderRequest scans [BasePtr]+0x18+0x40+0xB8 for items with
+// bag==nullptr and agent_id==0 — these are merchant offering slots.
+static uint32_t FindTraderVirtualItemId(uint32_t modelId) {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+    // Scan ALL items in the global array — items with bag==nullptr are virtual merchant slots
+    const uint32_t maxItems = AgentMgr::GetMaxAgents(); // item array size approximation
+    for (uint32_t id = 1; id < 4096; ++id) {
+        __try {
+            // Use the base pointer path: [BasePtr]+0x18+0x40+0xB8+[id*4]
+            uintptr_t p0 = 0, p1 = 0, p2 = 0, p3 = 0, itemPtr = 0;
+            if (!Offsets::BasePointer) break;
+            p0 = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+            if (p0 < 0x10000) break;
+            p1 = *reinterpret_cast<uintptr_t*>(p0 + 0x18);
+            if (p1 < 0x10000) break;
+            p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x40);
+            if (p2 < 0x10000) break;
+            p3 = *reinterpret_cast<uintptr_t*>(p2 + 0xB8);
+            if (p3 < 0x10000) break;
+            itemPtr = *reinterpret_cast<uintptr_t*>(p3 + id * 4);
+            if (itemPtr < 0x10000) continue;
+            auto* item = reinterpret_cast<Item*>(itemPtr);
+            if (item->model_id == modelId && item->bag == nullptr && item->agent_id == 0) {
+                return item->item_id;
+            }
+        } __except(EXCEPTION_EXECUTE_HANDLER) { break; }
+    }
+    return 0;
+}
+
 // Buy material packs from the material trader at Embark Beach.
 // Reproduces AutoIt BuyMaterialIfMissing: quote → buy → re-quote → buy loop.
 static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
@@ -2640,11 +2672,17 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
 
     uint32_t bought = 0;
     for (uint32_t p = 0; p < packs; ++p) {
-        // Request quote
+        // Find the trader's virtual item in the global item array (AutoIt approach)
+        const uint32_t traderItemId = FindTraderVirtualItemId(modelId);
+        if (!traderItemId) {
+            IntReport("  Trader virtual item not found for model=%u", modelId);
+            break;
+        }
+        // Request quote using the found item ID
         const uint32_t quoteBefore = TraderHook::GetQuoteId();
         TraderHook::Reset();
-        if (!TradeMgr::RequestTraderQuoteByModelId(modelId)) {
-            IntReport("  Quote request failed for model=%u", modelId);
+        if (!TradeMgr::RequestTraderQuoteByItemId(traderItemId)) {
+            IntReport("  Quote request failed for item=%u model=%u", traderItemId, modelId);
             break;
         }
         // Wait for quote response
