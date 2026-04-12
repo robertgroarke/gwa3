@@ -2700,16 +2700,23 @@ static bool ConsetCraftOneItem(const char* traderLabel, float traderX, float tra
     }
     uint32_t npc = ConsetFindNearestNPC(traderX, traderY);
     if (!npc) { IntReport("  No NPC near %s", traderLabel); return false; }
-    IntReport("  Interacting with NPC %u via AgentMgr::InteractNPC", npc);
+    IntReport("  Interacting with NPC %u", npc);
+    // Try native InteractNPC first (game thread safe)
     AgentMgr::InteractNPC(npc);
     Sleep(2000);
+    // Fallback: GoNPC packet via game thread
     if (TradeMgr::GetMerchantItemCount() == 0) {
-        AgentMgr::InteractNPC(npc);
-        Sleep(2000);
-    }
-    if (TradeMgr::GetMerchantItemCount() == 0) {
-        AgentMgr::InteractNPC(npc);
-        Sleep(2000);
+        IntReport("  InteractNPC didn't open merchant, trying GoNPC via GameThread...");
+        struct GoNPCTask { uint32_t npcId; };
+        static auto GoNPCInvoker = [](void* storage) {
+            auto* t = reinterpret_cast<GoNPCTask*>(storage);
+            if (t && t->npcId) CtoS::SendPacket(3, Packets::INTERACT_NPC, t->npcId, 0u);
+        };
+        for (int attempt = 0; attempt < 3 && TradeMgr::GetMerchantItemCount() == 0; ++attempt) {
+            GoNPCTask task{npc};
+            GameThread::EnqueueRaw(GoNPCInvoker, &task, sizeof(task));
+            Sleep(2000);
+        }
     }
     if (TradeMgr::GetMerchantItemCount() == 0) {
         IntReport("  Failed to open %s merchant", traderLabel);
@@ -2804,12 +2811,20 @@ bool TestConsetCraftCycle() {
             if (ConsetMoveToNPC(kMaterialTraderX, kMaterialTraderY, "Material Trader")) {
                 uint32_t npc = ConsetFindNearestNPC(kMaterialTraderX, kMaterialTraderY);
                 if (npc) {
-                    IntReport("  Opening material trader NPC %u via AgentMgr::InteractNPC...", npc);
+                    IntReport("  Opening material trader NPC %u...", npc);
                     AgentMgr::InteractNPC(npc);
                     Sleep(2000);
                     if (TradeMgr::GetMerchantItemCount() == 0) {
-                        AgentMgr::InteractNPC(npc);
-                        Sleep(2000);
+                        struct GoNPCTask { uint32_t npcId; };
+                        static auto GoNPCInvoker = [](void* storage) {
+                            auto* t = reinterpret_cast<GoNPCTask*>(storage);
+                            if (t && t->npcId) CtoS::SendPacket(3, Packets::INTERACT_NPC, t->npcId, 0u);
+                        };
+                        for (int a = 0; a < 3 && TradeMgr::GetMerchantItemCount() == 0; ++a) {
+                            GoNPCTask task{npc};
+                            GameThread::EnqueueRaw(GoNPCInvoker, &task, sizeof(task));
+                            Sleep(2000);
+                        }
                     }
                     // Wait for merchant context
                     WaitFor("material trader", 5000, []() { return TradeMgr::GetMerchantItemCount() > 0; });
