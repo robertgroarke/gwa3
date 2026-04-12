@@ -1,5 +1,6 @@
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/packets/CtoS.h>
+#include <gwa3/packets/CtoSHook.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
@@ -54,6 +55,13 @@ static bool s_loggedTargetLogRead = false;
 static bool s_loggedTargetLogStats = false;
 static bool s_loggedInteractNpcNative = false;
 static bool s_loggedInteractNpcFallback = false;
+static bool s_loggedMoveQueuedOnce = false;
+static bool s_loggedSparkflyMoveLane = false;
+static bool s_loggedChangeTargetEngineLane = false;
+static constexpr LONG kRenderCommandSlots = 32;
+static constexpr size_t kRenderCommandSlotSize = 32;
+static uintptr_t s_renderCommandPool = 0;
+static volatile LONG s_renderCommandSlotIndex = 0;
 
 static uintptr_t FindNearCallTarget(uintptr_t center, int backward, int forward) {
     if (!center) return 0;
@@ -123,6 +131,159 @@ bool Initialize() {
 
 static bool s_loggedMoveOnce = false;
 
+namespace {
+
+bool EnsureRenderCommandPool() {
+    if (s_renderCommandPool) return true;
+
+    void* mem = VirtualAlloc(nullptr,
+                             kRenderCommandSlots * kRenderCommandSlotSize,
+                             MEM_RESERVE | MEM_COMMIT,
+                             PAGE_EXECUTE_READWRITE);
+    if (!mem) {
+        Log::Error("AgentMgr: VirtualAlloc failed for render command pool");
+        return false;
+    }
+
+    s_renderCommandPool = reinterpret_cast<uintptr_t>(mem);
+    return true;
+}
+
+uintptr_t NextRenderCommandSlot() {
+    const LONG idx = InterlockedIncrement(&s_renderCommandSlotIndex) - 1;
+    return s_renderCommandPool + (static_cast<size_t>(idx % kRenderCommandSlots) * kRenderCommandSlotSize);
+}
+
+bool IsCastingState(const AgentLiving* agent) {
+    if (!agent) return false;
+    return agent->skill != 0u ||
+           agent->model_state == 0x41u ||
+           agent->model_state == 0x245u ||
+           agent->model_state == 0x645u;
+}
+
+struct SparkflyMoveCommand {
+    uintptr_t fn;
+    MoveData move;
+};
+
+struct ChangeTargetCommand {
+    uintptr_t fn;
+    uint32_t agent_id;
+};
+
+__declspec(naked) void BotshubMoveCommandStub() {
+    __asm {
+        lea eax, dword ptr [eax+4]
+        push eax
+        call dword ptr [s_moveFn]
+        add esp, 4
+        jmp GWA3BotshubCommandReturnThunk
+    }
+}
+
+__declspec(naked) void RenderMoveCommandStub() {
+    __asm {
+        lea eax, dword ptr [eax+4]
+        push eax
+        call dword ptr [s_moveFn]
+        pop eax
+        jmp GWA3CtoSHookCommandReturnThunk
+    }
+}
+
+__declspec(naked) void BotshubChangeTargetCommandStub() {
+    __asm {
+        xor edx, edx
+        push edx
+        mov eax, dword ptr [eax+4]
+        push eax
+        call dword ptr [s_changeTargetFn]
+        add esp, 8
+        jmp GWA3BotshubCommandReturnThunk
+    }
+}
+
+__declspec(naked) void RenderChangeTargetCommandStub() {
+    __asm {
+        xor edx, edx
+        push edx
+        mov eax, dword ptr [eax+4]
+        push eax
+        call dword ptr [s_changeTargetFn]
+        add esp, 8
+        jmp GWA3CtoSHookCommandReturnThunk
+    }
+}
+
+void InvokeSparkflyMoveRaw(const MoveData* move) {
+    if (!s_moveFn || !move) return;
+
+    uintptr_t fn = reinterpret_cast<uintptr_t>(s_moveFn);
+    const void* movePtr = move;
+    __asm {
+        push eax
+        mov eax, movePtr
+        push eax
+        call dword ptr [fn]
+        add esp, 4
+        pop eax
+    }
+}
+
+void InvokeChangeTargetRaw(uint32_t agentId) {
+    if (!s_changeTargetFn) return;
+
+    uintptr_t fn = reinterpret_cast<uintptr_t>(s_changeTargetFn);
+    __asm {
+        push eax
+        push edx
+        xor edx, edx
+        push edx
+        mov eax, agentId
+        push eax
+        call dword ptr [fn]
+        add esp, 8
+        pop edx
+        pop eax
+    }
+}
+
+void InvokeSparkflyMove(void* raw) {
+    if (!s_moveFn || !raw) return;
+    auto* cmd = reinterpret_cast<SparkflyMoveCommand*>(raw);
+    if (!MapMgr::GetIsMapLoaded() || GetMyId() == 0) {
+        return;
+    }
+    InvokeSparkflyMoveRaw(&cmd->move);
+}
+
+void InvokeChangeTarget(void* raw) {
+    if (!s_changeTargetFn || !raw) return;
+    const auto* cmd = reinterpret_cast<const ChangeTargetCommand*>(raw);
+    InvokeChangeTargetRaw(cmd->agent_id);
+}
+
+void IssueNativeMove(float x, float y) {
+    // Safety: don't call native move during zone transitions or when agent is invalid.
+    // The native fn crashes if called while the world state is being torn down/rebuilt.
+    if (!MapMgr::GetIsMapLoaded() || GetMyId() == 0) {
+        return;  // silently skip - caller will retry on next tick
+    }
+
+    MoveData moveData{};
+    moveData.x = x;
+    moveData.y = y;
+    moveData.plane = 0;
+    InvokeSparkflyMoveRaw(&moveData);
+}
+
+} // namespace
+
+bool IsCasting(const AgentLiving* agent) {
+    return IsCastingState(agent);
+}
+
 void Move(float x, float y) {
     if (!s_moveFn) {
         if (!s_loggedMoveOnce) {
@@ -132,44 +293,70 @@ void Move(float x, float y) {
         CtoS::MoveToCoord(x, y);
         return;
     }
+    if (IsCastingState(GetMyAgent())) {
+        return;
+    }
+    if (CtoS::Initialize()) {
+        if (!s_loggedSparkflyMoveLane) {
+            Log::Info("AgentMgr: Move using engine command lane");
+            s_loggedSparkflyMoveLane = true;
+        }
+        SparkflyMoveCommand cmd{};
+        cmd.fn = reinterpret_cast<uintptr_t>(&BotshubMoveCommandStub);
+        cmd.move.x = x;
+        cmd.move.y = y;
+        cmd.move.plane = 0u;
+        if (CtoS::EnqueueBotshubCommand(&cmd, sizeof(cmd))) {
+            return;
+        }
+        Log::Warn("AgentMgr: Botshub command queue rejected move, falling back");
+    }
     if (!GameThread::IsInitialized()) {
         Log::Warn("AgentMgr: Move falling back to packet path (GameThread not ready)");
         CtoS::MoveToCoord(x, y);
         return;
     }
 
-    // Safety: don't call native move during zone transitions or when agent is invalid.
-    // The native fn crashes if called while the world state is being torn down/rebuilt.
-    if (!MapMgr::GetIsMapLoaded() || GetMyId() == 0) {
-        return;  // silently skip — caller will retry on next tick
+    // Native movement must run on the post-dispatch game thread. GWA2 queued
+    // movement through the game's dispatcher; direct off-thread calls can
+    // desync animation/state and make the player glide without walking.
+    if (!GameThread::IsOnGameThread()) {
+        if (!s_loggedMoveQueuedOnce) {
+            Log::Info("AgentMgr: Move queuing native move on GameThread post-dispatch");
+            s_loggedMoveQueuedOnce = true;
+        }
+        GameThread::EnqueuePost([x, y]() {
+            IssueNativeMove(x, y);
+        });
+        return;
     }
 
-    // Call native move function directly. Callers that need the walking
-    // animation should wrap the call in GameThread::EnqueuePost themselves
-    // (MovePlayerNear, HandleDungeon zone loops already do this).
-    // Direct calls from the game thread (via Enqueue callbacks) work correctly.
-    static MoveData s_moveData;
-    s_moveData.x = x;
-    s_moveData.y = y;
-    s_moveData.plane = 0;
-    s_moveFn(&s_moveData);
+    IssueNativeMove(x, y);
 }
 
 void ChangeTarget(uint32_t agentId) {
     if (!s_changeTargetFn) {
-        CtoS::ChangeTarget(agentId);
-        return;
-    }
-    if (!GameThread::IsInitialized()) {
-        Log::Warn("AgentMgr: ChangeTarget falling back to packet path");
-        CtoS::ChangeTarget(agentId);
+        // No native function — can't change target via packet
+        // (TARGET_AGENT 0xC1 is not a valid ChangeTarget packet; upstream
+        // only uses the native command queue for target changes).
+        Log::Warn("AgentMgr: ChangeTarget skipped — no native fn resolved");
         return;
     }
 
-    auto fn = s_changeTargetFn;
-    GameThread::EnqueuePost([fn, agentId]() {
-        fn(agentId, 0);
-    });
+    // Call the native ChangeTarget from the game thread rather than the
+    // engine hook.  The engine hook crashes when ChangeTarget is called
+    // while the movement state machine is active (agent walking).  The
+    // game thread context is safe because it runs between frames with
+    // proper state synchronisation.
+    if (GameThread::IsInitialized()) {
+        GameThread::Enqueue([agentId]() {
+            InvokeChangeTargetRaw(agentId);
+        });
+        return;
+    }
+
+    // Last resort: direct call (only safe if called from game thread already)
+    InvokeChangeTargetRaw(agentId);
 }
 
 uint32_t GetTargetId() {

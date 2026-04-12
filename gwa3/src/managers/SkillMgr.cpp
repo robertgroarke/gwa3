@@ -1,5 +1,6 @@
 #include <gwa3/managers/SkillMgr.h>
 #include <gwa3/packets/CtoS.h>
+#include <gwa3/packets/CtoSHook.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
@@ -13,14 +14,17 @@
 
 namespace GWA3::SkillMgr {
 
-// Legacy command path pushes: myId, zeroBasedSlot, target, callTarget.
+// Native UseSkill expects: myId, zeroBasedSlot, target, callTarget.
 using UseSkillFn = void(__cdecl*)(uint32_t, uint32_t, uint32_t, uint32_t);
 using UseHeroSkillFn = void(__cdecl*)(uint32_t, uint32_t, uint32_t);
 
 static UseSkillFn s_useSkillFn = nullptr;
 static UseHeroSkillFn s_useHeroSkillFn = nullptr;
+static uintptr_t s_myIdPtr = 0;
 static bool s_initialized = false;
 static bool s_loggedSkillbarMiss = false;
+static bool s_loggedUseSkillRenderLane = false;
+static bool s_loggedUseSkillEngineLane = false;
 // Ring buffer of shellcode slots to prevent overwrites during rapid command queuing
 static constexpr int kShellcodeSlots = 16;
 static constexpr int kSlotSize = 32;
@@ -42,8 +46,8 @@ static bool EnsureUseSkillShellcode() {
 }
 
 static uintptr_t NextSkillShellcodeSlot() {
-    LONG idx = InterlockedIncrement(&s_useSkillSlotIndex) % kShellcodeSlots;
-    return s_useSkillShellcodeBase + idx * kSlotSize;
+    LONG idx = InterlockedIncrement(&s_useSkillSlotIndex) - 1;
+    return s_useSkillShellcodeBase + (static_cast<uintptr_t>(idx % kShellcodeSlots) * kSlotSize);
 }
 
 static uintptr_t GetSkillbarArrayBase() {
@@ -103,11 +107,85 @@ static uint32_t ResolveSkillbarAgentId(uint32_t heroIndex) {
     return playerParty->heroes.buffer[heroIndex - 1].agent_id;
 }
 
+namespace {
+
+struct UseSkillCommand {
+    uintptr_t fn;
+    uint32_t my_id;
+    uint32_t zero_based_slot;
+    uint32_t target_agent_id;
+    uint32_t call_target;
+};
+
+__declspec(naked) void BotshubUseSkillCommandStub() {
+    __asm {
+        mov ecx, dword ptr [eax+16]
+        push ecx
+        mov ebx, dword ptr [eax+12]
+        push ebx
+        mov edx, dword ptr [eax+8]
+        push edx
+        mov ecx, dword ptr [eax+4]
+        push ecx
+        call dword ptr [s_useSkillFn]
+        add esp, 16
+        jmp GWA3BotshubCommandReturnThunk
+    }
+}
+
+__declspec(naked) void RenderUseSkillCommandStub() {
+    __asm {
+        mov ecx, dword ptr [eax+16]
+        push ecx
+        mov ebx, dword ptr [eax+12]
+        push ebx
+        mov edx, dword ptr [eax+8]
+        push edx
+        mov ecx, dword ptr [eax+4]
+        push ecx
+        call dword ptr [s_useSkillFn]
+        add esp, 16
+        jmp GWA3CtoSHookCommandReturnThunk
+    }
+}
+
+void InvokeUseSkillRaw(uint32_t myId, uint32_t oneBasedSlot, uint32_t targetAgentId, uint32_t callTarget) {
+    if (!s_useSkillFn) return;
+
+    uintptr_t fn = reinterpret_cast<uintptr_t>(s_useSkillFn);
+    __asm {
+        push eax
+        push ecx
+        push edx
+        push ebx
+
+        mov ecx, callTarget
+        push ecx
+        mov ebx, targetAgentId
+        push ebx
+        mov edx, oneBasedSlot
+        dec edx
+        push edx
+        mov eax, myId
+        push eax
+        call dword ptr [fn]
+        add esp, 16
+
+        pop ebx
+        pop edx
+        pop ecx
+        pop eax
+    }
+}
+
+} // namespace
+
 bool Initialize() {
     if (s_initialized) return true;
 
     if (Offsets::UseSkill) s_useSkillFn = reinterpret_cast<UseSkillFn>(Offsets::UseSkill);
     if (Offsets::UseHeroSkill) s_useHeroSkillFn = reinterpret_cast<UseHeroSkillFn>(Offsets::UseHeroSkill);
+    s_myIdPtr = Offsets::MyID;
 
     s_initialized = true;
     Log::Info("SkillMgr: Initialized (UseSkill=0x%08X, UseHeroSkill=0x%08X)",
@@ -116,50 +194,15 @@ bool Initialize() {
 }
 
 void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
-    if (!s_useSkillFn) {
-        CtoS::UseSkill(slot, targetAgentId, callTarget);
-        return;
-    }
-
-    const uint32_t myId = AgentMgr::GetMyId();
-    if (!myId || slot == 0) {
-        Log::Warn("SkillMgr: UseSkill skipped (MyID=%u slot=%u)", myId, slot);
-        return;
-    }
-    const uint32_t zeroBasedSlot = slot - 1;
-
-    if (!RenderHook::IsInitialized() || !EnsureUseSkillShellcode()) {
-        GameThread::EnqueuePost([myId, zeroBasedSlot, targetAgentId, callTarget]() {
-            s_useSkillFn(myId, zeroBasedSlot, targetAgentId, callTarget);
-        });
-        return;
-    }
-
-    uintptr_t scSlot = NextSkillShellcodeSlot();
-    auto* sc = reinterpret_cast<uint8_t*>(scSlot);
-    sc[0] = 0x68; // push imm32 (callTarget)
-    memcpy(sc + 1, &callTarget, sizeof(callTarget));
-    sc[5] = 0x68; // push imm32 (target)
-    memcpy(sc + 6, &targetAgentId, sizeof(targetAgentId));
-    sc[10] = 0x68; // push imm32 (zero-based slot)
-    memcpy(sc + 11, &zeroBasedSlot, sizeof(zeroBasedSlot));
-    sc[15] = 0x68; // push imm32 (myId)
-    memcpy(sc + 16, &myId, sizeof(myId));
-    sc[20] = 0xE8; // call rel32
-    int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(s_useSkillFn) - (scSlot + 25));
-    memcpy(sc + 21, &rel, sizeof(rel));
-    sc[25] = 0x83; // add esp, 0x10
-    sc[26] = 0xC4;
-    sc[27] = 0x10;
-    sc[28] = 0xC3; // ret
-    FlushInstructionCache(GetCurrentProcess(), sc, 29);
-
-    if (!RenderHook::EnqueueCommand(scSlot)) {
-        Log::Warn("SkillMgr: RenderHook queue full, falling back to GameThread");
-        GameThread::EnqueuePost([myId, zeroBasedSlot, targetAgentId, callTarget]() {
-            s_useSkillFn(myId, zeroBasedSlot, targetAgentId, callTarget);
-        });
-    }
+    // UseSkill uses the packet path (CtoS::UseSkill sends header 0x46).
+    // The native UseSkill function crashes when called from the engine hook
+    // context during active movement in Sparkfly — likely a reentrancy or
+    // state conflict in the game's action system.  Move and ChangeTarget
+    // are safe on the engine command lane because they are simpler calls
+    // that don't interact with the action/casting state machine.
+    // TODO: revisit native UseSkill once the engine-lane action model
+    //       is better understood (see FROGGY_SPARKFLY_MOVE_CAST_DEBUG.md).
+    CtoS::UseSkill(slot, targetAgentId, callTarget);
 }
 
 void UseHeroSkill(uint32_t heroIndex, uint32_t slot, uint32_t targetAgentId) {

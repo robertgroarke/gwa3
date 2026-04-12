@@ -100,6 +100,12 @@ static DWORD WINAPI PacketSenderThread(LPVOID) {
 // Pointers used by the dispatch path — set during Initialize from Offsets
 static volatile LONG s_engineCallTest = 0;
 static void (__stdcall* s_engineDispatchOnePtr)() = nullptr;
+static int (__stdcall* s_shouldDeferBotshubCommandsPtr)() = nullptr;
+
+// Diagnostic counters for HandleCase vs RegularFlow frequency
+static volatile LONG s_deferCount = 0;      // HandleCase ticks (command deferred)
+static volatile LONG s_deferWithCmd = 0;     // HandleCase ticks where a command was actually waiting
+static volatile LONG s_regularFlowExec = 0;  // RegularFlow ticks where a command was executed
 
 // ===== Game Command Queue (GWA3-184) =====
 // Secondary ring buffer for game function calls that must execute in the
@@ -110,13 +116,24 @@ struct GameCommand {
     GameCommandFn fn;
     uint8_t params[248]; // 256 - 8 bytes for fn + padding
 };
-static GameCommand s_cmdRing[16];
+static constexpr LONG kGameCommandQueueSize = 64;
+static GameCommand s_cmdRing[kGameCommandQueueSize];
 static volatile LONG s_cmdHead = 0;
 static volatile LONG s_cmdTail = 0;
+static volatile LONG s_cmdWriteLock = 0;
+
+struct BotshubCommandSlot {
+    uint8_t bytes[256];
+};
+static constexpr LONG kBotshubCommandQueueSize = 64;
+static BotshubCommandSlot s_botshubCmdRing[kBotshubCommandQueueSize];
+static volatile LONG s_botshubCmdHead = 0;
+static volatile LONG s_botshubCmdTail = 0;
+static volatile LONG s_botshubCmdWriteLock = 0;
 
 static void __stdcall EngineDispatchCommand() {
     if (s_cmdTail == s_cmdHead) return;
-    LONG idx = s_cmdTail % 16;
+    LONG idx = s_cmdTail % kGameCommandQueueSize;
     GameCommand cmd = s_cmdRing[idx];
     InterlockedIncrement(&s_cmdTail);
     if (cmd.fn) {
@@ -142,6 +159,63 @@ static void __stdcall EngineDispatchOne() {
 }
 
 static void (__stdcall* s_engineDispatchCmdPtr)() = nullptr;
+static int __stdcall ShouldDeferBotshubCommands() {
+    if (!Offsets::BasePointer || !Offsets::Environment) return 0;
+
+    __try {
+        uintptr_t world = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+        if (world <= 0x10000) return 0;
+
+        world = *reinterpret_cast<uintptr_t*>(world);
+        if (world <= 0x10000) return 0;
+
+        uintptr_t p1 = *reinterpret_cast<uintptr_t*>(world + 0x18);
+        if (p1 <= 0x10000) return 0;
+
+        uintptr_t p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x44);
+        if (p2 <= 0x10000) return 0;
+
+        const uint32_t state_guard = *reinterpret_cast<uint32_t*>(p2 + 0x19C);
+        if (state_guard == 0u) return 0;
+
+        const uint32_t env_index = *reinterpret_cast<uint32_t*>(p2 + 0x198);
+        if (env_index == 0u) return 1;
+
+        // Offsets::Environment is the CODE address of the ADD EAX,imm32 operand.
+        // We must dereference to get the actual environment array base pointer
+        // (same as upstream's `add ebx, dword[Environment]`).
+        const uintptr_t env_base = *reinterpret_cast<uintptr_t*>(Offsets::Environment);
+        if (env_base <= 0x10000) return 0;
+
+        const uintptr_t env_entry = env_base + static_cast<uintptr_t>(env_index) * 0x7Cu;
+        if (env_entry <= 0x10000) return 0;
+
+        const uint32_t flags = *reinterpret_cast<uint32_t*>(env_entry + 0x10);
+        return (flags & 0x40001u) ? 1 : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+extern "C" void __declspec(naked) GWA3BotshubCommandReturnThunk() {
+    __asm {
+        // Match the original Froggy/GWA2 queue model: the detour pushes the
+        // active queue index onto the stack before jumping into the command
+        // stub, and the return path pops that saved index back off the stack.
+        // This avoids the reentrancy hazard from a global "active command"
+        // record when movement or skills trigger nested engine callbacks.
+        pop eax
+        mov ecx, dword ptr [s_botshubCmdTail]
+        cmp ecx, eax
+        jne skip_tail_advance
+        inc eax
+        mov dword ptr [s_botshubCmdTail], eax
+    skip_tail_advance:
+        popfd
+        popad
+        jmp [s_engineReplayTrampoline]
+    }
+}
 
 static __declspec(naked) void EngineDetourNaked() {
     __asm {
@@ -149,6 +223,41 @@ static __declspec(naked) void EngineDetourNaked() {
         pushfd
 
         inc dword ptr [s_heartbeat]
+
+        call dword ptr [s_shouldDeferBotshubCommandsPtr]
+        test eax, eax
+        jz regular_flow
+
+        // HandleCase: game engine state says defer.
+        // Upstream GWA2/BotsHub drops the command here, but our C++ bot
+        // issues commands once (no automatic retry loop), so we DEFER
+        // instead of DROP — leave the command in the queue for the next
+        // tick when RegularFlow fires.
+        inc dword ptr [s_deferCount]
+        mov ecx, dword ptr [s_botshubCmdTail]
+        cmp ecx, dword ptr [s_botshubCmdHead]
+        je no_botshub_command
+        inc dword ptr [s_deferWithCmd]
+        jmp no_botshub_command
+
+    regular_flow:
+        // RegularFlow: execute the next queued botshub command if any.
+        mov ecx, dword ptr [s_botshubCmdTail]
+        cmp ecx, dword ptr [s_botshubCmdHead]
+        je no_botshub_command
+        mov eax, ecx
+        and eax, 63
+        shl eax, 8
+        mov edx, offset s_botshubCmdRing
+        add eax, edx
+        mov edx, dword ptr [eax]
+        test edx, edx
+        jz no_botshub_command
+        inc dword ptr [s_regularFlowExec]
+        push ecx
+        mov dword ptr [eax], 0
+        jmp edx
+    no_botshub_command:
 
         // Dispatch game commands (salvage, etc.) — same context as AutoIt command queue
         mov eax, dword ptr [s_cmdTail]
@@ -224,6 +333,7 @@ static bool InstallEngineHook() {
     s_engineReplayTrampoline = reinterpret_cast<uintptr_t>(tramp);
     s_engineDispatchOnePtr = &EngineDispatchOne;
     s_engineDispatchCmdPtr = &EngineDispatchCommand;
+    s_shouldDeferBotshubCommandsPtr = &ShouldDeferBotshubCommands;
 
     // Write 5-byte JMP to our detour
     DWORD oldProtect;
@@ -258,21 +368,74 @@ static bool InstallEngineHook() {
 }
 
 
-void EnqueueGameCommand(GameCommandFn fn, const void* params, size_t paramSize) {
-    if (!s_engineInitialized || !fn) return;
+bool EnqueueGameCommand(GameCommandFn fn, const void* params, size_t paramSize) {
+    if (!s_engineInitialized || !fn) return false;
     if (paramSize > sizeof(GameCommand::params)) {
         Log::Warn("CtoS: EnqueueGameCommand param too large (%u > %u)",
                   (uint32_t)paramSize, (uint32_t)sizeof(GameCommand::params));
-        return;
+        return false;
     }
-    LONG idx = InterlockedIncrement(&s_cmdHead) - 1;
-    GameCommand& cmd = s_cmdRing[idx % 16];
-    cmd.fn = fn;
+
+    while (InterlockedCompareExchange(&s_cmdWriteLock, 1, 0) != 0) {
+        Sleep(0);
+    }
+
+    const LONG head = s_cmdHead;
+    const LONG tail = s_cmdTail;
+    if (head - tail >= kGameCommandQueueSize) {
+        InterlockedExchange(&s_cmdWriteLock, 0);
+        Log::Warn("CtoS: EnqueueGameCommand queue full (head=%ld tail=%ld size=%ld)",
+                  head, tail, kGameCommandQueueSize);
+        return false;
+    }
+
+    GameCommand& cmd = s_cmdRing[head % kGameCommandQueueSize];
+    ZeroMemory(cmd.params, sizeof(cmd.params));
     if (params && paramSize > 0) {
         memcpy(cmd.params, params, paramSize);
     }
+    MemoryBarrier();
+    cmd.fn = fn;
+    MemoryBarrier();
+    InterlockedExchange(&s_cmdHead, head + 1);
+    InterlockedExchange(&s_cmdWriteLock, 0);
+
     Log::Info("CtoS: EnqueueGameCommand fn=0x%08X paramSize=%u idx=%ld",
-              reinterpret_cast<uintptr_t>(fn), (uint32_t)paramSize, idx);
+              reinterpret_cast<uintptr_t>(fn), (uint32_t)paramSize, head);
+    return true;
+}
+
+bool EnqueueBotshubCommand(const void* slot, size_t slotSize) {
+    if (!s_engineInitialized || !slot || slotSize == 0u || slotSize > sizeof(BotshubCommandSlot::bytes)) {
+        return false;
+    }
+
+    while (InterlockedCompareExchange(&s_botshubCmdWriteLock, 1, 0) != 0) {
+        Sleep(0);
+    }
+
+    const LONG head = s_botshubCmdHead;
+    const LONG tail = s_botshubCmdTail;
+    if (head - tail >= kBotshubCommandQueueSize) {
+        InterlockedExchange(&s_botshubCmdWriteLock, 0);
+        Log::Warn("CtoS: EnqueueBotshubCommand queue full (head=%ld tail=%ld size=%ld)",
+                  head, tail, kBotshubCommandQueueSize);
+        return false;
+    }
+
+    BotshubCommandSlot& cmd = s_botshubCmdRing[head % kBotshubCommandQueueSize];
+    ZeroMemory(cmd.bytes, sizeof(cmd.bytes));
+    memcpy(cmd.bytes, slot, slotSize);
+    MemoryBarrier();
+    InterlockedExchange(&s_botshubCmdHead, head + 1);
+    InterlockedExchange(&s_botshubCmdWriteLock, 0);
+
+    Log::Info("CtoS: EnqueueBotshubCommand size=%u idx=%ld fn=0x%08X defer=%ld deferCmd=%ld exec=%ld hb=%ld",
+              static_cast<uint32_t>(slotSize),
+              head,
+              static_cast<unsigned>(*reinterpret_cast<const uintptr_t*>(slot)),
+              s_deferCount, s_deferWithCmd, s_regularFlowExec, s_heartbeat);
+    return true;
 }
 
 void SuspendEngineHook() {
