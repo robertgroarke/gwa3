@@ -2603,45 +2603,13 @@ bool TestMapTravel() {
 // ===== CONSET CRAFT CYCLE =====
 
 static bool ConsetMoveToNPC(float x, float y, const char* label) {
-    auto* me = AgentMgr::GetMyAgent();
-    if (!me) { IntReport("  No agent for move to %s", label); return false; }
-
-    const float dx0 = me->x - x, dy0 = me->y - y;
-    const float totalDist = sqrtf(dx0 * dx0 + dy0 * dy0);
-    IntReport("  Moving to %s at (%.0f, %.0f) dist=%.0f from (%.0f, %.0f)...",
-              label, x, y, totalDist, me->x, me->y);
-
-    // For long distances, issue move commands every 3s to keep the character walking
-    const uint32_t maxAttempts = (totalDist > 2000.0f) ? 20u : 10u;
-    IntReport("  Walk loop: maxAttempts=%u totalDist=%.0f", maxAttempts, totalDist);
-    float prevX = me->x, prevY = me->y;
-    for (uint32_t attempt = 0; attempt < maxAttempts; ++attempt) {
-        // Use CtoS packet for movement — native AgentMgr::Move crashes when
-        // called repeatedly to unreachable coords via GameThread dispatch.
-        CtoS::MoveToCoord(x, y);
-        Sleep(3000);
-        auto* me2 = AgentMgr::GetMyAgent();
-        if (!me2) { IntReport("  Agent lost at attempt %u", attempt); break; }
-        const float dxNow = me2->x - x, dyNow = me2->y - y;
-        const float currentDist = sqrtf(dxNow * dxNow + dyNow * dyNow);
-        IntReport("  Walk[%u/%u]: dist=%.0f pos=(%.0f, %.0f)", attempt, maxAttempts, currentDist, me2->x, me2->y);
-        // Stuck detection: if position hasn't changed in 3 attempts, give up
-        if (attempt >= 2) {
-            const float stuckDx = me2->x - prevX, stuckDy = me2->y - prevY;
-            if (stuckDx * stuckDx + stuckDy * stuckDy < 25.0f) {
-                IntReport("  STUCK at (%.0f, %.0f) — giving up", me2->x, me2->y);
-                break;
-            }
-        }
-        prevX = me2->x;
-        prevY = me2->y;
-        if (currentDist < 300.0f) {
-            IntReport("  Arrived at %s", label);
-            return true;
-        }
-    }
-    IntReport("  Failed to reach %s", label);
-    return false;
+    IntReport("  Moving to %s at (%.0f, %.0f)...", label, x, y);
+    // Use MovePlayerNear — the proven working movement function.
+    // Dispatches AgentMgr::Move via GameThread::EnqueuePost every 500ms.
+    const bool arrived = MovePlayerNear(x, y, 250.0f, 30000);
+    if (!arrived) IntReport("  Failed to reach %s", label);
+    else IntReport("  Arrived at %s", label);
+    return arrived;
 }
 
 static uint32_t ConsetFindNearestNPC(float x, float y, float maxDist = 500.0f) {
