@@ -334,53 +334,52 @@ void Move(float x, float y) {
     IssueNativeMove(x, y);
 }
 
-static bool s_loggedChangeTargetSEH = false;
+static bool s_loggedChangeTargetUIMsg = false;
 
 void ChangeTarget(uint32_t agentId) {
-    if (!s_changeTargetFn) {
-        Log::Warn("AgentMgr: ChangeTarget skipped — no native fn resolved");
+    // Py4GW pattern: use UIMessage kChangeTarget (0x10000020) instead of
+    // calling the native ChangeTarget function.  The native function
+    // deadlocks from the engine hook, crashes from GameThread during
+    // movement, and corrupts state from any dispatch context.
+    //
+    // The UIMessage path goes through the game's own UI dispatch system,
+    // which handles all internal state checks and lock ordering correctly.
+    //
+    // Struct: GWCA UIMgr.h ChangeTargetUIMsg
+    //   { uint32_t manual_target_id, uint32_t unk1,
+    //     uint32_t auto_target_id,   uint32_t unk2 }
+    struct ChangeTargetUIMsg {
+        uint32_t manual_target_id;
+        uint32_t unk1;
+        uint32_t auto_target_id;
+        uint32_t unk2;
+    };
+    static constexpr uint32_t kChangeTarget = 0x10000020u;
+
+    if (!s_loggedChangeTargetUIMsg) {
+        Log::Info("AgentMgr: ChangeTarget using UIMessage 0x%X agentId=%u", kChangeTarget, agentId);
+        s_loggedChangeTargetUIMsg = true;
+    }
+
+    ChangeTargetUIMsg msg{};
+    msg.manual_target_id = agentId;
+    msg.auto_target_id = agentId;
+
+    if (GameThread::IsOnGameThread()) {
+        UIMgr::SendUIMessage(kChangeTarget, &msg, nullptr);
         return;
     }
 
-    // Dispatch via GameThread::EnqueuePost — runs AFTER the game's own
-    // frame callback, outside the engine tick's lock scope.
-    //
-    // Why not engine hook / GameCommand / EnqueuePre:
-    //   The native ChangeTarget tries to acquire a lock the engine tick
-    //   already holds → deadlock ("Not Responding").
-    // Why not GameThread::Enqueue (pre-dispatch):
-    //   Can collide with an engine-lane Move executing in the same frame
-    //   → crash after the detour returns.
-    // EnqueuePost runs after the game finishes its own render-frame work,
-    // so both locks are released and movement state has settled.
     if (GameThread::IsInitialized()) {
-        GameThread::EnqueuePost([agentId]() {
-            if (!s_changeTargetFn) return;
-
-            // Check if the character is actively moving — if so, skip this
-            // call.  The bot retries ChangeTarget on the next combat tick.
-            // Calling native ChangeTarget during movement causes a crash or
-            // deadlock depending on the dispatch context.
-            const AgentLiving* me = GetMyAgent();
-            if (me && (me->move_x != 0.0f || me->move_y != 0.0f)) {
-                Log::Info("AgentMgr: ChangeTarget deferred (agent moving) agentId=%u", agentId);
-                return;
-            }
-
-            __try {
-                s_changeTargetFn(agentId, 0u);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
-                if (!s_loggedChangeTargetSEH) {
-                    Log::Error("AgentMgr: ChangeTarget SEH 0x%08X agentId=%u",
-                               GetExceptionCode(), agentId);
-                    s_loggedChangeTargetSEH = true;
-                }
-            }
+        GameThread::Enqueue([msg]() {
+            ChangeTargetUIMsg local = msg;
+            UIMgr::SendUIMessage(kChangeTarget, &local, nullptr);
         });
         return;
     }
 
-    InvokeChangeTargetRaw(agentId);
+    // Last resort: direct call (pre-GameThread init)
+    UIMgr::SendUIMessage(kChangeTarget, &msg, nullptr);
 }
 
 uint32_t GetTargetId() {
