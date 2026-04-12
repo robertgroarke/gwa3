@@ -2715,17 +2715,24 @@ static void __cdecl TraderQuoteInvoker(void* storage) {
 }
 
 static bool RequestTraderQuoteViaGameThread(uint32_t itemId) {
-    if (!itemId) return false;
+    if (!itemId || !Offsets::RequestQuote) return false;
     TraderHook::Reset();
+    CtoS::ResetPacketTap();
 
-    // Try TradeMgr::RequestTraderQuoteByItemId which uses RenderHook shellcode
-    // (same execution context as AutoIt's command queue).
-    Log::Info("[INTG] RequestTraderQuote: trying RenderHook path for item=%u (RenderHook init=%u)",
-              itemId, RenderHook::IsInitialized() ? 1u : 0u);
-    bool ok = TradeMgr::RequestTraderQuoteByItemId(itemId);
-    Log::Info("[INTG] RequestTraderQuote: RenderHook result=%u quoteId=%u costItem=%u costValue=%u",
-              ok ? 1u : 0u, TraderHook::GetQuoteId(), TraderHook::GetCostItemId(), TraderHook::GetCostValue());
-    return ok;
+    // Dispatch via Engine hook command queue (closest to AutoIt's rendering hook queue)
+    TraderQuoteTask task{itemId};
+    CtoS::EnqueueGameCommand(&TraderQuoteInvoker, &task, sizeof(task));
+
+    // Wait a moment for the command to execute, then check both TraderHook and packet tap
+    Sleep(500);
+    auto snap = CtoS::GetPacketTapSnapshot();
+    Log::Info("[INTG] RequestTraderQuote: item=%u quoteId=%u costItem=%u costValue=%u ctoS_total=%u",
+              itemId, TraderHook::GetQuoteId(), TraderHook::GetCostItemId(), TraderHook::GetCostValue(),
+              snap.total_packets);
+    for (uint32_t i = 0; i < 8 && snap.headers[i]; ++i) {
+        Log::Info("[INTG]   ctoS header=0x%03X count=%u", snap.headers[i], snap.counts[i]);
+    }
+    return true; // Let the WaitFor in ConsetBuyMaterial handle the response polling
 }
 
 // Buy material packs from the material trader at Embark Beach.
