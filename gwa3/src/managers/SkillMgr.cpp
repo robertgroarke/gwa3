@@ -149,11 +149,18 @@ __declspec(naked) void RenderUseSkillCommandStub() {
     }
 }
 
+// FPU save area for UseSkill — the native function uses floats and can
+// corrupt the x87 FPU stack, which crashes the calling code's epilogue.
+static __declspec(align(16)) uint8_t s_useSkillFpuSave[108];
+
 void InvokeUseSkillRaw(uint32_t myId, uint32_t oneBasedSlot, uint32_t targetAgentId, uint32_t callTarget) {
     if (!s_useSkillFn) return;
 
     uintptr_t fn = reinterpret_cast<uintptr_t>(s_useSkillFn);
     __asm {
+        // Save FPU state before the native call
+        fsave [s_useSkillFpuSave]
+
         push eax
         push ecx
         push edx
@@ -175,6 +182,9 @@ void InvokeUseSkillRaw(uint32_t myId, uint32_t oneBasedSlot, uint32_t targetAgen
         pop edx
         pop ecx
         pop eax
+
+        // Restore FPU state
+        frstor [s_useSkillFpuSave]
     }
 }
 
@@ -226,27 +236,24 @@ void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
         }
     }
 
-    // Dispatch via the engine command lane (botshub queue).  The USE_SKILL
-    // packet (0x46) crashes GW when dispatched by the sender thread
-    // concurrently with the game's combat processing — PacketSend is not
-    // thread-safe for combat packets.  The engine command lane runs in the
-    // correct hook context with proper serialisation.
-    if (CtoS::Initialize() && EnsureUseSkillShellcode()) {
+    // Dispatch via GameThread::EnqueuePost — runs after the game's own
+    // render-frame callback, outside the engine tick's lock scope.
+    //
+    // Neither the sender-thread packet path nor the engine command lane
+    // is safe for UseSkill:
+    //   - Sender thread PacketSend: not thread-safe for combat packets
+    //   - Engine command lane: corrupts action state → delayed crash
+    // EnqueuePost fires after the game finishes its own processing,
+    // avoiding both conflicts.
+    if (GameThread::IsInitialized()) {
         if (!s_loggedUseSkillEngineLane) {
-            Log::Info("SkillMgr: UseSkill using engine command lane");
+            Log::Info("SkillMgr: UseSkill using GameThread post-dispatch");
             s_loggedUseSkillEngineLane = true;
         }
-        auto* cmd = reinterpret_cast<UseSkillCommand*>(NextSkillShellcodeSlot());
-        cmd->fn = reinterpret_cast<uintptr_t>(&BotshubUseSkillCommandStub);
-        cmd->my_id = myId;
-        cmd->zero_based_slot = slot - 1u;
-        cmd->target_agent_id = targetAgentId;
-        cmd->call_target = callTarget;
-        FlushInstructionCache(GetCurrentProcess(), cmd, sizeof(*cmd));
-        if (CtoS::EnqueueBotshubCommand(cmd, sizeof(*cmd))) {
-            return;
-        }
-        Log::Warn("SkillMgr: engine command queue rejected skill, dropping");
+        GameThread::EnqueuePost([myId, slot, targetAgentId, callTarget]() {
+            InvokeUseSkillRaw(myId, slot, targetAgentId, callTarget);
+        });
+        return;
     }
 }
 
