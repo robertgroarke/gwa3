@@ -78,8 +78,26 @@
 
 ## Backlog — Consumable Crafting
 
-### GWA3-110: Consumable craft via GameThread TransactItems
-**Priority**: High — proven working path exists but not wired into the consumable harness
+### GWA3-110: Consumable craft via UI frame-click ✅ DONE
+**Resolved**: Frame-click crafting works — item select {0,0,index} + action125 Craft button via GameThread ButtonClick. Key fixes: FrameArray capacity/size (was reading 128 instead of 1000+), correct item path matching AutoIt {0,0,index}.
+
+### GWA3-114: Material trader buy via UI frame-click
+**Priority**: High — material buying is the last missing piece for full conset cycle
+**Context**: All packet/function-call approaches for material trader buying crash or produce no response:
+1. Native RequestQuote(0xC) via Engine/GameThread: TraderHook reads garbage (wrong register context)
+2. UIMessage kSendMerchantRequestQuote: no-op without GWCA hooks (GWCA-invented message IDs)
+3. Raw SendPacket(0x4C): crashes
+4. Direct TransactItems(0xC) via GameThread: crashes
+5. RenderHook shellcode: unavailable (shut down after bootstrap)
+The working approach for crafting is UI frame-click. Material trader UI shows items with prices and a Buy button — use the same frame-click approach.
+**Commits**: `096ddae`, `c1bbe21`, `fe1cfeb`
+
+### GWA3-113: Merchant frame row selection ✅ DONE
+**Resolved**: Fixed FrameArrayData struct to use GW::Array layout (capacity at +0x04, size at +0x08). Was reading m_capacity=128 instead of m_size=1000+. NavigateSortedChildPath now works reliably.
+
+### GWA3-110-old: Consumable craft via GameThread TransactItems (superseded)
+**Superseded by GWA3-110**: Frame-click approach is the proven path.
+**Priority**: Low — superseded
 **Context**: FroggyHM `CraftConsetsIfNeeded` and Gemma `craft_item` both use `GameThread::Enqueue([](){ TradeMgr::TransactItems(3, qty, itemId); })` and this works. The consumable harness currently tries direct `TransactItems` calls from the test thread which crash (wrong execution context — sender thread vs game thread). Wire the harness to use `GameThread::EnqueueRaw` for the `TransactItems(3, 1, merchantItemId)` call.
 **Commits**: `c049be5` (FroggyHM craft), `66220d7` (Gemma craft_item)
 
