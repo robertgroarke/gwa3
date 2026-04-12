@@ -2783,46 +2783,30 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
         // Request quote using the found item ID
         const uint32_t quoteBefore = TraderHook::GetQuoteId();
         TraderHook::Reset();
-        if (!RequestTraderQuoteViaGameThread(traderItemId)) {
-            IntReport("  Quote request failed for item=%u model=%u", traderItemId, modelId);
-            break;
-        }
-        // Wait for quote response
-        const bool quoteOk = WaitFor("trader quote", 5000, [quoteBefore]() {
-            return TraderHook::GetQuoteId() != quoteBefore && TraderHook::GetCostValue() > 0;
-        });
-        if (!quoteOk) {
-            IntReport("  No quote response for model=%u", modelId);
-            break;
-        }
-        const uint32_t cost = TraderHook::GetCostValue();
-        const uint32_t costItemId = TraderHook::GetCostItemId();
-        if (ItemMgr::GetGoldCharacter() < cost) {
-            IntReport("  Insufficient gold: need=%u have=%u", cost, ItemMgr::GetGoldCharacter());
-            break;
-        }
-        IntReport("  Quote: costItem=%u cost=%u gold=%u — buying pack %u/%u",
-                  costItemId, cost, ItemMgr::GetGoldCharacter(), p + 1, packs);
-
-        // Buy via TransactItems(0xC, 1, costItemId) on GameThread
-        struct TraderBuyTask { uint32_t costItemId; uint32_t cost; };
+        // Skip the broken quote — buy directly via TransactItems(0xC, 1, itemId)
+        // on the GameThread, same pattern as craft TransactItems(3, 1, itemId).
+        const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
+        IntReport("  Buying pack %u/%u: item=%u gold=%u", p + 1, packs, traderItemId, goldBefore);
+        struct TraderBuyTask { uint32_t itemId; };
         static auto TraderBuyInvoker = [](void* storage) {
             auto* t = reinterpret_cast<TraderBuyTask*>(storage);
-            if (t && t->costItemId) TradeMgr::TransactItems(0xC, 1, t->costItemId);
+            if (t && t->itemId) TradeMgr::TransactItems(0xC, 1, t->itemId);
         };
-        TraderBuyTask task{costItemId, cost};
-        GameThread::EnqueueRaw(TraderBuyInvoker, &task, sizeof(task));
+        TraderBuyTask buyTask{traderItemId};
+        GameThread::EnqueueRaw(TraderBuyInvoker, &buyTask, sizeof(buyTask));
 
-        // Wait for gold to decrease (confirms buy)
-        const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
-        const bool buyOk = WaitFor("trader buy", 3000, [goldBefore]() {
-            return ItemMgr::GetGoldCharacter() < goldBefore;
+        // Wait for gold to decrease or inventory to increase
+        const bool buyOk = WaitFor("trader buy", 5000, [goldBefore, modelId]() {
+            return ItemMgr::GetGoldCharacter() < goldBefore
+                || CountInventoryModelQuantity(modelId) > 0;
         });
         if (buyOk) {
             ++bought;
-            IntReport("  Bought pack %u: gold=%u->%u", p + 1, goldBefore, ItemMgr::GetGoldCharacter());
+            IntReport("  Bought pack %u: gold=%u->%u mat=%u",
+                      p + 1, goldBefore, ItemMgr::GetGoldCharacter(),
+                      CountInventoryModelQuantity(modelId));
         } else {
-            IntReport("  Buy failed at pack %u (gold unchanged)", p + 1);
+            IntReport("  Buy failed at pack %u (no gold/inventory change)", p + 1);
             break;
         }
         Sleep(ChatMgr::GetPing() + 200);
