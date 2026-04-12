@@ -217,12 +217,13 @@ extern "C" void __declspec(naked) GWA3BotshubCommandReturnThunk() {
         inc eax
         mov dword ptr [s_botshubCmdTail], eax
     skip_tail_advance:
-        // Restore x87 FPU state saved at detour entry so the trampoline's
-        // fld instruction sees the original FPU stack.
-        frstor [s_fpuSaveArea]
         popfd
         popad
-        jmp [s_engineReplayTrampoline]
+        // Hardcoded exit: replay original bytes inline, matching upstream
+        // MainProc.  No trampoline indirection.
+        mov ebp, esp
+        fld dword ptr [ebp + 8]
+        jmp [s_engineReturnAddr]
     }
 }
 
@@ -260,7 +261,11 @@ static __declspec(naked) void EngineDetourNaked() {
 
         popfd
         popad
-        jmp [s_engineReplayTrampoline]
+        // Hardcoded exit: replay original bytes inline, matching upstream
+        // MainProc.  No trampoline indirection.
+        mov ebp, esp
+        fld dword ptr [ebp + 8]
+        jmp [s_engineReturnAddr]
     }
 }
 
