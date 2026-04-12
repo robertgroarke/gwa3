@@ -2700,13 +2700,15 @@ static bool ConsetCraftOneItem(const char* traderLabel, float traderX, float tra
     }
     uint32_t npc = ConsetFindNearestNPC(traderX, traderY);
     if (!npc) { IntReport("  No NPC near %s", traderLabel); return false; }
-    IntReport("  Interacting with NPC %u", npc);
-    CtoS::SendPacket(2, Packets::INTERACT_LIVING, npc);
-    Sleep(1500);
-    CtoS::SendPacket(2, 0x39, npc); // GoNPC fallback
-    Sleep(1500);
+    IntReport("  Interacting with NPC %u via AgentMgr::InteractNPC", npc);
+    AgentMgr::InteractNPC(npc);
+    Sleep(2000);
     if (TradeMgr::GetMerchantItemCount() == 0) {
-        CtoS::SendPacket(2, 0x39, npc);
+        AgentMgr::InteractNPC(npc);
+        Sleep(2000);
+    }
+    if (TradeMgr::GetMerchantItemCount() == 0) {
+        AgentMgr::InteractNPC(npc);
         Sleep(2000);
     }
     if (TradeMgr::GetMerchantItemCount() == 0) {
@@ -2777,7 +2779,7 @@ bool TestConsetCraftCycle() {
     if (gold < 2000 && ItemMgr::GetGoldStorage() > 0) {
         if (ConsetMoveToNPC(kEmbarkXunlaiX, kEmbarkXunlaiY, "Xunlai Chest")) {
             uint32_t npc = ConsetFindNearestNPC(kEmbarkXunlaiX, kEmbarkXunlaiY);
-            if (npc) { CtoS::SendPacket(2, Packets::INTERACT_LIVING, npc); Sleep(1500); }
+            if (npc) { AgentMgr::InteractNPC(npc); Sleep(2000); }
             uint32_t toWithdraw = ItemMgr::GetGoldStorage() > 10000 ? 10000 : ItemMgr::GetGoldStorage();
             ItemMgr::ChangeGold(gold + toWithdraw, ItemMgr::GetGoldStorage() - toWithdraw);
             Sleep(500);
@@ -2802,11 +2804,13 @@ bool TestConsetCraftCycle() {
             if (ConsetMoveToNPC(kMaterialTraderX, kMaterialTraderY, "Material Trader")) {
                 uint32_t npc = ConsetFindNearestNPC(kMaterialTraderX, kMaterialTraderY);
                 if (npc) {
-                    IntReport("  Opening material trader NPC %u...", npc);
-                    CtoS::SendPacket(2, Packets::INTERACT_LIVING, npc);
-                    Sleep(1500);
-                    CtoS::SendPacket(2, 0x39, npc);
-                    Sleep(1500);
+                    IntReport("  Opening material trader NPC %u via AgentMgr::InteractNPC...", npc);
+                    AgentMgr::InteractNPC(npc);
+                    Sleep(2000);
+                    if (TradeMgr::GetMerchantItemCount() == 0) {
+                        AgentMgr::InteractNPC(npc);
+                        Sleep(2000);
+                    }
                     // Wait for merchant context
                     WaitFor("material trader", 5000, []() { return TradeMgr::GetMerchantItemCount() > 0; });
                     if (TradeMgr::GetMerchantItemCount() > 0) {
