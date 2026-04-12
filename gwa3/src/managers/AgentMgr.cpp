@@ -334,28 +334,52 @@ void Move(float x, float y) {
     IssueNativeMove(x, y);
 }
 
+static bool s_loggedChangeTargetSEH = false;
+
 void ChangeTarget(uint32_t agentId) {
     if (!s_changeTargetFn) {
-        // No native function — can't change target via packet
-        // (TARGET_AGENT 0xC1 is not a valid ChangeTarget packet; upstream
-        // only uses the native command queue for target changes).
         Log::Warn("AgentMgr: ChangeTarget skipped — no native fn resolved");
         return;
     }
 
-    // Call the native ChangeTarget from the game thread rather than the
-    // engine hook.  The engine hook crashes when ChangeTarget is called
-    // while the movement state machine is active (agent walking).  The
-    // game thread context is safe because it runs between frames with
-    // proper state synchronisation.
+    // Dispatch via GameThread::EnqueuePost — runs AFTER the game's own
+    // frame callback, outside the engine tick's lock scope.
+    //
+    // Why not engine hook / GameCommand / EnqueuePre:
+    //   The native ChangeTarget tries to acquire a lock the engine tick
+    //   already holds → deadlock ("Not Responding").
+    // Why not GameThread::Enqueue (pre-dispatch):
+    //   Can collide with an engine-lane Move executing in the same frame
+    //   → crash after the detour returns.
+    // EnqueuePost runs after the game finishes its own render-frame work,
+    // so both locks are released and movement state has settled.
     if (GameThread::IsInitialized()) {
-        GameThread::Enqueue([agentId]() {
-            InvokeChangeTargetRaw(agentId);
+        GameThread::EnqueuePost([agentId]() {
+            if (!s_changeTargetFn) return;
+
+            // Check if the character is actively moving — if so, skip this
+            // call.  The bot retries ChangeTarget on the next combat tick.
+            // Calling native ChangeTarget during movement causes a crash or
+            // deadlock depending on the dispatch context.
+            const AgentLiving* me = GetMyAgent();
+            if (me && (me->move_x != 0.0f || me->move_y != 0.0f)) {
+                Log::Info("AgentMgr: ChangeTarget deferred (agent moving) agentId=%u", agentId);
+                return;
+            }
+
+            __try {
+                s_changeTargetFn(agentId, 0u);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                if (!s_loggedChangeTargetSEH) {
+                    Log::Error("AgentMgr: ChangeTarget SEH 0x%08X agentId=%u",
+                               GetExceptionCode(), agentId);
+                    s_loggedChangeTargetSEH = true;
+                }
+            }
         });
         return;
     }
 
-    // Last resort: direct call (only safe if called from game thread already)
     InvokeChangeTargetRaw(agentId);
 }
 

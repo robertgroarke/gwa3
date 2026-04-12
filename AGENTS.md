@@ -1,0 +1,115 @@
+# AGENTS.md
+
+This file defines the minimum operating rules for coding agents working in this repository.
+
+## Required Reading
+
+Before making changes, launching Guild Wars, building `gwa3`, injecting DLLs, or running bridge tests, read these files:
+
+1. [AGENT_ACCOUNT_REGISTRY.md](C:\Users\Robert\Documents\GWA Censured X BotsHub\AGENT_ACCOUNT_REGISTRY.md)
+2. [AGENT_WORK_REGISTRY.md](C:\Users\Robert\Documents\GWA Censured X BotsHub\AGENT_WORK_REGISTRY.md)
+3. [MULTI_AGENT_BUILD_ARCHITECTURE.md](C:\Users\Robert\Documents\GWA Censured X BotsHub\MULTI_AGENT_BUILD_ARCHITECTURE.md)
+4. [gwa3/bridge/tests/TEST_EXECUTION_GUIDE.md](C:\Users\Robert\Documents\GWA Censured X BotsHub\gwa3\bridge\tests\TEST_EXECUTION_GUIDE.md)
+5. [GW_Launch_Method.md](C:\Users\Robert\Documents\GWA Censured X BotsHub\GW_Launch_Method.md)
+
+Do not skip these reads. They contain the current account ownership, task ownership, multi-agent build lanes, test execution constraints, and launcher rules.
+
+## Approved Reference Sources
+
+Agents are expected to use local reference material in this repo when investigating behavior, restoring functionality, comparing implementations, or porting logic.
+
+Primary reference locations:
+
+- local BotsHub repo:
+  - `C:\Users\Robert\Documents\GWA Censured X BotsHub\BotsHub-master`
+- upstream or newer BotsHub snapshot:
+  - `C:\Users\Robert\Documents\GWA Censured X BotsHub\BotsHub-latest`
+- original BotsHub baseline:
+  - `C:\Users\Robert\Documents\GWA Censured X BotsHub\BotsHub-original`
+- local GWA Censured / Froggy code:
+  - `C:\Users\Robert\Documents\GWA Censured X BotsHub\GWA Censured`
+- local GWToolbox source code:
+  - `C:\Users\Robert\Documents\GWA Censured X BotsHub\toolbox`
+  - `C:\Users\Robert\Documents\GWA Censured X BotsHub\GWA Censured\GWToolboxpp`
+- local GWCA material:
+  - `C:\Users\Robert\Documents\GWA Censured X BotsHub\gwca`
+  - `C:\Users\Robert\Documents\GWA Censured X BotsHub\GWA Censured\GWCA-master`
+- GWCA disassembly research:
+  - `C:\Users\Robert\Documents\GWA Censured X BotsHub\research\GWCA_Disassembly_Research`
+
+Use these sources to:
+
+- compare current behavior against prior working implementations
+- recover packet layouts, offsets, launch patterns, or helper logic
+- cross-check Froggy logic against BotsHub logic
+- inspect GWToolbox or GWCA patterns before inventing new low-level behavior
+- validate assumptions with the disassembly research before changing memory-facing code
+
+Do not assume the current implementation is the only source of truth when this repo already contains a better historical or research reference.
+
+## Non-Negotiable Rules
+
+- Always launch Guild Wars through the validated launcher path described in `GW_Launch_Method.md`.
+- Never start `Gw.exe` directly.
+- Never inject into a guessed PID. Inject only the exact PID returned by the launcher flow.
+- Never share one mutable build directory between concurrent agents.
+- Never share one DLL name between concurrent agents.
+- Never share one bridge pipe name between concurrent agents.
+- Treat launcher failures separately from DLL, injector, bridge, or test failures.
+- For live in-game debugging or harness work, prefer Asia/Japan district `99`, and fall back to Asia/Japan district `1` if the preferred district does not load cleanly.
+- Do not use America English districts for live bot-sensitive debugging unless the task explicitly requires that locale or district.
+
+## Engine Hook / Native Function Rules
+
+The `gwa3` DLL hooks the game's engine tick to dispatch queued commands (Move, ChangeTarget, UseSkill). These rules prevent crashes and deadlocks:
+
+- **One native call per engine tick.** Never call two native game functions (e.g. Move + ChangeTarget) within the same engine hook callback or GameCommand. The game's state machine expects at most one action per tick. Calling two in the same tick causes a deadlock/hang ("Not Responding").
+- **ChangeTarget crashes during active movement.** The native `ChangeTarget` function accesses movement state that is unsafe to read while the character is walking. Upstream BotsHub avoids this by waiting for movement to complete before changing target. Our code wraps the call in SEH as a safety net.
+- **UseSkill via native call crashes from the engine hook.** Use the packet path (`CtoS::UseSkill` header 0x46) instead. Move is the only native call proven safe on the engine command lane.
+- **`TARGET_AGENT` (0xC1) is NOT a valid ChangeTarget packet.** Upstream only changes target via the native command queue, never packets. Sending 0xC1 as a packet fails silently and can crash the game.
+- **`Offsets::Environment` must be dereferenced.** It's a `PatternType::Ptr` scan result pointing to a code address (an `ADD EAX, imm32` operand). Read the value at that address to get the actual environment array base.
+
+## Multi-Agent Expectations
+
+If more than one agent is active in this repo at the same time:
+
+- use an isolated lane per agent
+- keep build outputs, DLL names, and pipe names unique per lane
+- do not kill or interfere with another agent's Guild Wars client
+- do not assume the newest `Gw.exe` process belongs to you
+
+Preferred lanes are documented in `MULTI_AGENT_BUILD_ARCHITECTURE.md`.
+Account ownership and claim status are documented in `AGENT_ACCOUNT_REGISTRY.md`.
+Task ownership and current work claims are documented in `AGENT_WORK_REGISTRY.md`.
+
+## Test And Build Discipline
+
+Before reporting any test or bridge regression:
+
+1. Confirm you used the correct launcher-based account flow.
+2. Confirm you built in the correct isolated lane.
+3. Confirm your DLL name and pipe name match that lane.
+4. Confirm the launcher-returned PID reached a healthy loaded state before injection.
+5. Confirm you ran the relevant test tier for the current game state.
+6. If the test does not require a public or populated outpost, run it in a rarely used map and district to reduce visibility in-game.
+7. Default quiet district policy is Asia/Japan district `99`, fallback Asia/Japan district `1`, unless the workflow explicitly needs something else.
+
+If any of those checks were skipped, the result is not reliable.
+
+## Default Agent Startup Checklist
+
+At the start of a task:
+
+1. Read the five required files above.
+2. Pick or confirm your assigned character/account.
+3. Check whether the task area is already claimed in `AGENT_WORK_REGISTRY.md`.
+4. Pick or confirm your isolated build lane.
+5. Record the launcher-returned PID for your session.
+6. Choose a low-traffic map/district for testing whenever the workflow allows it.
+7. Prefer Asia/Japan district `99`, fallback Asia/Japan district `1`, for live debug or harness runs unless the task explicitly requires a different district.
+8. Use only lane-matching build, DLL, and pipe settings.
+9. Update `AGENT_ACCOUNT_REGISTRY.md` if you claim, switch, or release an account.
+10. Update `AGENT_WORK_REGISTRY.md` if you claim, switch, or release a work area.
+11. Prefer `python scripts/agent_registry.py ...` and `python scripts/agent_work_registry.py ...` over hand-editing the registry tables.
+
+If the task involves `gwa3` launch, injection, bridge work, or tests, follow that checklist before doing anything else.

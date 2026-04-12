@@ -194,15 +194,11 @@ bool Initialize() {
 }
 
 void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
-    // UseSkill uses the packet path (CtoS::UseSkill sends header 0x46).
-    // The native UseSkill function crashes when called from the engine hook
-    // context during active movement in Sparkfly — likely a reentrancy or
-    // state conflict in the game's action system.  Move and ChangeTarget
-    // are safe on the engine command lane because they are simpler calls
-    // that don't interact with the action/casting state machine.
-    // TODO: revisit native UseSkill once the engine-lane action model
-    //       is better understood (see FROGGY_SPARKFLY_MOVE_CAST_DEBUG.md).
-    CtoS::UseSkill(slot, targetAgentId, callTarget);
+    // TEMPORARY: UseSkill disabled for crash isolation.
+    // When the Sparkfly combat route engages enemies, something crashes.
+    // Disabling UseSkill isolates whether the crash is from skill packets
+    // or from something else in the combat path (Attack, agent reads, etc.).
+    Log::Info("SkillMgr: UseSkill SUPPRESSED slot=%u target=%u (crash isolation)", slot, targetAgentId);
 }
 
 void UseHeroSkill(uint32_t heroIndex, uint32_t slot, uint32_t targetAgentId) {

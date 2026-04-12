@@ -197,13 +197,12 @@ static int __stdcall ShouldDeferBotshubCommands() {
     }
 }
 
+// 108-byte buffer for fsave/frstor (x87 FPU state, 28 dwords).
+// Statically allocated — the engine detour is single-threaded per process.
+static __declspec(align(16)) uint8_t s_fpuSaveArea[108];
+
 extern "C" void __declspec(naked) GWA3BotshubCommandReturnThunk() {
     __asm {
-        // Match the original Froggy/GWA2 queue model: the detour pushes the
-        // active queue index onto the stack before jumping into the command
-        // stub, and the return path pops that saved index back off the stack.
-        // This avoids the reentrancy hazard from a global "active command"
-        // record when movement or skills trigger nested engine callbacks.
         pop eax
         mov ecx, dword ptr [s_botshubCmdTail]
         cmp ecx, eax
@@ -211,6 +210,9 @@ extern "C" void __declspec(naked) GWA3BotshubCommandReturnThunk() {
         inc eax
         mov dword ptr [s_botshubCmdTail], eax
     skip_tail_advance:
+        // Restore x87 FPU state saved at detour entry so the trampoline's
+        // fld instruction sees the original FPU stack.
+        frstor [s_fpuSaveArea]
         popfd
         popad
         jmp [s_engineReplayTrampoline]
@@ -221,6 +223,11 @@ static __declspec(naked) void EngineDetourNaked() {
     __asm {
         pushad
         pushfd
+
+        // Save x87 FPU state so command stubs (Move uses floats) don't
+        // corrupt the FPU stack the game relies on after the trampoline's
+        // fld instruction.
+        fsave [s_fpuSaveArea]
 
         inc dword ptr [s_heartbeat]
 
@@ -266,12 +273,8 @@ static __declspec(naked) void EngineDetourNaked() {
         call dword ptr [s_engineDispatchCmdPtr]
     no_command:
 
-        // Check if normal packets pending — if so, dispatch one from game thread
-        mov eax, dword ptr [s_pktTail]
-        cmp eax, dword ptr [s_pktHead]
-        je no_packet
-        call dword ptr [s_engineDispatchOnePtr]
-    no_packet:
+        // Restore x87 FPU state before returning to game code.
+        frstor [s_fpuSaveArea]
 
         popfd
         popad
