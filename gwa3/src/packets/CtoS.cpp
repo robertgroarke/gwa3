@@ -1,6 +1,7 @@
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
+#include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
 
 #include <Windows.h>
@@ -18,7 +19,7 @@ static uintptr_t s_packetLocation = 0;
 static bool s_initialized = false;
 
 // ===== Engine inline hook for CtoS dispatch =====
-// Hooks at Offsets::Engine (0x00C93C91) â€” a DIFFERENT function from the
+// Hooks at Offsets::Engine (0x00C93C91) -- a DIFFERENT function from the
 // Render/FrApi function (0x00AE3D10) that GameThread hooks.
 // This avoids the lock-ordering deadlock that occurs when PacketSend is
 // called from within the Render function.
@@ -86,7 +87,7 @@ static DWORD WINAPI PacketSenderThread(LPVOID) {
                     t.data[0]),
                 EXCEPTION_EXECUTE_HANDLER
             ) {
-                Log::Error("CtoS: PacketSend crashed â€” continuing");
+                Log::Error("CtoS: PacketSend crashed -- continuing");
             }
             Sleep(10);
         }
@@ -506,16 +507,35 @@ bool Initialize() {
 
     // Install Engine inline hook for packet dispatch
     if (!InstallEngineHook()) {
-        Log::Warn("CtoS: Engine hook failed â€” packets will be dropped");
+        Log::Warn("CtoS: Engine hook failed -- packets will be dropped");
     }
 
     return true;
 }
 
-// Core send: queue a packet for the sender-thread/game-thread transport.
+// Issue PacketSend on the current thread (must be game thread).
+static void IssuePacketSend(const uint32_t* data, uint32_t sizeBytes) {
+    // Re-read PacketLocation fresh every call
+    uintptr_t loc = s_packetLocation;
+    if (Offsets::PacketLocation) {
+        uintptr_t fresh = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
+        if (fresh) { loc = fresh; s_packetLocation = fresh; }
+    }
+    __try {
+        s_packetSendFn(reinterpret_cast<void*>(loc), sizeBytes, const_cast<uint32_t*>(data));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Error("CtoS: PacketSend exception 0x%08X hdr=0x%X",
+                   GetExceptionCode(), data[0]);
+    }
+}
+
+// Core send: GWCA pattern — call PacketSend on game thread only.
+// If already on game thread, call directly.  Otherwise copy the packet
+// and enqueue via GameThread::Enqueue.  NEVER call from a background
+// thread (PacketSend is not thread-safe).
 void SendPacket(uint32_t size, uint32_t header, ...) {
     if (!s_initialized && !Initialize()) {
-        Log::Warn("CtoS: SendPacket dropped (header=0x%X) â€” not initialized", header);
+        Log::Warn("CtoS: SendPacket dropped (header=0x%X) -- not initialized", header);
         return;
     }
 
@@ -530,38 +550,27 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
     va_end(args);
 
     const uint32_t sizeBytes = size * 4;
-    const bool traceHeroKick = header == Packets::HERO_KICK;
 
-    // Re-read PacketLocation every call
-    if (Offsets::PacketLocation) {
-        uintptr_t fresh = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
-        if (fresh) s_packetLocation = fresh;
-    }
-
-    // Enqueue to sender-thread ring buffer
-    if (s_engineInitialized && s_packetReadyEvent) {
-        LONG idx = InterlockedIncrement(&s_pktHead) - 1;
-        PacketTask& t = s_packetRing[idx % 64];
-        t.fn = s_packetSendFn;
-        t.location = s_packetLocation;
-        t.sizeBytes = sizeBytes;
-        memcpy(t.data, data, sizeBytes);
-        if (traceHeroKick) {
-            const uint32_t arg1 = size > 1 ? data[1] : 0u;
-            Log::Info("CtoS: HERO_KICK queued arg=0x%X pktIdx=%ld loc=0x%08X hb=%ld engineCalls=%ld head=%ld tail=%ld",
-                      arg1,
-                      idx,
-                      static_cast<unsigned>(s_packetLocation),
-                      s_heartbeat,
-                      s_engineCallTest,
-                      s_pktHead,
-                      s_pktTail);
-        }
-        SetEvent(s_packetReadyEvent);
+    if (GameThread::IsOnGameThread()) {
+        // Fast path: already on game thread, call directly
+        IssuePacketSend(data, sizeBytes);
         return;
     }
 
-    Log::Warn("CtoS: SendPacket dropped header=0x%X â€” not ready", header);
+    if (GameThread::IsInitialized()) {
+        // Off game thread: copy packet data into the lambda capture and
+        // enqueue for the game thread to dispatch.
+        struct PktCopy { uint32_t d[12]; uint32_t sz; };
+        PktCopy copy{};
+        memcpy(copy.d, data, sizeBytes);
+        copy.sz = sizeBytes;
+        GameThread::Enqueue([copy]() {
+            IssuePacketSend(copy.d, copy.sz);
+        });
+        return;
+    }
+
+    Log::Warn("CtoS: SendPacket dropped header=0x%X -- GameThread not ready", header);
 }
 
 // --- Type-safe wrappers ---
