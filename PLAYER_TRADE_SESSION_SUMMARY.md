@@ -206,3 +206,251 @@ The Max button internally sets `count = maxCount`. The OK button reads `count` a
 | `*roundtrip*prompt_max*` | NOT TESTED | Blocked by submit/accept and hang issues |
 | `*roundtrip*prompt_default*` | NOT TESTED | Same |
 | `*roundtrip*prompt_exact*` | NOT TESTED | Same |
+
+## 2026-04-12 Update: Bridge/Helper Recovery And Current Boundary
+
+This section captures the work done after the quantity-dialog fix, with emphasis on why live trade testing stalled and where the current blocker actually is.
+
+### 1. Helper mode was broken and is now fixed
+
+**Files:**
+- [gwa3/src/dllmain.cpp](gwa3/src/dllmain.cpp)
+- [gwa3/src/tests/IntegrationTestInternal.h](gwa3/src/tests/IntegrationTestInternal.h)
+
+The BLUMPKINS helper client was not actually entering trade-helper mode in the current committed DLL. `IntegrationTestSession.cpp` still had `RunTradeHelperMode()`, but `dllmain.cpp` was no longer reading `gwa3_test_trade_helper.flag`, so the helper client fell through into normal runtime instead of the passive trade helper loop.
+
+**Fix applied:**
+- restored `tradeHelperTest` flag handling in `dllmain.cpp`
+- included it in `anyTest`
+- restored the `RunTradeHelperMode()` dispatch
+- added the missing declarations in `IntegrationTestInternal.h`
+
+**Result:**
+- BLUMPKINS helper mode is active again
+- `trade_helper_status.json` is written again
+- helper heartbeat data is trustworthy again
+
+### 2. DISCO startup issue was not a generic GW crash
+
+**Files:**
+- [gwa3/src/tests/IntegrationTest.cpp](gwa3/src/tests/IntegrationTest.cpp)
+- [gwa3/src/tests/IntegrationTestInternal.h](gwa3/src/tests/IntegrationTestInternal.h)
+- [gwa3/src/dllmain.cpp](gwa3/src/dllmain.cpp)
+
+DISCO PANIC looked like it was "hanging" after injection, but the primary issue was not the Guild Wars client itself. The old LLM path was being killed by the watchdog's hung-window branch, and the bridge had an IPC write/read deadlock on first snapshot.
+
+Two separate fixes were applied:
+
+#### 2a. LLM watchdog hung-window kill disabled
+
+The integration watchdog's `SendMessageTimeoutA(... SMTO_ABORTIFHUNG ...)` branch was appropriate for full integration tests, but too aggressive for `llmMode` / `llmAdvisory`. In LLM mode, it was killing DISCO while the bridge was blocked.
+
+**Fix:**
+- added `SetWatchdogHungWindowKillEnabled(bool enabled)`
+- for `llmMode` and `llmAdvisory`, start watchdog but disable only the hung-window kill branch
+- explicit crash-dialog and disconnect detection remain available
+
+#### 2b. First Tier1 snapshot deadlock fixed
+
+**File:**
+- [gwa3/src/llm/IpcServer.cpp](gwa3/src/llm/IpcServer.cpp)
+
+The duplex pipe thread was blocking in `ReadFile` while the bridge thread tried to `WriteFile` the first Tier 1 snapshot. That made DISCO appear frozen very early in LLM mode.
+
+**Fix:**
+- added `PeekNamedPipe`-based `PipeHasBytesAvailable()`
+- only call `ReadMessage()` when bytes are actually available
+
+**Evidence after fix:**
+- DISCO log shows:
+  - `Tier1 begin`
+  - `Tier1 serialized len=2100`
+  - `Tier1 send begin`
+  - `Tier1 send end`
+  - `Tier1 end`
+
+So the first-snapshot transport deadlock is resolved.
+
+### 3. Launcher/test harness stale-PID bug fixed
+
+**File:**
+- [gwa3/bridge/tests/trade_harness.py](gwa3/bridge/tests/trade_harness.py)
+
+The launcher log parser used `re.search`, which returned the **first** `GWLAUNCHER_PID=` in an appended log file. That caused stale PIDs and false launch failures.
+
+**Fix:**
+- `_parse_pid_from_log()` now returns the **last** PID match
+- launcher log files are truncated before each launch
+
+This separated real trade failures from stale-launch failures.
+
+### 4. Current trade-open regression: wrong `kInitiateTrade` constant
+
+**Files:**
+- [gwa3/include/gwa3/managers/UIMgr.h](gwa3/include/gwa3/managers/UIMgr.h)
+- [gwa3/src/managers/TradeMgr.cpp](gwa3/src/managers/TradeMgr.cpp)
+
+The active source had regressed `UIMgr::MSG_INITIATE_TRADE` to:
+- `0x10000033`
+
+The previously working value, consistent with local disassembly research, was:
+- `0x100001A0`
+
+This regression is visible in live logs:
+- older working trade builds logged:
+  - `Trade UI tap registered (initiate=0x100001A0 ...)`
+- newer regressed builds logged:
+  - `Trade UI tap registered (initiate=0x10000033 ...)`
+
+The source has now been corrected back to:
+- `MSG_INITIATE_TRADE = 0x100001A0`
+
+and `build_trade` was rebuilt successfully afterward.
+
+### 5. Where the live boundary is now
+
+The current valid state is:
+
+- helper mode is working again
+- bridge transport is working again
+- DISCO is no longer blocked on first Tier 1 snapshot send
+- both DISCO and BLUMPKINS can remain alive and responsive during the test harness run
+
+But the trade helper still reports no incoming trade state during the focused open/cancel test:
+
+- `trade_flags = 0`
+- `trade_open_count = 0`
+- `trade_partner_hook_hits = 0`
+- all helper trade UI counters remain `0`
+
+This means the active blocker is back where it should be:
+- **player-trade initiation semantics**
+- not bridge startup
+- not helper mode
+- not the Tier1 IPC deadlock
+
+### 6. Practical interpretation of the DISCO vs BLUMPKINS asymmetry
+
+BLUMPKINS only runs the passive helper loop. DISCO runs the full LLM bridge and the active trade-open action path:
+- target selection
+- `InteractPlayer`
+- `CallTarget`
+- trade-button click path
+- IPC snapshot/action servicing
+
+So if DISCO appears stalled while BLUMPKINS looks fine, that asymmetry is expected. They are not executing the same workload.
+
+At the time of the latest inspection:
+- Windows reported **both** live clients as responding
+- the "Not Responding" DISCO screenshot was therefore either transient or from an earlier moment than the latest healthy bridge state
+
+### 7. Current remaining steps
+
+The remaining steps are:
+
+1. Re-run the smallest trade-open test on the corrected `0x100001A0` build:
+   - `python -m bridge.tests --filter "test_player_trade_open_idle_cancel_helper"`
+
+2. Verify helper-side state changes off the corrected build:
+   - `trade_flags`
+   - `trade_open_count`
+   - `trade_partner_hook_hits`
+   - helper `trade_ui_*` counters
+
+3. Only if trade-open is reestablished, move back to:
+   - submit/accept completion
+   - locating the real trade-window Submit / Accept buttons
+   - validating the round-trip tests
+
+### 8. Current short summary
+
+What is solved:
+- stackable quantity prompt paths
+- helper mode bootstrap
+- LLM-mode watchdog false-kill
+- first Tier1 snapshot IPC deadlock
+- stale launcher PID parsing
+- **IPC pipe name mismatch** (see section 9 below)
+- **client disconnect detection regression** (see section 9 below)
+- **log file exclusive lock** (see section 9 below)
+- **LLM mode abort on GameThread failure** (see section 9 below)
+
+What is not solved:
+- trade request still does not visibly land on the helper in the current focused run
+- submit/accept UI completion path is still blocked behind that
+
+### 9. 2026-04-12 Update: DISCO startup hang fully diagnosed and fixed
+
+The "DISCO not responding after injection" blocker has been fully diagnosed. It was NOT a real hang — DISCO was always running and responsive. Four bugs combined to make it appear broken:
+
+#### 9a. IPC pipe name mismatch (ROOT CAUSE of harness failures)
+
+**File:** [gwa3/src/llm/IpcServer.cpp](gwa3/src/llm/IpcServer.cpp)
+
+IpcServer.cpp hardcoded `\\.\pipe\gwa3_llm` instead of using the `GWA3_PIPE_NAME` compile definition from CMake. The trade lane preset defines `gwa3_llm_trade`. The Python harness checked for `\\.\pipe\gwa3_llm_trade`, but the DLL created `\\.\pipe\gwa3_llm`. Result: the harness timed out waiting 45s for a pipe that would never appear under that name.
+
+**Fix:** Use `#ifdef GWA3_PIPE_NAME` to pick up the CMake compile definition, with fallback to the old hardcoded value. Also exposed `GetPipeName()` for the log message in LlmBridge.cpp.
+
+**Evidence:** After fix, the DLL log shows `[LLM-IPC] Waiting for client on \\.\pipe\gwa3_llm_trade` and PowerShell NamedPipeClientStream connects successfully.
+
+#### 9b. Client disconnect not detected (post-PeekNamedPipe regression)
+
+**File:** [gwa3/src/llm/IpcServer.cpp](gwa3/src/llm/IpcServer.cpp)
+
+The `PeekNamedPipe` gating fix for the Tier1 deadlock introduced a regression. After a client disconnects, `PeekNamedPipe` returns FALSE with `ERROR_BROKEN_PIPE`. The old `PipeHasBytesAvailable()` treated this as "no bytes" and looped forever — it never called `ReadMessage()` which was the only disconnect detection path. The pipe handle was never cleaned up, blocking all future connections.
+
+**Fix:** Replaced `PipeHasBytesAvailable()` with `PipeCheckState()` returning tri-state: 1 (bytes available), 0 (no data yet), -1 (pipe broken/client disconnected). The read loop now breaks on -1.
+
+**Evidence:** After fix, the log shows:
+```
+[LLM-IPC] Client connected
+[LLM-IPC] PipeCheckState: pipe broken, ending session
+[LLM-IPC] Client disconnected
+[LLM-IPC] Waiting for client on \\.\pipe\gwa3_llm_trade
+[LLM-IPC] Client connected    <-- successful reconnection
+```
+
+#### 9c. Log file exclusive lock
+
+**File:** [gwa3/src/core/Log.cpp](gwa3/src/core/Log.cpp)
+
+`fopen_s` with mode `"a"` defaults to `_SH_DENYWR` on Windows, which prevents any other process from opening the file — even for reading. This made the DLL log completely unreadable during live debugging.
+
+**Fix:** Switched to `_fsopen(dllPath, "a", _SH_DENYNO)` which allows concurrent reads.
+
+#### 9d. LLM mode abort on GameThread failure
+
+**File:** [gwa3/src/dllmain.cpp](gwa3/src/dllmain.cpp)
+
+The `!anyTest` guard at the GameThread failure check didn't include `llmMode` or `llmAdvisory`. If GameThread::Initialize returned false for any reason, the InitThread would abort before reaching the LLM bridge initialization — silently, with only a log message that couldn't be read (due to 9c).
+
+**Fix:** Added `&& !llmMode && !llmAdvisory` to the abort condition.
+
+#### 9e. Verified healthy startup sequence
+
+With all four fixes applied, the full DISCO LLM startup sequence completes in ~4 seconds:
+
+```
+13:22:31 gwa3.dll loaded, llm=1
+13:22:31 Scanner + Offsets resolved
+13:22:31 All managers initialized
+13:22:31 RenderHook installed, Bootstrap: clicking Play
+13:22:35 Map 650 loaded, Player hydrated
+13:22:35 GameThread hook installed
+13:22:35 CtoS, TraderHook, TargetLogHook installed
+13:22:35 StoC, DialogMgr, ChatLogMgr, StringEncoding initialized
+13:22:35 === LLM AGENT MODE ===
+13:22:35 IPC pipe created: \\.\pipe\gwa3_llm_trade
+13:22:35 Bridge thread started
+13:22:35 GameThread draining, StoC handlers hooked (487)
+```
+
+DISCO window is **Responding=True, Mem=391MB**. Connect/disconnect/reconnect cycle works. Bridge sends Tier1 snapshots on connection.
+
+#### 9f. Additional context: same-tick deadlock insight
+
+A parallel investigation found that calling two native functions (Move-stop + ChangeTarget) in the same game engine tick deadlocks GW. The GameThread code already has a comment about this at `DrainPostQueuesOnGameThread` (line 119-120): "PacketSend has internal locks that prevent multiple calls per frame." This is not related to the startup hang but is relevant for later trade action sequencing.
+
+#### 9g. Note about concurrent agent interference
+
+UIMgr.h was modified by another agent after the last trade-lane build, causing the DLL to be stale (built with old `MSG_INITIATE_TRADE` value). The stale build was part of why earlier debugging was inconclusive.
