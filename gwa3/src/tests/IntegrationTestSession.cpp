@@ -2603,14 +2603,32 @@ bool TestMapTravel() {
 // ===== CONSET CRAFT CYCLE =====
 
 static bool ConsetMoveToNPC(float x, float y, const char* label) {
-    IntReport("  Moving to %s at (%.0f, %.0f)...", label, x, y);
-    CtoS::MoveToCoord(x, y);
-    return WaitFor(label, 15000, [x, y]() {
-        auto* me = AgentMgr::GetMyAgent();
-        if (!me) return false;
-        const float dx = me->x - x, dy = me->y - y;
-        return (dx * dx + dy * dy) < 300.0f * 300.0f;
-    });
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) { IntReport("  No agent for move to %s", label); return false; }
+
+    const float dx0 = me->x - x, dy0 = me->y - y;
+    const float totalDist = sqrtf(dx0 * dx0 + dy0 * dy0);
+    IntReport("  Moving to %s at (%.0f, %.0f) dist=%.0f from (%.0f, %.0f)...",
+              label, x, y, totalDist, me->x, me->y);
+
+    // For long distances, issue move commands every 3s to keep the character walking
+    const uint32_t maxAttempts = (totalDist > 2000.0f) ? 20u : 10u;
+    IntReport("  Walk loop: maxAttempts=%u totalDist=%.0f", maxAttempts, totalDist);
+    for (uint32_t attempt = 0; attempt < maxAttempts; ++attempt) {
+        CtoS::MoveToCoord(x, y);
+        Sleep(3000);
+        auto* me2 = AgentMgr::GetMyAgent();
+        if (!me2) { IntReport("  Agent lost at attempt %u", attempt); break; }
+        const float dxNow = me2->x - x, dyNow = me2->y - y;
+        const float currentDist = sqrtf(dxNow * dxNow + dyNow * dyNow);
+        IntReport("  Walk[%u/%u]: dist=%.0f pos=(%.0f, %.0f)", attempt, maxAttempts, currentDist, me2->x, me2->y);
+        if (currentDist < 300.0f) {
+            IntReport("  Arrived at %s", label);
+            return true;
+        }
+    }
+    IntReport("  Failed to reach %s", label);
+    return false;
 }
 
 static uint32_t ConsetFindNearestNPC(float x, float y, float maxDist = 500.0f) {
@@ -2626,6 +2644,71 @@ static uint32_t ConsetFindNearestNPC(float x, float y, float maxDist = 500.0f) {
         if (distSq < bestDistSq) { bestDistSq = distSq; bestId = i; }
     }
     return bestId;
+}
+
+// Buy material packs from the material trader at Embark Beach.
+// Reproduces AutoIt BuyMaterialIfMissing: quote → buy → re-quote → buy loop.
+static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
+    const uint32_t have = CountInventoryModelQuantity(modelId);
+    if (have >= neededTotal) return have;
+    const uint32_t missing = neededTotal - have;
+    // Materials come in packs of 10
+    const uint32_t packs = (missing + 9) / 10;
+    IntReport("  Buying material model=%u: have=%u need=%u missing=%u packs=%u",
+              modelId, have, neededTotal, missing, packs);
+
+    uint32_t bought = 0;
+    for (uint32_t p = 0; p < packs; ++p) {
+        // Request quote
+        const uint32_t quoteBefore = TraderHook::GetQuoteId();
+        TraderHook::Reset();
+        if (!TradeMgr::RequestTraderQuoteByModelId(modelId)) {
+            IntReport("  Quote request failed for model=%u", modelId);
+            break;
+        }
+        // Wait for quote response
+        const bool quoteOk = WaitFor("trader quote", 5000, [quoteBefore]() {
+            return TraderHook::GetQuoteId() != quoteBefore && TraderHook::GetCostValue() > 0;
+        });
+        if (!quoteOk) {
+            IntReport("  No quote response for model=%u", modelId);
+            break;
+        }
+        const uint32_t cost = TraderHook::GetCostValue();
+        const uint32_t costItemId = TraderHook::GetCostItemId();
+        if (ItemMgr::GetGoldCharacter() < cost) {
+            IntReport("  Insufficient gold: need=%u have=%u", cost, ItemMgr::GetGoldCharacter());
+            break;
+        }
+        IntReport("  Quote: costItem=%u cost=%u gold=%u — buying pack %u/%u",
+                  costItemId, cost, ItemMgr::GetGoldCharacter(), p + 1, packs);
+
+        // Buy via TransactItems(0xC, 1, costItemId) on GameThread
+        struct TraderBuyTask { uint32_t costItemId; uint32_t cost; };
+        static auto TraderBuyInvoker = [](void* storage) {
+            auto* t = reinterpret_cast<TraderBuyTask*>(storage);
+            if (t && t->costItemId) TradeMgr::TransactItems(0xC, 1, t->costItemId);
+        };
+        TraderBuyTask task{costItemId, cost};
+        GameThread::EnqueueRaw(TraderBuyInvoker, &task, sizeof(task));
+
+        // Wait for gold to decrease (confirms buy)
+        const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
+        const bool buyOk = WaitFor("trader buy", 3000, [goldBefore]() {
+            return ItemMgr::GetGoldCharacter() < goldBefore;
+        });
+        if (buyOk) {
+            ++bought;
+            IntReport("  Bought pack %u: gold=%u->%u", p + 1, goldBefore, ItemMgr::GetGoldCharacter());
+        } else {
+            IntReport("  Buy failed at pack %u (gold unchanged)", p + 1);
+            break;
+        }
+        Sleep(ChatMgr::GetPing() + 200);
+    }
+    const uint32_t finalCount = CountInventoryModelQuantity(modelId);
+    IntReport("  Material model=%u: bought=%u packs, final count=%u", modelId, bought, finalCount);
+    return finalCount;
 }
 
 static bool ConsetCraftOneItem(const char* traderLabel, float traderX, float traderY, uint32_t targetModelId) {
@@ -2695,12 +2778,21 @@ bool TestConsetCraftCycle() {
         WaitFor("Embark Beach", 30000, []() { return ReadMapId() == 857u && MapMgr::GetLoadingState() == 0; });
     }
     if (!WaitForPlayerWorldReady(15000)) { IntReport("  Failed to reach Embark"); return false; }
-    IntReport("  In Embark Beach district=%u", MapMgr::GetDistrict());
+    // Wait for player agent to be valid
+    const bool agentReady = WaitFor("player agent", 10000, []() {
+        auto* me = AgentMgr::GetMyAgent();
+        return me && me->x != 0.0f;
+    });
+    if (!agentReady) { IntReport("  Player agent not ready"); return false; }
+    {
+        auto* me = AgentMgr::GetMyAgent();
+        IntReport("  In Embark Beach district=%u pos=(%.0f, %.0f)", MapMgr::GetDistrict(), me ? me->x : 0.0f, me ? me->y : 0.0f);
+    }
 
     // 2. Check gold
     uint32_t gold = ItemMgr::GetGoldCharacter();
     IntReport("  Gold: char=%u storage=%u", gold, ItemMgr::GetGoldStorage());
-    if (gold < 5000 && ItemMgr::GetGoldStorage() > 0) {
+    if (gold < 2000 && ItemMgr::GetGoldStorage() > 0) {
         if (ConsetMoveToNPC(kEmbarkXunlaiX, kEmbarkXunlaiY, "Xunlai Chest")) {
             uint32_t npc = ConsetFindNearestNPC(kEmbarkXunlaiX, kEmbarkXunlaiY);
             if (npc) { CtoS::SendPacket(2, Packets::INTERACT_LIVING, npc); Sleep(1500); }
@@ -2711,12 +2803,50 @@ bool TestConsetCraftCycle() {
         }
     }
 
-    // 3. Check materials
+    // 3. Buy materials from material trader if needed
+    // 1 conset needs: 100 Iron, 100 Dust, 50 Bone, 50 Feather
+    IntReport("  Step 3: Buy materials from material trader if needed...");
+    {
+        uint32_t iron = CountInventoryModelQuantity(kMaterialIronIngot);
+        uint32_t dust = CountInventoryModelQuantity(kMaterialDust);
+        uint32_t bone = CountInventoryModelQuantity(kMaterialBone);
+        uint32_t feather = CountInventoryModelQuantity(kMaterialFeather);
+        IntReport("  Before buy: Iron=%u Dust=%u Bone=%u Feather=%u", iron, dust, bone, feather);
+
+        bool needBuy = iron < 100 || dust < 100 || bone < 50 || feather < 50;
+        if (needBuy) {
+            constexpr float kMaterialTraderX = 2933.0f;
+            constexpr float kMaterialTraderY = -2236.0f;
+            if (ConsetMoveToNPC(kMaterialTraderX, kMaterialTraderY, "Material Trader")) {
+                uint32_t npc = ConsetFindNearestNPC(kMaterialTraderX, kMaterialTraderY);
+                if (npc) {
+                    IntReport("  Opening material trader NPC %u...", npc);
+                    CtoS::SendPacket(2, Packets::INTERACT_LIVING, npc);
+                    Sleep(1500);
+                    CtoS::SendPacket(2, 0x39, npc);
+                    Sleep(1500);
+                    // Wait for merchant context
+                    WaitFor("material trader", 5000, []() { return TradeMgr::GetMerchantItemCount() > 0; });
+                    if (TradeMgr::GetMerchantItemCount() > 0) {
+                        IntReport("  Material trader open: %u items", TradeMgr::GetMerchantItemCount());
+                        if (iron < 100)    ConsetBuyMaterial(kMaterialIronIngot, 100);
+                        if (dust < 100)    ConsetBuyMaterial(kMaterialDust, 100);
+                        if (bone < 50)     ConsetBuyMaterial(kMaterialBone, 50);
+                        if (feather < 50)  ConsetBuyMaterial(kMaterialFeather, 50);
+                    } else {
+                        IntReport("  Failed to open material trader");
+                    }
+                }
+            }
+        }
+    }
+
+    // Re-check materials after buying
     uint32_t iron = CountInventoryModelQuantity(kMaterialIronIngot);
     uint32_t dust = CountInventoryModelQuantity(kMaterialDust);
     uint32_t bone = CountInventoryModelQuantity(kMaterialBone);
     uint32_t feather = CountInventoryModelQuantity(kMaterialFeather);
-    IntReport("  Materials: Iron=%u Dust=%u Bone=%u Feather=%u", iron, dust, bone, feather);
+    IntReport("  After buy: Iron=%u Dust=%u Bone=%u Feather=%u", iron, dust, bone, feather);
 
     bool canGrail = iron >= 50 && dust >= 50;
     bool canEssence = feather >= 50 && dust >= (canGrail ? 100 : 50);
