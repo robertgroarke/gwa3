@@ -4,6 +4,7 @@
 
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/Offsets.h>
+#include <gwa3/core/Log.h>
 #include <gwa3/core/RenderHook.h>
 #include <gwa3/core/TargetLogHook.h>
 #include <gwa3/core/TradePartnerHook.h>
@@ -2632,11 +2633,19 @@ static uint32_t ConsetFindNearestNPC(float x, float y, float maxDist = 500.0f) {
 // AutoIt's TraderRequest scans [BasePtr]+0x18+0x40+0xB8 for items with
 // bag==nullptr and agent_id==0 — these are merchant offering slots.
 static uint32_t FindTraderVirtualItemId(uint32_t modelId) {
-    Inventory* inv = ItemMgr::GetInventory();
-    if (!inv) return 0;
-    // Scan ALL items in the global array — items with bag==nullptr are virtual merchant slots
-    const uint32_t maxItems = AgentMgr::GetMaxAgents(); // item array size approximation
-    for (uint32_t id = 1; id < 4096; ++id) {
+    // Scan global item array for virtual merchant items (bag==nullptr, agent_id==0)
+    // Read item array size from [BasePtr]+0x18+0x40+0xC0 (same as AutoIt)
+    uint32_t arraySize = 0;
+    __try {
+        uintptr_t p0 = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+        uintptr_t p1 = *reinterpret_cast<uintptr_t*>(p0 + 0x18);
+        uintptr_t p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x40);
+        arraySize = *reinterpret_cast<uint32_t*>(p2 + 0xC0);
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    if (arraySize == 0 || arraySize > 8192) return 0;
+    IntReport("  FindTraderVirtualItemId: model=%u arraySize=%u", modelId, arraySize);
+    uint32_t virtualCount = 0;
+    for (uint32_t id = 1; id < arraySize; ++id) {
         __try {
             // Use the base pointer path: [BasePtr]+0x18+0x40+0xB8+[id*4]
             uintptr_t p0 = 0, p1 = 0, p2 = 0, p3 = 0, itemPtr = 0;
@@ -2652,11 +2661,17 @@ static uint32_t FindTraderVirtualItemId(uint32_t modelId) {
             itemPtr = *reinterpret_cast<uintptr_t*>(p3 + id * 4);
             if (itemPtr < 0x10000) continue;
             auto* item = reinterpret_cast<Item*>(itemPtr);
-            if (item->model_id == modelId && item->bag == nullptr && item->agent_id == 0) {
-                return item->item_id;
+            if (item->bag == nullptr && item->agent_id == 0) {
+                ++virtualCount;
+                if (item->model_id == modelId) {
+                    IntReport("  Found virtual item: id=%u model=%u at index=%u (scanned %u virtual items)",
+                              item->item_id, item->model_id, id, virtualCount);
+                    return item->item_id;
+                }
             }
         } __except(EXCEPTION_EXECUTE_HANDLER) { break; }
     }
+    IntReport("  Virtual item model=%u NOT FOUND (scanned %u items, %u virtual)", modelId, arraySize, virtualCount);
     return 0;
 }
 
@@ -2668,11 +2683,17 @@ static uint32_t s_traderQuoteItemId = 0;
 
 static void __cdecl TraderQuoteInvoker(void* storage) {
     auto* t = reinterpret_cast<TraderQuoteTask*>(storage);
-    if (!t || !t->itemId || !Offsets::RequestQuote) return;
+    if (!t || !t->itemId || !Offsets::RequestQuote) {
+        Log::Warn("[INTG] TraderQuoteInvoker: bad args item=%u fn=0x%08X",
+                  t ? t->itemId : 0, static_cast<unsigned>(Offsets::RequestQuote));
+        return;
+    }
 
     s_traderQuoteItemId = t->itemId;
     uint32_t* itemIdPtr = &s_traderQuoteItemId;
     const uintptr_t fn = Offsets::RequestQuote;
+    Log::Info("[INTG] TraderQuoteInvoker: calling RequestQuote(0xC) item=%u itemAddr=0x%08X fn=0x%08X",
+              t->itemId, reinterpret_cast<uintptr_t>(itemIdPtr), static_cast<unsigned>(fn));
     __asm {
         mov eax, itemIdPtr
         push eax        // recv.item_ids
@@ -2689,14 +2710,22 @@ static void __cdecl TraderQuoteInvoker(void* storage) {
         call eax
         add esp, 0x20
     }
+    Log::Info("[INTG] TraderQuoteInvoker: returned from RequestQuote — quoteId=%u costItem=%u costValue=%u",
+              TraderHook::GetQuoteId(), TraderHook::GetCostItemId(), TraderHook::GetCostValue());
 }
 
 static bool RequestTraderQuoteViaGameThread(uint32_t itemId) {
-    if (!itemId || !Offsets::RequestQuote) return false;
+    if (!itemId) return false;
     TraderHook::Reset();
-    TraderQuoteTask task{itemId};
-    GameThread::EnqueueRaw(&TraderQuoteInvoker, &task, sizeof(task));
-    return true;
+
+    // Try TradeMgr::RequestTraderQuoteByItemId which uses RenderHook shellcode
+    // (same execution context as AutoIt's command queue).
+    Log::Info("[INTG] RequestTraderQuote: trying RenderHook path for item=%u (RenderHook init=%u)",
+              itemId, RenderHook::IsInitialized() ? 1u : 0u);
+    bool ok = TradeMgr::RequestTraderQuoteByItemId(itemId);
+    Log::Info("[INTG] RequestTraderQuote: RenderHook result=%u quoteId=%u costItem=%u costValue=%u",
+              ok ? 1u : 0u, TraderHook::GetQuoteId(), TraderHook::GetCostItemId(), TraderHook::GetCostValue());
+    return ok;
 }
 
 // Buy material packs from the material trader at Embark Beach.
