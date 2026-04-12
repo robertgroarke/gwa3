@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(gwa3 LANGUAGES CXX)
+project(gwa3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,10 +27,25 @@ FetchContent_MakeAvailable(minhook)
 # --- FetchContent: nlohmann/json (header-only) ---
 FetchContent_Declare(
     json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG        v3.11.3
+    URL https://github.com/nlohmann/json/archive/refs/tags/v3.11.3.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(json)
+if(NOT TARGET nlohmann_json::nlohmann_json)
+    set(JSON_INCLUDE_ROOT "")
+    if(DEFINED json_SOURCE_DIR AND EXISTS "${json_SOURCE_DIR}/include")
+        set(JSON_INCLUDE_ROOT "${json_SOURCE_DIR}/include")
+    elseif(DEFINED FETCHCONTENT_SOURCE_DIR_JSON AND EXISTS "${FETCHCONTENT_SOURCE_DIR_JSON}/include")
+        set(JSON_INCLUDE_ROOT "${FETCHCONTENT_SOURCE_DIR_JSON}/include")
+    endif()
+    if(NOT JSON_INCLUDE_ROOT STREQUAL "")
+        add_library(nlohmann_json INTERFACE)
+        target_include_directories(nlohmann_json INTERFACE "${JSON_INCLUDE_ROOT}")
+        add_library(nlohmann_json::nlohmann_json ALIAS nlohmann_json)
+    else()
+        message(FATAL_ERROR "nlohmann_json target missing and no json include directory was found")
+    endif()
+endif()
 
 # --- gwa3_core (OBJECT library — shared between DLL and tests) ---
 add_library(gwa3_core OBJECT
@@ -41,6 +56,7 @@ add_library(gwa3_core OBJECT
     src/core/Memory.cpp
     src/core/RenderHook.cpp
     src/core/TraderHook.cpp
+    src/core/TradePartnerHook.cpp
     src/core/TargetLogHook.cpp
     src/core/CallbackRegistry.cpp
     src/packets/CtoS.cpp
@@ -66,6 +82,33 @@ add_library(gwa3_core OBJECT
     src/managers/ChatLogMgr.cpp
     src/utils/EncStrCodec.cpp
     src/bot/BotFramework.cpp
+    src/bot/ArachnisHaunt.cpp
+    src/bot/ArachnisHauntBot.cpp
+    src/bot/BotModuleRegistry.cpp
+    src/bot/BotModuleSelector.cpp
+    src/bot/DungeonBundle.cpp
+    src/bot/DungeonCombat.cpp
+    src/bot/DungeonCombatRoutine.cpp
+    src/bot/DungeonCheckpoint.cpp
+    src/bot/DungeonDialog.cpp
+    src/bot/DungeonInteractions.cpp
+    src/bot/DungeonInventory.cpp
+    src/bot/DungeonLoot.cpp
+    src/bot/DungeonQuest.cpp
+    src/bot/DungeonQuestRuntime.cpp
+    src/bot/DungeonSkill.cpp
+    src/bot/FrostmawsBurrows.cpp
+    src/bot/FrostmawsBurrowsBot.cpp
+    src/bot/Kathandrax.cpp
+    src/bot/KathandraxBot.cpp
+    src/bot/DungeonNavigation.cpp
+    src/bot/DungeonRoute.cpp
+    src/bot/DungeonTravel.cpp
+    refactor_staging/froggy_shared/FroggySharedAdapters.cpp
+    src/bot/RavensPoint.cpp
+    src/bot/RavensPointBot.cpp
+    src/bot/RragarsMenagerie.cpp
+    src/bot/RragarsMenagerieBot.cpp
     src/bot/FroggyHM.cpp
     src/tests/SmokeTest.cpp
     src/tests/BotFrameworkTest.cpp
@@ -89,12 +132,14 @@ add_library(gwa3_core OBJECT
 
 target_include_directories(gwa3_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/refactor_staging
 )
 
 # Crash investigation test selector (0=normal, 1=remove JMP after bootstrap, 2=disable GameThread)
 set(CRASH_TEST 0 CACHE STRING "Crash test mode")
+string(REPLACE "\\" "\\\\" GWA3_PIPE_NAME_ESCAPED "${GWA3_PIPE_NAME}")
 target_compile_definitions(gwa3_core PUBLIC CRASH_TEST=${CRASH_TEST})
-target_compile_definitions(gwa3_core PUBLIC GWA3_PIPE_NAME="${GWA3_PIPE_NAME}")
+target_compile_definitions(gwa3_core PUBLIC GWA3_PIPE_NAME="${GWA3_PIPE_NAME_ESCAPED}")
 
 # gwa3_core needs MinHook headers (for GameThread.cpp), version.lib (for MemoryMgr),
 # and nlohmann_json (for LLM bridge serialization)
@@ -133,6 +178,48 @@ target_include_directories(gwa3_tests PRIVATE
 target_link_libraries(gwa3_tests PRIVATE minhook version)
 
 set_target_properties(gwa3_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+# --- gwa3_dungeon_tests.exe ---
+add_executable(gwa3_dungeon_tests
+    tests/dungeon_tests_main.cpp
+    src/bot/ArachnisHaunt.cpp
+    src/bot/ArachnisHauntBot.cpp
+    src/bot/BotModuleRegistry.cpp
+    src/bot/BotModuleSelector.cpp
+    src/bot/DungeonBundle.cpp
+    src/bot/DungeonCombat.cpp
+    src/bot/DungeonCombatRoutine.cpp
+    src/bot/DungeonCheckpoint.cpp
+    src/bot/DungeonDialog.cpp
+    src/bot/DungeonInteractions.cpp
+    src/bot/DungeonInventory.cpp
+    src/bot/DungeonLoot.cpp
+    src/bot/DungeonQuest.cpp
+    src/bot/DungeonQuestRuntime.cpp
+    src/bot/DungeonSkill.cpp
+    src/bot/FrostmawsBurrows.cpp
+    src/bot/FrostmawsBurrowsBot.cpp
+    src/bot/Kathandrax.cpp
+    src/bot/KathandraxBot.cpp
+    src/bot/DungeonNavigation.cpp
+    src/bot/DungeonRoute.cpp
+    src/bot/DungeonTravel.cpp
+    src/bot/RavensPoint.cpp
+    src/bot/RavensPointBot.cpp
+    src/bot/RragarsMenagerie.cpp
+    src/bot/RragarsMenagerieBot.cpp
+    refactor_staging/froggy_shared/FroggySharedAdapters.cpp
+)
+
+target_include_directories(gwa3_dungeon_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/refactor_staging
+)
+target_compile_definitions(gwa3_dungeon_tests PRIVATE GWA3_DUNGEON_TEST_BUILD=1)
+
+set_target_properties(gwa3_dungeon_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 

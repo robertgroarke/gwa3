@@ -1565,18 +1565,18 @@ bool CraftConsumableViaUiClick(const char* targetLabel, uint32_t targetModelId, 
                                      TradeMgr::GetMerchantItemCount(), targetModelId, targetItemId,
                                      0, 0, merchantItemPosition != UINT32_MAX ? 1u : 0u, probeDetail);
     }
-    const uint32_t itemRowPath[] = {
-        0u, 1u, 3u, 0u,
-        merchantItemPosition == UINT32_MAX || merchantItemPosition == 0u ? 0u : (merchantItemPosition - 1u)
-    };
-    const uint32_t itemRowFallbackPath[] = { 0u, 1u, 2u, 4u };
+    // AutoIt's proven working item selection: NavigateFramePath("0,0,itemIndex")
+    // itemIndex is 0-based. merchantItemPosition is 1-based, so subtract 1.
+    const uint32_t autoit_itemIndex = (merchantItemPosition == UINT32_MAX || merchantItemPosition == 0u) ? 0u : (merchantItemPosition - 1u);
+    const uint32_t autoitItemPath[] = { 0u, 0u, autoit_itemIndex };
     const uint32_t actionButtonPath[] = { 0u, 1u, 1u };
     uintptr_t itemRowFrame = merchantItemPosition == UINT32_MAX
         ? 0u
-        : ResolveMerchantSortedPathFrame(merchantFrame, itemRowPath, _countof(itemRowPath), "item[0,1,3,0,index-1]");
+        : ResolveMerchantSortedPathFrame(merchantFrame, autoitItemPath, _countof(autoitItemPath), "item[0,0,index] (AutoIt)");
     if (itemRowFrame < 0x10000 && merchantItemPosition != UINT32_MAX) {
-        itemRowFrame = ResolveMerchantSortedPathFrame(merchantFrame, itemRowFallbackPath, _countof(itemRowFallbackPath),
-                                                      "item[0,1,2,4]-fallback");
+        // Fallback to old path
+        const uint32_t itemRowPath[] = { 0u, 1u, 3u, 0u, autoit_itemIndex };
+        itemRowFrame = ResolveMerchantSortedPathFrame(merchantFrame, itemRowPath, _countof(itemRowPath), "item[0,1,3,0,index-1]-fallback");
     }
     const uintptr_t rowClickFrame = ResolveMerchantRowClickTarget(itemRowFrame, clickMode);
     const uintptr_t pathActionFrame = ResolveMerchantSortedPathFrame(merchantFrame, actionButtonPath, _countof(actionButtonPath), "action[0,1,1]");
@@ -1586,11 +1586,9 @@ bool CraftConsumableViaUiClick(const char* targetLabel, uint32_t targetModelId, 
     const uintptr_t actionAltByContext = merchantContext >= 0x10000
         ? UIMgr::GetFrameByContextAndChildOffset(merchantContext, 126u, merchantFrame)
         : 0u;
-    // Craft is the left button (childOffset 125 in merchant context).
-    // Goodbye is the right button (childOffset 126).
-    // Always prefer the context-based action125 lookup over the path-based resolution,
-    // because pathActionFrame {0,1,1} can resolve to a sub-element with a different
-    // context that doesn't trigger the craft action when clicked.
+    // action125 (childOffset 125 in merchant context) produces CtoS 0x049 when clicked.
+    // pathActionFrame {0,1,1} has wrong sub-context and crashes on immediate click.
+    // Use action125 via GameThread dispatch (ButtonClick, not ButtonClickImmediate).
     const uintptr_t craftButtonFrame = actionPrimaryByContext
         ? actionPrimaryByContext
         : (pathActionFrame
@@ -1828,7 +1826,7 @@ bool CraftConsumableViaUiClick(const char* targetLabel, uint32_t targetModelId, 
         bool craftBtnClicked = false;
         if (craftTarget >= 0x10000) {
             const bool isHidden = UIMgr::IsFrameHidden(craftTarget);
-            IntReport("  Craft button: frame=0x%08X hash=%u hidden=%u — clicking anyway (AutoIt style)",
+            IntReport("  Craft button: frame=0x%08X hash=%u hidden=%u — clicking via GameThread",
                       static_cast<unsigned>(craftTarget), UIMgr::GetFrameHash(craftTarget), isHidden ? 1u : 0u);
             craftBtnClicked = UIMgr::ButtonClick(craftTarget);
             IntReport("  Craft button click result: clicked=%u", craftBtnClicked ? 1u : 0u);
