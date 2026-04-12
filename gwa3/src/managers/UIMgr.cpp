@@ -10,6 +10,9 @@
 
 namespace GWA3::UIMgr {
 
+// Forward declarations for functions used before their definition
+uint32_t GetChildFrameCount(uintptr_t frame);
+
 static uintptr_t s_sendFrameUIAddr = 0;
 using SendUIMessageFn = void(__cdecl*)(uint32_t msgid, void* wParam, void* lParam);
 

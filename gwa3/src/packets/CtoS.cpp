@@ -509,6 +509,14 @@ void TradeAccept() {
     SendPacket(1, Packets::TRADE_ACCEPT);
 }
 
+// Stub packet tap diagnostics (referenced by IntegrationTestSession)
+PacketTapSnapshot GetPacketTapSnapshot() {
+    return PacketTapSnapshot{};
+}
+
+void ResetPacketTap() {
+}
+
 } // namespace GWA3::CtoS
 
 
