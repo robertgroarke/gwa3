@@ -441,6 +441,10 @@ bool EnqueueBotshubCommand(const void* slot, size_t slotSize) {
     return true;
 }
 
+bool IsBotshubQueueIdle() {
+    return s_botshubCmdHead == s_botshubCmdTail;
+}
+
 void SuspendEngineHook() {
     if (!s_engineInitialized || !s_engineHookAddr) return;
     s_engineSuspended = true;  // Tell watchdog to stop re-patching

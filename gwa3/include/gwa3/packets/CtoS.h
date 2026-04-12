@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+extern "C" void GWA3BotshubCommandReturnThunk();
+
 namespace GWA3::CtoS {
 
     // Initialize: resolve PacketSend and PacketLocation from Offsets.
@@ -24,7 +26,9 @@ namespace GWA3::CtoS {
     // the correct context for operations like Salvage that need
     // the game's internal state.
     typedef void (*GameCommandFn)(void* params);
-    void EnqueueGameCommand(GameCommandFn fn, const void* params, size_t paramSize);
+    bool EnqueueGameCommand(GameCommandFn fn, const void* params, size_t paramSize);
+    bool EnqueueBotshubCommand(const void* slot, size_t slotSize);
+    bool IsBotshubQueueIdle();  // true when no pending botshub commands
 
     // Temporarily unhook/rehook the engine inline hook.
     // Use around map transitions to prevent stale-trampoline crashes.

@@ -194,11 +194,60 @@ bool Initialize() {
 }
 
 void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
-    // TEMPORARY: UseSkill disabled for crash isolation.
-    // When the Sparkfly combat route engages enemies, something crashes.
-    // Disabling UseSkill isolates whether the crash is from skill packets
-    // or from something else in the combat path (Attack, agent reads, etc.).
-    Log::Info("SkillMgr: UseSkill SUPPRESSED slot=%u target=%u (crash isolation)", slot, targetAgentId);
+    if (!s_useSkillFn) {
+        // No native function resolved — can't use skill
+        Log::Warn("SkillMgr: UseSkill skipped (no native fn) slot=%u", slot);
+        return;
+    }
+
+    if (slot == 0u) {
+        Log::Warn("SkillMgr: UseSkill skipped (slot=%u)", slot);
+        return;
+    }
+
+    const uint32_t myId = AgentMgr::GetMyId();
+    if (!myId) {
+        Log::Warn("SkillMgr: UseSkill skipped (MyID=%u slot=%u)", myId, slot);
+        return;
+    }
+
+    // Guard: don't call native UseSkill while the character is moving OR
+    // while Move commands are still pending in the engine queue.  Upstream
+    // BotsHub stops the character and waits before casting.  Calling the
+    // native function during or shortly after movement corrupts the game's
+    // action state machine, causing a delayed crash.
+    {
+        const auto* me = AgentMgr::GetMyAgent();
+        if (me && (me->move_x != 0.0f || me->move_y != 0.0f)) {
+            return;  // moving — bot retries next tick
+        }
+        if (!CtoS::IsBotshubQueueIdle()) {
+            return;  // pending Move commands — wait for them to drain
+        }
+    }
+
+    // Dispatch via the engine command lane (botshub queue).  The USE_SKILL
+    // packet (0x46) crashes GW when dispatched by the sender thread
+    // concurrently with the game's combat processing — PacketSend is not
+    // thread-safe for combat packets.  The engine command lane runs in the
+    // correct hook context with proper serialisation.
+    if (CtoS::Initialize() && EnsureUseSkillShellcode()) {
+        if (!s_loggedUseSkillEngineLane) {
+            Log::Info("SkillMgr: UseSkill using engine command lane");
+            s_loggedUseSkillEngineLane = true;
+        }
+        auto* cmd = reinterpret_cast<UseSkillCommand*>(NextSkillShellcodeSlot());
+        cmd->fn = reinterpret_cast<uintptr_t>(&BotshubUseSkillCommandStub);
+        cmd->my_id = myId;
+        cmd->zero_based_slot = slot - 1u;
+        cmd->target_agent_id = targetAgentId;
+        cmd->call_target = callTarget;
+        FlushInstructionCache(GetCurrentProcess(), cmd, sizeof(*cmd));
+        if (CtoS::EnqueueBotshubCommand(cmd, sizeof(*cmd))) {
+            return;
+        }
+        Log::Warn("SkillMgr: engine command queue rejected skill, dropping");
+    }
 }
 
 void UseHeroSkill(uint32_t heroIndex, uint32_t slot, uint32_t targetAgentId) {
