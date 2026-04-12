@@ -39,6 +39,10 @@ namespace GWA3::Scanner {
     Section GetRdataSection();
     Section GetDataSection();
 
+    // Walk backward from an address to find the function prologue (push ebp / mov ebp,esp).
+    // maxDistance: how far back to search. Returns 0 on failure.
+    uintptr_t ToFunctionStart(uintptr_t address, uintptr_t maxDistance);
+
     // Check if scanner is initialized.
     bool IsInitialized();
 

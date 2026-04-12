@@ -243,4 +243,31 @@ Section GetRdataSection() { return s_rdata; }
 Section GetDataSection()  { return s_data; }
 bool IsInitialized()      { return s_initialized; }
 
+uintptr_t ToFunctionStart(uintptr_t address, uintptr_t maxDistance) {
+    if (address < 0x10000 || maxDistance == 0) return 0;
+    const Section& text = s_text;
+    uintptr_t lower = address > maxDistance ? address - maxDistance : text.start;
+    if (lower < text.start) lower = text.start;
+    // Walk backward looking for common x86 function prologues:
+    //   55          push ebp
+    //   8B EC       mov ebp, esp
+    // or:
+    //   55          push ebp
+    //   89 E5       mov ebp, esp  (alternate encoding)
+    for (uintptr_t p = address - 1; p >= lower; --p) {
+        __try {
+            const uint8_t* b = reinterpret_cast<const uint8_t*>(p);
+            if (b[0] == 0x55 && p + 1 < address) {
+                // push ebp followed by mov ebp, esp
+                if ((b[1] == 0x8B && b[2] == 0xEC) || (b[1] == 0x89 && b[2] == 0xE5)) {
+                    return p;
+                }
+            }
+        } __except (1) {
+            break;
+        }
+    }
+    return 0;
+}
+
 } // namespace GWA3::Scanner

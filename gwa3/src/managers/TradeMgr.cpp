@@ -1570,6 +1570,10 @@ void OfferItemPromptQuantity(uint32_t itemId) {
     }
 }
 
+// Forward declarations for functions defined later in this file
+bool ConfirmTradeQuantityPromptValue(uint32_t quantity);
+bool ConfirmTradeQuantityPromptMax();
+
 bool OfferItemPromptValue(uint32_t itemId, uint32_t quantity) {
     if (quantity == 0) {
         Log::Warn("TradeMgr: OfferItemPromptValue invalid quantity=0");

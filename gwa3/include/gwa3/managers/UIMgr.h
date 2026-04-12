@@ -11,6 +11,7 @@ namespace GWA3::UIMgr {
 
     // Frame message IDs
     constexpr uint32_t MSG_MOUSE_CLICK2 = 0x31;
+    constexpr uint32_t MSG_INITIATE_TRADE = 0x10000033;
 
     // MouseAction action states
     constexpr uint32_t ACTION_MOUSE_UP   = 0x7;
@@ -53,8 +54,47 @@ namespace GWA3::UIMgr {
     void SendFrameUIMessage(uintptr_t frame, uint32_t msgId, void* wParam, void* lParam);
     void SendUIMessage(uint32_t msgId, void* wParam, void* lParam);
 
+    // Child frame navigation
+    uint32_t GetChildFrameCount(uintptr_t frame);
+    uintptr_t GetChildFrameByIndex(uintptr_t frame, uint32_t index);
+    uintptr_t GetChildFrameByOffset(uintptr_t frame, uint32_t childOffsetId);
+
+    uintptr_t GetFrameById(uint32_t frameId);
+    uintptr_t GetFrameByContextAndChildOffset(uintptr_t context, uint32_t childOffsetId, uintptr_t excludeFrame = 0);
+
+    // Frame search
+    uintptr_t GetVisibleFrameByChildOffsetAndChildCount(
+        uint32_t childOffsetId, uint32_t minChildCount, uint32_t maxChildCount,
+        uintptr_t excludeFrame = 0, uintptr_t excludeContext = 0);
+
+    // Sorted child path navigation
+    uintptr_t NavigateSortedChildPath(uintptr_t frame, const uint32_t* childIndices, uint32_t childIndexCount);
+
+    // Text/numeric editing
+    bool SetEditableTextValue(uintptr_t frame, const wchar_t* value, uintptr_t commitParentFrame = 0);
+    bool SetEditableTextLocalOnly(uintptr_t frame, const wchar_t* value);
+    bool SetNumericFrameValue(uintptr_t frame, uint32_t value, uintptr_t commitParentFrame = 0);
+    bool SetNumericFrameLocalOnly(uintptr_t frame, uint32_t value);
+
+    // Debug
+    void DebugDumpChildFrames(uintptr_t frame, const char* label, uint32_t maxCount = 32);
+    void DebugDumpFramesForContext(uintptr_t context, const char* label, uint32_t maxCount = 64);
+    void DebugDumpVisibleFramesByChildOffset(uint32_t childOffsetId, const char* label, uint32_t maxCount = 64);
+
+    // Key simulation
+    bool KeyPress(uintptr_t frame, uint32_t vkCode);
+
+    // Mouse action testing
+    bool TestMouseClickAction(uintptr_t frame, uint32_t currentState, uint32_t wparam, uint32_t lparam);
+    bool TestMouseAction(uintptr_t frame, uint32_t currentState, uint32_t wparam, uint32_t lparam);
+
+    // Low-level UIMessage dispatch
+    void SendUIMessageAsm(uint32_t msgId, void* wParam, void* lParam);
+
     // Button click (GWA3-021)
     // Sends MouseUp(0x7) via SendFrameUIMsg with msgid=0x31
+    bool ButtonClickImmediate(uintptr_t frame);
+    bool ButtonClickImmediateFull(uintptr_t frame);
     bool ButtonClick(uintptr_t frame);
     bool ButtonClickByHash(uint32_t hash);
 

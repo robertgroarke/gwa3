@@ -7,9 +7,20 @@ namespace GWA3::CtoS {
     // Initialize: resolve PacketSend and PacketLocation from Offsets.
     bool Initialize();
 
+    // Packet tap: lightweight header-frequency snapshot for diagnostics
+    struct PacketTapSnapshot {
+        uint32_t total_packets;
+        uint32_t unique_headers;
+        uint32_t headers[8];
+        uint32_t counts[8];
+    };
+
+    PacketTapSnapshot GetPacketTapSnapshot();
+    void ResetPacketTap();
+
     // ===== Game Command Queue (GWA3-184) =====
     // Enqueue a game command to execute in the Engine hook context.
-    // This runs in the same hook point as AutoIt's command queue —
+    // This runs in the same hook point as AutoIt's command queue ---
     // the correct context for operations like Salvage that need
     // the game's internal state.
     typedef void (*GameCommandFn)(void* params);
