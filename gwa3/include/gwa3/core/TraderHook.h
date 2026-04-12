@@ -13,4 +13,7 @@ namespace GWA3::TraderHook {
     uint32_t GetCostItemId();
     uint32_t GetCostValue();
 
+    // Debug: raw register state at hook point
+    uintptr_t GetDebugEbx();
+
 } // namespace GWA3::TraderHook

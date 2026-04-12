@@ -2714,25 +2714,51 @@ static void __cdecl TraderQuoteInvoker(void* storage) {
               TraderHook::GetQuoteId(), TraderHook::GetCostItemId(), TraderHook::GetCostValue());
 }
 
+// Send trader quote request via UIMessage (same path as GWCA/GWToolbox).
+// UIMessage kSendMerchantRequestQuote = 0x30000006 with struct:
+// { type=0xC, unknown=0, give={0,0,nullptr}, recv={0,1,&itemId} }
+struct TraderQuoteUIMsg {
+    uint32_t type;
+    uint32_t unknown;
+    struct { uint32_t unknown; uint32_t item_count; uint32_t* item_ids; } give;
+    struct { uint32_t unknown; uint32_t item_count; uint32_t* item_ids; } recv;
+};
+static uint32_t s_uiMsgItemId = 0;
+
+static void __cdecl TraderQuoteUIInvoker(void* storage) {
+    auto* t = reinterpret_cast<TraderQuoteTask*>(storage);
+    if (!t || !t->itemId) return;
+
+    s_uiMsgItemId = t->itemId;
+
+    TraderQuoteUIMsg msg{};
+    msg.type = 0xC; // TraderBuy
+    msg.unknown = 0;
+    msg.give = {0, 0, nullptr};
+    msg.recv = {0, 1, &s_uiMsgItemId};
+
+    Log::Info("[INTG] TraderQuoteUI: SendUIMessage(0x30000006) type=0xC item=%u", t->itemId);
+    UIMgr::SendUIMessageAsm(0x30000006u, &msg, nullptr);
+    Log::Info("[INTG] TraderQuoteUI: returned — quoteId=%u costItem=%u costValue=%u",
+              TraderHook::GetQuoteId(), TraderHook::GetCostItemId(), TraderHook::GetCostValue());
+}
+
 static bool RequestTraderQuoteViaGameThread(uint32_t itemId) {
-    if (!itemId || !Offsets::RequestQuote) return false;
+    if (!itemId) return false;
     TraderHook::Reset();
     CtoS::ResetPacketTap();
 
-    // Dispatch via Engine hook command queue (closest to AutoIt's rendering hook queue)
+    // Dispatch via Engine hook command queue — native RequestQuote fires TraderHook
     TraderQuoteTask task{itemId};
     CtoS::EnqueueGameCommand(&TraderQuoteInvoker, &task, sizeof(task));
 
-    // Wait a moment for the command to execute, then check both TraderHook and packet tap
+    // Wait for dispatch + response
     Sleep(500);
     auto snap = CtoS::GetPacketTapSnapshot();
-    Log::Info("[INTG] RequestTraderQuote: item=%u quoteId=%u costItem=%u costValue=%u ctoS_total=%u",
+    Log::Info("[INTG] RequestTraderQuote: item=%u quoteId=%u costItem=%u costValue=%u ctoS_total=%u debugEbx=0x%08X",
               itemId, TraderHook::GetQuoteId(), TraderHook::GetCostItemId(), TraderHook::GetCostValue(),
-              snap.total_packets);
-    for (uint32_t i = 0; i < 8 && snap.headers[i]; ++i) {
-        Log::Info("[INTG]   ctoS header=0x%03X count=%u", snap.headers[i], snap.counts[i]);
-    }
-    return true; // Let the WaitFor in ConsetBuyMaterial handle the response polling
+              snap.total_packets, static_cast<unsigned>(TraderHook::GetDebugEbx()));
+    return true;
 }
 
 // Buy material packs from the material trader at Embark Beach.

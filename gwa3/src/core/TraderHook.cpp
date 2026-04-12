@@ -15,9 +15,11 @@ static uint8_t s_savedBytes[kPatchSize] = {};
 static volatile LONG s_quoteId = 0;
 static volatile LONG s_costItemId = 0;
 static volatile LONG s_costValue = 0;
+static volatile uintptr_t s_debugEbx = 0;
 
 static __declspec(naked) void TraderDetourNaked() {
     __asm {
+        mov dword ptr [s_debugEbx], ebx
         push eax
         mov eax, dword ptr [ebx+28]
         mov eax, [eax]
@@ -40,6 +42,9 @@ trader_skip_reset:
         jmp [s_returnAddr]
     }
 }
+
+// Debug accessors for register state at hook point
+uintptr_t GetDebugEbx() { return s_debugEbx; }
 
 bool Initialize() {
     if (s_initialized) return true;
