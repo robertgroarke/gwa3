@@ -31,6 +31,7 @@
 #include <gwa3/core/SmokeTest.h>
 #include <gwa3/utils/StringEncoding.h>
 #include <gwa3/llm/LlmBridge.h>
+#include "tests/IntegrationTestInternal.h"
 
 static HMODULE g_hModule = nullptr;
 
@@ -254,16 +255,18 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     bool npcDialogTest = CheckFlag("GWA3_TEST_NPC_DIALOG", "gwa3_test_npc_dialog.flag");
     bool merchantQuoteTest = CheckFlag("GWA3_TEST_MERCHANT_QUOTE", "gwa3_test_merchant_quote.flag");
     bool merchantShellTest = CheckFlag("GWA3_TEST_MERCHANT_SHELL", "gwa3_test_merchant_shell.flag");
+    bool tradeHelperTest = CheckFlag("GWA3_TEST_TRADE_HELPER", "gwa3_test_trade_helper.flag");
     bool advancedTest = CheckFlag("GWA3_TEST_ADVANCED", "gwa3_test_advanced.flag");
     bool workflowTest = CheckFlag("GWA3_TEST_WORKFLOW", "gwa3_test_workflow.flag");
     bool froggyTest = CheckFlag("GWA3_TEST_FROGGY", "gwa3_test_froggy.flag");
     bool froggyFlaggingTest = CheckFlag("GWA3_TEST_FROGGY_FLAGGING", "gwa3_test_froggy_flagging.flag");
+    bool froggySparkflyTest = CheckFlag("GWA3_TEST_FROGGY_SPARKFLY", "gwa3_test_froggy_sparkfly.flag");
     bool consumableCraftingTest = CheckFlag("GWA3_TEST_CONSUMABLES", "gwa3_test_consumables.flag");
     bool llmMode = CheckFlag("GWA3_LLM_MODE", "gwa3_llm_mode.flag");
     bool llmAdvisory = CheckFlag("GWA3_LLM_ADVISORY", "gwa3_llm_advisory.flag");
-    bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || merchantShellTest || advancedTest || workflowTest || froggyTest || froggyFlaggingTest || consumableCraftingTest;
-    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d merchantShell=%d consumables=%d advanced=%d workflow=%d froggy=%d froggyFlagging=%d llm=%d advisory=%d",
-                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, merchantShellTest, consumableCraftingTest, advancedTest, workflowTest, froggyTest, froggyFlaggingTest, llmMode, llmAdvisory);
+    bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || merchantShellTest || tradeHelperTest || advancedTest || workflowTest || froggyTest || froggyFlaggingTest || froggySparkflyTest || consumableCraftingTest;
+    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d merchantShell=%d tradeHelper=%d consumables=%d advanced=%d workflow=%d froggy=%d froggyFlagging=%d froggySparkfly=%d llm=%d advisory=%d",
+                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, merchantShellTest, tradeHelperTest, consumableCraftingTest, advancedTest, workflowTest, froggyTest, froggyFlaggingTest, froggySparkflyTest, llmMode, llmAdvisory);
 
     HMODULE gwModule = GetModuleHandleA(nullptr);
     if (!GWA3::Scanner::Initialize(gwModule)) {
@@ -329,7 +332,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::Log::Warn("GameThread initialization failed — trying RenderHook fallback");
     }
 
-    if (integrationTest || npcDialogTest || merchantQuoteTest || merchantShellTest || consumableCraftingTest || advancedTest || workflowTest || froggyTest || froggyFlaggingTest || !anyTest) {
+    if (integrationTest || npcDialogTest || merchantQuoteTest || merchantShellTest || tradeHelperTest || consumableCraftingTest || advancedTest || workflowTest || froggyTest || froggyFlaggingTest || froggySparkflyTest || !anyTest) {
         // Always init RenderHook for bootstrap char select UI clicks
         if (!GWA3::RenderHook::Initialize()) {
             GWA3::Log::Error("RenderHook failed - aborting");
@@ -356,7 +359,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
 
     if (!gameThreadOk) {
         GWA3::Log::Warn("GameThread initialization failed");
-        if (!anyTest) {
+        if (!anyTest && !llmMode && !llmAdvisory) {
             GWA3::Log::Error("GameThread required for bot mode - aborting");
             return 1;
         }
@@ -438,6 +441,13 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
+    if (tradeHelperTest) {
+        GWA3::Log::Info("=== PLAYER TRADE HELPER MODE ===");
+        int failures = GWA3::SmokeTest::RunTradeHelperMode();
+        GWA3::Log::Info("Player trade helper mode complete: %d failures", failures);
+        return static_cast<DWORD>(failures);
+    }
+
     if (advancedTest) {
         GWA3::Log::Info("=== ADVANCED INTEGRATION TEST MODE ===");
         int failures = GWA3::SmokeTest::RunAdvancedTest();
@@ -450,6 +460,17 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         int failures = GWA3::SmokeTest::RunAdvancedWorkflowTest();
         GWA3::Log::Info("Workflow test complete: %d failures", failures);
         GWA3::Log::Info("Workflow test finished — terminating GW process");
+        GWA3::Log::Shutdown();
+        Sleep(100);
+        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
+        return static_cast<DWORD>(failures);
+    }
+
+    if (froggySparkflyTest) {
+        GWA3::Log::Info("=== FROGGY SPARKFLY ROUTE TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunFroggySparkflyRouteTest();
+        GWA3::Log::Info("Froggy Sparkfly route test complete: %d failures", failures);
+        GWA3::Log::Info("Froggy Sparkfly test finished - terminating GW process");
         GWA3::Log::Shutdown();
         Sleep(100);
         TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
@@ -480,6 +501,8 @@ DWORD WINAPI InitThread(LPVOID hModule) {
 
     if (llmAdvisory) {
         GWA3::Log::Info("=== LLM ADVISORY MODE (Froggy + LLM) ===");
+        GWA3::SmokeTest::StartWatchdog();
+        GWA3::SmokeTest::SetWatchdogHungWindowKillEnabled(false);
         // Start Froggy bot first
         GWA3::Bot::Froggy::Register();
         GWA3::Bot::Start();
@@ -493,19 +516,24 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         while (GWA3::Bot::IsRunning() || GWA3::LLM::IsRunning()) {
             Sleep(1000);
         }
+        GWA3::SmokeTest::StopWatchdog(false);
         return 0;
     }
 
     if (llmMode) {
         GWA3::Log::Info("=== LLM AGENT MODE ===");
+        GWA3::SmokeTest::StartWatchdog();
+        GWA3::SmokeTest::SetWatchdogHungWindowKillEnabled(false);
         if (!GWA3::LLM::Initialize()) {
             GWA3::Log::Error("LLM bridge initialization failed");
+            GWA3::SmokeTest::StopWatchdog(false);
             return 1;
         }
         GWA3::Log::Info("gwa3.dll initialization complete - LLM bridge active");
         while (GWA3::LLM::IsRunning()) {
             Sleep(1000);
         }
+        GWA3::SmokeTest::StopWatchdog(false);
         return 0;
     }
 

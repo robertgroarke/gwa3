@@ -38,4 +38,7 @@ namespace GWA3::LLM::IpcServer {
     // Returns true if a bridge client is currently connected.
     bool IsClientConnected();
 
+    // Returns the pipe name this server listens on.
+    const char* GetPipeName();
+
 } // namespace GWA3::LLM::IpcServer

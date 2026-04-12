@@ -78,6 +78,7 @@ namespace GWA3::LLM {
         DWORD lastTier2 = 0;
         DWORD lastTier3 = 0;
         DWORD lastHeartbeat = 0;
+        bool firstTier1Trace = false;
 
         while (g_running.load()) {
             DWORD now = GetTickCount();
@@ -86,11 +87,27 @@ namespace GWA3::LLM {
             if (IpcServer::IsClientConnected()) {
                 // Tier 1: core state (every 200ms)
                 if (now - lastTier1 >= TIER1_INTERVAL_MS) {
+                    if (!firstTier1Trace) {
+                        GWA3::Log::Info("[LLM-Bridge] Tier1 begin");
+                    }
                     uint32_t len = 0;
                     char* snap = GameSnapshot::SerializeTier1(&len);
+                    if (!firstTier1Trace) {
+                        GWA3::Log::Info("[LLM-Bridge] Tier1 serialized len=%u ptr=0x%08X", len, static_cast<unsigned>(reinterpret_cast<uintptr_t>(snap)));
+                    }
                     if (snap) {
+                        if (!firstTier1Trace) {
+                            GWA3::Log::Info("[LLM-Bridge] Tier1 send begin");
+                        }
                         IpcServer::Send(snap, len);
+                        if (!firstTier1Trace) {
+                            GWA3::Log::Info("[LLM-Bridge] Tier1 send end");
+                        }
                         delete[] snap;
+                    }
+                    if (!firstTier1Trace) {
+                        GWA3::Log::Info("[LLM-Bridge] Tier1 end");
+                        firstTier1Trace = true;
                     }
                     lastTier1 = now;
                 }
@@ -166,7 +183,7 @@ namespace GWA3::LLM {
             return false;
         }
 
-        GWA3::Log::Info("[LLM-Bridge] Initialized — listening on \\\\.\\pipe\\gwa3_llm");
+        GWA3::Log::Info("[LLM-Bridge] Initialized — listening on %s", IpcServer::GetPipeName());
         return true;
     }
 

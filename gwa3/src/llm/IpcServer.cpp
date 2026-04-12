@@ -7,7 +7,11 @@
 
 namespace GWA3::LLM::IpcServer {
 
+#ifdef GWA3_PIPE_NAME
+    static constexpr const char* PIPE_NAME = GWA3_PIPE_NAME;
+#else
     static constexpr const char* PIPE_NAME = "\\\\.\\pipe\\gwa3_llm";
+#endif
     static constexpr DWORD PIPE_BUFFER_SIZE = 64 * 1024;  // 64KB
     static constexpr DWORD CONNECT_TIMEOUT_MS = 500;
 
@@ -23,6 +27,20 @@ namespace GWA3::LLM::IpcServer {
     };
     static std::mutex g_inboundMutex;
     static std::queue<InboundMsg> g_inboundQueue;
+
+    // Returns: 1 = bytes available, 0 = no bytes yet, -1 = pipe broken (client disconnected)
+    static int PipeCheckState() {
+        if (g_pipe == INVALID_HANDLE_VALUE) return -1;
+        DWORD bytesAvail = 0;
+        if (!PeekNamedPipe(g_pipe, nullptr, 0, nullptr, &bytesAvail, nullptr)) {
+            DWORD err = GetLastError();
+            if (err == ERROR_BROKEN_PIPE || err == ERROR_NO_DATA) {
+                return -1; // client disconnected
+            }
+            return 0; // transient error, retry
+        }
+        return bytesAvail > 0 ? 1 : 0;
+    }
 
     // Write exactly `count` bytes to the pipe. Returns false on failure.
     static bool PipeWriteAll(const void* buf, DWORD count) {
@@ -133,6 +151,16 @@ namespace GWA3::LLM::IpcServer {
 
             // Read messages from the client until disconnect or shutdown
             while (g_running.load()) {
+                int state = PipeCheckState();
+                if (state < 0) {
+                    // Pipe broken — client disconnected
+                    GWA3::Log::Info("[LLM-IPC] PipeCheckState: pipe broken, ending session");
+                    break;
+                }
+                if (state == 0) {
+                    Sleep(10);
+                    continue;
+                }
                 uint32_t msgLen = 0;
                 char* msg = ReadMessage(&msgLen);
                 if (!msg) {
@@ -235,6 +263,10 @@ namespace GWA3::LLM::IpcServer {
 
     bool IsClientConnected() {
         return g_clientConnected.load();
+    }
+
+    const char* GetPipeName() {
+        return PIPE_NAME;
     }
 
 } // namespace GWA3::LLM::IpcServer

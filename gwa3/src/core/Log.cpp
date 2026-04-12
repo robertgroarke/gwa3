@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <ctime>
+#include <share.h>
 #include <mutex>
 
 namespace GWA3::Log {
@@ -70,7 +71,7 @@ void Initialize() {
     sprintf_s(logName, "gwa3_log_%u.txt", GetCurrentProcessId());
     strcat_s(dllPath, logName);
 
-    fopen_s(&g_logFile, dllPath, "a");
+    g_logFile = _fsopen(dllPath, "a", _SH_DENYNO);
 
     // Always create a dedicated console so injected runs have a visible live log window.
     if (AllocConsole()) {
