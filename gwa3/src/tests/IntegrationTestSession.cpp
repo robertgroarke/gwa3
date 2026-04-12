@@ -2614,7 +2614,10 @@ static bool ConsetMoveToNPC(float x, float y, const char* label) {
     // For long distances, issue move commands every 3s to keep the character walking
     const uint32_t maxAttempts = (totalDist > 2000.0f) ? 20u : 10u;
     IntReport("  Walk loop: maxAttempts=%u totalDist=%.0f", maxAttempts, totalDist);
+    float prevX = me->x, prevY = me->y;
     for (uint32_t attempt = 0; attempt < maxAttempts; ++attempt) {
+        // Use CtoS packet for movement — native AgentMgr::Move crashes when
+        // called repeatedly to unreachable coords via GameThread dispatch.
         CtoS::MoveToCoord(x, y);
         Sleep(3000);
         auto* me2 = AgentMgr::GetMyAgent();
@@ -2622,6 +2625,16 @@ static bool ConsetMoveToNPC(float x, float y, const char* label) {
         const float dxNow = me2->x - x, dyNow = me2->y - y;
         const float currentDist = sqrtf(dxNow * dxNow + dyNow * dyNow);
         IntReport("  Walk[%u/%u]: dist=%.0f pos=(%.0f, %.0f)", attempt, maxAttempts, currentDist, me2->x, me2->y);
+        // Stuck detection: if position hasn't changed in 3 attempts, give up
+        if (attempt >= 2) {
+            const float stuckDx = me2->x - prevX, stuckDy = me2->y - prevY;
+            if (stuckDx * stuckDx + stuckDy * stuckDy < 25.0f) {
+                IntReport("  STUCK at (%.0f, %.0f) — giving up", me2->x, me2->y);
+                break;
+            }
+        }
+        prevX = me2->x;
+        prevY = me2->y;
         if (currentDist < 300.0f) {
             IntReport("  Arrived at %s", label);
             return true;
@@ -2767,6 +2780,7 @@ static bool ConsetCraftOneItem(const char* traderLabel, float traderX, float tra
 
 bool TestConsetCraftCycle() {
     IntReport("=== CONSET CRAFT CYCLE TEST ===");
+    StartWatchdog();
     WriteConsumableHarnessStatus("conset_cycle_start", "conset", ReadMapId(), 0, 0, 0, 0, 0, 0, 0, "starting");
 
     // 1. Travel to Embark Beach

@@ -93,10 +93,12 @@ add_library(gwa3_core OBJECT
     src/bot/DungeonDialog.cpp
     src/bot/DungeonInteractions.cpp
     src/bot/DungeonInventory.cpp
+    src/bot/DungeonItemActions.cpp
     src/bot/DungeonLoot.cpp
     src/bot/DungeonQuest.cpp
     src/bot/DungeonQuestRuntime.cpp
     src/bot/DungeonSkill.cpp
+    src/bot/DungeonVendor.cpp
     src/bot/FrostmawsBurrows.cpp
     src/bot/FrostmawsBurrowsBot.cpp
     src/bot/Kathandrax.cpp
@@ -195,10 +197,12 @@ add_executable(gwa3_dungeon_tests
     src/bot/DungeonDialog.cpp
     src/bot/DungeonInteractions.cpp
     src/bot/DungeonInventory.cpp
+    src/bot/DungeonItemActions.cpp
     src/bot/DungeonLoot.cpp
     src/bot/DungeonQuest.cpp
     src/bot/DungeonQuestRuntime.cpp
     src/bot/DungeonSkill.cpp
+    src/bot/DungeonVendor.cpp
     src/bot/FrostmawsBurrows.cpp
     src/bot/FrostmawsBurrowsBot.cpp
     src/bot/Kathandrax.cpp

@@ -100,6 +100,30 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
             }
         }
 
+        // --- Crash dialog detection: #32770 class window from our process ---
+        {
+            DWORD myPid = GetCurrentProcessId();
+            HWND crashHwnd = nullptr;
+            HWND hwnd = nullptr;
+            while ((hwnd = FindWindowExA(nullptr, hwnd, "#32770", "Gw.exe")) != nullptr) {
+                DWORD windowPid = 0;
+                GetWindowThreadProcessId(hwnd, &windowPid);
+                if (windowPid == myPid) { crashHwnd = hwnd; break; }
+            }
+            if (crashHwnd) {
+                Log::Error("[WATCHDOG] !!! GW CRASH DIALOG DETECTED (#32770 'Gw.exe') hwnd=0x%08X pid=%u !!!",
+                           reinterpret_cast<uintptr_t>(crashHwnd), myPid);
+                Log::Error("[WATCHDOG] Test state: %d passed, %d failed, %d skipped",
+                           s_intPassed, s_intFailed, s_intSkipped);
+                s_crashDetected = true;
+                if (s_intReport) { fflush(s_intReport); }
+                Log::Error("[WATCHDOG] Terminating after crash dialog...");
+                Log::Shutdown();
+                Sleep(100);
+                TerminateProcess(GetCurrentProcess(), 0xCDA1);
+            }
+        }
+
         // --- Disconnect detection: MapID drops to 0 or charselect appears ---
         uint32_t currentMapId = MapMgr::GetMapId();
         if (s_watchdogLastMapId > 0 && currentMapId == 0) {
