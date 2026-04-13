@@ -3053,18 +3053,31 @@ bool TestConsetCraftCycle() {
         IntReport("  In Embark Beach district=%u pos=(%.0f, %.0f)", MapMgr::GetDistrict(), me ? me->x : 0.0f, me ? me->y : 0.0f);
     }
 
-    // 2. Check gold
+    // 2. Withdraw gold from Xunlai Chest if needed
+    // Full conset cycle costs ~5000g: materials (Iron ~1100, Dust ~2500, Bone ~500, Feather ~500) + craft fees (750)
     uint32_t gold = ItemMgr::GetGoldCharacter();
-    IntReport("  Gold: char=%u storage=%u", gold, ItemMgr::GetGoldStorage());
-    if (gold < 2000 && ItemMgr::GetGoldStorage() > 0) {
+    uint32_t storageGold = ItemMgr::GetGoldStorage();
+    IntReport("  Step 2: Gold check — char=%u storage=%u", gold, storageGold);
+    if (gold < 10000 && storageGold > 0) {
+        IntReport("  Withdrawing gold from Xunlai Chest...");
         if (ConsetMoveToNPC(kEmbarkXunlaiX, kEmbarkXunlaiY, "Xunlai Chest")) {
             uint32_t npc = ConsetFindNearestNPC(kEmbarkXunlaiX, kEmbarkXunlaiY);
-            if (npc) { AgentMgr::InteractNPC(npc); Sleep(2000); }
-            uint32_t toWithdraw = ItemMgr::GetGoldStorage() > 10000 ? 10000 : ItemMgr::GetGoldStorage();
-            ItemMgr::ChangeGold(gold + toWithdraw, ItemMgr::GetGoldStorage() - toWithdraw);
-            Sleep(500);
-            IntReport("  Gold after withdraw: char=%u", ItemMgr::GetGoldCharacter());
+            if (npc && ConsetOpenNPCDialog(npc, "Xunlai Chest")) {
+                // Withdraw up to 50k gold (cap is 100k on character)
+                uint32_t maxWithdraw = 100000u - gold;
+                uint32_t toWithdraw = storageGold > maxWithdraw ? maxWithdraw : storageGold;
+                if (toWithdraw > 50000) toWithdraw = 50000;
+                IntReport("  Withdrawing %u gold...", toWithdraw);
+                ItemMgr::ChangeGold(gold + toWithdraw, storageGold - toWithdraw);
+                Sleep(500);
+                gold = ItemMgr::GetGoldCharacter();
+                IntReport("  Gold after withdraw: char=%u storage=%u", gold, ItemMgr::GetGoldStorage());
+            } else {
+                IntReport("  Failed to open Xunlai Chest");
+            }
         }
+    } else {
+        IntReport("  Sufficient gold (%u), skipping Xunlai", gold);
     }
 
     // 3. Buy materials from material trader if needed
