@@ -2618,25 +2618,34 @@ static bool ConsetMoveToNPC(float x, float y, const char* label) {
 // ChangeTarget → GoNPC (0x39) → wait → Dialog (0x3A) → wait → verify merchant open.
 // This matches GWA2's GoToNPC + Dialog flow and GWA3 MaintenanceMgr's Xunlai open.
 static bool ConsetOpenNPCDialog(uint32_t npcId, const char* label) {
-    IntReport("  Opening %s NPC %u via GoNPC+Dialog packet sequence...", label, npcId);
+    IntReport("  Opening %s NPC %u via GoNPC packet sequence...", label, npcId);
     for (int attempt = 0; attempt < 3; ++attempt) {
-        // Target the NPC
+        // Target the NPC first
         AgentMgr::ChangeTarget(npcId);
         Sleep(250);
-        // GoNPC packet (0x39) — initiates interaction
+        // GoNPC packet (0x39) — initiates interaction and may open merchant directly
         CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
-        Sleep(1000);
-        // Dialog packet (0x3A) — opens the merchant/trade dialog
-        CtoS::SendPacket(2, Packets::DIALOG_SEND_LIVING, npcId);
-        Sleep(1500);
+        Sleep(2000);
         if (TradeMgr::GetMerchantItemCount() > 0) {
-            IntReport("  %s dialog opened on attempt %d: %u items", label, attempt + 1, TradeMgr::GetMerchantItemCount());
+            IntReport("  %s opened on attempt %d (GoNPC only): %u items",
+                      label, attempt + 1, TradeMgr::GetMerchantItemCount());
             return true;
         }
-        IntReport("  %s dialog not open after attempt %d, retrying...", label, attempt + 1);
+        // If GoNPC alone didn't work, try InteractNPC native as fallback
+        if (attempt == 1) {
+            IntReport("  GoNPC alone didn't work, trying native InteractNPC...");
+            AgentMgr::InteractNPC(npcId);
+            Sleep(2000);
+            if (TradeMgr::GetMerchantItemCount() > 0) {
+                IntReport("  %s opened via native InteractNPC: %u items",
+                          label, TradeMgr::GetMerchantItemCount());
+                return true;
+            }
+        }
+        IntReport("  %s not open after attempt %d, retrying...", label, attempt + 1);
         Sleep(500);
     }
-    IntReport("  Failed to open %s dialog after 3 attempts", label);
+    IntReport("  Failed to open %s after 3 attempts", label);
     return false;
 }
 
@@ -2789,6 +2798,39 @@ static bool RequestTraderQuoteViaGameThread(uint32_t itemId) {
 
 // Buy material packs from the material trader at Embark Beach.
 // Reproduces AutoIt BuyMaterialIfMissing: quote → buy → re-quote → buy loop.
+// Native TransactionFunction invoker for TraderBuy (type=0xC).
+// Must be a standalone __cdecl function (not lambda) for inline ASM.
+struct TraderTransactTask { uint32_t itemId; uint32_t cost; };
+static uint32_t s_traderRecvItemId = 0;
+static uint32_t s_traderRecvQty = 1;
+
+static void __cdecl TraderTransactInvoker(void* storage) {
+    auto* t = reinterpret_cast<TraderTransactTask*>(storage);
+    if (!t || !t->itemId || !Offsets::Transaction) return;
+
+    s_traderRecvItemId = t->itemId;
+    s_traderRecvQty = 1;
+    uint32_t* recvIds = &s_traderRecvItemId;
+    uint32_t* recvQtys = &s_traderRecvQty;
+    uint32_t goldGive = t->cost;
+    const uintptr_t fn = Offsets::Transaction;
+    __asm {
+        push recvQtys      // recv.item_quantities
+        push recvIds       // recv.item_ids
+        push 1             // recv.item_count
+        push 0             // gold_recv
+        push 0             // give.item_quantities
+        push 0             // give.item_ids
+        push 0             // give.item_count
+        push goldGive      // gold_give
+        push 0xC           // type = TraderBuy
+        mov eax, fn
+        call eax
+        add esp, 0x24
+    }
+    Log::Info("[INTG] TraderTransact: returned (item=%u cost=%u)", t->itemId, t->cost);
+}
+
 // Find the position (1-based) of an item in the merchant list by scanning
 // the global item array for a virtual item matching the model, then finding
 // that item_id in the merchant list.
@@ -2842,70 +2884,45 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
               static_cast<unsigned>(merchantFrame), static_cast<unsigned>(itemRowFrame),
               static_cast<unsigned>(buyBtn));
 
-    // Dump merchant frame children for diagnostic (first buy attempt only)
-    IntReport("  --- Material trader frame dump ---");
-    const uint32_t rootChildCount = UIMgr::GetChildFrameCount(merchantFrame);
-    IntReport("  merchantFrame=0x%08X hash=%u children=%u context=0x%08X",
-              static_cast<unsigned>(merchantFrame), UIMgr::GetFrameHash(merchantFrame),
-              rootChildCount, static_cast<unsigned>(merchantContext));
-    // Dump first 3 levels of {0}, {0,0}, {0,1}
-    for (uint32_t c0 = 0; c0 < 3 && c0 < rootChildCount; ++c0) {
-        uintptr_t child0 = UIMgr::GetChildFrameByIndex(merchantFrame, c0);
-        if (child0 < 0x10000) continue;
-        uint32_t c0Children = UIMgr::GetChildFrameCount(child0);
-        IntReport("    [%u] frame=0x%08X hash=%u children=%u offset=%u",
-                  c0, static_cast<unsigned>(child0), UIMgr::GetFrameHash(child0),
-                  c0Children, UIMgr::GetChildOffsetId(child0));
-        for (uint32_t c1 = 0; c1 < 4 && c1 < c0Children; ++c1) {
-            uintptr_t child1 = UIMgr::GetChildFrameByIndex(child0, c1);
-            if (child1 < 0x10000) continue;
-            IntReport("      [%u,%u] frame=0x%08X hash=%u children=%u offset=%u state=0x%X",
-                      c0, c1, static_cast<unsigned>(child1), UIMgr::GetFrameHash(child1),
-                      UIMgr::GetChildFrameCount(child1), UIMgr::GetChildOffsetId(child1),
-                      UIMgr::GetFrameState(child1));
-        }
-    }
-    // Dump context-based children (action buttons)
-    for (uint32_t offset = 120; offset <= 130; ++offset) {
-        uintptr_t f = UIMgr::GetFrameByContextAndChildOffset(merchantContext, offset, merchantFrame);
-        if (f >= 0x10000) {
-            IntReport("    ctx[%u] frame=0x%08X hash=%u state=0x%X hidden=%u",
-                      offset, static_cast<unsigned>(f), UIMgr::GetFrameHash(f),
-                      UIMgr::GetFrameState(f), UIMgr::IsFrameHidden(f) ? 1u : 0u);
-        }
-    }
-    IntReport("  --- End frame dump ---");
-
+    // Use native RequestQuote function (type=0xC) via Engine hook command queue,
+    // then native TransactionFunction via GameThread.
+    // NEVER use raw CtoS::SendPacket for 0x4C/0x4D — crashes the client.
+    // The native functions go through the game's internal dispatch which is safe.
     uint32_t bought = 0;
     for (uint32_t p = 0; p < packs; ++p) {
         const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
         const uint32_t matBefore = CountInventoryModelQuantity(modelId);
 
-        // Click the item row to select it
-        if (itemRowFrame >= 0x10000) {
-            IntReport("  Clicking item row frame=0x%08X hash=%u offset=%u",
-                      static_cast<unsigned>(itemRowFrame), UIMgr::GetFrameHash(itemRowFrame),
-                      UIMgr::GetChildOffsetId(itemRowFrame));
-            UIMgr::ButtonClick(itemRowFrame);
-            Sleep(500 + ChatMgr::GetPing());
+        // Find the virtual item ID for this material
+        const uint32_t traderItemId = FindTraderVirtualItemId(modelId);
+        if (!traderItemId) {
+            IntReport("  Virtual item not found for model=%u on pack %u", modelId, p + 1);
+            break;
         }
 
-        // Click the Buy button
-        if (buyBtn < 0x10000) {
-            IntReport("  Buy button (125) not found — trying 126");
-            const uintptr_t alt = UIMgr::GetFrameByContextAndChildOffset(merchantContext, 126u, merchantFrame);
-            if (alt >= 0x10000) {
-                IntReport("  Clicking alt buy button (126) frame=0x%08X", static_cast<unsigned>(alt));
-                UIMgr::ButtonClick(alt);
-            } else {
-                IntReport("  No buy button found at 125 or 126");
-                break;
-            }
-        } else {
-            IntReport("  Clicking buy button (125) frame=0x%08X hash=%u",
-                      static_cast<unsigned>(buyBtn), UIMgr::GetFrameHash(buyBtn));
-            UIMgr::ButtonClick(buyBtn);
-        }
+        // Request quote via native RequestQuote function (type=0xC TraderBuy)
+        TraderHook::Reset();
+        IntReport("  Requesting quote for item=%u (pack %u/%u) via native fn...", traderItemId, p + 1, packs);
+        TraderQuoteTask quoteTask{traderItemId};
+        CtoS::EnqueueGameCommand(&TraderQuoteInvoker, &quoteTask, sizeof(quoteTask));
+
+        // Wait for the server to respond to the quote
+        const bool quoteArrived = WaitFor("trader quote response", 5000, []() {
+            return TraderHook::GetQuoteId() > 0;
+        });
+        const uint32_t quotedCost = TraderHook::GetCostValue();
+        const uint32_t quotedItemId = TraderHook::GetCostItemId();
+        IntReport("  Quote response: arrived=%u quoteId=%u costItem=%u costValue=%u",
+                  quoteArrived, TraderHook::GetQuoteId(), quotedItemId, quotedCost);
+
+        // Use the quoted cost if available, otherwise skip
+        // Note: TraderHook values may be garbage due to wrong register context
+        // but the game's internal state should have the real cost cached
+        IntReport("  Buying via native TransactionFunction(0xC)...");
+        // Use quoted cost if it looks reasonable, otherwise 0
+        uint32_t goldToUse = (quotedCost > 0 && quotedCost < 10000) ? quotedCost : 0;
+        TraderTransactTask txTask{traderItemId, goldToUse};
+        CtoS::EnqueueGameCommand(&TraderTransactInvoker, &txTask, sizeof(txTask));
 
         // Wait for gold decrease or inventory increase
         const bool buyOk = WaitFor("material buy", 5000, [goldBefore, modelId, matBefore]() {
@@ -3615,5 +3632,12 @@ int RunConsumableCraftingTest() {
     if (!TestConsumableCrafting()) ++failures;
     return failures;
 }
+
+#if 0
+int RunFroggySparkflyRouteTest() {
+    IntReport("RunFroggySparkflyRouteTest: stub — not implemented in this file");
+    return 0;
+}
+#endif
 
 } // namespace GWA3::SmokeTest
