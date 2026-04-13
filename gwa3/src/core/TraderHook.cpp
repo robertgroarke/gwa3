@@ -1,6 +1,7 @@
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/core/CallbackRegistry.h>
 
 #include <MinHook.h>
 #include <Windows.h>
@@ -13,6 +14,29 @@ static volatile LONG s_quoteId = 0;
 static volatile LONG s_costItemId = 0;
 static volatile LONG s_costValue = 0;
 static volatile uintptr_t s_debugEbx = 0;
+
+// kVendorQuote UIMessage (0x100000BD) — native game message with quote price
+static constexpr uint32_t kVendorQuote = 0x100000BDu;
+struct VendorQuotePacket {
+    uint32_t item_id;
+    uint32_t price;
+};
+static HookEntry s_vendorQuoteHookEntry{};
+
+static void OnVendorQuote(HookStatus*, uint32_t, void* wParam, void*) {
+    if (!wParam) return;
+    __try {
+        auto* pkt = reinterpret_cast<VendorQuotePacket*>(wParam);
+        InterlockedExchange(&s_costItemId, static_cast<LONG>(pkt->item_id));
+        InterlockedExchange(&s_costValue, static_cast<LONG>(pkt->price));
+        LONG newId = InterlockedIncrement(&s_quoteId);
+        if (newId >= 200) InterlockedExchange(&s_quoteId, 1);
+        Log::Info("TraderHook: kVendorQuote item=%u price=%u quoteId=%u",
+                  pkt->item_id, pkt->price, static_cast<uint32_t>(s_quoteId));
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("TraderHook: kVendorQuote exception reading wParam");
+    }
+}
 
 // ===== MinHook-based RequestQuote hook (GWCA pattern) =====
 // Hook the native RequestQuote function to:
@@ -138,7 +162,14 @@ bool Initialize() {
         }
     }
 
-    // === Hook 2: Naked ASM on Trader response handler (price capture) ===
+    // === Hook 2: kVendorQuote UIMessage callback (price capture) ===
+    if (CallbackRegistry::RegisterUIMessageCallback(&s_vendorQuoteHookEntry, kVendorQuote, OnVendorQuote, 0x1)) {
+        Log::Info("TraderHook: kVendorQuote (0x%X) callback registered", kVendorQuote);
+    } else {
+        Log::Warn("TraderHook: Failed to register kVendorQuote callback");
+    }
+
+    // === Hook 3: Naked ASM on Trader response handler (legacy price capture) ===
     if (Offsets::Trader > 0x10000) {
         const uintptr_t hookAddr = Offsets::Trader;
         s_returnAddr = hookAddr + kPatchSize;
@@ -174,6 +205,9 @@ void Shutdown() {
         MH_RemoveHook(reinterpret_cast<void*>(Offsets::RequestQuote));
         s_requestQuoteOriginal = nullptr;
     }
+
+    // Remove kVendorQuote callback
+    CallbackRegistry::RemoveUIMessageCallback(&s_vendorQuoteHookEntry, kVendorQuote);
 
     // Remove naked ASM hook
     if (Offsets::Trader > 0x10000) {
