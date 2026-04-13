@@ -12,6 +12,7 @@
 #include <gwa3/managers/StoCMgr.h>
 #include <gwa3/packets/CtoSHook.h>
 #include <gwa3/managers/DialogMgr.h>
+#include <gwa3/core/DialogHook.h>
 #include <gwa3/managers/QuestMgr.h>
 #include <gwa3/managers/TradeMgr.h>
 #include <gwa3/managers/UIMgr.h>
@@ -23,6 +24,17 @@
 namespace GWA3::SmokeTest {
 
 namespace {
+
+void ReportRecentDialogUiTrace(const char* label) {
+    uint32_t trace[32] = {};
+    const uint32_t count = DialogMgr::GetRecentUITrace(trace, _countof(trace));
+    char buf[512] = {};
+    size_t used = 0;
+    for (uint32_t i = 0; i < count && used + 16 < sizeof(buf); ++i) {
+        used += sprintf_s(buf + used, sizeof(buf) - used, "%s0x%X", i == 0 ? "" : " ", trace[i]);
+    }
+    IntReport("  %s recent UI trace (%u): %s", label, count, count > 0 ? buf : "none");
+}
 
 struct MerchantStoCTap {
     StoC::HookEntry entries[0x200]{};
@@ -2217,20 +2229,46 @@ bool TestNpcDialog() {
               agent ? agent->allegiance : 0,
               agent ? agent->player_number : 0,
               agent ? agent->transmog_npc_id : 0);
+    float npcX = 0.0f;
+    float npcY = 0.0f;
+    if (TryReadAgentPosition(targetId, npcX, npcY)) {
+        const bool nearNpc = MovePlayerNear(npcX, npcY, 120.0f, 12000);
+        float meX = 0.0f;
+        float meY = 0.0f;
+        TryReadAgentPosition(ReadMyId(), meX, meY);
+        IntReport("  NPC pre-hook approach: near=%d player=(%.0f, %.0f) npc=(%.0f, %.0f) dist=%.0f",
+                  nearNpc ? 1 : 0,
+                  meX, meY, npcX, npcY,
+                  AgentMgr::GetDistance(meX, meY, npcX, npcY));
+    }
 
-    GameThread::Enqueue([targetId]() {
-        AgentMgr::InteractNPC(targetId);
-    });
-    Sleep(1500);
-    IntCheck("InteractNPC sent (no crash)", true);
+    AgentMgr::ChangeTarget(targetId);
+    Sleep(250);
+    DialogMgr::ResetRecentUITrace();
+    const bool dialogUiObserved = DialogMgr::NPCHook(targetId, 2000u);
+    Sleep(250);
+    IntCheck("NPCHook sent (no crash)", true);
+    IntCheck("Dialog UI message observed after NPCHook", dialogUiObserved);
+    IntReport("  Dialog hook: lastUi=0x%X armed=0x%X observed=0x%X",
+              DialogMgr::GetLastUIMessageId(),
+              DialogMgr::GetArmedUIMessageId(),
+              DialogMgr::GetObservedUIMessageId());
+    ReportRecentDialogUiTrace("NPCHook");
 
     constexpr uint32_t DIALOG_NPC_TALK = 0x2AE6;
-    IntReport("  Sending dialog 0x%X...", DIALOG_NPC_TALK);
-    GameThread::Enqueue([=]() {
-        QuestMgr::Dialog(DIALOG_NPC_TALK);
-    });
-    Sleep(1000);
-    IntCheck("Dialog sent (no crash)", true);
+    IntReport("  Sending dialog 0x%X via DialogHook...", DIALOG_NPC_TALK);
+    DialogMgr::ResetRecentUITrace();
+    const bool talkUiObserved = DialogMgr::DialogHook(DIALOG_NPC_TALK, 2000u);
+    Sleep(250);
+    IntCheck("DialogHook sent (no crash)", true);
+    IntCheck("Dialog hook captured last dialog id", DialogMgr::GetLastDialogId() == DIALOG_NPC_TALK);
+    IntReport("  Dialog hook: talkUiObserved=%d lastUi=0x%X armed=0x%X observed=0x%X lastDialogId=0x%X",
+              talkUiObserved ? 1 : 0,
+              DialogMgr::GetLastUIMessageId(),
+              DialogMgr::GetArmedUIMessageId(),
+              DialogMgr::GetObservedUIMessageId(),
+              DialogMgr::GetLastDialogId());
+    ReportRecentDialogUiTrace("DialogHook");
 
     GameThread::Enqueue([]() {
         AgentMgr::CancelAction();
@@ -2918,11 +2956,11 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
 
         // After RequestQuote, the game caches the quote. The AutoIt TraderBuy
         // passes TraderCostValue (from hook) as goldGive. Since we can't read the
-        // real price, try common material prices (100-250g per pack).
-        // The game should accept if goldGive >= actual cost.
-        uint32_t goldEstimate = goldBefore; // offer ALL gold — game deducts actual cost
-        IntReport("  Calling TransactItem(0xC) goldGive=%u item=%u...", goldEstimate, traderItemId);
-        TraderTransactTask txTask{traderItemId, goldEstimate};
+        // Use the REAL quoted price from kVendorQuote UIMessage callback
+        uint32_t itemForBuy = TraderHook::GetCostItemId();
+        uint32_t goldForBuy = quotedCost;
+        IntReport("  TransactItem(0xC): item=%u goldGive=%u", itemForBuy, goldForBuy);
+        TraderTransactTask txTask{itemForBuy, goldForBuy};
         CtoS::EnqueueGameCommand(&TraderTransactInvoker, &txTask, sizeof(txTask));
 
         // Wait for gold decrease or inventory increase
