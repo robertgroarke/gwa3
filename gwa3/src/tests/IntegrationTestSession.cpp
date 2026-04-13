@@ -2900,31 +2900,40 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
             break;
         }
 
-        // Request quote via native RequestQuote function (type=0xC TraderBuy)
+        // Request quote via native RequestQuote (type=0xC) — this tells the server
+        // we want to buy this item. The server responds with the price.
         TraderHook::Reset();
-        IntReport("  Requesting quote for item=%u (pack %u/%u) via native fn...", traderItemId, p + 1, packs);
+        IntReport("  Requesting quote for item=%u (pack %u/%u)...", traderItemId, p + 1, packs);
         TraderQuoteTask quoteTask{traderItemId};
         CtoS::EnqueueGameCommand(&TraderQuoteInvoker, &quoteTask, sizeof(quoteTask));
 
-        // Wait for the server to respond to the quote
-        const bool quoteArrived = WaitFor("trader quote response", 5000, []() {
-            return TraderHook::GetQuoteId() > 0;
+        // Wait for kVendorQuote UIMessage OR TraderHook response (whichever works)
+        const bool quoteArrived = WaitFor("trader quote", 5000, []() {
+            const uint32_t v = TraderHook::GetCostValue();
+            return v > 0 && v < 100000; // sane gold range
         });
         const uint32_t quotedCost = TraderHook::GetCostValue();
         const uint32_t quotedItemId = TraderHook::GetCostItemId();
-        IntReport("  Quote response: arrived=%u quoteId=%u costItem=%u costValue=%u",
-                  quoteArrived, TraderHook::GetQuoteId(), quotedItemId, quotedCost);
+        IntReport("  Quote: arrived=%u item=%u price=%u", quoteArrived, quotedItemId, quotedCost);
 
-        // Use the quoted cost if available, otherwise skip
-        // Note: TraderHook values may be garbage due to wrong register context
-        // but the game's internal state should have the real cost cached
-        IntReport("  Buying via native TransactionFunction(0xC)...");
-        // Pass the character's full gold as goldGive — the game deducts the actual cost.
-        // TraderHook's costValue is still garbage from the response handler.
-        uint32_t goldToUse = ItemMgr::GetGoldCharacter();
-        IntReport("  TransactItem: item=%u goldGive=%u (full gold)", traderItemId, goldToUse);
-        TraderTransactTask txTask{traderItemId, goldToUse};
-        CtoS::EnqueueGameCommand(&TraderTransactInvoker, &txTask, sizeof(txTask));
+        if (!quoteArrived || quotedCost == 0) {
+            // No valid quote — try selecting item by row click then Buy button
+            IntReport("  No valid quote — trying row click + Buy button");
+            if (itemRowFrame >= 0x10000) {
+                IntReport("  Clicking item row frame=0x%08X hash=%u", static_cast<unsigned>(itemRowFrame), UIMgr::GetFrameHash(itemRowFrame));
+                UIMgr::ButtonClick(itemRowFrame);
+                Sleep(1000 + ChatMgr::GetPing());
+            }
+            if (buyBtn >= 0x10000) {
+                IntReport("  Clicking Buy button (125) frame=0x%08X", static_cast<unsigned>(buyBtn));
+                UIMgr::ButtonClick(buyBtn);
+            }
+        } else {
+            // Valid quote — use native TransactItem with real cost
+            IntReport("  TransactItem: item=%u gold=%u", quotedItemId, quotedCost);
+            TraderTransactTask txTask{quotedItemId, quotedCost};
+            CtoS::EnqueueGameCommand(&TraderTransactInvoker, &txTask, sizeof(txTask));
+        }
 
         // Wait for gold decrease or inventory increase
         const bool buyOk = WaitFor("material buy", 5000, [goldBefore, modelId, matBefore]() {
