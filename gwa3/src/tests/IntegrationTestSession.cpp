@@ -2916,24 +2916,14 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
         const uint32_t quotedItemId = TraderHook::GetCostItemId();
         IntReport("  Quote: arrived=%u item=%u price=%u", quoteArrived, quotedItemId, quotedCost);
 
-        if (!quoteArrived || quotedCost == 0) {
-            // No valid quote — try selecting item by row click then Buy button
-            IntReport("  No valid quote — trying row click + Buy button");
-            if (itemRowFrame >= 0x10000) {
-                IntReport("  Clicking item row frame=0x%08X hash=%u", static_cast<unsigned>(itemRowFrame), UIMgr::GetFrameHash(itemRowFrame));
-                UIMgr::ButtonClick(itemRowFrame);
-                Sleep(1000 + ChatMgr::GetPing());
-            }
-            if (buyBtn >= 0x10000) {
-                IntReport("  Clicking Buy button (125) frame=0x%08X", static_cast<unsigned>(buyBtn));
-                UIMgr::ButtonClick(buyBtn);
-            }
-        } else {
-            // Valid quote — use native TransactItem with real cost
-            IntReport("  TransactItem: item=%u gold=%u", quotedItemId, quotedCost);
-            TraderTransactTask txTask{quotedItemId, quotedCost};
-            CtoS::EnqueueGameCommand(&TraderTransactInvoker, &txTask, sizeof(txTask));
-        }
+        // After RequestQuote, the game caches the quote. The AutoIt TraderBuy
+        // passes TraderCostValue (from hook) as goldGive. Since we can't read the
+        // real price, try common material prices (100-250g per pack).
+        // The game should accept if goldGive >= actual cost.
+        uint32_t goldEstimate = goldBefore; // offer ALL gold — game deducts actual cost
+        IntReport("  Calling TransactItem(0xC) goldGive=%u item=%u...", goldEstimate, traderItemId);
+        TraderTransactTask txTask{traderItemId, goldEstimate};
+        CtoS::EnqueueGameCommand(&TraderTransactInvoker, &txTask, sizeof(txTask));
 
         // Wait for gold decrease or inventory increase
         const bool buyOk = WaitFor("material buy", 5000, [goldBefore, modelId, matBefore]() {
