@@ -2,117 +2,188 @@
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/Log.h>
 
+#include <MinHook.h>
 #include <Windows.h>
 #include <cstring>
 
 namespace GWA3::TraderHook {
 
-static constexpr uint32_t kPatchSize = 5;
-
 static bool s_initialized = false;
-static uintptr_t s_returnAddr = 0;
-static uint8_t s_savedBytes[kPatchSize] = {};
 static volatile LONG s_quoteId = 0;
 static volatile LONG s_costItemId = 0;
 static volatile LONG s_costValue = 0;
 static volatile uintptr_t s_debugEbx = 0;
 
-static __declspec(naked) void TraderDetourNaked() {
+// ===== MinHook-based RequestQuote hook (GWCA pattern) =====
+// Hook the native RequestQuote function to:
+// 1. Capture which item is being quoted (from recv.item_ids)
+// 2. Call the original function via trampoline
+// 3. The game processes the quote internally
+//
+// GWCA declares RequestQuote as:
+//   void __cdecl RequestQuote(TransactionType type, uint32_t unknown,
+//                             QuoteInfo give, QuoteInfo recv)
+// where QuoteInfo = { uint32_t unknown, uint32_t item_count, uint32_t* item_ids }
+
+struct QuoteInfo {
+    uint32_t unknown;
+    uint32_t item_count;
+    uint32_t* item_ids;
+};
+
+typedef void (__cdecl *RequestQuoteFn)(uint32_t type, uint32_t unknown,
+                                       QuoteInfo give, QuoteInfo recv);
+
+static RequestQuoteFn s_requestQuoteOriginal = nullptr;
+
+static void __cdecl RequestQuoteDetour(uint32_t type, uint32_t unknown,
+                                        QuoteInfo give, QuoteInfo recv) {
+    // Capture the quoted item from recv
+    uint32_t quotedItemId = 0;
+    if (recv.item_count > 0 && recv.item_ids) {
+        __try {
+            quotedItemId = recv.item_ids[0];
+        } __except(EXCEPTION_EXECUTE_HANDLER) {}
+    }
+
+    Log::Info("TraderHook: RequestQuote type=0x%X item=%u recv_count=%u",
+              type, quotedItemId, recv.item_count);
+
+    // Store the quoted item ID — this is what we're asking the price for
+    if (quotedItemId) {
+        InterlockedExchange(&s_costItemId, static_cast<LONG>(quotedItemId));
+    }
+
+    // Call the original function — this sends the quote request to the server
+    if (s_requestQuoteOriginal) {
+        s_requestQuoteOriginal(type, unknown, give, recv);
+    }
+
+    // Increment quoteId to signal that a quote request was sent
+    LONG newId = InterlockedIncrement(&s_quoteId);
+    if (newId >= 200) InterlockedExchange(&s_quoteId, 1);
+
+    Log::Info("TraderHook: RequestQuote returned — quoteId=%u costItem=%u",
+              static_cast<uint32_t>(s_quoteId), quotedItemId);
+}
+
+// ===== Trader response hook (naked ASM — kept for quote price capture) =====
+// This fires when the server sends back the quote price.
+// The hook site is at Offsets::Trader (mid-function).
+// Original bytes: mov ebx, [ebp+0Ch]; mov esi, eax
+
+static constexpr uint32_t kPatchSize = 5;
+static uintptr_t s_returnAddr = 0;
+static uint8_t s_savedBytes[kPatchSize] = {};
+
+static __declspec(naked) void TraderResponseDetourNaked() {
     __asm {
         mov dword ptr [s_debugEbx], ebx
-        push eax
 
-        // Try reading from [ebp+0Ch] first — this is the function parameter
-        // that the original instruction assigns to ebx. The trader response
-        // struct pointer may be at this parameter, not in the current ebx.
-        mov eax, dword ptr [ebp+0Ch]
-        // If [eax+28] looks valid (non-null pointer), use it
-        cmp eax, 0x10000
-        jb use_ebx
+        // The 2nd parameter is at [ebp+0Ch] in the caller's frame.
+        // Read it and try to extract cost from [param+28].
+        push eax
         push ecx
+
+        mov eax, dword ptr [ebp+0Ch]
+        cmp eax, 0x10000
+        jb response_skip
+
+        // eax = 2nd parameter (response struct pointer)
         mov ecx, dword ptr [eax+28]
         cmp ecx, 0x10000
-        pop ecx
-        jb use_ebx
-        // Use [ebp+0Ch] path
-        mov eax, dword ptr [eax+28]
-        mov dword ptr [s_costItemId], 0
-        push ecx
-        mov ecx, [eax]
-        mov dword ptr [s_costItemId], ecx
-        mov ecx, [eax+4]
-        mov dword ptr [s_costValue], ecx
-        pop ecx
-        jmp extract_done
+        jb response_skip
 
-    use_ebx:
-        mov eax, dword ptr [ebx+28]
-        mov eax, [eax]
-        mov dword ptr [s_costItemId], eax
-        mov eax, dword ptr [ebx+28]
-        mov eax, [eax+4]
-        mov dword ptr [s_costValue], eax
+        // ecx = pointer to {itemId, costValue}
+        mov eax, [ecx]
+        mov dword ptr [s_costValue], eax  // Store the cost/price
 
-    extract_done:
+    response_skip:
+        pop ecx
         pop eax
+
+        // Replay original instructions
         mov ebx, dword ptr [ebp+0Ch]
         mov esi, eax
-        push eax
-        mov eax, dword ptr [s_quoteId]
-        inc eax
-        cmp eax, 200
-        jnz trader_skip_reset
-        xor eax, eax
-trader_skip_reset:
-        mov dword ptr [s_quoteId], eax
-        pop eax
+
         jmp [s_returnAddr]
     }
 }
 
-// Debug accessors for register state at hook point
-uintptr_t GetDebugEbx() { return s_debugEbx; }
-
 bool Initialize() {
     if (s_initialized) return true;
-    if (!Offsets::Trader) {
-        Log::Warn("TraderHook: Trader offset not resolved");
-        return false;
+
+    // === Hook 1: MinHook on RequestQuote function ===
+    if (Offsets::RequestQuote > 0x10000) {
+        MH_STATUS status = MH_Initialize();
+        if (status != MH_OK && status != MH_ERROR_ALREADY_INITIALIZED) {
+            Log::Warn("TraderHook: MH_Initialize failed: %s", MH_StatusToString(status));
+        }
+
+        status = MH_CreateHook(
+            reinterpret_cast<void*>(Offsets::RequestQuote),
+            reinterpret_cast<void*>(&RequestQuoteDetour),
+            reinterpret_cast<void**>(&s_requestQuoteOriginal));
+        if (status == MH_OK || status == MH_ERROR_ALREADY_CREATED) {
+            status = MH_EnableHook(reinterpret_cast<void*>(Offsets::RequestQuote));
+            if (status == MH_OK || status == MH_ERROR_ENABLED) {
+                Log::Info("TraderHook: RequestQuote MinHook installed at 0x%08X trampoline=0x%08X",
+                          static_cast<unsigned>(Offsets::RequestQuote),
+                          reinterpret_cast<uintptr_t>(s_requestQuoteOriginal));
+            } else {
+                Log::Warn("TraderHook: MH_EnableHook(RequestQuote) failed: %s", MH_StatusToString(status));
+            }
+        } else {
+            Log::Warn("TraderHook: MH_CreateHook(RequestQuote) failed: %s", MH_StatusToString(status));
+        }
     }
 
-    const uintptr_t hookAddr = Offsets::Trader;
-    s_returnAddr = hookAddr + kPatchSize;
-    memcpy(s_savedBytes, reinterpret_cast<void*>(hookAddr), kPatchSize);
+    // === Hook 2: Naked ASM on Trader response handler (price capture) ===
+    if (Offsets::Trader > 0x10000) {
+        const uintptr_t hookAddr = Offsets::Trader;
+        s_returnAddr = hookAddr + kPatchSize;
+        memcpy(s_savedBytes, reinterpret_cast<void*>(hookAddr), kPatchSize);
+
+        DWORD oldProtect = 0;
+        if (VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+            uint8_t patch[kPatchSize];
+            patch[0] = 0xE9;
+            const int32_t rel = static_cast<int32_t>(
+                reinterpret_cast<uintptr_t>(&TraderResponseDetourNaked) - (hookAddr + 5));
+            memcpy(patch + 1, &rel, sizeof(rel));
+            memcpy(reinterpret_cast<void*>(hookAddr), patch, kPatchSize);
+            FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hookAddr), kPatchSize);
+            VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, oldProtect, &oldProtect);
+            Log::Info("TraderHook: Response handler installed at 0x%08X -> return at 0x%08X",
+                      hookAddr, s_returnAddr);
+        }
+    }
+
     Reset();
-
-    DWORD oldProtect = 0;
-    if (!VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        Log::Error("TraderHook: VirtualProtect failed");
-        return false;
-    }
-
-    uint8_t patch[kPatchSize];
-    patch[0] = 0xE9;
-    const int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(&TraderDetourNaked) - (hookAddr + 5));
-    memcpy(patch + 1, &rel, sizeof(rel));
-    memcpy(reinterpret_cast<void*>(hookAddr), patch, kPatchSize);
-    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hookAddr), kPatchSize);
-    VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, oldProtect, &oldProtect);
-
     s_initialized = true;
-    Log::Info("TraderHook: Installed at 0x%08X -> return at 0x%08X", hookAddr, s_returnAddr);
+    Log::Info("TraderHook: Initialized");
     return true;
 }
 
 void Shutdown() {
     if (!s_initialized) return;
 
-    const uintptr_t hookAddr = Offsets::Trader;
-    DWORD oldProtect = 0;
-    if (VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        memcpy(reinterpret_cast<void*>(hookAddr), s_savedBytes, kPatchSize);
-        FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hookAddr), kPatchSize);
-        VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, oldProtect, &oldProtect);
+    // Remove MinHook
+    if (Offsets::RequestQuote > 0x10000) {
+        MH_DisableHook(reinterpret_cast<void*>(Offsets::RequestQuote));
+        MH_RemoveHook(reinterpret_cast<void*>(Offsets::RequestQuote));
+        s_requestQuoteOriginal = nullptr;
+    }
+
+    // Remove naked ASM hook
+    if (Offsets::Trader > 0x10000) {
+        const uintptr_t hookAddr = Offsets::Trader;
+        DWORD oldProtect = 0;
+        if (VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+            memcpy(reinterpret_cast<void*>(hookAddr), s_savedBytes, kPatchSize);
+            FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hookAddr), kPatchSize);
+            VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, oldProtect, &oldProtect);
+        }
     }
 
     Reset();
@@ -141,5 +212,7 @@ uint32_t GetCostItemId() {
 uint32_t GetCostValue() {
     return static_cast<uint32_t>(s_costValue);
 }
+
+uintptr_t GetDebugEbx() { return s_debugEbx; }
 
 } // namespace GWA3::TraderHook

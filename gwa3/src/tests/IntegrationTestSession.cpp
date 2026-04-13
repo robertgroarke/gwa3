@@ -2919,8 +2919,9 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
         // Note: TraderHook values may be garbage due to wrong register context
         // but the game's internal state should have the real cost cached
         IntReport("  Buying via native TransactionFunction(0xC)...");
-        // Use quoted cost if it looks reasonable, otherwise 0
-        uint32_t goldToUse = (quotedCost > 0 && quotedCost < 10000) ? quotedCost : 0;
+        // Use the captured cost from TraderHook (response detour should have real value now)
+        uint32_t goldToUse = quotedCost;
+        IntReport("  TransactItem: item=%u goldGive=%u", traderItemId, goldToUse);
         TraderTransactTask txTask{traderItemId, goldToUse};
         CtoS::EnqueueGameCommand(&TraderTransactInvoker, &txTask, sizeof(txTask));
 
