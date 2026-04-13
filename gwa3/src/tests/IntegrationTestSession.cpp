@@ -2614,6 +2614,32 @@ static bool ConsetMoveToNPC(float x, float y, const char* label) {
     return arrived;
 }
 
+// Open an NPC dialog using the proven AutoIt GoNPC + Dialog packet sequence.
+// ChangeTarget → GoNPC (0x39) → wait → Dialog (0x3A) → wait → verify merchant open.
+// This matches GWA2's GoToNPC + Dialog flow and GWA3 MaintenanceMgr's Xunlai open.
+static bool ConsetOpenNPCDialog(uint32_t npcId, const char* label) {
+    IntReport("  Opening %s NPC %u via GoNPC+Dialog packet sequence...", label, npcId);
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        // Target the NPC
+        AgentMgr::ChangeTarget(npcId);
+        Sleep(250);
+        // GoNPC packet (0x39) — initiates interaction
+        CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
+        Sleep(1000);
+        // Dialog packet (0x3A) — opens the merchant/trade dialog
+        CtoS::SendPacket(2, Packets::DIALOG_SEND_LIVING, npcId);
+        Sleep(1500);
+        if (TradeMgr::GetMerchantItemCount() > 0) {
+            IntReport("  %s dialog opened on attempt %d: %u items", label, attempt + 1, TradeMgr::GetMerchantItemCount());
+            return true;
+        }
+        IntReport("  %s dialog not open after attempt %d, retrying...", label, attempt + 1);
+        Sleep(500);
+    }
+    IntReport("  Failed to open %s dialog after 3 attempts", label);
+    return false;
+}
+
 static uint32_t ConsetFindNearestNPC(float x, float y, float maxDist = 500.0f) {
     const uint32_t maxAgents = AgentMgr::GetMaxAgents();
     uint32_t bestId = 0;
@@ -2763,50 +2789,138 @@ static bool RequestTraderQuoteViaGameThread(uint32_t itemId) {
 
 // Buy material packs from the material trader at Embark Beach.
 // Reproduces AutoIt BuyMaterialIfMissing: quote → buy → re-quote → buy loop.
+// Find the position (1-based) of an item in the merchant list by scanning
+// the global item array for a virtual item matching the model, then finding
+// that item_id in the merchant list.
+static uint32_t FindMerchantPositionForTraderItem(uint32_t modelId) {
+    const uint32_t virtualItemId = FindTraderVirtualItemId(modelId);
+    if (!virtualItemId) return UINT32_MAX;
+
+    // Scan merchant list for this item_id
+    const uint32_t merchantCount = TradeMgr::GetMerchantItemCount();
+    for (uint32_t pos = 1; pos <= merchantCount; ++pos) {
+        Item* item = TradeMgr::GetMerchantItemByPosition(pos);
+        if (item && item->item_id == virtualItemId) return pos;
+    }
+    // Fallback: try FindMerchantItemPositionByModelId
+    return FindMerchantItemPositionByModelId(modelId);
+}
+
 static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
     const uint32_t have = CountInventoryModelQuantity(modelId);
     if (have >= neededTotal) return have;
     const uint32_t missing = neededTotal - have;
-    // Materials come in packs of 10
     const uint32_t packs = (missing + 9) / 10;
     IntReport("  Buying material model=%u: have=%u need=%u missing=%u packs=%u",
               modelId, have, neededTotal, missing, packs);
 
+    // Find the item position in the merchant list
+    const uint32_t itemPosition = FindMerchantPositionForTraderItem(modelId);
+    if (itemPosition == UINT32_MAX || itemPosition == 0) {
+        IntReport("  Material model=%u not found in merchant list", modelId);
+        return have;
+    }
+    IntReport("  Material model=%u at merchant position %u", modelId, itemPosition);
+
+    // Resolve UI frames
+    const uintptr_t merchantFrame = UIMgr::GetFrameByHash(kMerchantRootHash);
+    const uintptr_t merchantContext = UIMgr::GetFrameContext(merchantFrame);
+    if (merchantFrame < 0x10000 || merchantContext < 0x10000) {
+        IntReport("  Merchant frame not available (frame=0x%08X context=0x%08X)",
+                  static_cast<unsigned>(merchantFrame), static_cast<unsigned>(merchantContext));
+        return have;
+    }
+
+    // Find the item row frame
+    const uint32_t itemIndex = itemPosition - 1u;
+    const uint32_t itemPath[] = { 0u, 0u, itemIndex };
+    const uintptr_t itemRowFrame = ResolveMerchantSortedPathFrame(merchantFrame, itemPath, 3, "trader-item[0,0,index]");
+
+    // Find the Buy button (same approach as crafter Craft button)
+    const uintptr_t buyBtn = UIMgr::GetFrameByContextAndChildOffset(merchantContext, 125u, merchantFrame);
+    IntReport("  UI frames: merchantFrame=0x%08X row=0x%08X buyBtn(125)=0x%08X",
+              static_cast<unsigned>(merchantFrame), static_cast<unsigned>(itemRowFrame),
+              static_cast<unsigned>(buyBtn));
+
+    // Dump merchant frame children for diagnostic (first buy attempt only)
+    IntReport("  --- Material trader frame dump ---");
+    const uint32_t rootChildCount = UIMgr::GetChildFrameCount(merchantFrame);
+    IntReport("  merchantFrame=0x%08X hash=%u children=%u context=0x%08X",
+              static_cast<unsigned>(merchantFrame), UIMgr::GetFrameHash(merchantFrame),
+              rootChildCount, static_cast<unsigned>(merchantContext));
+    // Dump first 3 levels of {0}, {0,0}, {0,1}
+    for (uint32_t c0 = 0; c0 < 3 && c0 < rootChildCount; ++c0) {
+        uintptr_t child0 = UIMgr::GetChildFrameByIndex(merchantFrame, c0);
+        if (child0 < 0x10000) continue;
+        uint32_t c0Children = UIMgr::GetChildFrameCount(child0);
+        IntReport("    [%u] frame=0x%08X hash=%u children=%u offset=%u",
+                  c0, static_cast<unsigned>(child0), UIMgr::GetFrameHash(child0),
+                  c0Children, UIMgr::GetChildOffsetId(child0));
+        for (uint32_t c1 = 0; c1 < 4 && c1 < c0Children; ++c1) {
+            uintptr_t child1 = UIMgr::GetChildFrameByIndex(child0, c1);
+            if (child1 < 0x10000) continue;
+            IntReport("      [%u,%u] frame=0x%08X hash=%u children=%u offset=%u state=0x%X",
+                      c0, c1, static_cast<unsigned>(child1), UIMgr::GetFrameHash(child1),
+                      UIMgr::GetChildFrameCount(child1), UIMgr::GetChildOffsetId(child1),
+                      UIMgr::GetFrameState(child1));
+        }
+    }
+    // Dump context-based children (action buttons)
+    for (uint32_t offset = 120; offset <= 130; ++offset) {
+        uintptr_t f = UIMgr::GetFrameByContextAndChildOffset(merchantContext, offset, merchantFrame);
+        if (f >= 0x10000) {
+            IntReport("    ctx[%u] frame=0x%08X hash=%u state=0x%X hidden=%u",
+                      offset, static_cast<unsigned>(f), UIMgr::GetFrameHash(f),
+                      UIMgr::GetFrameState(f), UIMgr::IsFrameHidden(f) ? 1u : 0u);
+        }
+    }
+    IntReport("  --- End frame dump ---");
+
     uint32_t bought = 0;
     for (uint32_t p = 0; p < packs; ++p) {
-        // Find the trader's virtual item in the global item array (AutoIt approach)
-        const uint32_t traderItemId = FindTraderVirtualItemId(modelId);
-        if (!traderItemId) {
-            IntReport("  Trader virtual item not found for model=%u", modelId);
-            break;
-        }
-        // Request quote using the found item ID
-        const uint32_t quoteBefore = TraderHook::GetQuoteId();
-        TraderHook::Reset();
-        // Skip the broken quote — buy directly via TransactItems(0xC, 1, itemId)
-        // on the GameThread, same pattern as craft TransactItems(3, 1, itemId).
         const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
-        IntReport("  Buying pack %u/%u: item=%u gold=%u", p + 1, packs, traderItemId, goldBefore);
-        struct TraderBuyTask { uint32_t itemId; };
-        static auto TraderBuyInvoker = [](void* storage) {
-            auto* t = reinterpret_cast<TraderBuyTask*>(storage);
-            if (t && t->itemId) TradeMgr::TransactItems(0xC, 1, t->itemId);
-        };
-        TraderBuyTask buyTask{traderItemId};
-        GameThread::EnqueueRaw(TraderBuyInvoker, &buyTask, sizeof(buyTask));
+        const uint32_t matBefore = CountInventoryModelQuantity(modelId);
 
-        // Wait for gold to decrease or inventory to increase
-        const bool buyOk = WaitFor("trader buy", 5000, [goldBefore, modelId]() {
+        // Click the item row to select it
+        if (itemRowFrame >= 0x10000) {
+            IntReport("  Clicking item row frame=0x%08X hash=%u offset=%u",
+                      static_cast<unsigned>(itemRowFrame), UIMgr::GetFrameHash(itemRowFrame),
+                      UIMgr::GetChildOffsetId(itemRowFrame));
+            UIMgr::ButtonClick(itemRowFrame);
+            Sleep(500 + ChatMgr::GetPing());
+        }
+
+        // Click the Buy button
+        if (buyBtn < 0x10000) {
+            IntReport("  Buy button (125) not found — trying 126");
+            const uintptr_t alt = UIMgr::GetFrameByContextAndChildOffset(merchantContext, 126u, merchantFrame);
+            if (alt >= 0x10000) {
+                IntReport("  Clicking alt buy button (126) frame=0x%08X", static_cast<unsigned>(alt));
+                UIMgr::ButtonClick(alt);
+            } else {
+                IntReport("  No buy button found at 125 or 126");
+                break;
+            }
+        } else {
+            IntReport("  Clicking buy button (125) frame=0x%08X hash=%u",
+                      static_cast<unsigned>(buyBtn), UIMgr::GetFrameHash(buyBtn));
+            UIMgr::ButtonClick(buyBtn);
+        }
+
+        // Wait for gold decrease or inventory increase
+        const bool buyOk = WaitFor("material buy", 5000, [goldBefore, modelId, matBefore]() {
             return ItemMgr::GetGoldCharacter() < goldBefore
-                || CountInventoryModelQuantity(modelId) > 0;
+                || CountInventoryModelQuantity(modelId) > matBefore;
         });
+        const uint32_t goldAfter = ItemMgr::GetGoldCharacter();
+        const uint32_t matAfter = CountInventoryModelQuantity(modelId);
         if (buyOk) {
             ++bought;
-            IntReport("  Bought pack %u: gold=%u->%u mat=%u",
-                      p + 1, goldBefore, ItemMgr::GetGoldCharacter(),
-                      CountInventoryModelQuantity(modelId));
+            IntReport("  Bought pack %u/%u: gold=%u->%u mat=%u->%u",
+                      p + 1, packs, goldBefore, goldAfter, matBefore, matAfter);
         } else {
-            IntReport("  Buy failed at pack %u (no gold/inventory change)", p + 1);
+            IntReport("  Buy failed at pack %u (gold=%u->%u mat=%u->%u)",
+                      p + 1, goldBefore, goldAfter, matBefore, matAfter);
             break;
         }
         Sleep(ChatMgr::GetPing() + 200);
@@ -2824,28 +2938,7 @@ static bool ConsetCraftOneItem(const char* traderLabel, float traderX, float tra
     }
     uint32_t npc = ConsetFindNearestNPC(traderX, traderY);
     if (!npc) { IntReport("  No NPC near %s", traderLabel); return false; }
-    IntReport("  Interacting with NPC %u", npc);
-    // Try native InteractNPC first (game thread safe)
-    AgentMgr::InteractNPC(npc);
-    Sleep(2000);
-    // Fallback: GoNPC packet via game thread
-    if (TradeMgr::GetMerchantItemCount() == 0) {
-        IntReport("  InteractNPC didn't open merchant, trying GoNPC via GameThread...");
-        struct GoNPCTask { uint32_t npcId; };
-        static auto GoNPCInvoker = [](void* storage) {
-            auto* t = reinterpret_cast<GoNPCTask*>(storage);
-            if (t && t->npcId) CtoS::SendPacket(3, Packets::INTERACT_NPC, t->npcId, 0u);
-        };
-        for (int attempt = 0; attempt < 3 && TradeMgr::GetMerchantItemCount() == 0; ++attempt) {
-            GoNPCTask task{npc};
-            GameThread::EnqueueRaw(GoNPCInvoker, &task, sizeof(task));
-            Sleep(2000);
-        }
-    }
-    if (TradeMgr::GetMerchantItemCount() == 0) {
-        IntReport("  Failed to open %s merchant", traderLabel);
-        return false;
-    }
+    if (!ConsetOpenNPCDialog(npc, traderLabel)) return false;
     IntReport("  %s merchant open: %u items", traderLabel, TradeMgr::GetMerchantItemCount());
 
     const uint32_t itemPosition = FindMerchantItemPositionByModelId(targetModelId);
@@ -2934,34 +3027,14 @@ bool TestConsetCraftCycle() {
             constexpr float kMaterialTraderY = -2236.0f;
             if (ConsetMoveToNPC(kMaterialTraderX, kMaterialTraderY, "Material Trader")) {
                 uint32_t npc = ConsetFindNearestNPC(kMaterialTraderX, kMaterialTraderY);
-                if (npc) {
-                    IntReport("  Opening material trader NPC %u...", npc);
-                    // InteractNPC + GoNPC fallback, same as crafter open path
-                    AgentMgr::InteractNPC(npc);
-                    Sleep(2000);
-                    if (TradeMgr::GetMerchantItemCount() == 0) {
-                        struct GoNPCTask { uint32_t npcId; };
-                        static auto GoNPCInvoker = [](void* storage) {
-                            auto* t = reinterpret_cast<GoNPCTask*>(storage);
-                            if (t && t->npcId) CtoS::SendPacket(3, Packets::INTERACT_NPC, t->npcId, 0u);
-                        };
-                        for (int a = 0; a < 3 && TradeMgr::GetMerchantItemCount() == 0; ++a) {
-                            GoNPCTask task{npc};
-                            GameThread::EnqueueRaw(GoNPCInvoker, &task, sizeof(task));
-                            Sleep(2000);
-                        }
-                    }
-                    // Wait for merchant context
-                    WaitFor("material trader", 5000, []() { return TradeMgr::GetMerchantItemCount() > 0; });
-                    if (TradeMgr::GetMerchantItemCount() > 0) {
-                        IntReport("  Material trader open: %u items", TradeMgr::GetMerchantItemCount());
-                        if (iron < 100)    ConsetBuyMaterial(kMaterialIronIngot, 100);
-                        if (dust < 100)    ConsetBuyMaterial(kMaterialDust, 100);
-                        if (bone < 50)     ConsetBuyMaterial(kMaterialBone, 50);
-                        if (feather < 50)  ConsetBuyMaterial(kMaterialFeather, 50);
-                    } else {
-                        IntReport("  Failed to open material trader");
-                    }
+                if (npc && ConsetOpenNPCDialog(npc, "Material Trader")) {
+                    IntReport("  Material trader open: %u items", TradeMgr::GetMerchantItemCount());
+                    if (iron < 100)    ConsetBuyMaterial(kMaterialIronIngot, 100);
+                    if (dust < 100)    ConsetBuyMaterial(kMaterialDust, 100);
+                    if (bone < 50)     ConsetBuyMaterial(kMaterialBone, 50);
+                    if (feather < 50)  ConsetBuyMaterial(kMaterialFeather, 50);
+                } else {
+                    IntReport("  Failed to open material trader");
                 }
             }
         }
