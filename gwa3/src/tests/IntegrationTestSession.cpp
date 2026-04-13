@@ -3062,18 +3062,22 @@ bool TestConsetCraftCycle() {
         IntReport("  Withdrawing gold from Xunlai Chest...");
         if (ConsetMoveToNPC(kEmbarkXunlaiX, kEmbarkXunlaiY, "Xunlai Chest")) {
             uint32_t npc = ConsetFindNearestNPC(kEmbarkXunlaiX, kEmbarkXunlaiY);
-            if (npc && ConsetOpenNPCDialog(npc, "Xunlai Chest")) {
-                // Withdraw up to 50k gold (cap is 100k on character)
+            if (npc) {
+                // Interact with chest via GoNPC + wait (no merchant check needed)
+                AgentMgr::ChangeTarget(npc);
+                Sleep(250);
+                CtoS::SendPacket(3, Packets::INTERACT_NPC, npc, 0u);
+                Sleep(2000);
+
+                // ChangeGold works as a direct packet — doesn't need the chest UI open
                 uint32_t maxWithdraw = 100000u - gold;
                 uint32_t toWithdraw = storageGold > maxWithdraw ? maxWithdraw : storageGold;
                 if (toWithdraw > 50000) toWithdraw = 50000;
-                IntReport("  Withdrawing %u gold...", toWithdraw);
+                IntReport("  Withdrawing %u gold (char=%u storage=%u)...", toWithdraw, gold, storageGold);
                 ItemMgr::ChangeGold(gold + toWithdraw, storageGold - toWithdraw);
                 Sleep(500);
                 gold = ItemMgr::GetGoldCharacter();
                 IntReport("  Gold after withdraw: char=%u storage=%u", gold, ItemMgr::GetGoldStorage());
-            } else {
-                IntReport("  Failed to open Xunlai Chest");
             }
         }
     } else {
