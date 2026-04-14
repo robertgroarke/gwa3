@@ -2644,141 +2644,12 @@ bool TestMapTravel() {
 
 // ===== CONSET CRAFT CYCLE =====
 
-// Stuck-aware movement for outposts. Detects when the character is blocked
-// by an NPC, identifies the blocking agent, and repaths laterally to go around.
-static bool ConsetMoveToNPC(float targetX, float targetY, const char* label) {
-    IntReport("  Moving to %s at (%.0f, %.0f)...", label, targetX, targetY);
-
-    constexpr float kArrivalThreshold = 250.0f;
-    constexpr int   kTotalTimeoutMs   = 45000;
-    constexpr int   kMoveIntervalMs   = 500;
-    constexpr float kStuckThreshold   = 25.0f;   // moved less than this = stuck
-    constexpr int   kStuckCountLimit  = 4;        // consecutive stuck checks before repath
-    constexpr float kLateralOffset    = 350.0f;   // how far to sidestep
-    constexpr float kBlockingAgentRange = 200.0f; // scan radius for blocking NPCs
-
-    const DWORD start = GetTickCount();
-    int stuckCount = 0;
-    float prevX = 0.0f, prevY = 0.0f;
-    bool havePrev = false;
-    int lateralSign = 1; // alternate left/right sidesteps
-
-    while ((GetTickCount() - start) < static_cast<DWORD>(kTotalTimeoutMs)) {
-        // Read current position
-        float myX = 0.0f, myY = 0.0f;
-        if (!TryReadAgentPosition(ReadMyId(), myX, myY)) {
-            Sleep(kMoveIntervalMs);
-            continue;
-        }
-
-        // Check if arrived
-        const float distToTarget = AgentMgr::GetDistance(myX, myY, targetX, targetY);
-        if (distToTarget <= kArrivalThreshold) {
-            IntReport("  Arrived at %s (dist=%.0f)", label, distToTarget);
-            return true;
-        }
-
-        // Stuck detection: compare with previous position
-        if (havePrev) {
-            const float moved = AgentMgr::GetDistance(prevX, prevY, myX, myY);
-            if (moved < kStuckThreshold) {
-                ++stuckCount;
-            } else {
-                stuckCount = 0; // making progress, reset
-            }
-        }
-
-        if (stuckCount >= kStuckCountLimit) {
-            // We're stuck — find nearby blocking agents
-            IntReport("  STUCK at (%.0f, %.0f) dist=%.0f to %s — scanning for blockers...",
-                      myX, myY, distToTarget, label);
-
-            // Direction vector from us to target (normalized)
-            const float dx = targetX - myX;
-            const float dy = targetY - myY;
-            const float len = sqrtf(dx * dx + dy * dy);
-            const float ndx = (len > 0.01f) ? dx / len : 1.0f;
-            const float ndy = (len > 0.01f) ? dy / len : 0.0f;
-
-            // Scan nearby agents to find closest NPC in our forward path
-            const uint32_t maxAgents = AgentMgr::GetMaxAgents();
-            float closestBlockerDist = 9999.0f;
-            float blockerX = 0.0f, blockerY = 0.0f;
-            uint32_t blockerId = 0;
-            for (uint32_t i = 1; i < maxAgents && i < 4096; ++i) {
-                if (i == ReadMyId()) continue;
-                auto* agent = AgentMgr::GetAgentByID(i);
-                if (!agent || agent->type != 0xDB) continue;
-                auto* living = static_cast<AgentLiving*>(agent);
-                if (living->allegiance != 6) continue; // NPC only
-                const float agentDist = AgentMgr::GetDistance(myX, myY, living->x, living->y);
-                if (agentDist < kBlockingAgentRange && agentDist < closestBlockerDist) {
-                    // Check if this NPC is roughly in our forward direction
-                    const float adx = living->x - myX;
-                    const float ady = living->y - myY;
-                    const float alen = sqrtf(adx * adx + ady * ady);
-                    if (alen > 0.01f) {
-                        const float dot = (adx * ndx + ady * ndy) / alen;
-                        if (dot > 0.3f) { // in front of us (within ~70 degree cone)
-                            closestBlockerDist = agentDist;
-                            blockerX = living->x;
-                            blockerY = living->y;
-                            blockerId = i;
-                        }
-                    }
-                }
-            }
-
-            if (blockerId) {
-                IntReport("  Blocker: agent %u at (%.0f, %.0f) dist=%.0f — sidestepping %s",
-                          blockerId, blockerX, blockerY, closestBlockerDist,
-                          lateralSign > 0 ? "right" : "left");
-            } else {
-                IntReport("  No obvious blocker found — sidestepping anyway");
-            }
-
-            // Compute lateral waypoint: perpendicular to target direction
-            // Perpendicular of (ndx, ndy) is (-ndy, ndx) or (ndy, -ndx)
-            const float perpX = -ndy * lateralSign;
-            const float perpY =  ndx * lateralSign;
-            const float waypointX = myX + perpX * kLateralOffset;
-            const float waypointY = myY + perpY * kLateralOffset;
-
-            IntReport("  Sidestepping to waypoint (%.0f, %.0f)...", waypointX, waypointY);
-
-            // Issue move to waypoint for ~2 seconds
-            if (GameThread::IsInitialized()) {
-                GameThread::EnqueuePost([waypointX, waypointY]() {
-                    AgentMgr::Move(waypointX, waypointY);
-                });
-            }
-            Sleep(1500);
-
-            // Alternate sidestep direction for next stuck event
-            lateralSign = -lateralSign;
-            stuckCount = 0;
-            havePrev = false; // reset position tracking after sidestep
-            continue;
-        }
-
-        // Normal forward movement
-        if (GameThread::IsInitialized()) {
-            GameThread::EnqueuePost([targetX, targetY]() {
-                AgentMgr::Move(targetX, targetY);
-            });
-        }
-
-        prevX = myX;
-        prevY = myY;
-        havePrev = true;
-        Sleep(kMoveIntervalMs);
-    }
-
-    float finalX = 0.0f, finalY = 0.0f;
-    TryReadAgentPosition(ReadMyId(), finalX, finalY);
-    const float finalDist = AgentMgr::GetDistance(finalX, finalY, targetX, targetY);
-    IntReport("  Failed to reach %s (final dist=%.0f, pos=%.0f,%.0f)", label, finalDist, finalX, finalY);
-    return false;
+static bool ConsetMoveToNPC(float x, float y, const char* label) {
+    IntReport("  Moving to %s at (%.0f, %.0f)...", label, x, y);
+    const bool arrived = MovePlayerNear(x, y, 250.0f, 45000);
+    if (!arrived) IntReport("  Failed to reach %s", label);
+    else IntReport("  Arrived at %s", label);
+    return arrived;
 }
 
 // Open an NPC dialog using the proven AutoIt GoNPC + Dialog packet sequence.
@@ -3855,6 +3726,23 @@ int RunTradeHelperMode() {
     } else {
         TradePartnerHook::Reset();
     }
+
+    const bool helperWorldReady = WaitFor("Helper world settle before travel", 5000, []() {
+        return ReadMapId() > 0
+            && ReadMyId() > 0
+            && MapMgr::GetLoadingState() == 1
+            && MapMgr::GetDistrict() != UINT32_MAX
+            && MapMgr::GetDistrict() != 0;
+    });
+    IntReport("  Helper pre-travel settle: ready=%d map=%u region=%u district=%u myId=%u loading=%u",
+              helperWorldReady ? 1 : 0,
+              ReadMapId(),
+              MapMgr::GetRegion(),
+              MapMgr::GetDistrict(),
+              ReadMyId(),
+              MapMgr::GetLoadingState());
+    AgentMgr::CancelAction();
+    Sleep(750);
 
     if (startMapId != kMapLongeyesLedge || MapMgr::GetRegion() != kTradeTestRegion || MapMgr::GetDistrict() != kTradeTestDistrict) {
         IntReport("  Traveling helper to Longeye's Ledge Asia/Japan district %u...", kTradeTestDistrict);

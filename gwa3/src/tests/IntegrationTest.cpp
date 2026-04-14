@@ -12,12 +12,14 @@
 #include <gwa3/managers/SkillMgr.h>
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/MemoryMgr.h>
+#include <gwa3/bot/FroggyHM.h>
 #include <gwa3/packets/CtoS.h>
 #include "IntegrationTestInternal.h"
 
 #include <Windows.h>
 #include <cstdio>
 #include <ctime>
+#include <cstdlib>
 #include <atomic>
 #include <functional>
 
@@ -34,15 +36,131 @@ static int s_intSkipped = 0;
 static volatile bool s_watchdogRunning = false;
 static volatile bool s_crashDetected = false;
 static HANDLE s_watchdogThread = nullptr;
+static volatile bool s_watchdogAllowHungWindowKill = true;
 
 static volatile bool s_disconnectDetected = false;
 static uint32_t s_watchdogLastMapId = 0;
+static volatile bool s_watchdogCrashScreenshotTaken = false;
 static constexpr bool kBisectWorkflowStopAfterEarlyPhase = false;
 static constexpr bool kBisectWorkflowStopAfter074c = false;
 static constexpr bool kBisectWorkflowSkipPostStoCTail = false;
 static constexpr bool kBisectWorkflowOnlyQuestTail = false;
 static constexpr bool kBisectWorkflowOnlyUiTail = false;
 static constexpr bool kBisectWorkflowOnlyAgentTail = false;
+
+static bool BuildWatchdogScreenshotPath(const char* tag, char* outPath, size_t outPathSize) {
+    if (!tag || !*tag || !outPath || outPathSize == 0) return false;
+
+    char modulePath[MAX_PATH] = {};
+    HMODULE hSelf = nullptr;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCSTR>(&BuildWatchdogScreenshotPath), &hSelf)) {
+        return false;
+    }
+    if (!GetModuleFileNameA(hSelf, modulePath, MAX_PATH)) return false;
+
+    char* slash = strrchr(modulePath, '\\');
+    if (!slash) return false;
+    *slash = '\0';
+
+    char screenshotDir[MAX_PATH] = {};
+    snprintf(screenshotDir, sizeof(screenshotDir), "%s\\screenshots", modulePath);
+    CreateDirectoryA(screenshotDir, nullptr);
+
+    SYSTEMTIME st = {};
+    GetLocalTime(&st);
+    snprintf(outPath, outPathSize,
+             "%s\\watchdog_%s_%04u%02u%02u_%02u%02u%02u.bmp",
+             screenshotDir,
+             tag,
+             st.wYear, st.wMonth, st.wDay,
+             st.wHour, st.wMinute, st.wSecond);
+    return true;
+}
+
+static bool SaveBitmapToBmp(HBITMAP hBitmap, HDC hdc, const char* path) {
+    if (!hBitmap || !hdc || !path || !*path) return false;
+
+    BITMAP bmp = {};
+    if (!GetObject(hBitmap, sizeof(bmp), &bmp)) return false;
+
+    BITMAPINFOHEADER bi = {};
+    bi.biSize = sizeof(BITMAPINFOHEADER);
+    bi.biWidth = bmp.bmWidth;
+    bi.biHeight = bmp.bmHeight;
+    bi.biPlanes = 1;
+    bi.biBitCount = 32;
+    bi.biCompression = BI_RGB;
+
+    const DWORD imageBytes = static_cast<DWORD>(bmp.bmWidth * bmp.bmHeight * 4);
+    void* pixels = std::malloc(imageBytes);
+    if (!pixels) return false;
+
+    BITMAPINFO info = {};
+    info.bmiHeader = bi;
+    const int scanLines = GetDIBits(hdc, hBitmap, 0, static_cast<UINT>(bmp.bmHeight), pixels, &info, DIB_RGB_COLORS);
+    if (scanLines == 0) {
+        std::free(pixels);
+        return false;
+    }
+
+    FILE* f = nullptr;
+    fopen_s(&f, path, "wb");
+    if (!f) {
+        std::free(pixels);
+        return false;
+    }
+
+    BITMAPFILEHEADER bfh = {};
+    bfh.bfType = 0x4D42;
+    bfh.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+    bfh.bfSize = bfh.bfOffBits + imageBytes;
+
+    fwrite(&bfh, sizeof(bfh), 1, f);
+    fwrite(&bi, sizeof(bi), 1, f);
+    fwrite(pixels, imageBytes, 1, f);
+    fclose(f);
+    std::free(pixels);
+    return true;
+}
+
+static void CaptureWatchdogScreenshot(const char* tag, HWND hwnd) {
+    if (s_watchdogCrashScreenshotTaken) return;
+    if (!hwnd || !IsWindow(hwnd)) return;
+
+    RECT rect = {};
+    if (!GetWindowRect(hwnd, &rect)) return;
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) return;
+
+    HDC windowDc = GetWindowDC(hwnd);
+    if (!windowDc) return;
+    HDC memDc = CreateCompatibleDC(windowDc);
+    HBITMAP bmp = CreateCompatibleBitmap(windowDc, width, height);
+    HGDIOBJ oldObj = nullptr;
+    if (memDc && bmp) {
+        oldObj = SelectObject(memDc, bmp);
+        BitBlt(memDc, 0, 0, width, height, windowDc, 0, 0, SRCCOPY);
+    }
+
+    char screenshotPath[MAX_PATH] = {};
+    bool saved = false;
+    if (memDc && bmp && BuildWatchdogScreenshotPath(tag ? tag : "crash", screenshotPath, sizeof(screenshotPath))) {
+        saved = SaveBitmapToBmp(bmp, memDc, screenshotPath);
+    }
+
+    if (oldObj) SelectObject(memDc, oldObj);
+    if (bmp) DeleteObject(bmp);
+    if (memDc) DeleteDC(memDc);
+    ReleaseDC(hwnd, windowDc);
+
+    if (!saved) return;
+
+    s_watchdogCrashScreenshotTaken = true;
+    Log::Error("[WATCHDOG] Screenshot saved: %s", screenshotPath);
+    Log::Error("WATCHDOG_SCREENSHOT: %s", screenshotPath);
+}
 
 static DWORD WINAPI WatchdogThread(LPVOID) {
     uint32_t lastHeartbeat = RenderHook::GetHeartbeat();
@@ -64,6 +182,7 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
                 Log::Error("[WATCHDOG] Last known test state: %d passed, %d failed, %d skipped",
                            s_intPassed, s_intFailed, s_intSkipped);
                 s_crashDetected = true;
+                CaptureWatchdogScreenshot("render_frozen", static_cast<HWND>(MemoryMgr::GetGWWindowHandle()));
 #if CRASH_TEST == 0
                 if (s_intReport) { fflush(s_intReport); }
                 Log::Error("[WATCHDOG] Terminating GW process...");
@@ -81,7 +200,7 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
         // --- Crash dialog detection: GW window stops responding ---
         {
             HWND gwHwnd = static_cast<HWND>(MemoryMgr::GetGWWindowHandle());
-            if (gwHwnd) {
+            if (gwHwnd && s_watchdogAllowHungWindowKill) {
                 DWORD_PTR result = 0;
                 LRESULT lr = SendMessageTimeoutA(gwHwnd, WM_NULL, 0, 0,
                                                   SMTO_ABORTIFHUNG, 2000, &result);
@@ -91,6 +210,7 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
                     Log::Error("[WATCHDOG] Test state: %d passed, %d failed, %d skipped",
                                s_intPassed, s_intFailed, s_intSkipped);
                     s_crashDetected = true;
+                    CaptureWatchdogScreenshot("window_hung", gwHwnd);
                     if (s_intReport) { fflush(s_intReport); }
                     Log::Error("[WATCHDOG] Terminating hung GW process...");
                     Log::Shutdown();
@@ -116,6 +236,7 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
                 Log::Error("[WATCHDOG] Test state: %d passed, %d failed, %d skipped",
                            s_intPassed, s_intFailed, s_intSkipped);
                 s_crashDetected = true;
+                CaptureWatchdogScreenshot("crash_dialog", crashHwnd);
                 if (s_intReport) { fflush(s_intReport); }
                 Log::Error("[WATCHDOG] Terminating after crash dialog...");
                 Log::Shutdown();
@@ -151,6 +272,8 @@ void StartWatchdog() {
     s_crashDetected = false;
     s_disconnectDetected = false;
     s_watchdogLastMapId = 0;
+    s_watchdogCrashScreenshotTaken = false;
+    s_watchdogAllowHungWindowKill = true;
     s_watchdogThread = CreateThread(nullptr, 0, WatchdogThread, nullptr, 0, nullptr);
 }
 
@@ -166,6 +289,10 @@ void StopWatchdog(bool waitForThread) {
         CloseHandle(s_watchdogThread);
         s_watchdogThread = nullptr;
     }
+}
+
+void SetWatchdogHungWindowKillEnabled(bool enabled) {
+    s_watchdogAllowHungWindowKill = enabled;
 }
 
 static bool ShouldAbortForRuntimeFailure() {
@@ -280,23 +407,105 @@ static uint32_t FindNearbyAllyAgent(uint32_t selfId, float maxDistance) {
     return bestId;
 }
 
-bool MovePlayerNear(float x, float y, float threshold, int timeoutMs) {
+bool MovePlayerNear(float targetX, float targetY, float threshold, int timeoutMs) {
+    // Stuck-aware movement with lateral avoidance for outpost NPC blocking.
+    // Detects when the character hasn't made progress, scans for blocking NPCs
+    // in the forward path, and sidesteps laterally to navigate around them.
+    constexpr float kStuckThreshold   = 25.0f;   // moved less than this = stuck
+    constexpr int   kStuckCountLimit  = 4;        // consecutive stuck checks before repath
+    constexpr float kLateralOffset    = 350.0f;   // how far to sidestep
+    constexpr float kBlockingAgentRange = 200.0f; // scan radius for blocking NPCs
+
     const DWORD start = GetTickCount();
+    int stuckCount = 0;
+    float prevX = 0.0f, prevY = 0.0f;
+    bool havePrev = false;
+    int lateralSign = 1; // alternate left/right sidesteps
+
     while ((GetTickCount() - start) < static_cast<DWORD>(timeoutMs)) {
-        if (GameThread::IsInitialized()) {
-            GameThread::EnqueuePost([x, y]() {
-                AgentMgr::Move(x, y);
-            });
+        float myX = 0.0f, myY = 0.0f;
+        if (!TryReadAgentPosition(ReadMyId(), myX, myY)) {
+            Sleep(500);
+            continue;
         }
-        Sleep(500);
 
-        float px = 0.0f;
-        float py = 0.0f;
-        if (!TryReadAgentPosition(ReadMyId(), px, py)) continue;
-
-        if (AgentMgr::GetDistance(px, py, x, y) <= threshold) {
+        // Check if arrived
+        if (AgentMgr::GetDistance(myX, myY, targetX, targetY) <= threshold) {
             return true;
         }
+
+        // Stuck detection: compare with previous position
+        if (havePrev) {
+            const float moved = AgentMgr::GetDistance(prevX, prevY, myX, myY);
+            if (moved < kStuckThreshold) {
+                ++stuckCount;
+            } else {
+                stuckCount = 0;
+            }
+        }
+
+        if (stuckCount >= kStuckCountLimit) {
+            // Direction vector from us to target (normalized)
+            const float dx = targetX - myX;
+            const float dy = targetY - myY;
+            const float len = sqrtf(dx * dx + dy * dy);
+            const float ndx = (len > 0.01f) ? dx / len : 1.0f;
+            const float ndy = (len > 0.01f) ? dy / len : 0.0f;
+
+            // Scan nearby agents to find closest NPC in our forward path
+            const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+            for (uint32_t i = 1; i < maxAgents && i < 4096; ++i) {
+                if (i == ReadMyId()) continue;
+                auto* agent = AgentMgr::GetAgentByID(i);
+                if (!agent || agent->type != 0xDB) continue;
+                auto* living = static_cast<AgentLiving*>(agent);
+                if (living->allegiance != 6) continue; // NPC only
+                const float agentDist = AgentMgr::GetDistance(myX, myY, living->x, living->y);
+                if (agentDist < kBlockingAgentRange) {
+                    const float adx = living->x - myX;
+                    const float ady = living->y - myY;
+                    const float alen = sqrtf(adx * adx + ady * ady);
+                    if (alen > 0.01f) {
+                        const float dot = (adx * ndx + ady * ndy) / alen;
+                        if (dot > 0.3f) { // in front of us (within ~70 degree cone)
+                            Log::Info("[MOVE] Stuck: blocker agent %u at (%.0f,%.0f) dist=%.0f",
+                                      i, living->x, living->y, agentDist);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Sidestep perpendicular to target direction
+            const float perpX = -ndy * lateralSign;
+            const float perpY =  ndx * lateralSign;
+            const float waypointX = myX + perpX * kLateralOffset;
+            const float waypointY = myY + perpY * kLateralOffset;
+
+            if (GameThread::IsInitialized()) {
+                GameThread::EnqueuePost([waypointX, waypointY]() {
+                    AgentMgr::Move(waypointX, waypointY);
+                });
+            }
+            Sleep(1500);
+
+            lateralSign = -lateralSign;
+            stuckCount = 0;
+            havePrev = false;
+            continue;
+        }
+
+        // Normal forward movement — only reissue when stalled or first move
+        if (GameThread::IsInitialized()) {
+            GameThread::EnqueuePost([targetX, targetY]() {
+                AgentMgr::Move(targetX, targetY);
+            });
+        }
+
+        prevX = myX;
+        prevY = myY;
+        havePrev = true;
+        Sleep(500);
     }
     return false;
 }
@@ -701,14 +910,22 @@ bool TryChooseOffensiveSkillCandidate(uint32_t targetId, SkillTestCandidate& out
         const uint32_t energyCost = NormalizeSkillEnergyCost(skill->energy_cost);
         if (energyCost > currentEnergy) continue;
 
+        uint32_t resolvedSkillId = 0;
+        uint32_t resolvedTargetId = 0;
+        uint8_t resolvedTargetType = 0;
+        if (!Bot::Froggy::DebugResolveUsableSkillTargetForSlot(slot, targetId, resolvedSkillId, resolvedTargetId, resolvedTargetType)) {
+            continue;
+        }
+        if (resolvedSkillId != sb->skill_id || resolvedTargetType != 5u) continue;
+
         const int observability = observabilityScore(skill);
         if (observability <= 0) continue;
 
         if (!found || observability > bestObservability) {
             best.slot = slot;
             best.skillId = sb->skill_id;
-            best.targetId = targetId;
-            best.targetType = skill->target;
+            best.targetId = resolvedTargetId;
+            best.targetType = resolvedTargetType;
             best.energyCost = skill->energy_cost;
             best.type = skill->type;
             best.baseRecharge = skill->recharge;
@@ -810,13 +1027,13 @@ bool TryForceNearbyLootDrop() {
                         // Keep loot combat stable: combat-time hero flagging
                         // can crash Sparkfly in this client build.
 
-                        if (haveOffensiveSkill) {
-                            Skillbar* liveBar = SkillMgr::GetPlayerSkillbar();
-                            if (liveBar && liveBar->skills[offensiveSkill.slot - 1].recharge == 0) {
-                                SkillMgr::UseSkill(offensiveSkill.slot, foeId, 0);
-                            }
+                    if (haveOffensiveSkill) {
+                        Skillbar* liveBar = SkillMgr::GetPlayerSkillbar();
+                        if (liveBar && liveBar->skills[offensiveSkill.slot - 1].recharge == 0) {
+                            SkillMgr::UseSkill(offensiveSkill.slot, foeId, 0);
                         }
-                        Sleep(1500);
+                    }
+                    Sleep(1500);
 
                         foe = GetAgentLivingRaw(foeId);
                         if (foe) {
@@ -994,7 +1211,7 @@ bool TryChooseSkillTestCandidate(SkillTestCandidate& out) {
     const uint32_t myId = ReadMyId();
     if (!bar || !me || myId == 0) return false;
 
-    const uint32_t allyId = FindNearbyAllyAgent(myId, 5000.0f);
+    const uint32_t currentTarget = AgentMgr::GetTargetId();
     const uint32_t currentEnergy = GetCurrentEnergyPoints();
 
     auto slotPriority = [](uint8_t targetType) -> int {
@@ -1029,31 +1246,20 @@ bool TryChooseSkillTestCandidate(SkillTestCandidate& out) {
         const Skill* skill = SkillMgr::GetSkillConstantData(skillbarSkill->skill_id);
         if (!skill) continue;
         if (skill->adrenaline != 0) continue;
+        if (skillbarSkill->skill_id == 2233u) continue;
 
         const uint32_t energyCost = NormalizeSkillEnergyCost(skill->energy_cost);
         if (energyCost > currentEnergy) continue;
 
+        uint32_t resolvedSkillId = 0;
         uint32_t targetId = 0;
-        switch (skill->target) {
-        case 0:
-        case 3:
-            targetId = myId;
-            break;
-        case 4:
-            targetId = allyId;
-            break;
-        case 5:
-            // Keep the main regression lane deterministic: offensive skills are
-            // used in the dedicated loot/combat micro-phase, while the core
-            // skill assertion prefers self/ally casts.
-            continue;
-        default:
+        uint8_t targetType = 0;
+        if (!Bot::Froggy::DebugResolveUsableSkillTargetForSlot(slot, currentTarget, resolvedSkillId, targetId, targetType)) {
             continue;
         }
+        if (resolvedSkillId != skillbarSkill->skill_id) continue;
 
-        if (targetId == 0) continue;
-
-        const int priority = slotPriority(skill->target);
+        const int priority = slotPriority(targetType);
         const int observability = observabilityScore(skill);
         if (observability <= 0) continue;
 
@@ -1063,7 +1269,7 @@ bool TryChooseSkillTestCandidate(SkillTestCandidate& out) {
             best.slot = slot;
             best.skillId = skillbarSkill->skill_id;
             best.targetId = targetId;
-            best.targetType = skill->target;
+            best.targetType = targetType;
             best.energyCost = skill->energy_cost;
             best.type = skill->type;
             best.baseRecharge = skill->recharge;
