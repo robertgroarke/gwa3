@@ -2954,6 +2954,16 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
         const uint32_t quotedItemId = TraderHook::GetCostItemId();
         IntReport("  Quote: arrived=%u item=%u price=%u", quoteArrived, quotedItemId, quotedCost);
 
+        // Check if the trader has supply (price 0 = out of stock) or if we can afford it
+        if (!quoteArrived || quotedCost == 0) {
+            IntReport("  Material out of stock or no quote — stopping buy for model=%u", modelId);
+            break;
+        }
+        if (goldBefore < quotedCost + 1000) { // keep 1000g reserve for craft fees
+            IntReport("  Low gold (%u) — stopping buy for model=%u", goldBefore, modelId);
+            break;
+        }
+
         // After RequestQuote, the game caches the quote. The AutoIt TraderBuy
         // passes TraderCostValue (from hook) as goldGive. Since we can't read the
         // Use the REAL quoted price from kVendorQuote UIMessage callback
@@ -2979,7 +2989,12 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
                       p + 1, goldBefore, goldAfter, matBefore, matAfter);
             break;
         }
-        Sleep(ChatMgr::GetPing() + 200);
+        Sleep(ChatMgr::GetPing() + 500);
+        // Every 20 packs, pause longer to let the game catch up
+        if ((p + 1) % 20 == 0) {
+            IntReport("  Pausing after %u packs to let game settle...", p + 1);
+            Sleep(2000);
+        }
     }
     const uint32_t finalCount = CountInventoryModelQuantity(modelId);
     IntReport("  Material model=%u: bought=%u packs, final count=%u", modelId, bought, finalCount);
