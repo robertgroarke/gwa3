@@ -2642,14 +2642,141 @@ bool TestMapTravel() {
 
 // ===== CONSET CRAFT CYCLE =====
 
-static bool ConsetMoveToNPC(float x, float y, const char* label) {
-    IntReport("  Moving to %s at (%.0f, %.0f)...", label, x, y);
-    // Use MovePlayerNear — the proven working movement function.
-    // Dispatches AgentMgr::Move via GameThread::EnqueuePost every 500ms.
-    const bool arrived = MovePlayerNear(x, y, 250.0f, 30000);
-    if (!arrived) IntReport("  Failed to reach %s", label);
-    else IntReport("  Arrived at %s", label);
-    return arrived;
+// Stuck-aware movement for outposts. Detects when the character is blocked
+// by an NPC, identifies the blocking agent, and repaths laterally to go around.
+static bool ConsetMoveToNPC(float targetX, float targetY, const char* label) {
+    IntReport("  Moving to %s at (%.0f, %.0f)...", label, targetX, targetY);
+
+    constexpr float kArrivalThreshold = 250.0f;
+    constexpr int   kTotalTimeoutMs   = 45000;
+    constexpr int   kMoveIntervalMs   = 500;
+    constexpr float kStuckThreshold   = 25.0f;   // moved less than this = stuck
+    constexpr int   kStuckCountLimit  = 4;        // consecutive stuck checks before repath
+    constexpr float kLateralOffset    = 350.0f;   // how far to sidestep
+    constexpr float kBlockingAgentRange = 200.0f; // scan radius for blocking NPCs
+
+    const DWORD start = GetTickCount();
+    int stuckCount = 0;
+    float prevX = 0.0f, prevY = 0.0f;
+    bool havePrev = false;
+    int lateralSign = 1; // alternate left/right sidesteps
+
+    while ((GetTickCount() - start) < static_cast<DWORD>(kTotalTimeoutMs)) {
+        // Read current position
+        float myX = 0.0f, myY = 0.0f;
+        if (!TryReadAgentPosition(ReadMyId(), myX, myY)) {
+            Sleep(kMoveIntervalMs);
+            continue;
+        }
+
+        // Check if arrived
+        const float distToTarget = AgentMgr::GetDistance(myX, myY, targetX, targetY);
+        if (distToTarget <= kArrivalThreshold) {
+            IntReport("  Arrived at %s (dist=%.0f)", label, distToTarget);
+            return true;
+        }
+
+        // Stuck detection: compare with previous position
+        if (havePrev) {
+            const float moved = AgentMgr::GetDistance(prevX, prevY, myX, myY);
+            if (moved < kStuckThreshold) {
+                ++stuckCount;
+            } else {
+                stuckCount = 0; // making progress, reset
+            }
+        }
+
+        if (stuckCount >= kStuckCountLimit) {
+            // We're stuck — find nearby blocking agents
+            IntReport("  STUCK at (%.0f, %.0f) dist=%.0f to %s — scanning for blockers...",
+                      myX, myY, distToTarget, label);
+
+            // Direction vector from us to target (normalized)
+            const float dx = targetX - myX;
+            const float dy = targetY - myY;
+            const float len = sqrtf(dx * dx + dy * dy);
+            const float ndx = (len > 0.01f) ? dx / len : 1.0f;
+            const float ndy = (len > 0.01f) ? dy / len : 0.0f;
+
+            // Scan nearby agents to find closest NPC in our forward path
+            const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+            float closestBlockerDist = 9999.0f;
+            float blockerX = 0.0f, blockerY = 0.0f;
+            uint32_t blockerId = 0;
+            for (uint32_t i = 1; i < maxAgents && i < 4096; ++i) {
+                if (i == ReadMyId()) continue;
+                auto* agent = AgentMgr::GetAgentByID(i);
+                if (!agent || agent->type != 0xDB) continue;
+                auto* living = static_cast<AgentLiving*>(agent);
+                if (living->allegiance != 6) continue; // NPC only
+                const float agentDist = AgentMgr::GetDistance(myX, myY, living->x, living->y);
+                if (agentDist < kBlockingAgentRange && agentDist < closestBlockerDist) {
+                    // Check if this NPC is roughly in our forward direction
+                    const float adx = living->x - myX;
+                    const float ady = living->y - myY;
+                    const float alen = sqrtf(adx * adx + ady * ady);
+                    if (alen > 0.01f) {
+                        const float dot = (adx * ndx + ady * ndy) / alen;
+                        if (dot > 0.3f) { // in front of us (within ~70 degree cone)
+                            closestBlockerDist = agentDist;
+                            blockerX = living->x;
+                            blockerY = living->y;
+                            blockerId = i;
+                        }
+                    }
+                }
+            }
+
+            if (blockerId) {
+                IntReport("  Blocker: agent %u at (%.0f, %.0f) dist=%.0f — sidestepping %s",
+                          blockerId, blockerX, blockerY, closestBlockerDist,
+                          lateralSign > 0 ? "right" : "left");
+            } else {
+                IntReport("  No obvious blocker found — sidestepping anyway");
+            }
+
+            // Compute lateral waypoint: perpendicular to target direction
+            // Perpendicular of (ndx, ndy) is (-ndy, ndx) or (ndy, -ndx)
+            const float perpX = -ndy * lateralSign;
+            const float perpY =  ndx * lateralSign;
+            const float waypointX = myX + perpX * kLateralOffset;
+            const float waypointY = myY + perpY * kLateralOffset;
+
+            IntReport("  Sidestepping to waypoint (%.0f, %.0f)...", waypointX, waypointY);
+
+            // Issue move to waypoint for ~2 seconds
+            if (GameThread::IsInitialized()) {
+                GameThread::EnqueuePost([waypointX, waypointY]() {
+                    AgentMgr::Move(waypointX, waypointY);
+                });
+            }
+            Sleep(1500);
+
+            // Alternate sidestep direction for next stuck event
+            lateralSign = -lateralSign;
+            stuckCount = 0;
+            havePrev = false; // reset position tracking after sidestep
+            continue;
+        }
+
+        // Normal forward movement
+        if (GameThread::IsInitialized()) {
+            GameThread::EnqueuePost([targetX, targetY]() {
+                AgentMgr::Move(targetX, targetY);
+            });
+        }
+
+        prevX = myX;
+        prevY = myY;
+        havePrev = true;
+        Sleep(kMoveIntervalMs);
+    }
+
+    float finalX = 0.0f, finalY = 0.0f;
+    TryReadAgentPosition(ReadMyId(), finalX, finalY);
+    const float finalDist = AgentMgr::GetDistance(finalX, finalY, targetX, targetY);
+    IntReport("  Failed to reach %s (final dist=%.0f, pos=%.0f,%.0f)", label, finalDist, finalX, finalY);
+    return false;
 }
 
 // Open an NPC dialog using the proven AutoIt GoNPC + Dialog packet sequence.
@@ -2886,9 +3013,11 @@ static uint32_t FindMerchantPositionForTraderItem(uint32_t modelId) {
     return FindMerchantItemPositionByModelId(modelId);
 }
 
-static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
+struct BuyResult { uint32_t finalCount; bool outOfStock; };
+
+static BuyResult ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
     const uint32_t have = CountInventoryModelQuantity(modelId);
-    if (have >= neededTotal) return have;
+    if (have >= neededTotal) return {have, false};
     const uint32_t missing = neededTotal - have;
     const uint32_t packs = (missing + 9) / 10;
     IntReport("  Buying material model=%u: have=%u need=%u missing=%u packs=%u",
@@ -2898,7 +3027,7 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
     const uint32_t itemPosition = FindMerchantPositionForTraderItem(modelId);
     if (itemPosition == UINT32_MAX || itemPosition == 0) {
         IntReport("  Material model=%u not found in merchant list", modelId);
-        return have;
+        return {have, false};
     }
     IntReport("  Material model=%u at merchant position %u", modelId, itemPosition);
 
@@ -2908,7 +3037,7 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
     if (merchantFrame < 0x10000 || merchantContext < 0x10000) {
         IntReport("  Merchant frame not available (frame=0x%08X context=0x%08X)",
                   static_cast<unsigned>(merchantFrame), static_cast<unsigned>(merchantContext));
-        return have;
+        return {have, false};
     }
 
     // Find the item row frame
@@ -2956,8 +3085,10 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
 
         // Check if the trader has supply (price 0 = out of stock) or if we can afford it
         if (!quoteArrived || quotedCost == 0) {
-            IntReport("  Material out of stock or no quote — stopping buy for model=%u", modelId);
-            break;
+            IntReport("  Material OUT OF STOCK or no quote — stopping buy for model=%u", modelId);
+            const uint32_t oosFinal = CountInventoryModelQuantity(modelId);
+            IntReport("  Material model=%u: bought=%u packs, final count=%u (OUT OF STOCK)", modelId, bought, oosFinal);
+            return {oosFinal, true};
         }
         if (goldBefore < quotedCost + 1000) { // keep 1000g reserve for craft fees
             IntReport("  Low gold (%u) — stopping buy for model=%u", goldBefore, modelId);
@@ -2998,7 +3129,7 @@ static uint32_t ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
     }
     const uint32_t finalCount = CountInventoryModelQuantity(modelId);
     IntReport("  Material model=%u: bought=%u packs, final count=%u", modelId, bought, finalCount);
-    return finalCount;
+    return {finalCount, false};
 }
 
 static bool ConsetCraftOneItem(const char* traderLabel, float traderX, float traderY, uint32_t targetModelId) {
@@ -3158,11 +3289,79 @@ bool TestConsetCraftCycle() {
     IntReport("  Need: Iron=%u Dust=%u Bone=%u Feather=%u", needIron, needDust, needBone, needFeather);
 
     // 4. Buy all materials (material trader is already open)
-    IntReport("  Step 4: Buying materials...");
-    if (haveIron < needIron)    ConsetBuyMaterial(kMaterialIronIngot, needIron);
-    if (haveDust < needDust)    ConsetBuyMaterial(kMaterialDust, needDust);
-    if (haveBone < needBone)    ConsetBuyMaterial(kMaterialBone, needBone);
-    if (haveFeather < needFeather) ConsetBuyMaterial(kMaterialFeather, needFeather);
+    // Track which materials are out of stock at the trader so we can
+    // redirect remaining gold to buy more of available materials.
+    bool ironOOS = false, dustOOS = false, boneOOS = false, featherOOS = false;
+    IntReport("  Step 4: Buying materials (pass 1)...");
+    if (haveIron < needIron)       { auto r = ConsetBuyMaterial(kMaterialIronIngot, needIron);    ironOOS = r.outOfStock; }
+    if (haveDust < needDust)       { auto r = ConsetBuyMaterial(kMaterialDust, needDust);         dustOOS = r.outOfStock; }
+    if (haveBone < needBone)       { auto r = ConsetBuyMaterial(kMaterialBone, needBone);         boneOOS = r.outOfStock; }
+    if (haveFeather < needFeather) { auto r = ConsetBuyMaterial(kMaterialFeather, needFeather);   featherOOS = r.outOfStock; }
+
+    // If any material is out of stock, redirect remaining gold to buy more
+    // of the available materials so we can craft extra of the non-blocked consumables.
+    // Grail = Iron + Dust, Essence = Feather + Dust, Armor = Iron + Bone
+    // If Iron OOS → can't craft Grail or Armor, buy more Feather+Dust for Essences
+    // If Dust OOS → can't craft Grail or Essence, buy more Iron+Bone for Armors
+    // If Bone OOS → can't craft Armor, buy more of others
+    // If Feather OOS → can't craft Essence, buy more of others
+    if (ironOOS || dustOOS || boneOOS || featherOOS) {
+        IntReport("  Out of stock: Iron=%s Dust=%s Bone=%s Feather=%s — redistributing budget",
+                  ironOOS ? "YES" : "no", dustOOS ? "YES" : "no",
+                  boneOOS ? "YES" : "no", featherOOS ? "YES" : "no");
+        gold = ItemMgr::GetGoldCharacter();
+        // Calculate how many extra of each craftable consumable we can make
+        // with remaining gold. Each consumable costs ~(5 packs mat A + 5 packs mat B + 250g craft fee)
+        // Buy in increments of 50 (5 packs) for each available consumable.
+        constexpr uint32_t kMinGoldForBuy = 3000u;
+        if (gold > kMinGoldForBuy) {
+            // Re-open material trader if it closed
+            if (TradeMgr::GetMerchantItemCount() == 0) {
+                IntReport("  Re-opening material trader for supplemental buying...");
+                if (ConsetMoveToNPC(kMaterialTraderX, kMaterialTraderY, "Material Trader")) {
+                    uint32_t tn = ConsetFindNearestNPC(kMaterialTraderX, kMaterialTraderY);
+                    if (tn) ConsetOpenNPCDialog(tn, "Material Trader");
+                }
+            }
+            // Can craft Essence if Feather+Dust available
+            bool canBuyForEssence = !featherOOS && !dustOOS;
+            // Can craft Grail if Iron+Dust available
+            bool canBuyForGrail = !ironOOS && !dustOOS;
+            // Can craft Armor if Iron+Bone available
+            bool canBuyForArmor = !ironOOS && !boneOOS;
+
+            // Estimate extra crafts we can afford (~2000-4000g per craft incl materials)
+            uint32_t extraBudget = gold - kMinGoldForBuy;
+            uint32_t extraCrafts = extraBudget / 4000u; // conservative estimate
+            if (extraCrafts > 25) extraCrafts = 25;
+            IntReport("  Extra budget: %u  Estimated extra crafts: %u (Grail=%s Essence=%s Armor=%s)",
+                      extraBudget, extraCrafts,
+                      canBuyForGrail ? "yes" : "OOS", canBuyForEssence ? "yes" : "OOS",
+                      canBuyForArmor ? "yes" : "OOS");
+
+            uint32_t extraPer = (extraCrafts > 0 && (canBuyForGrail || canBuyForEssence || canBuyForArmor))
+                ? extraCrafts : 0u;
+            if (extraPer > 0 && TradeMgr::GetMerchantItemCount() > 0) {
+                // Buy extra materials for available recipes
+                if (canBuyForEssence && !featherOOS) {
+                    uint32_t curFeather2 = CountInventoryModelQuantity(kMaterialFeather);
+                    ConsetBuyMaterial(kMaterialFeather, curFeather2 + extraPer * 50);
+                }
+                if ((canBuyForGrail || canBuyForEssence) && !dustOOS) {
+                    uint32_t curDust2 = CountInventoryModelQuantity(kMaterialDust);
+                    ConsetBuyMaterial(kMaterialDust, curDust2 + extraPer * 50);
+                }
+                if ((canBuyForGrail || canBuyForArmor) && !ironOOS) {
+                    uint32_t curIron2 = CountInventoryModelQuantity(kMaterialIronIngot);
+                    ConsetBuyMaterial(kMaterialIronIngot, curIron2 + extraPer * 50);
+                }
+                if (canBuyForArmor && !boneOOS) {
+                    uint32_t curBone2 = CountInventoryModelQuantity(kMaterialBone);
+                    ConsetBuyMaterial(kMaterialBone, curBone2 + extraPer * 50);
+                }
+            }
+        }
+    }
 
     haveIron = CountInventoryModelQuantity(kMaterialIronIngot);
     haveDust = CountInventoryModelQuantity(kMaterialDust);
@@ -3171,11 +3370,17 @@ bool TestConsetCraftCycle() {
     gold = ItemMgr::GetGoldCharacter();
     IntReport("  After buying: Iron=%u Dust=%u Bone=%u Feather=%u Gold=%u",
               haveIron, haveDust, haveBone, haveFeather, gold);
+    if (ironOOS || dustOOS || boneOOS || featherOOS) {
+        IntReport("  NOTE: Some materials were out of stock. Will craft unequal conset components to burn remaining gold.");
+    }
 
-    // 5. Craft consets in a loop until we run out of materials or gold
+    // 5. Craft consumables in a loop until we run out of materials or gold.
+    // When materials are out of stock, we craft unequal numbers — e.g. if Iron
+    // was OOS we may craft 10 Essences but only 3 Grails and 3 Armors.
     IntReport("  Step 5: Crafting consets...");
     uint32_t grailsCrafted = 0, essencesCrafted = 0, armorsCrafted = 0;
-    for (uint32_t c = 0; c < numConsets; ++c) {
+    constexpr uint32_t kMaxCraftPasses = 50u; // safety cap
+    for (uint32_t c = 0; c < kMaxCraftPasses; ++c) {
         uint32_t curIron = CountInventoryModelQuantity(kMaterialIronIngot);
         uint32_t curDust = CountInventoryModelQuantity(kMaterialDust);
         uint32_t curBone = CountInventoryModelQuantity(kMaterialBone);
@@ -3187,13 +3392,13 @@ bool TestConsetCraftCycle() {
         bool canArmor = curIron >= 50 && curBone >= 50 && curGold >= 250;
 
         if (!canGrail && !canEssence && !canArmor) {
-            IntReport("  Stopping at conset %u — insufficient materials/gold (Iron=%u Dust=%u Bone=%u Feather=%u Gold=%u)",
+            IntReport("  Stopping at pass %u — insufficient materials/gold (Iron=%u Dust=%u Bone=%u Feather=%u Gold=%u)",
                       c, curIron, curDust, curBone, curFeather, curGold);
             break;
         }
 
-        IntReport("  --- Conset %u/%u (Iron=%u Dust=%u Bone=%u Feather=%u Gold=%u) ---",
-                  c + 1, numConsets, curIron, curDust, curBone, curFeather, curGold);
+        IntReport("  --- Craft pass %u (Iron=%u Dust=%u Bone=%u Feather=%u Gold=%u) ---",
+                  c + 1, curIron, curDust, curBone, curFeather, curGold);
 
         if (canGrail && ConsetCraftOneItem("Eyja", kEmbarkEyjaX, kEmbarkEyjaY, kModelGrailOfMight)) {
             ++grailsCrafted;
