@@ -52,6 +52,8 @@ static uintptr_t s_partyButtonReturnAddr = 0;
 static uintptr_t s_partyButtonTrampoline = 0;
 static uint8_t s_partyButtonSavedBytes[kTradeHookPatchSize] = {};
 static GWA3::HookEntry s_tradeUiEntry{nullptr};
+static GWA3::HookEntry s_merchantTransactUiEntry{nullptr};
+static bool s_merchantTransactCallbackRegistered = false;
 static volatile LONG s_tradeUiPlayerUpdatedCount = 0;
 static volatile LONG s_tradeUiInitiateCount = 0;
 static volatile LONG s_tradeUiSessionStartCount = 0;
@@ -518,6 +520,32 @@ static Item* GetMerchantItemPtrByItemId(uint32_t itemId) {
     return reinterpret_cast<Item*>(itemPtr);
 }
 
+static Item* ValidateMerchantItemPtr(Item* item, uint32_t expectedItemId) {
+    if (!item) return nullptr;
+
+    __try {
+        // Virtual merchant entries are not bag-backed and should round-trip to the
+        // same item id. Touch the core fields here so callers do not crash later
+        // while logging or transacting against a stale pointer.
+        const uint32_t actualItemId = item->item_id;
+        const uint32_t modelId = item->model_id;
+        const uint32_t quantity = item->quantity;
+        const uint32_t value = item->value;
+        const uintptr_t bagPtr = reinterpret_cast<uintptr_t>(item->bag);
+        const uint32_t agentId = item->agent_id;
+        (void)quantity;
+        (void)value;
+
+        if (actualItemId != expectedItemId) return nullptr;
+        if (modelId == 0) return nullptr;
+        if (bagPtr > 0 && bagPtr <= 0x10000) return nullptr;
+        if (bagPtr != 0 && agentId != 0) return nullptr;
+        return item;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
 static bool EnsureRequestQuoteShellcode() {
     if (s_requestQuoteBase) return true;
 
@@ -846,6 +874,61 @@ static void __cdecl RequestCrafterQuoteInvoker(void* storage) {
     Log::Warn("TradeMgr: RequestCrafterQuote has no viable path (RequestQuote offset unresolved)");
 }
 
+// UIMessage callback for kUiSendMerchantTransactItem (0x30000007).
+// GWCA invented this UIMessage ID — the game has no native handler for it.
+// We register our own handler that bridges to the native Transaction function,
+// matching how GWCA/GWToolbox makes this work.
+static void __cdecl OnMerchantTransactCall(MerchantTransactItemMessage* msg) {
+    const uintptr_t fn = Offsets::Transaction;
+    uint32_t txType = msg->type;
+    uint32_t goldGive = msg->gold_give;
+    uint32_t goldRecv = msg->gold_recv;
+    uint32_t giveCount = msg->give.item_count;
+    uint32_t* giveIds = msg->give.item_ids;
+    uint32_t* giveQtys = msg->give.item_quantities;
+    uint32_t recvCount = msg->recv.item_count;
+    uint32_t* recvIds = msg->recv.item_ids;
+    uint32_t* recvQtys = msg->recv.item_quantities;
+
+    __asm {
+        mov eax, recvQtys
+        push eax
+        mov eax, recvIds
+        push eax
+        push recvCount
+        push goldRecv
+        mov eax, giveQtys
+        push eax
+        mov eax, giveIds
+        push eax
+        push giveCount
+        push goldGive
+        push txType
+        mov eax, fn
+        call eax
+        add esp, 0x24
+    }
+}
+
+static void OnMerchantTransactUIMessage(HookStatus*, uint32_t msgId, void* wParam, void*) {
+    if (!wParam || !Offsets::Transaction) return;
+    auto* msg = reinterpret_cast<MerchantTransactItemMessage*>(wParam);
+    Log::Info("TradeMgr: OnMerchantTransact UIMsg=0x%08X type=%u goldGive=%u giveCount=%u recvCount=%u",
+              msgId, msg->type, msg->gold_give, msg->give.item_count, msg->recv.item_count);
+    OnMerchantTransactCall(msg);
+    Log::Info("TradeMgr: OnMerchantTransact Transaction returned");
+}
+
+static void EnsureMerchantTransactCallback() {
+    if (s_merchantTransactCallbackRegistered) return;
+    CallbackRegistry::RegisterUIMessageCallback(
+        &s_merchantTransactUiEntry, kUiSendMerchantTransactItem,
+        OnMerchantTransactUIMessage, 0x1);
+    s_merchantTransactCallbackRegistered = true;
+    Log::Info("TradeMgr: Registered UIMessage callback for kUiSendMerchantTransactItem (0x%08X)",
+              kUiSendMerchantTransactItem);
+}
+
 static void __cdecl CraftMerchantItemDirectInvoker(void* storage) {
     auto* task = reinterpret_cast<CrafterTransactionTask*>(storage);
     if (!task || !Offsets::Transaction || task->quantity == 0 || task->item_id == 0 || task->material_count == 0) {
@@ -947,6 +1030,7 @@ bool Initialize() {
         Log::Warn("TradeMgr: UpdateTradeCart hook disabled for live player-trade debug");
     }
     EnsureTradeUiTap();
+    EnsureMerchantTransactCallback();
     if (!InstallPartyWindowButtonHook()) {
         Log::Warn("TradeMgr: PartyWindowButtonCallback hook unavailable");
     }
@@ -1969,7 +2053,7 @@ Item* GetMerchantItemByPosition(uint32_t itemPosition) {
 
     uint32_t itemId = 0;
     if (!ReadU32(merchantBase + 4 * (itemPosition - 1), itemId)) return nullptr;
-    return itemId ? GetMerchantItemPtrByItemId(itemId) : nullptr;
+    return itemId ? ValidateMerchantItemPtr(GetMerchantItemPtrByItemId(itemId), itemId) : nullptr;
 }
 
 Item* GetMerchantItemByModelId(uint32_t modelId) {
@@ -1982,7 +2066,7 @@ Item* GetMerchantItemByModelId(uint32_t modelId) {
             const uint32_t itemId = *reinterpret_cast<uint32_t*>(merchantBase + i * 4);
             if (!itemId) continue;
 
-            Item* item = GetMerchantItemPtrByItemId(itemId);
+            Item* item = ValidateMerchantItemPtr(GetMerchantItemPtrByItemId(itemId), itemId);
             if (!item) continue;
             if (item->model_id == modelId && item->bag == nullptr && item->agent_id == 0) {
                 return item;

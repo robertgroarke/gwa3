@@ -55,4 +55,12 @@ namespace GWA3::TradeMgr {
     bool RequestCrafterQuoteByPositionPacket(uint32_t itemPosition);
     bool CraftMerchantItemByPositionPacket(uint32_t itemPosition, uint32_t quantity);
 
+    // Crafter via native Transaction function (UIMessage or direct call)
+    bool CraftMerchantItem(uint32_t itemId, uint32_t quantity, uint32_t totalValue,
+                           const uint32_t* materialModelIds, const uint32_t* materialQuantities,
+                           uint32_t materialCount);
+    bool CraftMerchantItemByModelId(uint32_t modelId, uint32_t quantity, uint32_t totalValue,
+                                    const uint32_t* materialModelIds, const uint32_t* materialQuantities,
+                                    uint32_t materialCount);
+
 } // namespace GWA3::TradeMgr

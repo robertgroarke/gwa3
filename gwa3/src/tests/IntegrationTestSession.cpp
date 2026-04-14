@@ -15,6 +15,7 @@
 #include <gwa3/core/DialogHook.h>
 #include <gwa3/managers/QuestMgr.h>
 #include <gwa3/managers/TradeMgr.h>
+#include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
@@ -1128,26 +1129,34 @@ static uint32_t FindHelperInventoryItemByModel(uint32_t modelId) {
     return 0;
 }
 
-static uint32_t ReadTradeHelperSubmitGoldConfig() {
+static bool ReadTradeHelperConfigFile(char* buf, size_t bufSize) {
+    if (!buf || bufSize < 2) return false;
+    buf[0] = '\0';
+
     char path[MAX_PATH];
     HMODULE hSelf = nullptr;
     GetModuleHandleExA(
         GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        reinterpret_cast<LPCSTR>(&ReadTradeHelperSubmitGoldConfig), &hSelf);
+        reinterpret_cast<LPCSTR>(&ReadTradeHelperConfigFile), &hSelf);
     GetModuleFileNameA(hSelf, path, MAX_PATH);
     char* slash = strrchr(path, '\\');
     if (slash) *(slash + 1) = '\0';
     strcat_s(path, "trade_helper_config.json");
 
     HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return 0;
+    if (h == INVALID_HANDLE_VALUE) return false;
 
-    char buf[256] = {};
     DWORD read = 0;
-    const BOOL ok = ReadFile(h, buf, sizeof(buf) - 1, &read, nullptr);
+    const BOOL ok = ReadFile(h, buf, static_cast<DWORD>(bufSize - 1), &read, nullptr);
     CloseHandle(h);
-    if (!ok || read == 0) return 0;
+    if (!ok || read == 0) return false;
     buf[read] = '\0';
+    return true;
+}
+
+static uint32_t ReadTradeHelperSubmitGoldConfig() {
+    char buf[512] = {};
+    if (!ReadTradeHelperConfigFile(buf, sizeof(buf))) return 0;
 
     const char* key = strstr(buf, "\"submit_gold\"");
     if (!key) return 0;
@@ -1158,25 +1167,8 @@ static uint32_t ReadTradeHelperSubmitGoldConfig() {
 }
 
 static bool ReadTradeHelperAutoSubmitConfig() {
-    char path[MAX_PATH];
-    HMODULE hSelf = nullptr;
-    GetModuleHandleExA(
-        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        reinterpret_cast<LPCSTR>(&ReadTradeHelperAutoSubmitConfig), &hSelf);
-    GetModuleFileNameA(hSelf, path, MAX_PATH);
-    char* slash = strrchr(path, '\\');
-    if (slash) *(slash + 1) = '\0';
-    strcat_s(path, "trade_helper_config.json");
-
-    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
-
-    char buf[256] = {};
-    DWORD read = 0;
-    const BOOL ok = ReadFile(h, buf, sizeof(buf) - 1, &read, nullptr);
-    CloseHandle(h);
-    if (!ok || read == 0) return false;
-    buf[read] = '\0';
+    char buf[512] = {};
+    if (!ReadTradeHelperConfigFile(buf, sizeof(buf))) return false;
 
     const char* key = strstr(buf, "\"auto_submit\"");
     if (!key) return false;
@@ -1187,25 +1179,8 @@ static bool ReadTradeHelperAutoSubmitConfig() {
 }
 
 static uint32_t ReadTradeHelperOfferItemModelConfig() {
-    char path[MAX_PATH];
-    HMODULE hSelf = nullptr;
-    GetModuleHandleExA(
-        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        reinterpret_cast<LPCSTR>(&ReadTradeHelperOfferItemModelConfig), &hSelf);
-    GetModuleFileNameA(hSelf, path, MAX_PATH);
-    char* slash = strrchr(path, '\\');
-    if (slash) *(slash + 1) = '\0';
-    strcat_s(path, "trade_helper_config.json");
-
-    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return 0;
-
-    char buf[256] = {};
-    DWORD read = 0;
-    const BOOL ok = ReadFile(h, buf, sizeof(buf) - 1, &read, nullptr);
-    CloseHandle(h);
-    if (!ok || read == 0) return 0;
-    buf[read] = '\0';
+    char buf[512] = {};
+    if (!ReadTradeHelperConfigFile(buf, sizeof(buf))) return 0;
 
     const char* key = strstr(buf, "\"offer_item_model_id\"");
     if (!key) return 0;
@@ -1213,6 +1188,33 @@ static uint32_t ReadTradeHelperOfferItemModelConfig() {
     if (!colon) return 0;
     unsigned long value = strtoul(colon + 1, nullptr, 10);
     return static_cast<uint32_t>(value);
+}
+
+static uint32_t ReadTradeHelperMoveSequenceConfig() {
+    char buf[512] = {};
+    if (!ReadTradeHelperConfigFile(buf, sizeof(buf))) return 0;
+
+    const char* key = strstr(buf, "\"move_seq\"");
+    if (!key) return 0;
+    const char* colon = strchr(key, ':');
+    if (!colon) return 0;
+    unsigned long value = strtoul(colon + 1, nullptr, 10);
+    return static_cast<uint32_t>(value);
+}
+
+static bool ReadTradeHelperMoveTargetConfig(float& outX, float& outY) {
+    char buf[512] = {};
+    if (!ReadTradeHelperConfigFile(buf, sizeof(buf))) return false;
+
+    const char* xKey = strstr(buf, "\"move_x\"");
+    const char* yKey = strstr(buf, "\"move_y\"");
+    if (!xKey || !yKey) return false;
+    const char* xColon = strchr(xKey, ':');
+    const char* yColon = strchr(yKey, ':');
+    if (!xColon || !yColon) return false;
+    outX = static_cast<float>(strtod(xColon + 1, nullptr));
+    outY = static_cast<float>(strtod(yColon + 1, nullptr));
+    return true;
 }
 
 uintptr_t GetAgentPtrRaw(uint32_t agentId) {
@@ -3023,38 +3025,15 @@ static BuyResult ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
     IntReport("  Buying material model=%u: have=%u need=%u missing=%u packs=%u",
               modelId, have, neededTotal, missing, packs);
 
-    // Find the item position in the merchant list
-    const uint32_t itemPosition = FindMerchantPositionForTraderItem(modelId);
-    if (itemPosition == UINT32_MAX || itemPosition == 0) {
-        IntReport("  Material model=%u not found in merchant list", modelId);
-        return {have, false};
-    }
-    IntReport("  Material model=%u at merchant position %u", modelId, itemPosition);
-
-    // Resolve UI frames
-    const uintptr_t merchantFrame = UIMgr::GetFrameByHash(kMerchantRootHash);
-    const uintptr_t merchantContext = UIMgr::GetFrameContext(merchantFrame);
-    if (merchantFrame < 0x10000 || merchantContext < 0x10000) {
-        IntReport("  Merchant frame not available (frame=0x%08X context=0x%08X)",
-                  static_cast<unsigned>(merchantFrame), static_cast<unsigned>(merchantContext));
+    // Material buying uses the native RequestQuote/TransactItem API, NOT UI frame clicks.
+    // We only need the virtual item ID from the global item array — the merchant list
+    // position is irrelevant for the native API path.
+    // Verify the material trader dialog is still open (merchant item count > 0).
+    if (TradeMgr::GetMerchantItemCount() == 0) {
+        IntReport("  Material trader dialog not open — cannot buy model=%u", modelId);
         return {have, false};
     }
 
-    // Find the item row frame
-    const uint32_t itemIndex = itemPosition - 1u;
-    const uint32_t itemPath[] = { 0u, 0u, itemIndex };
-    const uintptr_t itemRowFrame = ResolveMerchantSortedPathFrame(merchantFrame, itemPath, 3, "trader-item[0,0,index]");
-
-    // Find the Buy button (same approach as crafter Craft button)
-    const uintptr_t buyBtn = UIMgr::GetFrameByContextAndChildOffset(merchantContext, 125u, merchantFrame);
-    IntReport("  UI frames: merchantFrame=0x%08X row=0x%08X buyBtn(125)=0x%08X",
-              static_cast<unsigned>(merchantFrame), static_cast<unsigned>(itemRowFrame),
-              static_cast<unsigned>(buyBtn));
-
-    // Use native RequestQuote function (type=0xC) via Engine hook command queue,
-    // then native TransactionFunction via GameThread.
-    // NEVER use raw CtoS::SendPacket for 0x4C/0x4D — crashes the client.
-    // The native functions go through the game's internal dispatch which is safe.
     uint32_t bought = 0;
     for (uint32_t p = 0; p < packs; ++p) {
         const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
@@ -3132,46 +3111,61 @@ static BuyResult ConsetBuyMaterial(uint32_t modelId, uint32_t neededTotal) {
     return {finalCount, false};
 }
 
-static bool ConsetCraftOneItem(const char* traderLabel, float traderX, float traderY, uint32_t targetModelId) {
-    IntReport("  --- Crafting at %s (model=%u) ---", traderLabel, targetModelId);
+// Craft ALL affordable units of a consumable at one crafter NPC.
+// Walks to the crafter once, opens dialog, then uses TradeMgr::CraftMerchantItemByModelId
+// which calls the native Transaction function (via UIMessage or direct call).
+// This avoids the UI button-click approach which breaks when multiple merchant
+// dialogs are opened in the same session (stale frame contexts).
+static uint32_t ConsetCraftAllAtNPC(const char* traderLabel, float traderX, float traderY,
+                                     uint32_t targetModelId, uint32_t maxCrafts,
+                                     const uint32_t* matModels, const uint32_t* matQtys,
+                                     uint32_t matCount) {
+    IntReport("  --- Crafting up to %u at %s (model=%u) ---", maxCrafts, traderLabel, targetModelId);
+    if (maxCrafts == 0) return 0;
+
     if (!ConsetMoveToNPC(traderX, traderY, traderLabel)) {
         IntReport("  Failed to reach %s", traderLabel);
-        return false;
+        return 0;
     }
     uint32_t npc = ConsetFindNearestNPC(traderX, traderY);
-    if (!npc) { IntReport("  No NPC near %s", traderLabel); return false; }
-    if (!ConsetOpenNPCDialog(npc, traderLabel)) return false;
+    if (!npc) { IntReport("  No NPC near %s", traderLabel); return 0; }
+    if (!ConsetOpenNPCDialog(npc, traderLabel)) return 0;
     IntReport("  %s merchant open: %u items", traderLabel, TradeMgr::GetMerchantItemCount());
 
-    const uint32_t itemPosition = FindMerchantItemPositionByModelId(targetModelId);
-    if (itemPosition == UINT32_MAX) { IntReport("  Model %u not found at %s", targetModelId, traderLabel); return false; }
-    Item* merchantItem = TradeMgr::GetMerchantItemByPosition(itemPosition);
-    if (!merchantItem) return false;
+    uint32_t crafted = 0;
+    for (uint32_t i = 0; i < maxCrafts; ++i) {
+        const uint32_t beforeCount = CountInventoryModelQuantity(targetModelId);
+        const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
+        if (goldBefore < 250) {
+            IntReport("  Out of gold (%u) — stopping craft at %s", goldBefore, traderLabel);
+            break;
+        }
 
-    const uint32_t beforeCount = CountInventoryModelQuantity(targetModelId);
-    const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
+        // Use native Transaction function to craft — bypasses UI frame issues
+        const bool dispatched = TradeMgr::CraftMerchantItemByModelId(
+            targetModelId, 1, 250, matModels, matQtys, matCount);
+        if (!dispatched) {
+            IntReport("  CraftMerchantItemByModelId rejected (missing materials?) at %s", traderLabel);
+            break;
+        }
 
-    const uintptr_t merchantFrame = UIMgr::GetFrameByHash(kMerchantRootHash);
-    const uintptr_t merchantContext = UIMgr::GetFrameContext(merchantFrame);
-    const uint32_t itemIndex = itemPosition - 1u;
-    const uint32_t itemPath[] = { 0u, 0u, itemIndex };
-    uintptr_t itemRowFrame = ResolveMerchantSortedPathFrame(merchantFrame, itemPath, 3, "item[0,0,index]");
-    if (itemRowFrame < 0x10000) { IntReport("  Item row not found"); return false; }
-
-    UIMgr::ButtonClick(itemRowFrame);
-    Sleep(500 + ChatMgr::GetPing());
-
-    const uintptr_t craftBtn = merchantContext >= 0x10000
-        ? UIMgr::GetFrameByContextAndChildOffset(merchantContext, 125u, merchantFrame) : 0u;
-    if (craftBtn < 0x10000) { IntReport("  Craft button not found"); return false; }
-
-    UIMgr::ButtonClick(craftBtn);
-    const bool crafted = WaitFor("craft completion", 5000, [targetModelId, beforeCount, goldBefore]() {
-        return CountInventoryModelQuantity(targetModelId) > beforeCount || ItemMgr::GetGoldCharacter() < goldBefore;
-    });
-    const uint32_t afterCount = CountInventoryModelQuantity(targetModelId);
-    IntReport("  Result: before=%u after=%u gold=%u->%u", beforeCount, afterCount, goldBefore, ItemMgr::GetGoldCharacter());
-    return afterCount > beforeCount;
+        const bool ok = WaitFor("craft completion", 5000, [targetModelId, beforeCount, goldBefore]() {
+            return CountInventoryModelQuantity(targetModelId) > beforeCount || ItemMgr::GetGoldCharacter() < goldBefore;
+        });
+        const uint32_t afterCount = CountInventoryModelQuantity(targetModelId);
+        if (afterCount > beforeCount) {
+            ++crafted;
+            IntReport("  Crafted %u/%u at %s (gold=%u->%u)", crafted, maxCrafts, traderLabel,
+                      goldBefore, ItemMgr::GetGoldCharacter());
+        } else {
+            IntReport("  Craft failed at %s (count unchanged %u, gold=%u->%u) — likely out of materials",
+                      traderLabel, afterCount, goldBefore, ItemMgr::GetGoldCharacter());
+            break;
+        }
+        Sleep(ChatMgr::GetPing() + 300);
+    }
+    IntReport("  Finished at %s: crafted %u/%u", traderLabel, crafted, maxCrafts);
+    return crafted;
 }
 
 bool TestConsetCraftCycle() {
@@ -3374,41 +3368,107 @@ bool TestConsetCraftCycle() {
         IntReport("  NOTE: Some materials were out of stock. Will craft unequal conset components to burn remaining gold.");
     }
 
-    // 5. Craft consumables in a loop until we run out of materials or gold.
-    // When materials are out of stock, we craft unequal numbers — e.g. if Iron
-    // was OOS we may craft 10 Essences but only 3 Grails and 3 Armors.
-    IntReport("  Step 5: Crafting consets...");
+    // 5. Calculate how many of each consumable we can craft, then visit
+    // each crafter ONCE and batch-craft all units there. This avoids
+    // walking back and forth between Eyja/Kwat/Alcus for every single conset.
+    haveIron = CountInventoryModelQuantity(kMaterialIronIngot);
+    haveDust = CountInventoryModelQuantity(kMaterialDust);
+    haveBone = CountInventoryModelQuantity(kMaterialBone);
+    haveFeather = CountInventoryModelQuantity(kMaterialFeather);
+    gold = ItemMgr::GetGoldCharacter();
+
+    // Grail = 50 Iron + 50 Dust + 250g
+    // Essence = 50 Feather + 50 Dust + 250g
+    // Armor = 50 Iron + 50 Bone + 250g
+    // Dust is shared between Grail and Essence. Iron is shared between Grail and Armor.
+    // Split shared materials: prioritize equal conset counts, then overflow to available recipes.
+    // Simple approach: calculate max of each independently, then cap by shared resource.
+
+    // Try to craft equal sets first, then allocate leftovers
+    // Equal sets are limited by the scarcest component across all 3 recipes
+    uint32_t equalSets = gold / 250; // gold caps everything (per-craft fee)
+    // Each equal set needs: 100 Iron (50 Grail + 50 Armor), 100 Dust (50 Grail + 50 Essence),
+    //                       50 Bone, 50 Feather, 750g
+    if (equalSets > haveIron / 100) equalSets = haveIron / 100;
+    if (equalSets > haveDust / 100) equalSets = haveDust / 100;
+    if (equalSets > haveBone / 50)  equalSets = haveBone / 50;
+    if (equalSets > haveFeather / 50) equalSets = haveFeather / 50;
+    if (equalSets > gold / 750) equalSets = gold / 750;
+
+    // After equal sets, calculate how many of each consumable we can craft
+    // with remaining materials. Shared resources (Dust used by Grail+Essence,
+    // Iron used by Grail+Armor) must be split fairly — not greedily.
+    uint32_t leftIron = haveIron - equalSets * 100;
+    uint32_t leftDust = haveDust - equalSets * 100;
+    uint32_t leftBone = haveBone - equalSets * 50;
+    uint32_t leftFeather = haveFeather - equalSets * 50;
+    uint32_t leftGold = gold - equalSets * 750;
+
+    // Calculate max possible for each recipe independently
+    uint32_t maxExtraGrails = leftIron / 50;     // Grail needs Iron + Dust
+    if (maxExtraGrails > leftDust / 50) maxExtraGrails = leftDust / 50;
+    if (maxExtraGrails > leftGold / 250) maxExtraGrails = leftGold / 250;
+
+    uint32_t maxExtraEssences = leftFeather / 50; // Essence needs Feather + Dust
+    if (maxExtraEssences > leftDust / 50) maxExtraEssences = leftDust / 50;
+    if (maxExtraEssences > leftGold / 250) maxExtraEssences = leftGold / 250;
+
+    uint32_t maxExtraArmors = leftIron / 50;      // Armor needs Iron + Bone
+    if (maxExtraArmors > leftBone / 50) maxExtraArmors = leftBone / 50;
+    if (maxExtraArmors > leftGold / 250) maxExtraArmors = leftGold / 250;
+
+    // Split shared Dust between Grails and Essences (50/50)
+    uint32_t dustForGrails = leftDust / 2;
+    uint32_t dustForEssences = leftDust - dustForGrails;
+    uint32_t extraGrails = leftIron / 50;
+    if (extraGrails > dustForGrails / 50) extraGrails = dustForGrails / 50;
+    if (extraGrails > leftGold / 250) extraGrails = leftGold / 250;
+    leftIron -= extraGrails * 50;
+    leftGold -= extraGrails * 250;
+
+    uint32_t extraEssences = leftFeather / 50;
+    if (extraEssences > dustForEssences / 50) extraEssences = dustForEssences / 50;
+    if (extraEssences > leftGold / 250) extraEssences = leftGold / 250;
+    leftGold -= extraEssences * 250;
+
+    // Split remaining Iron between Grails (already allocated) and Armors
+    uint32_t extraArmors = leftIron / 50;
+    if (extraArmors > leftBone / 50) extraArmors = leftBone / 50;
+    if (extraArmors > leftGold / 250) extraArmors = leftGold / 250;
+
+    uint32_t numGrails = equalSets + extraGrails;
+    uint32_t numEssences = equalSets + extraEssences;
+    uint32_t numArmors = equalSets + extraArmors;
+    IntReport("  Step 5: Craft plan — %u equal sets + extras: Grails=%u Essences=%u Armors=%u",
+              equalSets, numGrails, numEssences, numArmors);
+    IntReport("  Materials: Iron=%u Dust=%u Bone=%u Feather=%u Gold=%u",
+              haveIron, haveDust, haveBone, haveFeather, gold);
+
+    // Visit each crafter once and batch-craft all units.
+    // Each recipe: {materialModelIds[], materialQtyPer[], materialCount}
+    // Grail of Might: 50 Iron + 50 Dust + 250g
+    const uint32_t grailMats[] = { kMaterialIronIngot, kMaterialDust };
+    const uint32_t grailQtys[] = { 50u, 50u };
+    // Essence of Celerity: 50 Feather + 50 Dust + 250g
+    const uint32_t essenceMats[] = { kMaterialFeather, kMaterialDust };
+    const uint32_t essenceQtys[] = { 50u, 50u };
+    // Armor of Salvation: 50 Iron + 50 Bone + 250g
+    const uint32_t armorMats[] = { kMaterialIronIngot, kMaterialBone };
+    const uint32_t armorQtys[] = { 50u, 50u };
+
     uint32_t grailsCrafted = 0, essencesCrafted = 0, armorsCrafted = 0;
-    constexpr uint32_t kMaxCraftPasses = 50u; // safety cap
-    for (uint32_t c = 0; c < kMaxCraftPasses; ++c) {
-        uint32_t curIron = CountInventoryModelQuantity(kMaterialIronIngot);
-        uint32_t curDust = CountInventoryModelQuantity(kMaterialDust);
-        uint32_t curBone = CountInventoryModelQuantity(kMaterialBone);
-        uint32_t curFeather = CountInventoryModelQuantity(kMaterialFeather);
-        uint32_t curGold = ItemMgr::GetGoldCharacter();
 
-        bool canGrail = curIron >= 50 && curDust >= 50 && curGold >= 250;
-        bool canEssence = curFeather >= 50 && curDust >= 50 && curGold >= 250;
-        bool canArmor = curIron >= 50 && curBone >= 50 && curGold >= 250;
-
-        if (!canGrail && !canEssence && !canArmor) {
-            IntReport("  Stopping at pass %u — insufficient materials/gold (Iron=%u Dust=%u Bone=%u Feather=%u Gold=%u)",
-                      c, curIron, curDust, curBone, curFeather, curGold);
-            break;
-        }
-
-        IntReport("  --- Craft pass %u (Iron=%u Dust=%u Bone=%u Feather=%u Gold=%u) ---",
-                  c + 1, curIron, curDust, curBone, curFeather, curGold);
-
-        if (canGrail && ConsetCraftOneItem("Eyja", kEmbarkEyjaX, kEmbarkEyjaY, kModelGrailOfMight)) {
-            ++grailsCrafted;
-        }
-        if (canEssence && ConsetCraftOneItem("Kwat", kEmbarkKwatX, kEmbarkKwatY, kModelEssenceCelerity)) {
-            ++essencesCrafted;
-        }
-        if (canArmor && ConsetCraftOneItem("Alcus", kEmbarkAlcusX, kEmbarkAlcusY, kModelArmorSalvation)) {
-            ++armorsCrafted;
-        }
+    if (numGrails > 0) {
+        grailsCrafted = ConsetCraftAllAtNPC("Eyja", kEmbarkEyjaX, kEmbarkEyjaY,
+            kModelGrailOfMight, numGrails, grailMats, grailQtys, 2);
+    }
+    if (numEssences > 0) {
+        essencesCrafted = ConsetCraftAllAtNPC("Kwat", kEmbarkKwatX, kEmbarkKwatY,
+            kModelEssenceCelerity, numEssences, essenceMats, essenceQtys, 2);
+    }
+    if (numArmors > 0) {
+        armorsCrafted = ConsetCraftAllAtNPC("Alcus", kEmbarkAlcusX, kEmbarkAlcusY,
+            kModelArmorSalvation, numArmors, armorMats, armorQtys, 2);
     }
 
     uint32_t totalSets = (grailsCrafted < essencesCrafted ? grailsCrafted : essencesCrafted);
@@ -3831,6 +3891,11 @@ int RunTradeHelperMode() {
     uint32_t lastOpenFlags = 0;
     uint32_t submitAttemptCount = 0;
     uint32_t acceptAttemptCount = 0;
+    uint32_t lastMoveSeq = 0;
+    DWORD lastMoveIssuedAt = 0;
+    float activeMoveTargetX = 0.0f;
+    float activeMoveTargetY = 0.0f;
+    bool activeMovePending = false;
     bool submittedThisOpen = false;
     bool acceptedThisOpen = false;
     bool offeredItemThisOpen = false;
@@ -3865,6 +3930,21 @@ int RunTradeHelperMode() {
             offeredItemThisOpen = false;
             submitGoldThisOpen = 0;
             offerModelThisOpen = 0;
+        }
+
+        const uint32_t moveSeq = ReadTradeHelperMoveSequenceConfig();
+        if (moveSeq != 0 && moveSeq != lastMoveSeq) {
+            float targetX = 0.0f;
+            float targetY = 0.0f;
+            if (ReadTradeHelperMoveTargetConfig(targetX, targetY)) {
+                activeMoveTargetX = targetX;
+                activeMoveTargetY = targetY;
+                activeMovePending = true;
+                lastMoveSeq = moveSeq;
+                lastMoveIssuedAt = 0;
+                IntReport("  Helper received rendezvous move request seq=%u target=(%.1f, %.1f)",
+                          moveSeq, activeMoveTargetX, activeMoveTargetY);
+            }
         }
 
         const bool autoSubmitEnabled = ReadTradeHelperAutoSubmitConfig();
@@ -3911,6 +3991,24 @@ int RunTradeHelperMode() {
 
         float x = 0.0f, y = 0.0f;
         TryReadAgentPosition(ReadMyId(), x, y);
+        if (activeMovePending) {
+            const float dx = activeMoveTargetX - x;
+            const float dy = activeMoveTargetY - y;
+            const float distSq = dx * dx + dy * dy;
+            if (distSq <= 100.0f * 100.0f) {
+                activeMovePending = false;
+                IntReport("  Helper reached rendezvous target seq=%u pos=(%.1f, %.1f)", lastMoveSeq, x, y);
+            } else if (lastMoveIssuedAt == 0 || now - lastMoveIssuedAt >= 1500) {
+                const float moveX = activeMoveTargetX;
+                const float moveY = activeMoveTargetY;
+                IntReport("  Helper moving toward rendezvous seq=%u current=(%.1f, %.1f) target=(%.1f, %.1f)",
+                          lastMoveSeq, x, y, moveX, moveY);
+                GameThread::EnqueuePost([moveX, moveY]() {
+                    AgentMgr::Move(moveX, moveY);
+                });
+                lastMoveIssuedAt = now;
+            }
+        }
         const uint32_t mapId = ReadMapId();
         const uint32_t region = MapMgr::GetRegion();
         const uint32_t district = MapMgr::GetDistrict();
