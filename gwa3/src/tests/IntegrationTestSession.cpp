@@ -3029,7 +3029,7 @@ static bool ConsetCraftOneItem(const char* traderLabel, float traderX, float tra
 }
 
 bool TestConsetCraftCycle() {
-    IntReport("=== CONSET CRAFT CYCLE TEST ===");
+    IntReport("=== CONSET CRAFT CYCLE TEST (100k budget) ===");
     StartWatchdog();
     WriteConsumableHarnessStatus("conset_cycle_start", "conset", ReadMapId(), 0, 0, 0, 0, 0, 0, 0, "starting");
 
@@ -3042,7 +3042,6 @@ bool TestConsetCraftCycle() {
         WaitFor("Embark Beach", 30000, []() { return ReadMapId() == 857u && MapMgr::GetLoadingState() == 0; });
     }
     if (!WaitForPlayerWorldReady(15000)) { IntReport("  Failed to reach Embark"); return false; }
-    // Wait for player agent to be valid
     const bool agentReady = WaitFor("player agent", 10000, []() {
         auto* me = AgentMgr::GetMyAgent();
         return me && me->x != 0.0f;
@@ -3053,27 +3052,23 @@ bool TestConsetCraftCycle() {
         IntReport("  In Embark Beach district=%u pos=(%.0f, %.0f)", MapMgr::GetDistrict(), me ? me->x : 0.0f, me ? me->y : 0.0f);
     }
 
-    // 2. Withdraw gold from Xunlai Chest if needed
-    // Full conset cycle costs ~5000g: materials (Iron ~1100, Dust ~2500, Bone ~500, Feather ~500) + craft fees (750)
+    // 2. Withdraw gold to reach 100k on character
+    constexpr uint32_t kTargetGold = 100000u;
     uint32_t gold = ItemMgr::GetGoldCharacter();
     uint32_t storageGold = ItemMgr::GetGoldStorage();
-    IntReport("  Step 2: Gold check — char=%u storage=%u", gold, storageGold);
-    if (gold < 10000 && storageGold > 0) {
-        IntReport("  Withdrawing gold from Xunlai Chest...");
+    IntReport("  Step 2: Gold — char=%u storage=%u target=%u", gold, storageGold, kTargetGold);
+    if (gold < kTargetGold && storageGold > 0) {
+        IntReport("  Withdrawing gold from Xunlai to reach %u...", kTargetGold);
         if (ConsetMoveToNPC(kEmbarkXunlaiX, kEmbarkXunlaiY, "Xunlai Chest")) {
             uint32_t npc = ConsetFindNearestNPC(kEmbarkXunlaiX, kEmbarkXunlaiY);
             if (npc) {
-                // Interact with chest via GoNPC + wait (no merchant check needed)
                 AgentMgr::ChangeTarget(npc);
                 Sleep(250);
                 CtoS::SendPacket(3, Packets::INTERACT_NPC, npc, 0u);
                 Sleep(2000);
-
-                // ChangeGold works as a direct packet — doesn't need the chest UI open
-                uint32_t maxWithdraw = 100000u - gold;
-                uint32_t toWithdraw = storageGold > maxWithdraw ? maxWithdraw : storageGold;
-                if (toWithdraw > 50000) toWithdraw = 50000;
-                IntReport("  Withdrawing %u gold (char=%u storage=%u)...", toWithdraw, gold, storageGold);
+                uint32_t toWithdraw = kTargetGold - gold;
+                if (toWithdraw > storageGold) toWithdraw = storageGold;
+                IntReport("  Withdrawing %u gold...", toWithdraw);
                 ItemMgr::ChangeGold(gold + toWithdraw, storageGold - toWithdraw);
                 Sleep(500);
                 gold = ItemMgr::GetGoldCharacter();
@@ -3081,61 +3076,133 @@ bool TestConsetCraftCycle() {
             }
         }
     } else {
-        IntReport("  Sufficient gold (%u), skipping Xunlai", gold);
+        IntReport("  Already have %u gold, skipping Xunlai", gold);
     }
 
-    // 3. Buy materials from material trader if needed
-    // 1 conset needs: 100 Iron, 100 Dust, 50 Bone, 50 Feather
-    IntReport("  Step 3: Buy materials from material trader if needed...");
-    {
-        uint32_t iron = CountInventoryModelQuantity(kMaterialIronIngot);
-        uint32_t dust = CountInventoryModelQuantity(kMaterialDust);
-        uint32_t bone = CountInventoryModelQuantity(kMaterialBone);
-        uint32_t feather = CountInventoryModelQuantity(kMaterialFeather);
-        IntReport("  Before buy: Iron=%u Dust=%u Bone=%u Feather=%u", iron, dust, bone, feather);
+    // 3. Open material trader and get prices
+    constexpr float kMaterialTraderX = 2933.0f;
+    constexpr float kMaterialTraderY = -2236.0f;
+    IntReport("  Step 3: Opening material trader for price check...");
+    if (!ConsetMoveToNPC(kMaterialTraderX, kMaterialTraderY, "Material Trader")) {
+        IntReport("  Failed to reach material trader");
+        return false;
+    }
+    uint32_t traderNpc = ConsetFindNearestNPC(kMaterialTraderX, kMaterialTraderY);
+    if (!traderNpc || !ConsetOpenNPCDialog(traderNpc, "Material Trader")) {
+        IntReport("  Failed to open material trader");
+        return false;
+    }
+    IntReport("  Material trader open: %u items", TradeMgr::GetMerchantItemCount());
 
-        bool needBuy = iron < 100 || dust < 100 || bone < 50 || feather < 50;
-        if (needBuy) {
-            constexpr float kMaterialTraderX = 2933.0f;
-            constexpr float kMaterialTraderY = -2236.0f;
-            if (ConsetMoveToNPC(kMaterialTraderX, kMaterialTraderY, "Material Trader")) {
-                uint32_t npc = ConsetFindNearestNPC(kMaterialTraderX, kMaterialTraderY);
-                if (npc && ConsetOpenNPCDialog(npc, "Material Trader")) {
-                    IntReport("  Material trader open: %u items", TradeMgr::GetMerchantItemCount());
-                    if (iron < 100)    ConsetBuyMaterial(kMaterialIronIngot, 100);
-                    if (dust < 100)    ConsetBuyMaterial(kMaterialDust, 100);
-                    if (bone < 50)     ConsetBuyMaterial(kMaterialBone, 50);
-                    if (feather < 50)  ConsetBuyMaterial(kMaterialFeather, 50);
-                } else {
-                    IntReport("  Failed to open material trader");
-                }
-            }
+    // Get current prices by requesting a single quote for each material
+    auto getPrice = [](uint32_t modelId) -> uint32_t {
+        uint32_t itemId = FindTraderVirtualItemId(modelId);
+        if (!itemId) return 0;
+        TraderHook::Reset();
+        TraderQuoteTask q{itemId};
+        CtoS::EnqueueGameCommand(&TraderQuoteInvoker, &q, sizeof(q));
+        WaitFor("price check", 3000, []() {
+            return TraderHook::GetCostValue() > 0 && TraderHook::GetCostValue() < 100000;
+        });
+        return TraderHook::GetCostValue();
+    };
+    uint32_t priceIron = getPrice(kMaterialIronIngot);
+    uint32_t priceDust = getPrice(kMaterialDust);
+    uint32_t priceBone = getPrice(kMaterialBone);
+    uint32_t priceFeather = getPrice(kMaterialFeather);
+    IntReport("  Prices: Iron=%u Dust=%u Bone=%u Feather=%u", priceIron, priceDust, priceBone, priceFeather);
+
+    if (!priceIron || !priceDust || !priceBone || !priceFeather) {
+        IntReport("  Failed to get all material prices");
+        return false;
+    }
+
+    // Calculate how many consets we can afford with ~90k budget
+    // Per conset: 10 packs Iron + 10 packs Dust + 5 packs Bone + 5 packs Feather + 750g craft fees
+    // Material prices rise as we buy — estimate ~50% markup over starting price
+    constexpr uint32_t kMaterialBudget = 90000u;
+    uint32_t costPerConset = 10u * priceIron + 10u * priceDust + 5u * priceBone + 5u * priceFeather + 750u;
+    // Add 50% buffer for price increases
+    uint32_t estimatedCostPerConset = costPerConset + costPerConset / 2;
+    uint32_t numConsets = kMaterialBudget / estimatedCostPerConset;
+    if (numConsets < 1) numConsets = 1;
+    if (numConsets > 25) numConsets = 25; // cap to avoid very long runs
+    IntReport("  Cost per conset (base): %u  Estimated (1.5x): %u  Budget: %u  Consets to craft: %u",
+              costPerConset, estimatedCostPerConset, kMaterialBudget, numConsets);
+
+    // Calculate total materials needed (including what we already have)
+    uint32_t haveIron = CountInventoryModelQuantity(kMaterialIronIngot);
+    uint32_t haveDust = CountInventoryModelQuantity(kMaterialDust);
+    uint32_t haveBone = CountInventoryModelQuantity(kMaterialBone);
+    uint32_t haveFeather = CountInventoryModelQuantity(kMaterialFeather);
+    uint32_t needIron = numConsets * 100;
+    uint32_t needDust = numConsets * 100;
+    uint32_t needBone = numConsets * 50;
+    uint32_t needFeather = numConsets * 50;
+    IntReport("  Have: Iron=%u Dust=%u Bone=%u Feather=%u", haveIron, haveDust, haveBone, haveFeather);
+    IntReport("  Need: Iron=%u Dust=%u Bone=%u Feather=%u", needIron, needDust, needBone, needFeather);
+
+    // 4. Buy all materials (material trader is already open)
+    IntReport("  Step 4: Buying materials...");
+    if (haveIron < needIron)    ConsetBuyMaterial(kMaterialIronIngot, needIron);
+    if (haveDust < needDust)    ConsetBuyMaterial(kMaterialDust, needDust);
+    if (haveBone < needBone)    ConsetBuyMaterial(kMaterialBone, needBone);
+    if (haveFeather < needFeather) ConsetBuyMaterial(kMaterialFeather, needFeather);
+
+    haveIron = CountInventoryModelQuantity(kMaterialIronIngot);
+    haveDust = CountInventoryModelQuantity(kMaterialDust);
+    haveBone = CountInventoryModelQuantity(kMaterialBone);
+    haveFeather = CountInventoryModelQuantity(kMaterialFeather);
+    gold = ItemMgr::GetGoldCharacter();
+    IntReport("  After buying: Iron=%u Dust=%u Bone=%u Feather=%u Gold=%u",
+              haveIron, haveDust, haveBone, haveFeather, gold);
+
+    // 5. Craft consets in a loop until we run out of materials or gold
+    IntReport("  Step 5: Crafting consets...");
+    uint32_t grailsCrafted = 0, essencesCrafted = 0, armorsCrafted = 0;
+    for (uint32_t c = 0; c < numConsets; ++c) {
+        uint32_t curIron = CountInventoryModelQuantity(kMaterialIronIngot);
+        uint32_t curDust = CountInventoryModelQuantity(kMaterialDust);
+        uint32_t curBone = CountInventoryModelQuantity(kMaterialBone);
+        uint32_t curFeather = CountInventoryModelQuantity(kMaterialFeather);
+        uint32_t curGold = ItemMgr::GetGoldCharacter();
+
+        bool canGrail = curIron >= 50 && curDust >= 50 && curGold >= 250;
+        bool canEssence = curFeather >= 50 && curDust >= 50 && curGold >= 250;
+        bool canArmor = curIron >= 50 && curBone >= 50 && curGold >= 250;
+
+        if (!canGrail && !canEssence && !canArmor) {
+            IntReport("  Stopping at conset %u — insufficient materials/gold (Iron=%u Dust=%u Bone=%u Feather=%u Gold=%u)",
+                      c, curIron, curDust, curBone, curFeather, curGold);
+            break;
+        }
+
+        IntReport("  --- Conset %u/%u (Iron=%u Dust=%u Bone=%u Feather=%u Gold=%u) ---",
+                  c + 1, numConsets, curIron, curDust, curBone, curFeather, curGold);
+
+        if (canGrail && ConsetCraftOneItem("Eyja", kEmbarkEyjaX, kEmbarkEyjaY, kModelGrailOfMight)) {
+            ++grailsCrafted;
+        }
+        if (canEssence && ConsetCraftOneItem("Kwat", kEmbarkKwatX, kEmbarkKwatY, kModelEssenceCelerity)) {
+            ++essencesCrafted;
+        }
+        if (canArmor && ConsetCraftOneItem("Alcus", kEmbarkAlcusX, kEmbarkAlcusY, kModelArmorSalvation)) {
+            ++armorsCrafted;
         }
     }
 
-    // Re-check materials after buying
-    uint32_t iron = CountInventoryModelQuantity(kMaterialIronIngot);
-    uint32_t dust = CountInventoryModelQuantity(kMaterialDust);
-    uint32_t bone = CountInventoryModelQuantity(kMaterialBone);
-    uint32_t feather = CountInventoryModelQuantity(kMaterialFeather);
-    IntReport("  After buy: Iron=%u Dust=%u Bone=%u Feather=%u", iron, dust, bone, feather);
-
-    bool canGrail = iron >= 50 && dust >= 50;
-    bool canEssence = feather >= 50 && dust >= (canGrail ? 100 : 50);
-    bool canArmor = iron >= (canGrail ? 100 : 50) && bone >= 50;
-    IntReport("  Can craft: Grail=%u Essence=%u Armor=%u", canGrail, canEssence, canArmor);
-
-    // 4. Craft
-    bool grailOk = false, essenceOk = false, armorOk = false;
-    if (canGrail) { grailOk = ConsetCraftOneItem("Eyja", kEmbarkEyjaX, kEmbarkEyjaY, kModelGrailOfMight); IntCheck("Crafted Grail", grailOk); }
-    if (canEssence) { essenceOk = ConsetCraftOneItem("Kwat", kEmbarkKwatX, kEmbarkKwatY, kModelEssenceCelerity); IntCheck("Crafted Essence", essenceOk); }
-    if (canArmor) { armorOk = ConsetCraftOneItem("Alcus", kEmbarkAlcusX, kEmbarkAlcusY, kModelArmorSalvation); IntCheck("Crafted Armor", armorOk); }
-
-    uint32_t total = (grailOk?1:0)+(essenceOk?1:0)+(armorOk?1:0);
-    char result[128]; sprintf_s(result, "grail=%u essence=%u armor=%u total=%u", grailOk, essenceOk, armorOk, total);
-    WriteConsumableHarnessStatus("conset_cycle_complete", "conset", ReadMapId(), 0, 0, 0, 0, 0, total, total>0?1:0, result);
-    IntReport("=== CONSET RESULT: %u/3 (%s) ===", total, result);
-    return total > 0;
+    uint32_t totalSets = (grailsCrafted < essencesCrafted ? grailsCrafted : essencesCrafted);
+    totalSets = (totalSets < armorsCrafted ? totalSets : armorsCrafted);
+    uint32_t finalGold = ItemMgr::GetGoldCharacter();
+    uint32_t goldSpent = (gold > finalGold) ? (gold - finalGold) : 0;
+    // Use starting gold before any buying for total spent calculation
+    char result[256];
+    sprintf_s(result, "grails=%u essences=%u armors=%u completeSets=%u goldSpent=%u goldRemaining=%u",
+              grailsCrafted, essencesCrafted, armorsCrafted, totalSets, goldSpent, finalGold);
+    WriteConsumableHarnessStatus("conset_cycle_complete", "conset", ReadMapId(), 0, 0, 0, 0,
+                                 0, totalSets, totalSets > 0 ? 1u : 0u, result);
+    IntReport("=== CONSET RESULT: %u complete sets — %s ===", totalSets, result);
+    return totalSets > 0;
 }
 
 bool TestConsumableCrafting() {
