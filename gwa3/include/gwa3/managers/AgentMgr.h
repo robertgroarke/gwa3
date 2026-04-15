@@ -21,6 +21,7 @@ namespace GWA3::AgentMgr {
     void Attack(uint32_t agentId);
     void CancelAction();
     void CallTarget(uint32_t agentId);
+    bool ActionInteract();
 
     // Interaction
     void InteractItem(uint32_t agentId, bool callTarget = false);
@@ -33,9 +34,7 @@ namespace GWA3::AgentMgr {
     AgentLiving* GetMyAgent();
     AgentLiving* GetTargetAsLiving();
     uint32_t GetMaxAgents();
-
-    // Deprecated — returns null. Use GetAgentByID + GetMaxAgents instead.
-    GWArray<Agent*>* GetAgentArray();
+    bool IsCasting(const AgentLiving* agent);
 
     // Utility
     float GetDistance(float x1, float y1, float x2, float y2);

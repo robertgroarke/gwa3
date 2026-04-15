@@ -48,13 +48,13 @@ static InlineTask s_preQueue[kMaxQueue];
 static uint32_t s_queueHead = 0;
 static uint32_t s_queueTail = 0;
 
+static InlineTask s_serialPreQueue[kMaxQueue];
+static uint32_t s_serialPreHead = 0;
+static uint32_t s_serialPreTail = 0;
+
 static InlineTask s_postQueue_ring[kMaxQueue];
 static uint32_t s_postHead = 0;
 static uint32_t s_postTail = 0;
-
-// Legacy — kept for API compatibility
-static std::vector<Callback> s_queue;
-static std::vector<Callback> s_postQueue;
 
 // --- Persistent callback registry ---
 struct CallbackRecord {
@@ -63,8 +63,6 @@ struct CallbackRecord {
     Callback cb;
 };
 static std::vector<CallbackRecord> s_registry;
-
-// Old Dispatch/DispatchPost removed — replaced by DrainPreQueue/DrainPostQueue below
 
 // --- Queue drain (called via GameCallback-typed pointer from detour) ---
 // No heap allocation — InlineTask stores callable inline.
@@ -82,6 +80,26 @@ static void __cdecl DrainQueuesOnGameThread(float, int) {
         s_preQueue[idx]();
         s_preQueue[idx].invoke = nullptr;
         Log::Info("GameThread: Drain pre[%u] done", idx);
+        EnterCriticalSection(&s_cs);
+    }
+
+    LeaveCriticalSection(&s_cs);
+}
+
+static void __cdecl DrainSerialPreQueueOnGameThread(float, int) {
+    EnterCriticalSection(&s_cs);
+    s_onGameThread = true;
+    s_gameThreadId = GetCurrentThreadId();
+
+    if (s_serialPreTail != s_serialPreHead) {
+        const uint32_t idx = s_serialPreTail;
+        s_serialPreTail = (s_serialPreTail + 1) % kMaxQueue;
+        Log::Info("GameThread: Drain serial-pre[%u] invoke=0x%08X", idx,
+                  reinterpret_cast<uintptr_t>(s_serialPreQueue[idx].invoke));
+        LeaveCriticalSection(&s_cs);
+        s_serialPreQueue[idx]();
+        s_serialPreQueue[idx].invoke = nullptr;
+        Log::Info("GameThread: Drain serial-pre[%u] done", idx);
         EnterCriticalSection(&s_cs);
     }
 
@@ -151,10 +169,19 @@ static DWORD WINAPI HookWatchdog(LPVOID) {
 // --- MinHook detour ---
 // Drain functions use GameCallback signature so MSVC generates identical
 // call-site code as s_originalCallback (which is proven stable).
+static GameCallback s_serialPreDrain = reinterpret_cast<GameCallback>(&DrainSerialPreQueueOnGameThread);
 static GameCallback s_preDrain = reinterpret_cast<GameCallback>(&DrainQueuesOnGameThread);
 static GameCallback s_postDrain = reinterpret_cast<GameCallback>(&DrainPostQueuesOnGameThread);
 
 static void __cdecl DetourCallback(float elapsed, int unknown) {
+    if (s_serialPreTail != s_serialPreHead) {
+        Log::Info("GameThread: Detour serial-pre pending (head=%u tail=%u)",
+                  s_serialPreHead, s_serialPreTail);
+        s_serialPreDrain(elapsed, unknown);
+        Log::Info("GameThread: Detour serial-pre returned (head=%u tail=%u)",
+                  s_serialPreHead, s_serialPreTail);
+    }
+
     // Pre-dispatch: drain queued tasks on game thread
     if (s_queueTail != s_queueHead) {
         Log::Info("GameThread: Detour pre-dispatch pending (head=%u tail=%u)", s_queueHead, s_queueTail);
@@ -312,9 +339,11 @@ void Shutdown() {
     // Clear all queued work
     EnterCriticalSection(&s_cs);
     s_queueHead = s_queueTail = 0;
+    s_serialPreHead = s_serialPreTail = 0;
     s_postHead = s_postTail = 0;
     for (uint32_t i = 0; i < kMaxQueue; i++) {
         s_preQueue[i].invoke = nullptr;
+        s_serialPreQueue[i].invoke = nullptr;
         s_postQueue_ring[i].invoke = nullptr;
     }
     s_registry.clear();
@@ -350,6 +379,28 @@ void Enqueue(Callback task) {
     }
     EmplaceCallback(s_preQueue[s_queueHead], std::move(task));
     s_queueHead = next;
+    LeaveCriticalSection(&s_cs);
+}
+
+void EnqueueSerialPre(Callback task) {
+    if (!s_initialized) return;
+
+    EnterCriticalSection(&s_cs);
+
+    if (s_onGameThread && s_gameThreadId == GetCurrentThreadId()) {
+        LeaveCriticalSection(&s_cs);
+        task();
+        return;
+    }
+
+    const uint32_t next = (s_serialPreHead + 1) % kMaxQueue;
+    if (next == s_serialPreTail) {
+        LeaveCriticalSection(&s_cs);
+        Log::Warn("GameThread: EnqueueSerialPre ring buffer full, dropping task");
+        return;
+    }
+    EmplaceCallback(s_serialPreQueue[s_serialPreHead], std::move(task));
+    s_serialPreHead = next;
     LeaveCriticalSection(&s_cs);
 }
 

@@ -33,6 +33,9 @@ static constexpr uint32_t MAP_SPARKFLY_SWAMP    = 558;
 static constexpr uint32_t MAP_BOGROOT_LVL1      = 615;
 static constexpr uint32_t MAP_BOGROOT_LVL2      = 616;
 static constexpr uint32_t MAP_GADDS_ENCAMPMENT  = 638;
+static constexpr float LONG_BOW_RANGE           = 1320.0f;
+static constexpr uint32_t EFFECTS_SKIP_AGGRO_FOE = 0x0014u;
+static constexpr uint32_t TYPE_MAP_VANISHED_HOSTILE_MINION = 262152u;
 
 static constexpr uint32_t QUEST_TEKKS_WAR       = 0x339;
 static constexpr uint32_t DIALOG_QUEST_REWARD   = 0x833907;
@@ -53,17 +56,15 @@ struct Waypoint {
 // ===== Routes =====
 
 static const Waypoint SPARKFLY_TO_DUNGEON[] = {
-    {-4559,  -14406, 1300, "1"},
-    {-5204,  -9831,  1300, "2"},
-    {-928,   -8699,  1300, "3"},
-    {4200,   -4897,  1500, "4"},
-    {6114,   819,    1300, "5"},
-    {9500,   2281,   1300, "6"},
-    {11570,  6120,   1200, "7"},
-    {11025,  11710,  900,  "8"},
-    {14624,  19314,  600,  "9"},
-    {14650,  19417,  0,    "10"},
-    {12280,  22585,  0,    "11"},
+    {-4559,  -14406, 1350, "1"},
+    {-5204,  -9831,  1350, "2"},
+    {-928,   -8699,  1350, "3"},
+    {4200,   -4897,  1350, "4"},
+    {6114,   819,    1250, "5"},
+    {9500,   2281,   1250, "6"},
+    {11570,  6120,   1250, "7"},
+    {11025,  11710,  1250, "8"},
+    {14624,  19314,  1250, "9"},
 };
 
 static const Waypoint BOGROOT_LVL1[] = {
@@ -143,6 +144,7 @@ static uint32_t s_wipeCount = 0;
 static DWORD s_runStartTime = 0;
 static DWORD s_totalStartTime = 0;
 static DWORD s_bestRunTime = 0xFFFFFFFF;
+static DungeonLoopTelemetry s_dungeonLoopTelemetry = {};
 
 // ===== Forward declarations =====
 static void WaitMs(DWORD ms);
@@ -155,6 +157,8 @@ static bool SendDialogWithRetry(uint32_t dialogId, int maxRetries = 3, DWORD del
 static void UseDpRemovalIfNeeded();
 static bool IsDead();
 static uint32_t CountFreeSlots();
+static void SuspendTransitionSensitiveHooks();
+static void ResumeTransitionSensitiveHooks();
 
 // ===== Skill Template Decoder (GWA3-101) =====
 
@@ -315,7 +319,7 @@ static constexpr uint32_t ROLE_RESURRECT      = (1 << 18);  // Resurrection
 static constexpr uint32_t ROLE_OFFENSIVE      = (1 << 19);  // Generic offensive
 static constexpr uint32_t ROLE_DEFENSIVE      = (1 << 20);  // Generic defensive
 
-// Combined masks for legacy compatibility
+// Combined role masks
 static constexpr uint32_t ROLE_ANY_HEAL = ROLE_HEAL_SINGLE | ROLE_HEAL_PARTY | ROLE_HEAL_SELF;
 static constexpr uint32_t ROLE_ANY_INTERRUPT = ROLE_INTERRUPT_HARD | ROLE_INTERRUPT_SOFT;
 static constexpr uint32_t ROLE_ANY_REMOVAL = ROLE_COND_REMOVE | ROLE_HEX_REMOVE | ROLE_ENCHANT_REMOVE;
@@ -335,8 +339,10 @@ struct CachedSkill {
 static CachedSkill s_skillCache[8] = {};
 static bool s_skillsCached = false;
 static bool s_skillUsedThisStep[8] = {};
+static constexpr uint32_t EFFECT_QUICKENING_ZEPHYR = 475u;
 static char s_lastCombatStep[128] = "uninitialized";
 static LastCombatStepInfo s_lastCombatStepInfo = {};
+static SparkflyTraversalCombatStats s_sparkflyTraversalCombatStats = {};
 static bool s_combatDebugLogging = false;
 static char s_builtinCombatDump[12][256] = {};
 static int s_builtinCombatDumpCount = 0;
@@ -352,6 +358,10 @@ static void SetLastCombatStepDescription(const char* fmt, ...) {
 
 static void ResetLastCombatStepInfo() {
     s_lastCombatStepInfo = {};
+}
+
+static void ResetSparkflyTraversalCombatStatsState() {
+    s_sparkflyTraversalCombatStats = {};
 }
 
 static void ResetCombatDebugTrace() {
@@ -451,7 +461,8 @@ static bool IsSpeedBoostId(uint32_t id) {
     switch (id) {
     case 312: case 452: case 826: case 828: case 856:
     case 867: case 878: case 947: case 1003: case 1338:
-    case 2370: case 2371: case 2051: case 2052:
+    case 2051: case 2052: case 2370: case 2371:
+    case 3431: // Heroic Refrain
         return true;
     }
     return false;
@@ -462,7 +473,6 @@ static bool IsBindingId(uint32_t id) {
     switch (id) {
     case 2233: // Ebon Battle Standard of Honor
     case 2100: // Summon Spirits Kurzick
-    case 1228: // Spirit Siphon
     case 1232: // Armor of Unfeeling
     case 1238: // Signet of Creation
     case 1239: // Signet of Spirits
@@ -470,7 +480,7 @@ static bool IsBindingId(uint32_t id) {
     case 2110: // Vampirism
     case 1742: // Signet of Ghostly Might
     case 1217: // Ritual Lord
-    case 1884: // Soul Twisting
+    case 1240: // Soul Twisting
     case 786: case 787: case 788: case 789: case 790:  // Spirits
     case 791: case 792: case 793: case 794: case 795:
     case 960: case 961: case 962: case 963: case 964:
@@ -495,6 +505,7 @@ static bool IsPressureSpiritId(uint32_t id) {
 static bool IsPrecastId(uint32_t id) {
     if (IsPressureSpiritId(id)) return true;
     switch (id) {
+    case 1230: // Boon of Creation
     case 1232: // Armor of Unfeeling
     case 1228: // Spirit Siphon
     case 2100: // Summon Spirits Kurzick
@@ -641,7 +652,7 @@ static void CacheSkillBar() {
 // ===== Intelligent Target Selection (GWA3-123) =====
 
 // Find the ally with the lowest HP fraction. Returns 0 if no ally found.
-static uint32_t GetLowestHealthAlly(float maxRange = 2500.0f) {
+static uint32_t GetLowestHealthAlly(float maxRange = 2500.0f, bool excludeSelf = false) {
     auto* me = AgentMgr::GetMyAgent();
     if (!me) return 0;
     float bestHp = 1.0f;
@@ -652,6 +663,7 @@ static uint32_t GetLowestHealthAlly(float maxRange = 2500.0f) {
         if (!a || a->type != 0xDB) continue;
         auto* living = static_cast<AgentLiving*>(a);
         if (living->allegiance != 1) continue; // allies only
+        if (excludeSelf && living->agent_id == me->agent_id) continue;
         if (living->hp <= 0.0f) continue; // skip dead
         float dist = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
         if (dist > maxRange * maxRange) continue;
@@ -661,6 +673,87 @@ static uint32_t GetLowestHealthAlly(float maxRange = 2500.0f) {
         }
     }
     return bestId;
+}
+
+static uint32_t CountAgentEffectsByPredicate(uint32_t agentId, bool (*predicate)(const Skill*)) {
+    if (agentId == 0 || predicate == nullptr) return 0;
+    auto* effectArray = EffectMgr::GetAgentEffectArray(agentId);
+    if (!effectArray || !effectArray->buffer) return 0;
+
+    uint32_t matches = 0;
+    for (uint32_t i = 0; i < effectArray->size; ++i) {
+        const Effect& effect = effectArray->buffer[i];
+        if (effect.skill_id == 0) continue;
+        const Skill* effectSkill = SkillMgr::GetSkillConstantData(effect.skill_id);
+        if (!effectSkill) continue;
+        if (predicate(effectSkill)) {
+            ++matches;
+        }
+    }
+    return matches;
+}
+
+static bool IsHexEffectSkill(const Skill* skill) {
+    return skill && skill->type == 1u;
+}
+
+static bool IsConditionEffectSkill(const Skill* skill) {
+    return skill && skill->condition != 0u;
+}
+
+static uint32_t GetMostAffectedAlly(bool excludeSelf,
+                                    uint32_t (*scoreFn)(uint32_t),
+                                    float maxRange = 2500.0f) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me || !scoreFn) return 0;
+
+    uint32_t bestId = 0;
+    uint32_t bestScore = 0;
+    float bestHp = 1.1f;
+    const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1; i < maxAgents; ++i) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (living->allegiance != 1 || living->hp <= 0.0f) continue;
+        if (excludeSelf && living->agent_id == me->agent_id) continue;
+        const float distSq = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+        if (distSq > maxRange * maxRange) continue;
+
+        const uint32_t score = scoreFn(living->agent_id);
+        if (score == 0) continue;
+        if (score > bestScore || (score == bestScore && living->hp < bestHp)) {
+            bestScore = score;
+            bestHp = living->hp;
+            bestId = living->agent_id;
+        }
+    }
+    return bestId;
+}
+
+static uint32_t CountHexEffects(uint32_t agentId) {
+    return CountAgentEffectsByPredicate(agentId, &IsHexEffectSkill);
+}
+
+static uint32_t CountConditionEffects(uint32_t agentId) {
+    return CountAgentEffectsByPredicate(agentId, &IsConditionEffectSkill);
+}
+
+static uint32_t GetMostHexedAlly(bool excludeSelf = false, float maxRange = 2500.0f) {
+    return GetMostAffectedAlly(excludeSelf, &CountHexEffects, maxRange);
+}
+
+static uint32_t GetMostConditionedAlly(bool excludeSelf = false, float maxRange = 2500.0f) {
+    return GetMostAffectedAlly(excludeSelf, &CountConditionEffects, maxRange);
+}
+
+static bool CanCast(const CachedSkill& skill);
+
+static bool CanBasicAttack() {
+    CachedSkill basicAttack = {};
+    basicAttack.slot = 0xFF;
+    basicAttack.skill_type = 9;
+    return CanCast(basicAttack);
 }
 
 // Find the nearest dead ally. Returns 0 if none.
@@ -685,115 +778,143 @@ static uint32_t GetDeadAlly(float maxRange = 2500.0f) {
     return bestId;
 }
 
-// Find nearest enemy without a hex. Returns 0 if all hexed or none nearby.
-static uint32_t GetUnhexedEnemy(float maxRange = 1500.0f) {
+static uint32_t GetNearestLivingAgentByAllegiance(uint8_t allegiance, float maxRange = 2500.0f) {
     auto* me = AgentMgr::GetMyAgent();
     if (!me) return 0;
     float bestDist = maxRange * maxRange;
     uint32_t bestId = 0;
-    uint32_t maxAgents = AgentMgr::GetMaxAgents();
-    for (uint32_t i = 1; i < maxAgents; i++) {
+    const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1; i < maxAgents; ++i) {
         auto* a = AgentMgr::GetAgentByID(i);
         if (!a || a->type != 0xDB) continue;
         auto* living = static_cast<AgentLiving*>(a);
-        if (living->allegiance != 3) continue; // foes only
+        if (living->allegiance != allegiance) continue;
         if (living->hp <= 0.0f) continue;
-        if (living->hex != 0) continue; // already hexed â€” skip
-        float dist = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
-        if (dist < bestDist) {
-            bestDist = dist;
+        const float distSq = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+        if (distSq < bestDist) {
+            bestDist = distSq;
             bestId = living->agent_id;
         }
     }
     return bestId;
 }
 
-// Find nearest enemy that is currently casting. Returns 0 if none casting.
-static uint32_t GetCastingEnemy(float maxRange = 1500.0f) {
-    auto* me = AgentMgr::GetMyAgent();
-    if (!me) return 0;
-    float bestDist = maxRange * maxRange;
-    uint32_t bestId = 0;
-    uint32_t maxAgents = AgentMgr::GetMaxAgents();
-    for (uint32_t i = 1; i < maxAgents; i++) {
-        auto* a = AgentMgr::GetAgentByID(i);
-        if (!a || a->type != 0xDB) continue;
-        auto* living = static_cast<AgentLiving*>(a);
-        if (living->allegiance != 3) continue;
-        if (living->hp <= 0.0f) continue;
-        if (living->skill == 0) continue; // not casting
-        float dist = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
-        if (dist < bestDist) {
-            bestDist = dist;
-            bestId = living->agent_id;
-        }
-    }
-    return bestId;
+static uint32_t GetNearestSpiritAlly(float maxRange = 2500.0f) {
+    return GetNearestLivingAgentByAllegiance(4u, maxRange);
 }
 
-// Find nearest enemy with an enchantment. Returns 0 if none enchanted.
-static uint32_t GetEnchantedEnemy(float maxRange = 1500.0f) {
-    auto* me = AgentMgr::GetMyAgent();
-    if (!me) return 0;
-    float bestDist = maxRange * maxRange;
-    uint32_t bestId = 0;
-    uint32_t maxAgents = AgentMgr::GetMaxAgents();
-    for (uint32_t i = 1; i < maxAgents; i++) {
-        auto* a = AgentMgr::GetAgentByID(i);
-        if (!a || a->type != 0xDB) continue;
-        auto* living = static_cast<AgentLiving*>(a);
-        if (living->allegiance != 3) continue;
-        if (living->hp <= 0.0f) continue;
-        // Check for enchantments via effects
+static uint32_t GetNearestMinionAlly(float maxRange = 2500.0f) {
+    return GetNearestLivingAgentByAllegiance(5u, maxRange);
+}
+
+static bool IsValidAggroEnemy(const AgentLiving* me,
+                              const AgentLiving* living,
+                              float maxRange,
+                              bool castingOnly = false,
+                              bool noHexOnly = false,
+                              bool enchantedOnly = false) {
+    if (!me || !living) return false;
+    if (living->allegiance != 3) return false;
+    if (living->agent_id == 0 || living->agent_id == me->agent_id) return false;
+    if (living->hp <= 0.0f) return false;
+    if ((living->effects & EFFECTS_SKIP_AGGRO_FOE) != 0) return false;
+    if (living->type_map == TYPE_MAP_VANISHED_HOSTILE_MINION) return false;
+
+    const float distSq = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+    if (distSq > maxRange * maxRange) return false;
+
+    if (castingOnly && living->skill == 0) return false;
+    if (noHexOnly && living->hex != 0) return false;
+    if (enchantedOnly) {
         auto* agentEffects = EffectMgr::GetAgentEffects(living->agent_id);
-        if (!agentEffects) continue;
+        if (!agentEffects || !agentEffects->effects.buffer) return false;
         bool hasEnchant = false;
-        if (agentEffects->effects.buffer) {
-            for (uint32_t ei = 0; ei < agentEffects->effects.size; ei++) {
-                auto& eff = agentEffects->effects.buffer[ei];
-                if (eff.skill_id == 0) continue;
-                const auto* sd = SkillMgr::GetSkillConstantData(eff.skill_id);
-                if (sd && (sd->type == 3 || sd->type == 16)) { // Enchantment or Flash Enchantment
-                    hasEnchant = true;
-                    break;
-                }
+        for (uint32_t ei = 0; ei < agentEffects->effects.size; ++ei) {
+            auto& eff = agentEffects->effects.buffer[ei];
+            if (eff.skill_id == 0) continue;
+            const auto* sd = SkillMgr::GetSkillConstantData(eff.skill_id);
+            if (sd && (sd->type == 3 || sd->type == 16)) {
+                hasEnchant = true;
+                break;
             }
         }
-        if (!hasEnchant) continue;
-        float dist = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
-        if (dist < bestDist) {
-            bestDist = dist;
-            bestId = living->agent_id;
+        if (!hasEnchant) return false;
+    }
+
+    return true;
+}
+
+static uint32_t SelectMostBalledEnemy(float maxRange = 1350.0f,
+                                      bool castingOnly = false,
+                                      bool noHexOnly = false,
+                                      bool enchantedOnly = false) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return 0;
+
+    constexpr size_t kMaxCandidates = 512;
+    uint32_t candidateIds[kMaxCandidates] = {};
+    size_t candidateCount = 0;
+    const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1; i < maxAgents && candidateCount < kMaxCandidates; ++i) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (!IsValidAggroEnemy(me, living, maxRange, castingOnly, noHexOnly, enchantedOnly)) continue;
+        candidateIds[candidateCount++] = living->agent_id;
+    }
+
+    float bestSumDistances = 999999999.0f;
+    uint32_t bestId = 0;
+    for (size_t i = 0; i < candidateCount; ++i) {
+        auto* src = AgentMgr::GetAgentByID(candidateIds[i]);
+        if (!src) continue;
+
+        float sumDistances = 0.0f;
+        for (size_t j = 0; j < candidateCount; ++j) {
+            if (i == j) continue;
+            auto* dst = AgentMgr::GetAgentByID(candidateIds[j]);
+            if (!dst) continue;
+            sumDistances += AgentMgr::GetDistance(src->x, src->y, dst->x, dst->y);
+        }
+
+        if (sumDistances < bestSumDistances) {
+            bestSumDistances = sumDistances;
+            bestId = candidateIds[i];
         }
     }
     return bestId;
 }
 
-// Find nearest enemy in melee range (250 units).
-static uint32_t GetMeleeRangeEnemy() {
-    auto* me = AgentMgr::GetMyAgent();
-    if (!me) return 0;
-    float bestDist = 250.0f * 250.0f;
-    uint32_t bestId = 0;
-    uint32_t maxAgents = AgentMgr::GetMaxAgents();
-    for (uint32_t i = 1; i < maxAgents; i++) {
-        auto* a = AgentMgr::GetAgentByID(i);
-        if (!a || a->type != 0xDB) continue;
-        auto* living = static_cast<AgentLiving*>(a);
-        if (living->allegiance != 3) continue;
-        if (living->hp <= 0.0f) continue;
-        float dist = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
-        if (dist < bestDist) {
-            bestDist = dist;
-            bestId = living->agent_id;
-        }
-    }
-    return bestId;
+// Mirrors AutoIt's GetBestTargetPtr(range): choose the most balled foe in range,
+// not simply the nearest foe.
+static uint32_t GetBestEnemy(float maxRange = 1350.0f) {
+    return SelectMostBalledEnemy(maxRange, false, false, false);
+}
+
+// Find the most balled enemy without a hex. Returns 0 if all hexed or none nearby.
+static uint32_t GetUnhexedEnemy(float maxRange = 1320.0f) {
+    return SelectMostBalledEnemy(maxRange, false, true, false);
+}
+
+// Find the most balled enemy that is currently casting. Returns 0 if none casting.
+static uint32_t GetCastingEnemy(float maxRange = 1320.0f) {
+    return SelectMostBalledEnemy(maxRange, true, false, false);
+}
+
+// Find the most balled enemy with an enchantment. Returns 0 if none enchanted.
+static uint32_t GetEnchantedEnemy(float maxRange = 1320.0f) {
+    return SelectMostBalledEnemy(maxRange, false, false, true);
+}
+
+// Preserve the old helper name, but mirror AutoIt's GetBestMeleeTarget semantics:
+// choose the best aggro target for attack skills within standard aggro range.
+static uint32_t GetMeleeRangeEnemy(float maxRange = LONG_BOW_RANGE) {
+    return SelectMostBalledEnemy(maxRange, false, false, false);
 }
 
 // Resolve best target for a skill based on its roles.
 // Returns the target agent ID to use, or 0 if no valid target.
-static uint32_t ResolveSkillTarget(const CachedSkill& skill, uint32_t defaultFoeId) {
+static uint32_t ResolveSkillTarget(const CachedSkill& skill, uint32_t defaultFoeId, float aggroRange = 1320.0f) {
     auto* me = AgentMgr::GetMyAgent();
     if (!me) return 0;
 
@@ -802,48 +923,82 @@ static uint32_t ResolveSkillTarget(const CachedSkill& skill, uint32_t defaultFoe
         return GetDeadAlly();
     }
 
+    if (skill.target_type == 0) {
+        if (skill.skill_type == 7) {
+            auto* foe = defaultFoeId ? AgentMgr::GetAgentByID(defaultFoeId) : nullptr;
+            if (!foe || foe->type != 0xDB) return 0;
+            const float distSq = AgentMgr::GetSquaredDistance(me->x, me->y, foe->x, foe->y);
+            if (distSq > aggroRange * aggroRange) return 0;
+        }
+        return me->agent_id;
+    }
+
+    if (skill.target_type == 1) {
+        const uint32_t spiritId = GetNearestSpiritAlly();
+        return spiritId ? spiritId : 0;
+    }
+
     // Ally-targeting skills
     if (skill.target_type == 3 || skill.target_type == 4) {
-        // Heal: target lowest HP ally
+        const bool excludeSelf = skill.target_type == 4;
         if (skill.hasRole(ROLE_ANY_HEAL)) {
-            uint32_t target = GetLowestHealthAlly();
-            return target ? target : me->agent_id;
+            uint32_t target = GetLowestHealthAlly(2500.0f, excludeSelf);
+            return target ? target : (excludeSelf ? 0 : me->agent_id);
         }
-        // Condition removal: target most-conditioned (simplified: use self for now)
-        if (skill.hasRole(ROLE_COND_REMOVE)) return me->agent_id;
-        // Hex removal: target most-hexed (simplified: use self for now)
-        if (skill.hasRole(ROLE_HEX_REMOVE)) return me->agent_id;
-        // Default ally: self
-        return me->agent_id;
+        if (skill.hasRole(ROLE_COND_REMOVE)) {
+            uint32_t target = GetMostConditionedAlly(excludeSelf);
+            return target ? target : (excludeSelf ? 0 : me->agent_id);
+        }
+        if (skill.hasRole(ROLE_HEX_REMOVE)) {
+            uint32_t target = GetMostHexedAlly(excludeSelf);
+            return target ? target : (excludeSelf ? 0 : me->agent_id);
+        }
+        if (skill.hasRole(ROLE_PRECAST) || skill.hasRole(ROLE_SURVIVAL)) {
+            return me->agent_id;
+        }
+        uint32_t target = GetLowestHealthAlly(2500.0f, excludeSelf);
+        if (target) return target;
+        return excludeSelf ? 0 : me->agent_id;
     }
 
     // Foe-targeting skills
     if (skill.target_type == 5) {
         // Hex: prefer unhexed enemy
         if (skill.hasRole(ROLE_HEX)) {
-            uint32_t target = GetUnhexedEnemy();
+            uint32_t target = GetUnhexedEnemy(aggroRange);
+            if (target) return target;
+            target = GetBestEnemy(aggroRange);
             return target ? target : defaultFoeId;
         }
         // Interrupt: prefer casting enemy
         if (skill.hasRole(ROLE_ANY_INTERRUPT)) {
-            uint32_t target = GetCastingEnemy();
+            uint32_t target = GetCastingEnemy(aggroRange);
             return target ? target : 0; // don't waste interrupt if nobody casting
         }
         // Enchant removal: prefer enchanted enemy
         if (skill.hasRole(ROLE_ENCHANT_REMOVE)) {
-            uint32_t target = GetEnchantedEnemy();
+            uint32_t target = GetEnchantedEnemy(aggroRange);
             return target ? target : 0;
         }
         // Attack: prefer melee range
         if (skill.hasRole(ROLE_ATTACK)) {
             uint32_t target = GetMeleeRangeEnemy();
-            return target ? target : defaultFoeId;
+            return target ? target : 0;
         }
-        return defaultFoeId;
+        return GetBestEnemy(aggroRange);
+    }
+
+    if (skill.target_type == 6) {
+        return GetDeadAlly();
+    }
+
+    if (skill.target_type == 14) {
+        const uint32_t minionId = GetNearestMinionAlly();
+        return minionId ? minionId : 0;
     }
 
     // Self-targeting / no target
-    return 0;
+    return me->agent_id;
 }
 
 // ===== Debuff Blocking (GWA3-126) =====
@@ -875,6 +1030,10 @@ static const char* ExplainCanCastFailure(const CachedSkill& skill) {
     if (loadingState != 1) return "not_loaded";
     if (PartyMgr::GetIsPartyDefeated()) return "party_defeated";
     if (me->model_state == 0x450) return "knocked";
+    auto* bar = SkillMgr::GetPlayerSkillbar();
+    if (bar && skill.slot < 8u && bar->skills[skill.slot].recharge > 0u) {
+        return "recharging";
+    }
 
     const uint32_t myId = me->agent_id;
     const uint8_t type = skill.skill_type;
@@ -907,95 +1066,64 @@ static const char* ExplainCanCastFailure(const CachedSkill& skill) {
 
 static bool CanCast(const CachedSkill& skill) {
     return ExplainCanCastFailure(skill) == nullptr;
-#if 0
-    auto* me = AgentMgr::GetMyAgent();
-    if (!me) return false;
-    if (me->hp <= 0.0f) return false; // dead
-
-    // GWA3-136: Safety checks â€” knockdown, wipe, disconnect
-    if (MapMgr::GetLoadingState() != 1) return false;  // not loaded or disconnected
-    if (PartyMgr::GetIsPartyDefeated()) return false;   // party wiped
-    // Knockdown check: model_state bit indicates knocked down
-    if (me->model_state == 0 || (me->model_state & 0x400) != 0) {
-        // model_state 0 = dead/inactive, 0x400 = knocked down
-        // Only block if explicitly knocked (not just model_state == 0 which is normal idle)
-        if ((me->model_state & 0x400) != 0) return false;
-    }
-
-    uint32_t myId = me->agent_id;
-
-    // Check debuffs based on skill type
-    uint8_t type = skill.skill_type;
-
-    // Spell/Hex/Enchantment/Well/Ward blocking debuffs
-    if (type == 1 || type == 2 || type == 3 || type == 5 || type == 7 ||
-        type == 14 || type == 15 || type == 16) {
-        if (EffectMgr::HasEffect(myId, DEBUFF_DIVERSION)) return false;
-        if (EffectMgr::HasEffect(myId, DEBUFF_BACKFIRE)) return false;
-        if (EffectMgr::HasEffect(myId, DEBUFF_SOUL_LEECH)) return false;
-        if (EffectMgr::HasEffect(myId, DEBUFF_MISTRUST)) return false;
-        if (EffectMgr::HasEffect(myId, DEBUFF_VISIONS_OF_REGRET)) return false;
-        if (EffectMgr::HasEffect(myId, DEBUFF_SPITEFUL_SPIRIT)) return false;
-    }
-
-    // Attack skill blocking debuffs
-    if (type == 9 || type == 17) {
-        if (EffectMgr::HasEffect(myId, DEBUFF_INEPTITUDE)) return false;
-        if (EffectMgr::HasEffect(myId, DEBUFF_CLUMSINESS)) return false;
-        if (EffectMgr::HasEffect(myId, DEBUFF_WANDERING_EYE)) return false;
-        if (EffectMgr::HasEffect(myId, DEBUFF_SPITEFUL_SPIRIT)) return false;
-    }
-
-    // Signet blocking
-    if (type == 4) {
-        if (EffectMgr::HasEffect(myId, DEBUFF_IGNORANCE)) return false;
-        if (EffectMgr::HasEffect(myId, DEBUFF_DIVERSION)) return false;
-    }
-
-    // Shout/Chant blocking
-    if (type == 10 || type == 20) {
-        if (EffectMgr::HasEffect(myId, DEBUFF_WELL_OF_SILENCE)) return false;
-        if (EffectMgr::HasEffect(myId, DEBUFF_DIVERSION)) return false;
-    }
-
-    return true;
-#endif
 }
 
 // ===== HP Gating & Effect Overlap (GWA3-124) =====
 
-static bool CanUseSkill(const CachedSkill& skill, uint32_t targetId) {
+static const char* ExplainCanUseSkillFailure(const CachedSkill& skill, uint32_t targetId, float aggroRange = LONG_BOW_RANGE) {
     auto* me = AgentMgr::GetMyAgent();
-    if (!me) return false;
+    if (!me) return "no_player";
+    if (AgentMgr::IsCasting(me)) return "casting";
 
     // Debuff check first
-    if (!CanCast(skill)) return false;
+    if (const char* castFailure = ExplainCanCastFailure(skill)) return castFailure;
+
+    const uint32_t resolvedTargetId = ResolveSkillTarget(skill, targetId, aggroRange);
+    if ((skill.target_type == 1 || skill.target_type == 4 || skill.target_type == 5 || skill.target_type == 6 || skill.target_type == 14) &&
+        resolvedTargetId == 0) {
+        return "no_target";
+    }
 
     // Heal skills: only cast if someone actually needs healing
     if (skill.hasRole(ROLE_ANY_HEAL)) {
-        uint32_t healTarget = GetLowestHealthAlly();
+        uint32_t healTarget = resolvedTargetId;
         if (healTarget) {
             auto* ally = AgentMgr::GetAgentByID(healTarget);
             if (ally && ally->type == 0xDB) {
                 auto* living = static_cast<AgentLiving*>(ally);
-                if (living->hp > 0.8f) return false; // nobody below 80% â€” don't waste
+                if (living->hp > 0.8f) return "heal_target_healthy"; // nobody below 80% â€” don't waste
             }
-        } else {
-            if (me->hp > 0.8f) return false; // self is fine â€” skip
+        } else if (me->hp > 0.8f) {
+            return "heal_self_healthy"; // self is fine â€” skip
         }
     }
 
     // Survival skills: only if HP is low
     if (skill.hasRole(ROLE_SURVIVAL)) {
-        if (me->hp > 0.5f) return false;
+        if (me->hp > 0.5f) return "survival_hp_high";
         // Check if already have the effect active
         float remaining = EffectMgr::GetEffectTimeRemaining(me->agent_id, skill.skill_id);
-        if (remaining > 5.0f) return false; // already active with >5s left
+        if (remaining > 5.0f) return "survival_effect_active"; // already active with >5s left
     }
 
-    // Binding rituals: only if enemies nearby
+    // Binding spirits should be available once we've committed to a real foe,
+    // even if the target is slightly outside the old 1500-unit proximity gate.
+    // The tighter gate was suppressing Bloodsong/AoU follow-up casts during
+    // Sparkfly approaches after Signet of Spirits resolved.
     if (skill.hasRole(ROLE_BINDING)) {
         bool enemyNearby = false;
+        if (targetId > 0) {
+            auto* target = AgentMgr::GetAgentByID(targetId);
+            if (target && target->type == 0xDB) {
+                auto* living = static_cast<AgentLiving*>(target);
+                if (living->allegiance == 3 && living->hp > 0.0f) {
+                    const float targetDistSq = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+                    if (targetDistSq < 5000.0f * 5000.0f) {
+                        enemyNearby = true;
+                    }
+                }
+            }
+        }
         uint32_t maxAgents = AgentMgr::GetMaxAgents();
         for (uint32_t i = 1; i < maxAgents && !enemyNearby; i++) {
             auto* a = AgentMgr::GetAgentByID(i);
@@ -1003,26 +1131,31 @@ static bool CanUseSkill(const CachedSkill& skill, uint32_t targetId) {
             auto* living = static_cast<AgentLiving*>(a);
             if (living->allegiance == 3 && living->hp > 0.0f) {
                 float dist = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
-                if (dist < 1500.0f * 1500.0f) enemyNearby = true;
+                if (dist < 2500.0f * 2500.0f) enemyNearby = true;
             }
         }
-        if (!enemyNearby) return false;
+        if (!enemyNearby) return "binding_no_enemy";
     }
 
     // Precast: check if effect already active (don't re-cast stances/preps)
     if (skill.hasRole(ROLE_PRECAST) && !skill.hasRole(ROLE_OFFENSIVE)) {
         float remaining = EffectMgr::GetEffectTimeRemaining(me->agent_id, skill.skill_id);
-        if (remaining > 3.0f) return false; // already active
+        if (remaining > 3.0f) return "precast_effect_active"; // already active
+    }
+
+    if (skill.hasRole(ROLE_SPEED_BOOST)) {
+        float remaining = EffectMgr::GetEffectTimeRemaining(me->agent_id, skill.skill_id);
+        if (remaining > 3.0f) return "speed_boost_active";
     }
 
     // GWA3-137: Quickening Zephyr energy cost multiplier
-    // When Essence of Celerity (skill 2054) is active, energy costs are +30%
+    // AutoIt applies the +30% cost penalty while Quickening Zephyr is active.
     float energyCost = static_cast<float>(skill.energy_cost);
-    if (EffectMgr::HasEffect(me->agent_id, 2054u)) { // Essence of Celerity
+    if (EffectMgr::HasEffect(me->agent_id, EFFECT_QUICKENING_ZEPHYR)) {
         energyCost *= 1.3f;
     }
     float myEnergy = me->energy * static_cast<float>(me->max_energy);
-    if (energyCost > 0 && myEnergy < energyCost) return false;
+    if (energyCost > 0 && myEnergy < energyCost) return "energy_low";
 
     // GWA3-137: Adrenaline check â€” adrenaline skills need adrenaline, not energy
     const auto* skillData = SkillMgr::GetSkillConstantData(skill.skill_id);
@@ -1030,32 +1163,121 @@ static bool CanUseSkill(const CachedSkill& skill, uint32_t targetId) {
         auto* bar = SkillMgr::GetPlayerSkillbar();
         if (bar) {
             uint32_t currentAdrenaline = bar->skills[skill.slot].adrenaline_a;
-            if (currentAdrenaline < skillData->adrenaline) return false;
+            if (currentAdrenaline < skillData->adrenaline) return "adrenaline_low";
         }
     }
 
     // GWA3-137: Pressure gate â€” Finish Him (and similar) require low target HP
     // Finish Him: only if target HP < 45%
     if (skill.hasRole(ROLE_PRESSURE) && targetId > 0) {
-        auto* target = AgentMgr::GetAgentByID(targetId);
+        auto* target = AgentMgr::GetAgentByID(resolvedTargetId ? resolvedTargetId : targetId);
         if (target && target->type == 0xDB) {
             auto* targetLiving = static_cast<AgentLiving*>(target);
             // For pressure skills with known HP gates, check target HP
             // Finish Him (skill 2249): requires < 45%
-            if (skill.skill_id == 2249 && targetLiving->hp > 0.45f) return false;
+            if (skill.skill_id == 2249 && targetLiving->hp > 0.45f) return "finish_him_hp_high";
         }
     }
 
-    return true;
+    if (skill.hasRole(ROLE_COND_REMOVE)) {
+        const uint32_t condTargetId = resolvedTargetId ? resolvedTargetId : me->agent_id;
+        if (CountConditionEffects(condTargetId) == 0) return "no_condition_target";
+    }
+
+    if (skill.hasRole(ROLE_HEX_REMOVE)) {
+        const uint32_t hexTargetId = resolvedTargetId ? resolvedTargetId : me->agent_id;
+        auto* hexTarget = AgentMgr::GetAgentByID(hexTargetId);
+        if (!hexTarget || hexTarget->type != 0xDB || static_cast<AgentLiving*>(hexTarget)->hex == 0) {
+            return "no_hex_target";
+        }
+    }
+
+    return nullptr;
 }
 
-// Try to use a skill matching the given role bitmask. Returns true if a skill was used.
-static bool TryUseSkillWithRole(uint32_t targetId, uint32_t roleMask) {
+static bool CanUseSkill(const CachedSkill& skill, uint32_t targetId, float aggroRange = LONG_BOW_RANGE) {
+    return ExplainCanUseSkillFailure(skill, targetId, aggroRange) == nullptr;
+}
+
+static bool TryUseSkillIndex(int idx, uint32_t targetId, bool waitForCompletion = true, float aggroRange = LONG_BOW_RANGE) {
+    static constexpr DWORD kUseSkillTimeoutMs = 6000u;
     auto* bar = SkillMgr::GetPlayerSkillbar();
     auto* me = AgentMgr::GetMyAgent();
     if (!bar || !me) return false;
 
-    float myEnergy = me->energy * me->max_energy; // absolute energy points
+    if (idx < 0 || idx >= 8) return false;
+    auto& c = s_skillCache[idx];
+    if (c.skill_id == 0) {
+        CombatDebugLog("slot=%d skip empty", idx + 1);
+        return false;
+    }
+    if (s_skillUsedThisStep[idx]) {
+        CombatDebugLog("slot=%d skill=%u skip already_used_this_step", idx + 1, c.skill_id);
+        return false;
+    }
+
+    const uint32_t skillTarget = ResolveSkillTarget(c, targetId, aggroRange);
+    if (!CanUseSkill(c, targetId, aggroRange)) {
+        const char* useReason = ExplainCanUseSkillFailure(c, targetId, aggroRange);
+        CombatDebugLog("slot=%d skill=%u skip CanUseSkill=false reason=%s target=%u",
+                       idx + 1, c.skill_id, useReason ? useReason : "unknown", targetId);
+        return false;
+    }
+
+    if (skillTarget == 0 && (c.target_type == 1 || c.target_type == 4 || c.target_type == 5 || c.target_type == 6 || c.target_type == 14)) {
+        CombatDebugLog("slot=%d skill=%u skip target resolution=0 targetType=%u",
+                       idx + 1, c.skill_id, c.target_type);
+        return false;
+    }
+
+    SetLastCombatStepDescription("skill slot=%d skill=%u target=%u",
+                                 idx + 1, c.skill_id, skillTarget);
+    ResetLastCombatStepInfo();
+    s_lastCombatStepInfo.valid = true;
+    s_lastCombatStepInfo.used_skill = true;
+    s_lastCombatStepInfo.auto_attack = false;
+    s_lastCombatStepInfo.slot = idx + 1;
+    s_lastCombatStepInfo.skill_id = c.skill_id;
+    s_lastCombatStepInfo.target_id = skillTarget;
+    s_lastCombatStepInfo.role_mask = c.roles;
+    s_lastCombatStepInfo.target_type = c.target_type;
+    s_lastCombatStepInfo.started_at_ms = GetTickCount();
+    s_skillUsedThisStep[idx] = true;
+    CombatDebugLog("slot=%d skill=%u USE target=%u", idx + 1, c.skill_id, skillTarget);
+    if (skillTarget != 0 && skillTarget != me->agent_id) {
+        AgentMgr::ChangeTarget(skillTarget);
+    }
+    SkillMgr::UseSkill(idx + 1, skillTarget, 0);
+    if (!waitForCompletion) {
+        s_lastCombatStepInfo.finished_at_ms = GetTickCount();
+        return true;
+    }
+
+    DWORD castStart = GetTickCount();
+    while ((GetTickCount() - castStart) < kUseSkillTimeoutMs) {
+        if (IsDead()) break;
+        if (!CanCast(c)) break;
+        WaitMs(50);
+    }
+
+    float aftercast = c.activation > 0 ? c.activation : 0.0f;
+    const auto* skillData = SkillMgr::GetSkillConstantData(c.skill_id);
+    if (skillData && skillData->aftercast > 0) {
+        aftercast = skillData->aftercast;
+    }
+    s_lastCombatStepInfo.expected_aftercast_ms =
+        aftercast > 0 ? static_cast<uint32_t>(aftercast * 1000.0f) : 0;
+    if (aftercast > 0) {
+        WaitMs(static_cast<DWORD>(aftercast * 1000));
+    }
+    s_lastCombatStepInfo.finished_at_ms = GetTickCount();
+    return true;
+}
+
+// Try to use a skill matching the given role bitmask. Returns true if a skill was used.
+static bool TryUseSkillWithRole(uint32_t targetId, uint32_t roleMask, bool waitForCompletion = true, float aggroRange = LONG_BOW_RANGE) {
+    auto* bar = SkillMgr::GetPlayerSkillbar();
+    if (!bar) return false;
 
     for (int i = 0; i < 8; i++) {
         auto& c = s_skillCache[i];
@@ -1063,86 +1285,22 @@ static bool TryUseSkillWithRole(uint32_t targetId, uint32_t roleMask) {
             CombatDebugLog("roleMask=0x%X slot=%d skip empty", roleMask, i + 1);
             continue;
         }
-        if (s_skillUsedThisStep[i]) {
-            CombatDebugLog("roleMask=0x%X slot=%d skill=%u skip already_used_this_step",
-                           roleMask, i + 1, c.skill_id);
-            continue;
-        }
         if (!(c.roles & roleMask)) {
             CombatDebugLog("roleMask=0x%X slot=%d skill=%u skip roles=0x%X", roleMask, i + 1, c.skill_id, c.roles);
-            continue; // no matching role
-        }
-        if (bar->skills[i].recharge > 0) {
-            CombatDebugLog("roleMask=0x%X slot=%d skill=%u skip recharge=%u", roleMask, i + 1, c.skill_id, bar->skills[i].recharge);
-            continue; // still recharging
-        }
-        if (c.energy_cost > static_cast<uint8_t>(myEnergy)) {
-            CombatDebugLog("roleMask=0x%X slot=%d skill=%u skip energy need=%u have=%.1f", roleMask, i + 1, c.skill_id, c.energy_cost, myEnergy);
-            continue; // not enough energy
-        }
-        if (!CanUseSkill(c, targetId)) {
-            CombatDebugLog("roleMask=0x%X slot=%d skill=%u skip CanUseSkill=false target=%u", roleMask, i + 1, c.skill_id, targetId);
-            continue; // HP gates, debuff blocking, overlap prevention
-        }
-
-        // Intelligent target selection based on skill role
-        uint32_t skillTarget = ResolveSkillTarget(c, targetId);
-        // If ResolveSkillTarget returns 0 for a foe-targeting skill, skip it
-        if (skillTarget == 0 && (c.target_type == 5 || c.target_type == 6)) {
-            CombatDebugLog("roleMask=0x%X slot=%d skill=%u skip target resolution=0 targetType=%u",
-                           roleMask, i + 1, c.skill_id, c.target_type);
             continue;
         }
-
-        SetLastCombatStepDescription("skill slot=%d skill=%u target=%u roleMask=0x%X",
-                                     i + 1, c.skill_id, skillTarget, roleMask);
-        ResetLastCombatStepInfo();
-        s_lastCombatStepInfo.valid = true;
-        s_lastCombatStepInfo.used_skill = true;
-        s_lastCombatStepInfo.auto_attack = false;
-        s_lastCombatStepInfo.slot = i + 1;
-        s_lastCombatStepInfo.skill_id = c.skill_id;
-        s_lastCombatStepInfo.target_id = skillTarget;
-        s_lastCombatStepInfo.role_mask = roleMask;
-        s_lastCombatStepInfo.target_type = c.target_type;
-        s_lastCombatStepInfo.started_at_ms = GetTickCount();
-        s_skillUsedThisStep[i] = true;
-        CombatDebugLog("roleMask=0x%X slot=%d skill=%u USE target=%u",
-                       roleMask, i + 1, c.skill_id, skillTarget);
-        SkillMgr::UseSkill(i + 1, skillTarget, 0);
-
-        // GWA3-132: Aftercast delay â€” wait for skill activation + aftercast
-        // Poll until skill enters recharge (activated) or 2s timeout
-        DWORD castStart = GetTickCount();
-        while ((GetTickCount() - castStart) < 2000) {
-            if (IsDead()) break;
-            if (bar->skills[i].recharge > 0) break; // skill activated (now recharging)
-            auto* meCheck = AgentMgr::GetMyAgent();
-            if (meCheck && meCheck->skill != 0) break; // casting animation started
-            WaitMs(50);
+        if (TryUseSkillIndex(i, targetId, waitForCompletion, aggroRange)) {
+            return true;
         }
-        // Wait for aftercast delay
-        float aftercast = c.activation > 0 ? c.activation : 0.0f;
-        const auto* skillData = SkillMgr::GetSkillConstantData(c.skill_id);
-        if (skillData && skillData->aftercast > 0) {
-            aftercast = skillData->aftercast;
-        }
-        s_lastCombatStepInfo.expected_aftercast_ms =
-            aftercast > 0 ? static_cast<uint32_t>(aftercast * 1000.0f) : 0;
-        if (aftercast > 0) {
-            WaitMs(static_cast<DWORD>(aftercast * 1000));
-        }
-        s_lastCombatStepInfo.finished_at_ms = GetTickCount();
-
-        return true;
     }
     return false;
 }
 
-static int UseAllSkillsWithRole(uint32_t targetId, uint32_t roleMask, int maxUses = 8);
+static int UseAllSkillsWithRole(uint32_t targetId, uint32_t roleMask, int maxUses = 8, float aggroRange = LONG_BOW_RANGE);
+static int UseSkillsInSlotOrder(uint32_t targetId, float aggroRange = LONG_BOW_RANGE, bool waitForCompletion = true);
 
 // Full combat routine: use skills then fall back to auto-attack
-static void FightTarget(uint32_t targetId) {
+static void FightTarget(uint32_t targetId, float aggroRange = LONG_BOW_RANGE) {
     // GWA3-121: Combat mode toggle â€” if LLM mode, just auto-attack
     // Gemma handles skill decisions via the bridge
     auto& cfg = Bot::GetConfig();
@@ -1167,63 +1325,22 @@ static void FightTarget(uint32_t targetId) {
 
     auto* me = AgentMgr::GetMyAgent();
     if (!me) return;
-
-    // === GWA3-125: Dynamic Priority Combat Engine ===
-
-    // Priority 1: Emergency ally heal â€” if any ally HP < 30%
-    uint32_t lowestAlly = GetLowestHealthAlly();
-    if (lowestAlly) {
-        auto* ally = AgentMgr::GetAgentByID(lowestAlly);
-        if (ally && ally->type == 0xDB) {
-            auto* allyLiving = static_cast<AgentLiving*>(ally);
-            if (allyLiving->hp < 0.3f && allyLiving->hp > 0.0f) {
-                if (TryUseSkillWithRole(lowestAlly, ROLE_ANY_HEAL)) return;
-            }
-        }
+    if (AgentMgr::IsCasting(me)) {
+        CombatDebugLog("FightTarget skip while casting target=%u skill=%u model=0x%X",
+                       targetId, me->skill, me->model_state);
+        return;
     }
 
-    // Priority 2: Resurrection â€” if any ally dead
-    uint32_t deadAlly = GetDeadAlly();
-    if (deadAlly) {
-        if (TryUseSkillWithRole(deadAlly, ROLE_RESURRECT)) return;
+    bool attacked = false;
+    if (targetId != 0 && CanBasicAttack()) {
+        CombatDebugLog("FightTarget opening auto-attack target=%u before slot sweep", targetId);
+        AgentMgr::Attack(targetId);
+        attacked = true;
     }
 
-    // Priority 3: Self-survival â€” if own HP critically low
-    if (me->hp < 0.3f) {
-        if (TryUseSkillWithRole(targetId, ROLE_SURVIVAL)) return;
-        if (TryUseSkillWithRole(me->agent_id, ROLE_ANY_HEAL)) return;
-        if (TryUseSkillWithRole(targetId, ROLE_PROT | ROLE_DEFENSIVE)) return;
-    }
-
-    // Priority 4: Condition/hex removal on self
-    if (me->hex != 0) {
-        TryUseSkillWithRole(me->agent_id, ROLE_HEX_REMOVE | ROLE_COND_REMOVE);
-    }
-
-    // Priority 5: Interrupt casting enemies (prefer hard over soft)
-    uint32_t castingFoe = GetCastingEnemy();
-    if (castingFoe) {
-        if (!TryUseSkillWithRole(castingFoe, ROLE_INTERRUPT_HARD)) {
-            TryUseSkillWithRole(castingFoe, ROLE_INTERRUPT_SOFT);
-        }
-    }
-
-    // Priority 6: Pre-combat buffs (stances, shouts, preparations)
-    UseAllSkillsWithRole(targetId, ROLE_PRECAST | ROLE_SHOUT);
-
-    // Priority 7: Hex pressure â€” prefer unhexed enemies
-    UseAllSkillsWithRole(targetId, ROLE_HEX | ROLE_PRESSURE);
-
-    // Priority 8: Enchant removal on enchanted enemies
-    uint32_t enchantedFoe = GetEnchantedEnemy();
-    if (enchantedFoe) {
-        TryUseSkillWithRole(enchantedFoe, ROLE_ENCHANT_REMOVE);
-    }
-
-    // Priority 9: Offensive skills (attacks, damage spells)
-    if (!TryUseSkillWithRole(targetId, ROLE_OFFENSIVE | ROLE_ATTACK)) {
-        // No skills ready â€” auto-attack
-        CombatDebugLog("No skill selected, issuing auto-attack target=%u", targetId);
+    const int uses = UseSkillsInSlotOrder(targetId, aggroRange, true);
+    if (uses <= 0 && attacked) {
+        CombatDebugLog("FightTarget slot sweep found no skill; auto-attack target=%u", targetId);
         SetLastCombatStepDescription("auto_attack target=%u", targetId);
         ResetLastCombatStepInfo();
         s_lastCombatStepInfo.valid = true;
@@ -1231,12 +1348,121 @@ static void FightTarget(uint32_t targetId) {
         s_lastCombatStepInfo.target_id = targetId;
         s_lastCombatStepInfo.role_mask = ROLE_ATTACK | ROLE_OFFENSIVE;
         s_lastCombatStepInfo.started_at_ms = GetTickCount();
-        AgentMgr::Attack(targetId);
         s_lastCombatStepInfo.finished_at_ms = GetTickCount();
     }
 }
 
 // ===== Helpers =====
+
+static float GetNearestEnemyDistance(float maxRange = 99999.0f) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return maxRange;
+
+    float bestDistSq = maxRange * maxRange;
+    bool found = false;
+    const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (living->allegiance != 3) continue;
+        if (living->hp <= 0.0f) continue;
+        const float distSq = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+        if (distSq < bestDistSq) {
+            bestDistSq = distSq;
+            found = true;
+        }
+    }
+
+    return found ? sqrtf(bestDistSq) : maxRange;
+}
+
+static bool CanAttackInAggro(float aggroRange, uint32_t* outTargetId = nullptr) {
+    const uint32_t bestTargetId = GetBestEnemy(aggroRange);
+    if (outTargetId) *outTargetId = bestTargetId;
+    if (bestTargetId == 0) return false;
+    return CanBasicAttack();
+}
+
+static bool WeCanMove(float range = LONG_BOW_RANGE) {
+    if (GetNearestEnemyDistance() < range && range < LONG_BOW_RANGE) return false;
+    return true;
+}
+
+static void FightEnemiesInAggro(float aggroRange, bool careful = false,
+                                SparkflyTraversalCombatStats* stats = nullptr) {
+    const DWORD fightStart = GetTickCount();
+    const bool sparkflyMap = MapMgr::GetMapId() == MAP_SPARKFLY_SWAMP;
+    if (sparkflyMap) {
+        SkillMgr::SetSparkflyPlayerUseSkillOverride(true);
+    }
+
+    while (GetNearestEnemyDistance() <= aggroRange &&
+           !IsDead() &&
+           MapMgr::GetIsMapLoaded() &&
+           !PartyMgr::GetIsPartyDefeated() &&
+           (GetTickCount() - fightStart) < 240000) {
+        if (careful) {
+            AgentMgr::CancelAction();
+        }
+
+        uint32_t bestTarget = 0;
+        const bool canAttack = CanAttackInAggro(aggroRange, &bestTarget);
+        if (!bestTarget) break;
+
+        if (stats) {
+            ++stats->quick_step_attempts;
+            stats->last_target_id = bestTarget;
+        }
+
+        memset(s_skillUsedThisStep, 0, sizeof(s_skillUsedThisStep));
+        bool attacked = false;
+        if (canAttack) {
+            AgentMgr::Attack(bestTarget);
+            attacked = true;
+        }
+        WaitMs(100);
+
+        if (careful) {
+            auto* target = AgentMgr::GetAgentByID(bestTarget);
+            if (target) {
+                AgentMgr::Move(target->x, target->y);
+            }
+            WaitMs(300);
+        }
+
+        const DWORD actionStart = GetTickCount();
+        const int uses = UseSkillsInSlotOrder(bestTarget, aggroRange, true);
+        if (uses <= 0 && attacked) {
+            SetLastCombatStepDescription("auto_attack target=%u", bestTarget);
+            ResetLastCombatStepInfo();
+            s_lastCombatStepInfo.valid = true;
+            s_lastCombatStepInfo.auto_attack = true;
+            s_lastCombatStepInfo.target_id = bestTarget;
+            s_lastCombatStepInfo.role_mask = ROLE_ATTACK | ROLE_OFFENSIVE;
+            s_lastCombatStepInfo.started_at_ms = actionStart;
+            s_lastCombatStepInfo.finished_at_ms = GetTickCount();
+        }
+        const auto stepInfo = GetLastCombatStepInfo();
+        if (stats && stepInfo.valid && stepInfo.started_at_ms >= actionStart) {
+            if (stepInfo.used_skill) {
+                ++stats->skill_steps;
+            } else if (stepInfo.auto_attack) {
+                ++stats->auto_attack_steps;
+            }
+        }
+
+        WaitMs(100);
+    }
+
+    if (sparkflyMap) {
+        SkillMgr::SetSparkflyPlayerUseSkillOverride(false);
+    }
+
+    if (stats == nullptr) {
+        PickupNearbyLoot(3000.0f);
+    }
+}
 
 static float DistanceTo(float x, float y) {
     auto* me = AgentMgr::GetMyAgent();
@@ -1247,7 +1473,7 @@ static float DistanceTo(float x, float y) {
 static int GetNearestWaypointIndex(const Waypoint* wps, int count) {
     auto* me = AgentMgr::GetMyAgent();
     if (!me) return 0;
-    float bestDist = 999999.0f;
+    float bestDist = FLT_MAX;
     int bestIdx = 0;
     for (int i = 0; i < count; i++) {
         float d = AgentMgr::GetSquaredDistance(me->x, me->y, wps[i].x, wps[i].y);
@@ -1272,6 +1498,52 @@ static void WaitMs(DWORD ms) {
     Sleep(ms);
 }
 
+static void LogLvl1ToLvl2TransitionState(const char* stage, uint32_t portalId, DWORD elapsedMs, DWORD attempt) {
+    auto* me = AgentMgr::GetMyAgent();
+    const float meX = me ? me->x : 0.0f;
+    const float meY = me ? me->y : 0.0f;
+    const float distToExit = me ? AgentMgr::GetDistance(me->x, me->y, 7665.0f, -19050.0f) : -1.0f;
+    const uint32_t mapId = MapMgr::GetMapId();
+    const int loaded = MapMgr::GetIsMapLoaded() ? 1 : 0;
+    const uint32_t targetId = AgentMgr::GetTargetId();
+
+    float portalX = 0.0f;
+    float portalY = 0.0f;
+    float portalDist = -1.0f;
+    uint32_t portalType = 0u;
+    uint32_t portalGadget = 0u;
+    if (portalId) {
+        if (auto* portal = AgentMgr::GetAgentByID(portalId)) {
+            portalX = portal->x;
+            portalY = portal->y;
+            portalType = portal->type;
+            if (portal->type == 0x200) {
+                portalGadget = static_cast<AgentGadget*>(portal)->gadget_id;
+            }
+            if (me) {
+                portalDist = AgentMgr::GetDistance(me->x, me->y, portal->x, portal->y);
+            }
+        }
+    }
+
+    LogBot("Lvl1 to Lvl2 [%s] attempt=%lu elapsed=%lums map=%u loaded=%d me=(%.0f, %.0f) distToExit=%.0f target=%u portal=%u type=0x%X gadget=%u portalPos=(%.0f, %.0f) portalDist=%.0f",
+           stage,
+           static_cast<unsigned long>(attempt),
+           static_cast<unsigned long>(elapsedMs),
+           mapId,
+           loaded,
+           meX,
+           meY,
+           distToExit,
+           targetId,
+           portalId,
+           portalType,
+           portalGadget,
+           portalX,
+           portalY,
+           portalDist);
+}
+
 static void MoveToAndWait(float x, float y, float threshold = 250.0f) {
     AgentMgr::Move(x, y);
     DWORD start = GetTickCount();
@@ -1281,9 +1553,14 @@ static void MoveToAndWait(float x, float y, float threshold = 250.0f) {
     }
 }
 
-static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
-    AgentMgr::Move(x, y);
+  static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
+      LogBot("AggroMoveToEx start target=(%.0f, %.0f) fightRange=%.0f", x, y, fightRange);
+      if (WeCanMove(fightRange)) {
+          AgentMgr::Move(x, y);
+      }
     DWORD start = GetTickCount();
+    DWORD lastMoveIssue = start;
+    const float arrivalThreshold = MapMgr::GetMapId() == MAP_SPARKFLY_SWAMP ? 500.0f : 250.0f;
     // GWA3-135: Per-target combat timeout
     uint32_t currentTargetId = 0;
     DWORD targetFightStart = 0;
@@ -1294,12 +1571,21 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
         auto* meInit = AgentMgr::GetMyAgent();
         if (meInit) { lastX = meInit->x; lastY = meInit->y; }
     }
-    while (DistanceTo(x, y) > 250.0f && (GetTickCount() - start) < 240000) {
+    while (DistanceTo(x, y) > arrivalThreshold && (GetTickCount() - start) < 240000) {
         if (IsDead()) return;
         if (!IsMapLoaded()) return;
 
-        // GWA3-134: Check if stuck (position unchanged between iterations)
-        {
+        const float nearestDistance = GetNearestEnemyDistance();
+        if (nearestDistance < fightRange) {
+            // AutoIt's blocked detection is tied to movement attempts, not
+            // intentional combat pauses inside AggroMoveToEX.
+            stuckCount = 0;
+            if (auto* meCombat = AgentMgr::GetMyAgent()) {
+                lastX = meCombat->x;
+                lastY = meCombat->y;
+            }
+        } else {
+            // GWA3-134: Check if stuck (position unchanged between iterations)
             auto* meStuck = AgentMgr::GetMyAgent();
             if (meStuck) {
                 float moved = AgentMgr::GetDistance(lastX, lastY, meStuck->x, meStuck->y);
@@ -1325,31 +1611,38 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
             }
         }
 
-        // Check for enemies in fight range â€” auto-attack nearest
+        // Check for enemies in fight range. Mirror AutoIt's AggroMoveToEX by
+        // entering the fight loop as soon as a foe is inside aggro range.
         {
-            float bestDist = fightRange * fightRange;
-            uint32_t bestId = 0;
-            auto* me = AgentMgr::GetMyAgent();
-            uint32_t maxAgents = AgentMgr::GetMaxAgents();
-            if (me && maxAgents > 0) {
-                for (uint32_t i = 1; i < maxAgents; i++) {
-                    auto* a = AgentMgr::GetAgentByID(i);
-                    if (!a || a->type != 0xDB) continue;
-                    auto* living = static_cast<AgentLiving*>(a);
-                    if (living->allegiance != 3) continue; // not foe
-                    if (living->hp <= 0.0f) continue;
-                    float d = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
-                    if (d < bestDist) {
-                        bestDist = d;
-                        bestId = living->agent_id;
-                    }
+            if (nearestDistance < fightRange) {
+                const uint32_t bestId = GetBestEnemy(fightRange);
+                if (!bestId) {
+                    WaitMs(100);
+                    continue;
                 }
-            }
-            if (bestId) {
+                const bool sparkflyTraversal = MapMgr::GetMapId() == MAP_SPARKFLY_SWAMP;
+                if (sparkflyTraversal) {
+                    ++s_sparkflyTraversalCombatStats.settle_requests;
+                    s_sparkflyTraversalCombatStats.last_target_id = bestId;
+                    LogBot("AggroMoveToEx Sparkfly holding movement for local clear: foe=%u waypoint=(%.0f, %.0f) dist=%.0f",
+                           bestId, x, y, nearestDistance);
+                    AgentMgr::CancelAction();
+                    WaitMs(50);
+                    FightEnemiesInAggro(fightRange, false, &s_sparkflyTraversalCombatStats);
+                    AgentMgr::CancelAction();
+                    currentTargetId = 0;
+                    AgentMgr::Move(x, y);
+                    lastMoveIssue = GetTickCount();
+                    WaitMs(250);
+                    continue;
+                }
+
                 // GWA3-135: Track per-target combat duration
                 if (bestId != currentTargetId) {
                     currentTargetId = bestId;
                     targetFightStart = GetTickCount();
+                    LogBot("AggroMoveToEx engaging foe=%u waypoint=(%.0f, %.0f) dist=%.0f",
+                           bestId, x, y, nearestDistance);
                 }
                 DWORD fightDuration = GetTickCount() - targetFightStart;
                 if (fightDuration > 120000) {
@@ -1362,14 +1655,32 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
                 if (fightDuration > 60000 && fightDuration < 61000) {
                     LogBot("Combat warning: 60s on target %u", bestId);
                 }
+                auto* me = AgentMgr::GetMyAgent();
+                if (AgentMgr::IsCasting(me)) {
+                    WaitMs(50);
+                    continue;
+                }
 
                 // Flag heroes to fight position
-                auto* foeAgent = AgentMgr::GetAgentByID(bestId);
-                if (foeAgent) {
-                    FlagAllHeroes(foeAgent->x, foeAgent->y);
+                const bool allowHeroFlags = true;
+                __try {
+                    auto* foeAgent = AgentMgr::GetAgentByID(bestId);
+                    if (allowHeroFlags && foeAgent) {
+                        FlagAllHeroes(foeAgent->x, foeAgent->y);
+                    }
+                    AgentMgr::ChangeTarget(bestId);
+                    FightTarget(bestId, fightRange);
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    LogBot("AggroMoveToEx combat fault on foe=%u waypoint=(%.0f, %.0f); falling back to auto-attack",
+                           bestId, x, y);
+                    if (allowHeroFlags) {
+                        UnflagAllHeroes();
+                    }
+                    AgentMgr::Attack(bestId);
+                    WaitMs(500);
+                    currentTargetId = 0;
+                    continue;
                 }
-                AgentMgr::ChangeTarget(bestId);
-                FightTarget(bestId);
                 // Brief wait for skill activation
                 WaitMs(500);
                 // Continue fighting if enemy still alive
@@ -1383,16 +1694,28 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
                 }
                 currentTargetId = 0; // target dead, reset timer
                 // Combat resolved â€” unflag heroes
-                UnflagAllHeroes();
+                if (allowHeroFlags) {
+                    UnflagAllHeroes();
+                }
                 // Enemy dead or gone â€” pick up loot
                 PickupNearbyLoot(600.0f);
+                AgentMgr::Move(x, y);
+                lastMoveIssue = GetTickCount();
                 continue;
             }
         }
 
-        AgentMgr::Move(x, y);
-        WaitMs(500);
+        const DWORD now = GetTickCount();
+        const bool longSinceMove = (now - lastMoveIssue) >= 4000;
+        const bool stalledEnoughToReissue = stuckCount >= 2 && (now - lastMoveIssue) >= 1500;
+        if (longSinceMove || stalledEnoughToReissue) {
+            AgentMgr::Move(x, y);
+            lastMoveIssue = now;
+        }
+        WaitMs(250);
     }
+    LogBot("AggroMoveToEx end target=(%.0f, %.0f) remaining=%.0f threshold=%.0f",
+           x, y, DistanceTo(x, y), arrivalThreshold);
 }
 
 // GWA3-140: Wipe recovery checkpoint â€” back up 2 waypoints from nearest
@@ -1403,34 +1726,48 @@ static int GetWipeRestartWaypoint(const Waypoint* wps, int count) {
     return restart;
 }
 
+static void SuspendTransitionSensitiveHooks() {
+    CtoS::SuspendEngineHook();
+    DialogMgr::Shutdown();
+}
+
+static void ResumeTransitionSensitiveHooks() {
+    CtoS::ResumeEngineHook();
+    DialogMgr::Initialize();
+}
+
 static void GrabDungeonBlessing(float shrineX, float shrineY); // forward decl
 static void OpenDungeonDoorAt(float doorX, float doorY);       // forward decl
 static uint32_t FindNearestNpcByAllegiance(float x, float y, float maxDist); // forward decl
-static void FollowWaypoints(const Waypoint* wps, int count) {
+static uint32_t FindNearestSignpost(float x, float y, float maxDist); // forward decl
+static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunning = false) {
     int startIdx = GetNearestWaypointIndex(wps, count);
     uint32_t mapId = MapMgr::GetMapId();
+    const bool useNearestProgressBacktrack = mapId != MAP_BOGROOT_LVL1 && mapId != MAP_BOGROOT_LVL2;
     // GWA3-140: Stuck detection â€” track nearest waypoint progress
     int lastNearestWp = startIdx;
     int sameWpCount = 0;
 
     for (int i = startIdx; i < count; i++) {
-        if (!Bot::IsRunning()) return;
+        if (!ignoreBotRunning && !Bot::IsRunning()) return;
         if (MapMgr::GetMapId() != mapId) return;
 
-        // GWA3-140: Stuck backtrack â€” if nearest waypoint unchanged 5 iterations
-        int currentNearest = GetNearestWaypointIndex(wps, count);
-        if (currentNearest == lastNearestWp) {
-            sameWpCount++;
-            if (sameWpCount >= 5) {
-                int backtrack = (currentNearest > 0) ? currentNearest - 1 : 0;
-                LogBot("Waypoint stuck (nearest=%d unchanged 5x) â€” backtracking to %d",
-                       currentNearest, backtrack);
-                i = backtrack;
+        if (useNearestProgressBacktrack) {
+            // GWA3-140: Stuck backtrack â€” if nearest waypoint unchanged 5 iterations
+            int currentNearest = GetNearestWaypointIndex(wps, count);
+            if (currentNearest == lastNearestWp) {
+                sameWpCount++;
+                if (sameWpCount >= 5) {
+                    int backtrack = (currentNearest > 0) ? currentNearest - 1 : 0;
+                    LogBot("Waypoint stuck (nearest=%d unchanged 5x) â€” backtracking to %d",
+                           currentNearest, backtrack);
+                    i = backtrack;
+                    sameWpCount = 0;
+                }
+            } else {
+                lastNearestWp = currentNearest;
                 sameWpCount = 0;
             }
-        } else {
-            lastNearestWp = currentNearest;
-            sameWpCount = 0;
         }
 
         if (IsDead()) {
@@ -1473,12 +1810,55 @@ static void FollowWaypoints(const Waypoint* wps, int count) {
             continue;
         }
         if (strcmp(wps[i].label, "Lvl1 to Lvl2") == 0) {
-            DWORD start = GetTickCount();
-            while ((GetTickCount() - start) < 60000) {
-                AgentMgr::Move(7665, -19050);
-                WaitMs(250);
-                if (MapMgr::GetMapId() == MAP_BOGROOT_LVL2) return;
+            SuspendTransitionSensitiveHooks();
+            uint32_t portalId = FindNearestSignpost(7665.0f, -19050.0f, 1500.0f);
+            if (portalId) {
+                LogBot("Lvl1 to Lvl2: found portal signpost agent=%u", portalId);
+                if (auto* portal = AgentMgr::GetAgentByID(portalId)) {
+                    MoveToAndWait(portal->x, portal->y, 150.0f);
+                }
+            } else {
+                LogBot("Lvl1 to Lvl2: no signpost found near portal coords, using movement-only push");
             }
+            DWORD start = GetTickCount();
+            DWORD lastLogAt = 0;
+            DWORD lastRefreshAt = 0;
+            DWORD attempt = 0;
+            LogLvl1ToLvl2TransitionState("start", portalId, 0, attempt);
+            while ((GetTickCount() - start) < 60000) {
+                ++attempt;
+                const DWORD elapsed = GetTickCount() - start;
+                if ((!portalId || !AgentMgr::GetAgentExists(portalId)) && (elapsed - lastRefreshAt) >= 1000) {
+                    const uint32_t refreshedPortalId = FindNearestSignpost(7665.0f, -19050.0f, 1500.0f);
+                    if (refreshedPortalId != portalId) {
+                        LogBot("Lvl1 to Lvl2: portal refresh old=%u new=%u elapsed=%lums",
+                               portalId,
+                               refreshedPortalId,
+                               static_cast<unsigned long>(elapsed));
+                        portalId = refreshedPortalId;
+                    }
+                    lastRefreshAt = elapsed;
+                }
+                if (elapsed - lastLogAt >= 2000) {
+                    LogLvl1ToLvl2TransitionState("loop", portalId, elapsed, attempt);
+                    lastLogAt = elapsed;
+                }
+                if (portalId) {
+                    AgentMgr::InteractSignpost(portalId);
+                    WaitMs(250);
+                }
+                AgentMgr::Move(7665, -19050);
+                WaitMs(500);
+                if (MapMgr::GetMapId() == MAP_BOGROOT_LVL2) {
+                    LogLvl1ToLvl2TransitionState("entered_lvl2", portalId, GetTickCount() - start, attempt);
+                    s_dungeonLoopTelemetry.entered_lvl2 = true;
+                    WaitMs(3000);
+                    ResumeTransitionSensitiveHooks();
+                    return;
+                }
+            }
+            LogLvl1ToLvl2TransitionState("timeout", portalId, GetTickCount() - start, attempt);
+            ResumeTransitionSensitiveHooks();
             return;
         }
         if (strcmp(wps[i].label, "Dungeon Key") == 0) {
@@ -1494,61 +1874,31 @@ static void FollowWaypoints(const Waypoint* wps, int count) {
             continue;
         }
         if (strcmp(wps[i].label, "Dungeon Door Checkpoint") == 0) {
-            // GWA3-162: Move to checkpoint, verify we advanced past it
+            // Bogroot's route geometry causes pure nearest-waypoint checks to
+            // oscillate here. Just settle at the checkpoint and continue.
             if (wps[i].fightRange > 0 && IsMapLoaded()) {
                 AggroMoveToEx(wps[i].x, wps[i].y, wps[i].fightRange);
             } else {
                 MoveToAndWait(wps[i].x, wps[i].y);
             }
-            int newNearest = GetNearestWaypointIndex(wps, count);
-            if (newNearest <= i) {
-                // Door didn't open â€” backtrack 3 waypoints and retry
-                LogBot("Dungeon Door Checkpoint failed at wp %d, backtracking", i);
-                int backtrack = (i > 3) ? i - 3 : 0;
-                for (int j = i - 1; j >= backtrack; j--) {
-                    if (wps[j].fightRange > 0 && IsMapLoaded()) {
-                        AggroMoveToEx(wps[j].x, wps[j].y, wps[j].fightRange);
-                    } else {
-                        MoveToAndWait(wps[j].x, wps[j].y);
-                    }
-                }
-                i = GetNearestWaypointIndex(wps, count) - 1; // retry from nearest
-            }
+            LogBot("Dungeon Door Checkpoint reached at wp %d", i);
             continue;
         }
         if (strcmp(wps[i].label, "Quest Door Checkpoint") == 0) {
-            // GWA3-161: Move to checkpoint, verify we advanced past it
+            // Bogroot's quest-door checkpoint is followed by a duplicate
+            // coordinate waypoint. Nearest-waypoint heuristics are not stable
+            // here, so rely on forward route progression instead of aborting.
             if (wps[i].fightRange > 0 && IsMapLoaded()) {
                 AggroMoveToEx(wps[i].x, wps[i].y, wps[i].fightRange);
             } else {
                 MoveToAndWait(wps[i].x, wps[i].y);
             }
-            int newNearest = GetNearestWaypointIndex(wps, count);
-            if (newNearest <= i) {
-                // Quest door failed â€” backtrack and abort to Sparkfly
-                LogBot("Quest Door Checkpoint failed at wp %d â€” aborting run", i);
-                s_failCount++;
-                for (int j = i - 1; j >= i - 3 && j >= 0; j--) {
-                    if (wps[j].fightRange > 0 && IsMapLoaded()) {
-                        AggroMoveToEx(wps[j].x, wps[j].y, wps[j].fightRange);
-                    } else {
-                        MoveToAndWait(wps[j].x, wps[j].y);
-                    }
-                }
-                // Reverse to Sparkfly (AutoIt ReverseToSparkflySwamp)
-                MoveToAndWait(14747, 480);
-                DWORD exitStart = GetTickCount();
-                while ((GetTickCount() - exitStart) < 60000) {
-                    AgentMgr::Move(14747, 480);
-                    WaitMs(250);
-                    if (MapMgr::GetMapId() == MAP_SPARKFLY_SWAMP) break;
-                }
-                return;
-            }
+            LogBot("Quest Door Checkpoint reached at wp %d", i);
             continue;
         }
         if (strcmp(wps[i].label, "Boss") == 0) {
             // GWA3-163: Full boss encounter
+            s_dungeonLoopTelemetry.boss_started = true;
             AggroMoveToEx(wps[i].x, wps[i].y, wps[i].fightRange);
             // Fight + first loot sweep
             WaitMs(3000);
@@ -1556,18 +1906,25 @@ static void FollowWaypoints(const Waypoint* wps, int count) {
 
             // Open chest (find nearest signpost near chest coords)
             MoveToAndWait(14876, -19033);
-            OpenNearbyChest(1500.0f);
+            ++s_dungeonLoopTelemetry.chest_attempts;
+            if (OpenNearbyChest(1500.0f)) {
+                ++s_dungeonLoopTelemetry.chest_successes;
+            }
             WaitMs(2000);
             PickupNearbyLoot(1500.0f);
 
             // Second chest attempt (AutoIt does double open)
-            OpenNearbyChest(1500.0f);
+            ++s_dungeonLoopTelemetry.chest_attempts;
+            if (OpenNearbyChest(1500.0f)) {
+                ++s_dungeonLoopTelemetry.chest_successes;
+            }
             WaitMs(1000);
             PickupNearbyLoot(1000.0f);
 
             // Talk to Tekk for quest reward
             // Use GoNPC pattern: find NPC, move close, interact, dialog
             MoveToAndWait(14618, -17828);
+            s_dungeonLoopTelemetry.reward_attempted = true;
             uint32_t tekksId = FindNearestNpcByAllegiance(14618, -17828, 1500.0f);
             if (tekksId) {
                 auto* npc = AgentMgr::GetAgentByID(tekksId);
@@ -1585,6 +1942,28 @@ static void FollowWaypoints(const Waypoint* wps, int count) {
                 LogBot("Boss: Tekk NPC not found â€” sending reward dialog directly");
                 SendDialogWithRetry(DIALOG_QUEST_REWARD, 3, 1000);
             }
+            s_dungeonLoopTelemetry.last_dialog_id = DialogMgr::GetLastDialogId();
+            s_dungeonLoopTelemetry.reward_dialog_latched =
+                s_dungeonLoopTelemetry.last_dialog_id == DIALOG_QUEST_REWARD;
+            s_dungeonLoopTelemetry.boss_completed = true;
+
+            SuspendTransitionSensitiveHooks();
+            const DWORD transitionStart = GetTickCount();
+            while ((GetTickCount() - transitionStart) < 360000) {
+                const uint32_t mapIdNow = MapMgr::GetMapId();
+                if (mapIdNow != MAP_BOGROOT_LVL2) {
+                    s_dungeonLoopTelemetry.final_map_id = mapIdNow;
+                    s_dungeonLoopTelemetry.returned_to_sparkfly = mapIdNow == MAP_SPARKFLY_SWAMP;
+                    if (mapIdNow == MAP_SPARKFLY_SWAMP) {
+                        WaitMs(3000);
+                        ResumeTransitionSensitiveHooks();
+                    }
+                    return;
+                }
+                WaitMs(250);
+            }
+            ResumeTransitionSensitiveHooks();
+            s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
             return;
         }
 
@@ -1670,17 +2049,31 @@ static bool SendDialogWithRetry(uint32_t dialogId, int maxRetries, DWORD delayMs
 // Model IDs that should always be picked up regardless of rarity
 static bool IsAlwaysPickupModel(uint32_t modelId) {
     switch (modelId) {
-    // Ectoplasm, obsidian
-    case 930: case 945:
-    // Diamonds, rubies, sapphires, onyx
-    case 935: case 936: case 937: case 938:
-    // DP removal sweets
-    case 22269: case 28436: case 28431:
-    // Lockpicks
-    case 22751:
-    // Tomes (all professions)
+    case 2619: case 36985:
+    case 27067: case 27071: case 27033: case 27052: case 22374:
+    case 2605: case 2606: case 501: case 502: case 503: case 2566:
+    case 2607: case 6102: case 6104: case 6531:
+    case 15564: case 15565: case 15867: case 15869: case 15870: case 15871:
+    case 17054: case 17055: case 17075:
+    case 22781: case 22782:
+    case 25410: case 25413: case 25416:
+    case 24628: case 24582:
+    case 910: case 2513: case 5585: case 6049: case 6366: case 6367: case 6375:
+    case 15477: case 19171: case 19172: case 19173: case 22190: case 24593:
+    case 28435: case 30855: case 31145: case 31146: case 35124: case 36682:
+    case 15528: case 15479: case 19170: case 21492: case 21812: case 22644:
+    case 30208: case 31150: case 35125: case 36681:
+    case 17060: case 17061: case 17062: case 22269: case 28431: case 28432:
+    case 28436: case 29431: case 31151: case 31152: case 31153: case 35121:
+    case 6370: case 19039: case 21488: case 21489: case 22191: case 26784:
+    case 28433: case 35127:
+    case 556: case 18345: case 21491: case 37765: case 21833: case 28434:
+    case 930: case 935: case 936: case 945:
+    case 21786: case 21787: case 21788: case 21789: case 21790:
+    case 21791: case 21792: case 21793: case 21794: case 21795:
     case 21796: case 21797: case 21798: case 21799: case 21800:
     case 21801: case 21802: case 21803: case 21804: case 21805:
+    case 22751:
         return true;
     }
     return false;
@@ -1722,7 +2115,7 @@ static bool ShouldPickUp(const Agent* agent, uint32_t myAgentId) {
 
     // Cross-reference with actual item data
     auto* item = ItemMgr::GetItemById(itemAgent->item_id);
-    if (!item) return true; // Can't read item data â€” pick up anyway
+    if (!item) return false;
 
     // GWA3-138: Inventory guard â€” if < 2 free slots, only pick gold coins and bundles
     uint32_t freeSlots = CountFreeSlots();
@@ -1732,32 +2125,32 @@ static bool ShouldPickUp(const Agent* agent, uint32_t myAgentId) {
         return false; // skip everything else when nearly full
     }
 
-    // Always pick up whitelisted models (ectos, gems, etc.)
+    if (MaintenanceMgr::IsRareSkin(item->model_id)) return true;
+
     if (IsAlwaysPickupModel(item->model_id)) return true;
 
     // GWA3-138: Quest-specific items
     if (IsQuestPickupModel(item->model_id)) return true;
 
-    // GWA3-138: Type-based rules
     switch (item->type) {
-    case TYPE_TROPHY:  return false;  // trophies â€” never (vendor trash)
-    case TYPE_SCROLL:  return false;  // scrolls â€” never
-    case TYPE_KEY:     return true;   // keys â€” always (dungeon keys, lockpicks)
-    case TYPE_MATERIAL: return true;  // materials â€” always
-    case TYPE_GOLD:                   // gold coins â€” only if < 100k
+    case TYPE_BUNDLE:
+        return item->model_id == 22342 || item->model_id == 24350;
+    case TYPE_DYE:
+        return item->dye.dye_tint == 10;
+    case TYPE_KEY:
+        return true;
+    case TYPE_GOLD:
         return ItemMgr::GetGoldCharacter() < 100000;
-    case TYPE_DYE:     return false;  // dye â€” skip (not worth inventory space)
+    case TYPE_MATERIAL:
+    case TYPE_SCROLL:
+    case TYPE_TROPHY:
+        return false;
+    case TYPE_USABLE:
+        return item->model_id >= 21786 && item->model_id <= 21805;
     }
 
     uint16_t rarity = GetItemRarity(item);
-
-    // Always pick up gold and green rarity
-    if (rarity == RARITY_GOLD || rarity == RARITY_GREEN) return true;
-
-    // Pick up purple
-    if (rarity == RARITY_PURPLE) return true;
-
-    return false;
+    return rarity == RARITY_GOLD && freeSlots > 8;
 }
 
 static int PickupNearbyLoot(float maxRange) {
@@ -2159,16 +2552,32 @@ static bool WaitForMerchantContext(DWORD timeoutMs) {
     return false;
 }
 
-static int UseAllSkillsWithRole(uint32_t targetId, uint32_t roleMask, int maxUses) {
+static int UseAllSkillsWithRole(uint32_t targetId, uint32_t roleMask, int maxUses, float aggroRange) {
     int usedCount = 0;
     while (usedCount < maxUses) {
-        if (!TryUseSkillWithRole(targetId, roleMask)) {
+        if (!TryUseSkillWithRole(targetId, roleMask, true, aggroRange)) {
             break;
         }
         ++usedCount;
     }
     if (usedCount > 0) {
         CombatDebugLog("roleMask=0x%X multi_use count=%d", roleMask, usedCount);
+    }
+    return usedCount;
+}
+
+static int UseSkillsInSlotOrder(uint32_t targetId, float aggroRange, bool waitForCompletion) {
+    int usedCount = 0;
+    for (int i = 0; i < 8; ++i) {
+        if (TryUseSkillIndex(i, targetId, waitForCompletion, aggroRange)) {
+            ++usedCount;
+        }
+        if (GetNearestEnemyDistance() > aggroRange) {
+            break;
+        }
+    }
+    if (usedCount > 0) {
+        CombatDebugLog("slot_order_use count=%d", usedCount);
     }
     return usedCount;
 }
@@ -2897,8 +3306,14 @@ BotState HandleDungeon(BotConfig& cfg) {
         // GWA3-166: Renew consets at Sparkfly entry
         UseConsumables(cfg);
 
+        // Match the proven AutoIt Sparkfly aggro route instead of
+        // straight-lining to Tekks. This keeps combat active on approach and
+        // avoids the explorable glide/floating behavior seen on long direct
+        // movement.
+        FollowWaypoints(SPARKFLY_TO_DUNGEON, sizeof(SPARKFLY_TO_DUNGEON) / sizeof(SPARKFLY_TO_DUNGEON[0]));
+
         // Accept quest from Tekk
-        MoveToAndWait(12396, 22407);
+        MoveToAndWait(12061, 22485);
         WaitMs(500);
         SendDialogWithRetry(DIALOG_NPC_TALK, 2, 500);
         SendDialogWithRetry(DIALOG_QUEST_ACCEPT, 2, 500);
@@ -3349,6 +3764,13 @@ int RunFroggyUnitTests() {
         FroggyCheck("ResolveSkillTarget(heal) returns valid agent",
                     healTarget > 0 && AgentMgr::GetAgentExists(healTarget));
 
+        CachedSkill fakeSelfResolve = {};
+        fakeSelfResolve.roles = ROLE_PRECAST | ROLE_BINDING;
+        fakeSelfResolve.target_type = 0;
+        uint32_t selfTarget = ResolveSkillTarget(fakeSelfResolve, 42);
+        FroggyCheck("ResolveSkillTarget(self) returns my agent id",
+                    selfTarget == AgentMgr::GetMyId());
+
         // ResolveSkillTarget for res â€” should return 0 (nobody dead, hopefully)
         CachedSkill fakeResResolve = {};
         fakeResResolve.roles = ROLE_RESURRECT;
@@ -3606,7 +4028,44 @@ int RunFroggyUnitTests() {
     return s_testFailed;
 }
 
-bool ExecuteBuiltinCombatStep(uint32_t targetId) {
+bool DebugAggroMoveTo(float x, float y, float fightRange) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded()) {
+        return false;
+    }
+
+    LogBot("DebugAggroMoveTo request target=(%.0f, %.0f) fightRange=%.0f", x, y, fightRange);
+    AggroMoveToEx(x, y, fightRange);
+    const float arrivalThreshold = MapMgr::GetMapId() == MAP_SPARKFLY_SWAMP ? 500.0f : 250.0f;
+    return DistanceTo(x, y) <= arrivalThreshold;
+}
+
+bool DebugRunSparkflyRouteToTekks() {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != MAP_SPARKFLY_SWAMP) {
+        return false;
+    }
+
+    static constexpr float kTekksStageX = 12061.0f;
+    static constexpr float kTekksStageY = 22485.0f;
+    static constexpr float kTekksStageThreshold = 500.0f;
+
+    LogBot("DebugRunSparkflyRouteToTekks start");
+    FollowWaypoints(SPARKFLY_TO_DUNGEON, sizeof(SPARKFLY_TO_DUNGEON) / sizeof(SPARKFLY_TO_DUNGEON[0]), true);
+    if (!MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != MAP_SPARKFLY_SWAMP) {
+        LogBot("DebugRunSparkflyRouteToTekks aborted after waypoint follow: map=%u loaded=%d",
+               MapMgr::GetMapId(), MapMgr::GetIsMapLoaded() ? 1 : 0);
+        return false;
+    }
+
+    MoveToAndWait(kTekksStageX, kTekksStageY, kTekksStageThreshold);
+    const float remaining = DistanceTo(kTekksStageX, kTekksStageY);
+    const bool reached = remaining <= kTekksStageThreshold;
+    LogBot("DebugRunSparkflyRouteToTekks end remaining=%.0f reached=%d", remaining, reached ? 1 : 0);
+    return reached;
+}
+
+bool ExecuteBuiltinCombatStep(uint32_t targetId, bool quickStep) {
     if (!targetId) return false;
 
     auto* target = AgentMgr::GetAgentByID(targetId);
@@ -3619,8 +4078,70 @@ bool ExecuteBuiltinCombatStep(uint32_t targetId) {
     ResetLastCombatStepInfo();
     ResetCombatDebugTrace();
     s_combatDebugLogging = true;
+    const bool sparkflyMap = MapMgr::GetMapId() == MAP_SPARKFLY_SWAMP;
 
-    FightTarget(targetId);
+    if (quickStep) {
+        if (!s_skillsCached) CacheSkillBar();
+        memset(s_skillUsedThisStep, 0, sizeof(s_skillUsedThisStep));
+        AgentMgr::ChangeTarget(targetId);
+        bool attacked = false;
+        if (CanBasicAttack()) {
+            AgentMgr::Attack(targetId);
+            attacked = true;
+        }
+        SkillMgr::SetSparkflyPlayerUseSkillOverride(true);
+        const int usedSkills = UseSkillsInSlotOrder(targetId, LONG_BOW_RANGE, false);
+        SkillMgr::SetSparkflyPlayerUseSkillOverride(false);
+        if (usedSkills <= 0 && attacked) {
+            SetLastCombatStepDescription("auto_attack target=%u", targetId);
+            ResetLastCombatStepInfo();
+            s_lastCombatStepInfo.valid = true;
+            s_lastCombatStepInfo.auto_attack = true;
+            s_lastCombatStepInfo.target_id = targetId;
+            s_lastCombatStepInfo.role_mask = ROLE_ATTACK | ROLE_OFFENSIVE;
+            s_lastCombatStepInfo.started_at_ms = GetTickCount();
+            s_lastCombatStepInfo.finished_at_ms = GetTickCount();
+        }
+    } else if (sparkflyMap) {
+        if (!s_skillsCached) CacheSkillBar();
+        memset(s_skillUsedThisStep, 0, sizeof(s_skillUsedThisStep));
+        AgentMgr::ChangeTarget(targetId);
+
+        bool usedFoeTargetSkill = false;
+        SkillMgr::SetSparkflyPlayerUseSkillOverride(true);
+        for (int i = 0; i < 8; ++i) {
+            const auto& c = s_skillCache[i];
+            if (c.skill_id == 0) continue;
+            if (c.target_type != 5) continue;
+            if (!CanUseSkill(c, targetId, LONG_BOW_RANGE)) continue;
+            usedFoeTargetSkill = TryUseSkillIndex(i, targetId, true, LONG_BOW_RANGE);
+            if (usedFoeTargetSkill) {
+                break;
+            }
+        }
+
+        if (!usedFoeTargetSkill) {
+            bool attacked = false;
+            if (CanBasicAttack()) {
+                AgentMgr::Attack(targetId);
+                attacked = true;
+            }
+            const int usedSkills = UseSkillsInSlotOrder(targetId, LONG_BOW_RANGE, true);
+            if (usedSkills <= 0 && attacked) {
+                SetLastCombatStepDescription("auto_attack target=%u", targetId);
+                ResetLastCombatStepInfo();
+                s_lastCombatStepInfo.valid = true;
+                s_lastCombatStepInfo.auto_attack = true;
+                s_lastCombatStepInfo.target_id = targetId;
+                s_lastCombatStepInfo.role_mask = ROLE_ATTACK | ROLE_OFFENSIVE;
+                s_lastCombatStepInfo.started_at_ms = GetTickCount();
+                s_lastCombatStepInfo.finished_at_ms = GetTickCount();
+            }
+        }
+        SkillMgr::SetSparkflyPlayerUseSkillOverride(false);
+    } else {
+        FightTarget(targetId);
+    }
 
     s_combatDebugLogging = false;
     cfg.combat_mode = originalMode;
@@ -3633,6 +4154,14 @@ const char* GetLastCombatStepDescription() {
 
 LastCombatStepInfo GetLastCombatStepInfo() {
     return s_lastCombatStepInfo;
+}
+
+void ResetSparkflyTraversalCombatStats() {
+    ResetSparkflyTraversalCombatStatsState();
+}
+
+SparkflyTraversalCombatStats GetSparkflyTraversalCombatStats() {
+    return s_sparkflyTraversalCombatStats;
 }
 
 bool DebugResolveFirstSkillTarget(uint32_t roleMask, uint32_t defaultFoeId,
@@ -3653,6 +4182,41 @@ bool DebugResolveFirstSkillTarget(uint32_t roleMask, uint32_t defaultFoeId,
         return true;
     }
     return false;
+}
+
+bool DebugResolveSyntheticSkillTarget(uint32_t roleMask, uint8_t targetType,
+                                      uint32_t defaultFoeId, uint32_t& outTargetId) {
+    CachedSkill synthetic = {};
+    synthetic.roles = roleMask;
+    synthetic.target_type = targetType;
+    outTargetId = ResolveSkillTarget(synthetic, defaultFoeId);
+    return AgentMgr::GetMyAgent() != nullptr;
+}
+
+bool DebugResolveUsableSkillTargetForSlot(uint32_t slot, uint32_t defaultFoeId,
+                                          uint32_t& outSkillId, uint32_t& outTargetId, uint8_t& outTargetType) {
+    if (!s_skillsCached) {
+        CacheSkillBar();
+    }
+    outSkillId = 0;
+    outTargetId = 0;
+    outTargetType = 0;
+    if (slot == 0 || slot > 8) return false;
+
+    const auto& c = s_skillCache[slot - 1];
+    if (c.skill_id == 0) return false;
+    if (!CanUseSkill(c, defaultFoeId)) return false;
+
+    const uint32_t resolvedTarget = ResolveSkillTarget(c, defaultFoeId);
+    if (resolvedTarget == 0 &&
+        (c.target_type == 1 || c.target_type == 4 || c.target_type == 5 || c.target_type == 6 || c.target_type == 14)) {
+        return false;
+    }
+
+    outSkillId = c.skill_id;
+    outTargetId = resolvedTarget;
+    outTargetType = c.target_type;
+    return true;
 }
 
 uint32_t DebugGetCastingEnemy() {
@@ -3726,13 +4290,16 @@ void DebugDumpBuiltinCombatDecision(uint32_t targetId) {
         const bool canCast = CanCast(c);
         const bool canUse = CanUseSkill(c, targetId);
         const char* canCastReason = ExplainCanCastFailure(c);
+        const char* canUseReason = ExplainCanUseSkillFailure(c, targetId);
         const uint32_t resolvedTarget = ResolveSkillTarget(c, targetId);
         const uint32_t adrenalineReq = SkillMgr::GetSkillConstantData(c.skill_id) ? SkillMgr::GetSkillConstantData(c.skill_id)->adrenaline : 0;
         const uint32_t adrenalineCur = bar->skills[i].adrenaline_a;
-        AddBuiltinCombatDumpLine("slot=%d skill=%u roles=0x%X match=%d recharge=%u ready=%d e=%u/%0.1f adren=%u/%u canCast=%d canUse=%d reason=%s target=%u tgtType=%u type=%u",
+        AddBuiltinCombatDumpLine("slot=%d skill=%u roles=0x%X match=%d recharge=%u ready=%d e=%u/%0.1f adren=%u/%u canCast=%d canUse=%d castReason=%s useReason=%s target=%u tgtType=%u type=%u",
                                  i + 1, c.skill_id, c.roles, roleMatch ? 1 : 0, bar->skills[i].recharge,
                                  rechargeReady ? 1 : 0, c.energy_cost, myEnergy, adrenalineCur, adrenalineReq,
-                                 canCast ? 1 : 0, canUse ? 1 : 0, canCastReason ? canCastReason : "ok",
+                                 canCast ? 1 : 0, canUse ? 1 : 0,
+                                 canCastReason ? canCastReason : "ok",
+                                 canUseReason ? canUseReason : "ok",
                                  resolvedTarget, c.target_type, c.skill_type);
         LogBot("BuiltinCombatDump: slot=%d skill=%u roles=0x%X roleMatch=%d recharge=%u ready=%d energyCost=%u energyReady=%d canUse=%d resolvedTarget=%u targetType=%u type=%u",
                i + 1, c.skill_id, c.roles, roleMatch ? 1 : 0, bar->skills[i].recharge,
@@ -3757,6 +4324,42 @@ int GetCombatDebugTraceCount() {
 const char* GetCombatDebugTraceLine(int index) {
     if (index < 0 || index >= s_combatDebugTraceCount) return "";
     return s_combatDebugTrace[index];
+}
+
+void ResetDungeonLoopTelemetry() {
+    s_dungeonLoopTelemetry = {};
+}
+
+DungeonLoopTelemetry GetDungeonLoopTelemetry() {
+    s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
+    s_dungeonLoopTelemetry.last_dialog_id = DialogMgr::GetLastDialogId();
+    return s_dungeonLoopTelemetry;
+}
+
+bool DebugRunDungeonLoopFromCurrentMap() {
+    ResetDungeonLoopTelemetry();
+
+    const uint32_t startMapId = MapMgr::GetMapId();
+    if (startMapId == MAP_BOGROOT_LVL1) {
+        s_dungeonLoopTelemetry.started_in_lvl1 = true;
+        FollowWaypoints(BOGROOT_LVL1, sizeof(BOGROOT_LVL1) / sizeof(BOGROOT_LVL1[0]), true);
+    } else if (startMapId == MAP_BOGROOT_LVL2) {
+        s_dungeonLoopTelemetry.started_in_lvl2 = true;
+    } else {
+        s_dungeonLoopTelemetry.final_map_id = startMapId;
+        return false;
+    }
+
+    if (MapMgr::GetMapId() == MAP_BOGROOT_LVL2) {
+        s_dungeonLoopTelemetry.started_in_lvl2 = true;
+        FollowWaypoints(BOGROOT_LVL2, sizeof(BOGROOT_LVL2) / sizeof(BOGROOT_LVL2[0]), true);
+    }
+
+    s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
+    s_dungeonLoopTelemetry.last_dialog_id = DialogMgr::GetLastDialogId();
+    s_dungeonLoopTelemetry.returned_to_sparkfly =
+        s_dungeonLoopTelemetry.final_map_id == MAP_SPARKFLY_SWAMP;
+    return s_dungeonLoopTelemetry.returned_to_sparkfly;
 }
 
 } // namespace GWA3::Bot::Froggy

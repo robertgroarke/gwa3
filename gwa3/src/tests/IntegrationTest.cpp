@@ -41,12 +41,6 @@ static volatile bool s_watchdogAllowHungWindowKill = true;
 static volatile bool s_disconnectDetected = false;
 static uint32_t s_watchdogLastMapId = 0;
 static volatile bool s_watchdogCrashScreenshotTaken = false;
-static constexpr bool kBisectWorkflowStopAfterEarlyPhase = false;
-static constexpr bool kBisectWorkflowStopAfter074c = false;
-static constexpr bool kBisectWorkflowSkipPostStoCTail = false;
-static constexpr bool kBisectWorkflowOnlyQuestTail = false;
-static constexpr bool kBisectWorkflowOnlyUiTail = false;
-static constexpr bool kBisectWorkflowOnlyAgentTail = false;
 
 static bool BuildWatchdogScreenshotPath(const char* tag, char* outPath, size_t outPathSize) {
     if (!tag || !*tag || !outPath || outPathSize == 0) return false;
@@ -1418,10 +1412,6 @@ int RunAdvancedWorkflowTest() {
         if (AbortWorkflowIfRuntimeFailed("TestGoldTransfer")) goto workflow_done;
         TestMemAllocFree();
         if (AbortWorkflowIfRuntimeFailed("TestMemAllocFree")) goto workflow_done;
-        if (kBisectWorkflowStopAfter074c) {
-            IntSkip("Workflow after 074c (076-089)", "Temporarily skipped while bisecting early workflow crash");
-            goto workflow_done;
-        }
 
         // 076: Skillbar management
         TestLoadSkillbar();
@@ -1434,10 +1424,6 @@ int RunAdvancedWorkflowTest() {
         // 078: Title management
         TestTitleManagement();
         if (AbortWorkflowIfRuntimeFailed("TestTitleManagement")) goto workflow_done;
-        if (kBisectWorkflowStopAfterEarlyPhase) {
-            IntSkip("Workflow tail (080-089)", "Temporarily skipped while bisecting late workflow crash");
-            goto workflow_done;
-        }
 
         // 080: Callback registry
         TestCallbackRegistry();
@@ -1450,26 +1436,14 @@ int RunAdvancedWorkflowTest() {
         // 082: StoC packet type coverage
         TestStoCPacketTypes();
         if (AbortWorkflowIfRuntimeFailed("TestStoCPacketTypes")) goto workflow_done;
-        if (kBisectWorkflowSkipPostStoCTail) {
-            IntSkip("Workflow post-StoC tail (083-089)", "Temporarily skipped while bisecting late workflow crash");
-            goto workflow_done;
-        }
 
         // 083: Quest management
         TestQuestManagement();
         if (AbortWorkflowIfRuntimeFailed("TestQuestManagement")) goto workflow_done;
-        if (kBisectWorkflowOnlyQuestTail) {
-            IntSkip("Workflow tail after quest (085-089)", "Temporarily skipped while bisecting late workflow crash");
-            goto workflow_done;
-        }
 
         // 085: UI frame interaction
         TestUIFrameInteraction();
         if (AbortWorkflowIfRuntimeFailed("TestUIFrameInteraction")) goto workflow_done;
-        if (kBisectWorkflowOnlyUiTail) {
-            IntSkip("Workflow tail after UI frame interaction (086-089)", "Temporarily skipped while bisecting late workflow crash");
-            goto workflow_done;
-        }
 
         // 086: Agent interaction
         TestAgentInteraction();

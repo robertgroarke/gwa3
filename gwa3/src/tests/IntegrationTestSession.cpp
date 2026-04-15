@@ -1033,21 +1033,8 @@ void WriteConsumableHarnessStatus(const char* stage, const char* targetLabel, ui
     }
 }
 
-static uintptr_t ResolveGameContextForTradeHelper() {
-    if (Offsets::BasePointer <= 0x10000) return 0;
-    __try {
-        uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
-        if (ctx <= 0x10000) return 0;
-        uintptr_t gc = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
-        if (gc <= 0x10000) return 0;
-        return gc;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
-
 static uint32_t ReadTradeFlagsForHelper() {
-    uintptr_t gc = ResolveGameContextForTradeHelper();
+    uintptr_t gc = Offsets::ResolveGameContext();
     if (!gc) return 0;
     __try {
         uintptr_t trade = *reinterpret_cast<uintptr_t*>(gc + 0x58);
@@ -3961,12 +3948,5 @@ int RunConsumableCraftingTest() {
     if (!TestConsumableCrafting()) ++failures;
     return failures;
 }
-
-#if 0
-int RunFroggySparkflyRouteTest() {
-    IntReport("RunFroggySparkflyRouteTest: stub — not implemented in this file");
-    return 0;
-}
-#endif
 
 } // namespace GWA3::SmokeTest

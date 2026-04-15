@@ -18,6 +18,7 @@
 namespace GWA3::AgentMgr {
 
 static constexpr uint32_t kSendCallTargetUiMessage = 0x30000013u;
+static constexpr uint32_t kActionInteractCode = 0x80u;
 
 enum class CallTargetType : uint32_t {
     Following = 0x3,
@@ -57,6 +58,7 @@ static bool s_loggedInteractNpcNative = false;
 static bool s_loggedInteractNpcFallback = false;
 static bool s_loggedMoveQueuedOnce = false;
 static bool s_loggedSparkflyMoveLane = false;
+static bool s_loggedSparkflyMoveLaneUnavailable = false;
 static bool s_loggedChangeTargetEngineLane = false;
 static constexpr LONG kRenderCommandSlots = 32;
 static constexpr size_t kRenderCommandSlotSize = 32;
@@ -130,6 +132,10 @@ bool Initialize() {
 }
 
 static bool s_loggedMoveOnce = false;
+struct SendChangeTargetUIMsg {
+    uint32_t target_id;
+    uint32_t auto_target_id;
+};
 
 namespace {
 
@@ -218,17 +224,9 @@ __declspec(naked) void RenderChangeTargetCommandStub() {
 
 void InvokeSparkflyMoveRaw(const MoveData* move) {
     if (!s_moveFn || !move) return;
-
-    uintptr_t fn = reinterpret_cast<uintptr_t>(s_moveFn);
-    const void* movePtr = move;
-    __asm {
-        push eax
-        mov eax, movePtr
-        push eax
-        call dword ptr [fn]
-        add esp, 4
-        pop eax
-    }
+    // Direct C function pointer call — matches GWCA's Move_Func(&pos).
+    // The inline asm version was suspected of stack/register corruption.
+    s_moveFn(move);
 }
 
 void InvokeChangeTargetRaw(uint32_t agentId) {
@@ -296,7 +294,26 @@ void Move(float x, float y) {
     if (IsCastingState(GetMyAgent())) {
         return;
     }
-    if (CtoS::Initialize()) {
+    if (GameThread::IsInitialized()) {
+        // Prefer native post-dispatch movement once GameThread is live.
+        // The Botshub lane is useful as an early fallback, but repeated route
+        // movement through that queue is a crash/saturation vector.
+        if (!GameThread::IsOnGameThread()) {
+            if (!s_loggedMoveQueuedOnce) {
+                Log::Info("AgentMgr: Move queuing native move on GameThread post-dispatch");
+                s_loggedMoveQueuedOnce = true;
+            }
+            GameThread::EnqueuePost([x, y]() {
+                IssueNativeMove(x, y);
+            });
+            return;
+        }
+
+        IssueNativeMove(x, y);
+        return;
+    }
+
+    if (CtoS::Initialize() && CtoS::IsBotshubCommandLaneAvailable()) {
         if (!s_loggedSparkflyMoveLane) {
             Log::Info("AgentMgr: Move using engine command lane");
             s_loggedSparkflyMoveLane = true;
@@ -310,76 +327,50 @@ void Move(float x, float y) {
             return;
         }
         Log::Warn("AgentMgr: Botshub command queue rejected move, falling back");
-    }
-    if (!GameThread::IsInitialized()) {
-        Log::Warn("AgentMgr: Move falling back to packet path (GameThread not ready)");
-        CtoS::MoveToCoord(x, y);
-        return;
+    } else if (CtoS::Initialize() && !s_loggedSparkflyMoveLaneUnavailable) {
+        Log::Info("AgentMgr: Move skipping engine command lane because it is unavailable");
+        s_loggedSparkflyMoveLaneUnavailable = true;
     }
 
-    // Native movement must run on the post-dispatch game thread. GWA2 queued
-    // movement through the game's dispatcher; direct off-thread calls can
-    // desync animation/state and make the player glide without walking.
-    if (!GameThread::IsOnGameThread()) {
-        if (!s_loggedMoveQueuedOnce) {
-            Log::Info("AgentMgr: Move queuing native move on GameThread post-dispatch");
-            s_loggedMoveQueuedOnce = true;
-        }
-        GameThread::EnqueuePost([x, y]() {
-            IssueNativeMove(x, y);
-        });
-        return;
-    }
-
-    IssueNativeMove(x, y);
+    Log::Warn("AgentMgr: Move falling back to packet path (GameThread not ready)");
+    CtoS::MoveToCoord(x, y);
 }
 
-static bool s_loggedChangeTargetUIMsg = false;
+static bool s_loggedChangeTargetDeferred = false;
+static bool s_loggedChangeTargetNative = false;
 
 void ChangeTarget(uint32_t agentId) {
-    // Py4GW pattern: use UIMessage kChangeTarget (0x10000020) instead of
-    // calling the native ChangeTarget function.  The native function
-    // deadlocks from the engine hook, crashes from GameThread during
-    // movement, and corrupts state from any dispatch context.
-    //
-    // The UIMessage path goes through the game's own UI dispatch system,
-    // which handles all internal state checks and lock ordering correctly.
-    //
-    // Struct: GWCA UIMgr.h ChangeTargetUIMsg
-    //   { uint32_t manual_target_id, uint32_t unk1,
-    //     uint32_t auto_target_id,   uint32_t unk2 }
-    struct ChangeTargetUIMsg {
-        uint32_t manual_target_id;
-        uint32_t unk1;
-        uint32_t auto_target_id;
-        uint32_t unk2;
-    };
-    static constexpr uint32_t kChangeTarget = 0x10000020u;
-
-    if (!s_loggedChangeTargetUIMsg) {
-        Log::Info("AgentMgr: ChangeTarget using UIMessage 0x%X agentId=%u", kChangeTarget, agentId);
-        s_loggedChangeTargetUIMsg = true;
+    // Native ChangeTarget is stable only when stationary. Defer until
+    // movement settles and the botshub move queue drains, matching the
+    // upstream Move -> settle -> ChangeTarget sequencing.
+    const auto* me = GetMyAgent();
+    if ((me && (me->move_x != 0.0f || me->move_y != 0.0f)) || !CtoS::IsBotshubQueueIdle()) {
+        if (!s_loggedChangeTargetDeferred) {
+            Log::Info("AgentMgr: ChangeTarget deferred until movement settles");
+            s_loggedChangeTargetDeferred = true;
+        }
+        return;
     }
 
-    ChangeTargetUIMsg msg{};
-    msg.manual_target_id = agentId;
-    msg.auto_target_id = agentId;
+    if (!s_loggedChangeTargetNative) {
+        Log::Info("AgentMgr: ChangeTarget using native GameThread path agentId=%u", agentId);
+        s_loggedChangeTargetNative = true;
+    }
 
     if (GameThread::IsOnGameThread()) {
-        UIMgr::SendUIMessage(kChangeTarget, &msg, nullptr);
+        InvokeChangeTargetRaw(agentId);
         return;
     }
 
     if (GameThread::IsInitialized()) {
-        GameThread::Enqueue([msg]() {
-            ChangeTargetUIMsg local = msg;
-            UIMgr::SendUIMessage(kChangeTarget, &local, nullptr);
+        Log::Info("AgentMgr: ChangeTarget queueing native dispatch agentId=%u", agentId);
+        GameThread::Enqueue([agentId]() {
+            InvokeChangeTargetRaw(agentId);
         });
         return;
     }
 
-    // Last resort: direct call (pre-GameThread init)
-    UIMgr::SendUIMessage(kChangeTarget, &msg, nullptr);
+    InvokeChangeTargetRaw(agentId);
 }
 
 uint32_t GetTargetId() {
@@ -429,11 +420,24 @@ uint32_t GetMyId() {
 }
 
 void Attack(uint32_t agentId) {
-    CtoS::AttackAgent(agentId);
+    static bool s_loggedActionAttack = false;
+    if (!s_loggedActionAttack) {
+        s_loggedActionAttack = true;
+        Log::Info("AgentMgr: Attack using ACTION_ATTACK packet path with call-target");
+    }
+    CtoS::ActionAttack(agentId, 1u);
 }
 
 void CancelAction() {
     CtoS::CancelAction();
+}
+
+bool ActionInteract() {
+    if (!UIMgr::HasControlActionKeypress()) {
+        Log::Warn("AgentMgr: ActionInteract unavailable (DoAction/action context missing)");
+        return false;
+    }
+    return UIMgr::ActionKeyPress(kActionInteractCode);
 }
 
 void CallTarget(uint32_t agentId) {
@@ -477,9 +481,6 @@ void InteractNPC(uint32_t agentId) {
         return;
     }
 
-    // Current AutoIt GWA2 logic uses INTERACT_LIVING (0x38) for NPCs.
-    // Keep the native path above first, but make the packet fallback match
-    // the modern working merchant-interaction packet shape.
     if (!s_loggedInteractNpcFallback) {
         Log::Warn("AgentMgr: InteractNPC falling back to raw packet path");
         s_loggedInteractNpcFallback = true;
@@ -535,12 +536,6 @@ uint32_t GetMaxAgents() {
     __try {
         return *reinterpret_cast<uint32_t*>(Offsets::AgentBase + 0x8);
     } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
-}
-
-GWArray<Agent*>* GetAgentArray() {
-    // Legacy API — returns null because agent array is not a GWArray
-    // Use GetAgentByID + GetMaxAgents instead
-    return nullptr;
 }
 
 float GetSquaredDistance(float x1, float y1, float x2, float y2) {

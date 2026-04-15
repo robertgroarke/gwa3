@@ -6,6 +6,7 @@
 #include <gwa3/core/RenderHook.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/TargetLogHook.h>
+#include <gwa3/core/DialogHook.h>
 #include <gwa3/core/Memory.h>
 #include <gwa3/packets/CtoSHook.h>
 #include <gwa3/managers/AgentMgr.h>
@@ -328,9 +329,6 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     // Defer GameThread init to after bootstrap — initialize RenderHook
     // first for char select, then GameThread after map load.
     bool gameThreadOk = false;
-    if (!gameThreadOk) {
-        GWA3::Log::Warn("GameThread initialization failed — trying RenderHook fallback");
-    }
 
     if (integrationTest || npcDialogTest || merchantQuoteTest || merchantShellTest || tradeHelperTest || consumableCraftingTest || advancedTest || workflowTest || froggyTest || froggyFlaggingTest || froggySparkflyTest || !anyTest) {
         // Always init RenderHook for bootstrap char select UI clicks
@@ -350,11 +348,11 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         gameThreadOk = GWA3::GameThread::Initialize();
 
         GWA3::CtoS::Initialize();
-        // CtoSHook at Render site disabled — CtoS now has its own Engine
-        // inline hook for packet dispatch (different function, no lock conflict)
-        // GWA3::CtoSHook::Initialize();
+        // CtoSHook not needed — CtoS has its own Engine inline hook for
+        // packet dispatch (different function, no lock conflict).
         GWA3::TraderHook::Initialize();
         GWA3::TargetLogHook::Initialize();
+        GWA3::DialogHook::Initialize();
     }
 
     if (!gameThreadOk) {
@@ -555,6 +553,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
         GWA3::Bot::Stop();
         GWA3::ChatLogMgr::Shutdown();
         GWA3::DialogMgr::Shutdown();
+        GWA3::DialogHook::Shutdown();
         GWA3::StoC::Shutdown();
         GWA3::CtoSHook::Shutdown();
         GWA3::TraderHook::Shutdown();
