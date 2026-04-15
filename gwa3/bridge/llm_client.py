@@ -1,7 +1,6 @@
 """OpenAI-compatible async HTTP client for local LLM inference (vLLM/Ollama)."""
 
 import json
-import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -17,10 +16,8 @@ class ToolCall:
 
     @property
     def parsed_arguments(self) -> dict:
-        try:
-            return json.loads(self.arguments)
-        except (json.JSONDecodeError, TypeError):
-            return {}
+        """Parse JSON arguments string. Raises on malformed LLM output."""
+        return json.loads(self.arguments)
 
 
 @dataclass

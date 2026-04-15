@@ -135,10 +135,10 @@ class AgentLoop:
                 pass
 
     async def _collect_observations_safe(self):
-        """Collect observations, swallowing timeouts."""
+        """Collect observations, swallowing timeouts (expected when pipe is idle)."""
         try:
             await self._collect_observations()
-        except (asyncio.TimeoutError, Exception):
+        except asyncio.TimeoutError:
             pass
 
     def _build_messages(self) -> list[dict]:

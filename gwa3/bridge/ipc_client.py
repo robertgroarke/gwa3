@@ -80,7 +80,8 @@ class IpcClient:
     async def read_message(self) -> dict | None:
         """Read one length-prefixed JSON message from the pipe.
 
-        Returns the parsed JSON dict, or None on error/disconnect.
+        Returns the parsed JSON dict, or None on pipe disconnect/close.
+        Raises json.JSONDecodeError on malformed messages (bug in sender).
         """
         async with self._read_lock:
             try:
@@ -92,7 +93,7 @@ class IpcClient:
                     return None
                 payload = await loop.run_in_executor(None, self._read_bytes, length)
                 return json.loads(payload.decode("utf-8"))
-            except Exception:
+            except (IOError, OSError, pywintypes.error):
                 self._connected = False
                 return None
 
