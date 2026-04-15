@@ -106,46 +106,6 @@ void RemoveUIMessageCallback(HookEntry* entry, uint32_t messageId) {
     }
 }
 
-// === FrameUIMessage ===
-
-bool RegisterFrameUIMessageCallback(HookEntry* entry, uint32_t messageId,
-                                    const UICallback& callback, int altitude) {
-    if (!entry || !callback) return false;
-    std::lock_guard<std::mutex> lock(s_mutex);
-
-    RemoveByEntry(s_frameCallbacks[messageId], entry);
-    InsertSorted(s_frameCallbacks[messageId], {altitude, entry, callback});
-    TrackModuleOwnership(entry);
-    return true;
-}
-
-void RemoveFrameUIMessageCallback(HookEntry* entry, uint32_t messageId) {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    auto it = s_frameCallbacks.find(messageId);
-    if (it != s_frameCallbacks.end()) {
-        RemoveByEntry(it->second, entry);
-        if (it->second.empty()) s_frameCallbacks.erase(it);
-    }
-}
-
-// === CreateUIComponent ===
-
-bool RegisterCreateUIComponentCallback(HookEntry* entry,
-                                       const UICallback& callback, int altitude) {
-    if (!entry || !callback) return false;
-    std::lock_guard<std::mutex> lock(s_mutex);
-
-    RemoveByEntry(s_createCallbacks, entry);
-    InsertSorted(s_createCallbacks, {altitude, entry, callback});
-    TrackModuleOwnership(entry);
-    return true;
-}
-
-void RemoveCreateUIComponentCallback(HookEntry* entry) {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    RemoveByEntry(s_createCallbacks, entry);
-}
-
 // === Bulk Cleanup ===
 
 void RemoveCallbacks(HookEntry* entry) {
@@ -177,19 +137,6 @@ void DispatchUIMessage(uint32_t messageId, void* wparam, void* lparam) {
     if (it != s_uiCallbacks.end()) {
         DispatchList(it->second, messageId, wparam, lparam);
     }
-}
-
-void DispatchFrameUIMessage(uint32_t messageId, void* wparam, void* lparam) {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    auto it = s_frameCallbacks.find(messageId);
-    if (it != s_frameCallbacks.end()) {
-        DispatchList(it->second, messageId, wparam, lparam);
-    }
-}
-
-void DispatchCreateUIComponent(uint32_t componentId, void* wparam, void* lparam) {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    DispatchList(s_createCallbacks, componentId, wparam, lparam);
 }
 
 } // namespace GWA3::CallbackRegistry

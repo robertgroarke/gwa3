@@ -44,6 +44,7 @@ static constexpr uint32_t DIALOG_QUEST_REWARD   = 0x833907;
 static constexpr uint32_t DIALOG_QUEST_ACCEPT   = 0x833901;
 static constexpr uint32_t DIALOG_QUEST_BODY     = 0x8101;
 static constexpr uint32_t DIALOG_NPC_TALK       = 0x2AE6;
+static constexpr uint32_t DIALOG_DUNGEON_ENTRY  = 0x833905;
 
 // ===== Waypoint =====
 
@@ -2044,6 +2045,51 @@ static bool SendDialogWithRetry(uint32_t dialogId, int maxRetries, DWORD delayMs
     return true;
 }
 
+static bool PrepareTekksDungeonEntry() {
+    static constexpr float kTekksStageX = 12061.0f;
+    static constexpr float kTekksStageY = 22485.0f;
+    static constexpr float kTekksSearchX = 12396.0f;
+    static constexpr float kTekksSearchY = 22407.0f;
+
+    LogBot("Preparing Tekks dungeon entry sequence");
+    MoveToAndWait(kTekksStageX, kTekksStageY, 500.0f);
+    WaitMs(500);
+
+    const uint32_t tekksId = FindNearestNpcByAllegiance(kTekksSearchX, kTekksSearchY, 1800.0f);
+    if (tekksId != 0) {
+        if (auto* npc = AgentMgr::GetAgentByID(tekksId)) {
+            MoveToAndWait(npc->x, npc->y, 120.0f);
+        }
+        AgentMgr::ChangeTarget(tekksId);
+        WaitMs(250);
+        DialogMgr::ResetHookState();
+        const bool npcHooked = DialogMgr::NPCHook(tekksId, 2000u);
+        LogBot("Tekks NPCHook agent=%u hooked=%d lastUi=0x%X lastDialog=0x%X",
+               tekksId,
+               npcHooked ? 1 : 0,
+               DialogMgr::GetLastUIMessageId(),
+               DialogMgr::GetLastDialogId());
+    } else {
+        LogBot("Tekks NPC not found near expected coordinates; sending dialog sequence without NPCHook");
+    }
+
+    SendDialogWithRetry(DIALOG_QUEST_ACCEPT, 2, 250);
+    if (QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr) {
+        SendDialogWithRetry(DIALOG_QUEST_REWARD, 3, 250);
+        WaitMs(250);
+        SendDialogWithRetry(DIALOG_QUEST_ACCEPT, 2, 250);
+    }
+    SendDialogWithRetry(DIALOG_NPC_TALK, 2, 250);
+    SendDialogWithRetry(DIALOG_DUNGEON_ENTRY, 2, 250);
+    WaitMs(500);
+
+    LogBot("Tekks dungeon entry sequence complete activeQuest=0x%X questPresent=%d lastDialog=0x%X",
+           QuestMgr::GetActiveQuestId(),
+           QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr ? 1 : 0,
+           DialogMgr::GetLastDialogId());
+    return true;
+}
+
 // ===== Loot Pickup (GWA3-098) =====
 
 // Model IDs that should always be picked up regardless of rarity
@@ -3312,11 +3358,10 @@ BotState HandleDungeon(BotConfig& cfg) {
         // movement.
         FollowWaypoints(SPARKFLY_TO_DUNGEON, sizeof(SPARKFLY_TO_DUNGEON) / sizeof(SPARKFLY_TO_DUNGEON[0]));
 
-        // Accept quest from Tekk
-        MoveToAndWait(12061, 22485);
-        WaitMs(500);
-        SendDialogWithRetry(DIALOG_NPC_TALK, 2, 500);
-        SendDialogWithRetry(DIALOG_QUEST_ACCEPT, 2, 500);
+        // AutoIt-faithful Tekks interaction: interact with Tekks, refresh the
+        // quest dialog state, then send the dungeon-entry dialog so the door
+        // actually opens before we walk the portal.
+        PrepareTekksDungeonEntry();
 
         // Move to dungeon entrance
         MoveToAndWait(12228, 22677);
@@ -4162,26 +4207,6 @@ void ResetSparkflyTraversalCombatStats() {
 
 SparkflyTraversalCombatStats GetSparkflyTraversalCombatStats() {
     return s_sparkflyTraversalCombatStats;
-}
-
-bool DebugResolveFirstSkillTarget(uint32_t roleMask, uint32_t defaultFoeId,
-                                  uint32_t& outSkillId, uint32_t& outTargetId, uint8_t& outTargetType) {
-    if (!s_skillsCached) {
-        CacheSkillBar();
-    }
-    outSkillId = 0;
-    outTargetId = 0;
-    outTargetType = 0;
-    for (int i = 0; i < 8; ++i) {
-        const auto& c = s_skillCache[i];
-        if (c.skill_id == 0) continue;
-        if (!(c.roles & roleMask)) continue;
-        outSkillId = c.skill_id;
-        outTargetType = c.target_type;
-        outTargetId = ResolveSkillTarget(c, defaultFoeId);
-        return true;
-    }
-    return false;
 }
 
 bool DebugResolveSyntheticSkillTarget(uint32_t roleMask, uint8_t targetType,

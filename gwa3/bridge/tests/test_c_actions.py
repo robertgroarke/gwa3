@@ -1,7 +1,7 @@
 """Category C: Action Tests — send commands through the bridge and verify results + state changes."""
 
 from .base import BridgeTestCase
-from .helpers import assert_true, assert_gt, assert_keys_present, assert_type, assert_gte
+from .helpers import assert_true, assert_gt, assert_keys_present, assert_type
 
 
 # ============================================================

@@ -158,14 +158,6 @@ namespace GWA3::ChatLogMgr {
         return g_count;
     }
 
-    const ChatEntry* GetMessage(uint32_t index) {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        if (index >= g_count) return nullptr;
-        // Ring buffer: oldest message is at (writeIndex - count), newest at (writeIndex - 1)
-        uint32_t ringIdx = (g_writeIndex - g_count + index) % RING_SIZE;
-        return &g_ring[ringIdx];
-    }
-
     uint32_t GetMessagesSince(uint32_t timestampMs, const ChatEntry** outBuf, uint32_t maxEntries) {
         std::lock_guard<std::mutex> lock(g_mutex);
         uint32_t written = 0;

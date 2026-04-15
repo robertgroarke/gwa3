@@ -220,10 +220,6 @@ uint32_t GetHeartbeat() {
     return static_cast<uint32_t>(s_heartbeat);
 }
 
-bool IsCrashDetected() {
-    return false;
-}
-
 bool IsHookIntact() {
     if (!s_initialized) return false;
     uintptr_t hookAddr = Offsets::Render;

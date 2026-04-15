@@ -11,6 +11,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from ..ipc_client import IpcClient
 from .helpers import TestFailure, assert_true
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -151,13 +152,24 @@ def _helper_config_path() -> Path:
     return _build_dir() / "bin" / "Release" / "trade_helper_config.json"
 
 
-def write_trade_helper_config(*, submit_gold: int = 0, auto_submit: bool = False, offer_item_model_id: int = 0) -> None:
+def write_trade_helper_config(
+    *,
+    submit_gold: int = 0,
+    auto_submit: bool = False,
+    offer_item_model_id: int = 0,
+    move_x: float = 0.0,
+    move_y: float = 0.0,
+    move_seq: int = 0,
+) -> None:
     path = _helper_config_path()
     path.write_text(
         json.dumps({
             "submit_gold": int(submit_gold),
             "auto_submit": bool(auto_submit),
             "offer_item_model_id": int(offer_item_model_id),
+            "move_x": float(move_x),
+            "move_y": float(move_y),
+            "move_seq": int(move_seq),
         }),
         encoding="utf-8",
     )
@@ -239,50 +251,26 @@ def _expected_log_path(pid: int | None) -> Path | None:
     return _build_dir() / "bin" / "Release" / f"gwa3_log_{int(pid)}.txt"
 
 
-def trade_runtime_debug() -> dict:
-    disco_log = _expected_log_path(_disco_pid)
-    helper_log = _expected_log_path(_helper_pid)
-    return {
-        "main_name": _main_name(),
-        "helper_name": _helper_name(),
-        "disco_pid": _disco_pid or 0,
-        "helper_pid": _helper_pid or 0,
-        "main_launcher": str(_main_launcher()),
-        "helper_launcher": str(_helper_launcher()),
-        "main_launcher_log": str(_main_log()),
-        "helper_launcher_log": str(_helper_log()),
-        "disco_log": str(disco_log) if disco_log else None,
-        "helper_log": str(helper_log) if helper_log else None,
-        "disco_log_exists": bool(disco_log and disco_log.exists()),
-        "helper_log_exists": bool(helper_log and helper_log.exists()),
-        "pipe_name": _pipe_name(),
-        "build_dir": str(_build_dir()),
-        "dll_name": _dll_name(),
-    }
+def _read_runtime_log(pid: int | None) -> str:
+    log_path = _expected_log_path(pid)
+    if not log_path or not log_path.exists():
+        return ""
+    try:
+        return log_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
 
 
-def _select_healthy_character_pid(character_name: str) -> int | None:
-    candidates = []
-    for row in _list_character_gw_processes(character_name):
-        pid = int(row["pid"])
-        mem_kb = _pid_memory_kb(pid)
-        if mem_kb >= _MIN_HEALTHY_MEM_KB and _pid_is_running(pid):
-            candidates.append((mem_kb, pid))
-    if not candidates:
+def _bootstrap_stuck_reason(pid: int | None) -> str | None:
+    text = _read_runtime_log(pid)
+    if not text:
         return None
-    candidates.sort()
-    return candidates[-1][1]
-
-
-def _cleanup_stale_character_processes(character_name: str, keep_pid: int | None = None) -> None:
-    for row in _list_character_gw_processes(character_name):
-        pid = int(row["pid"])
-        if keep_pid and pid == keep_pid:
-            continue
-        mem_kb = _pid_memory_kb(pid)
-        if mem_kb < _MIN_HEALTHY_MEM_KB:
-            _log_cleanup_target("stale_failed_boot", character_name, pid)
-            _kill_pid(pid)
+    play_clicks = len(re.findall(r"Bootstrap: clicking Play", text))
+    map_ids = [int(m.group(1)) for m in re.finditer(r"MapID=(\d+)", text)]
+    max_map_id = max(map_ids) if map_ids else 0
+    if play_clicks >= 5 and max_map_id == 0:
+        return f"pre-game bootstrap stuck at Play (clicks={play_clicks}, max_map_id={max_map_id})"
+    return None
 
 
 def cleanup_trade_clients() -> None:
@@ -315,29 +303,30 @@ def cleanup_trade_clients() -> None:
         pass
 
 
-async def _wait_for_trade_lane_quiet(timeout: float = 15.0) -> None:
+async def _wait_for_trade_lane_quiet(timeout: float = 15.0, *, preserve_helper: bool = False) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         helper_alive = any(_pid_is_running(int(row["pid"])) for row in _list_character_gw_processes(_helper_name()))
         main_alive = any(_pid_is_running(int(row["pid"])) for row in _list_character_gw_processes(_main_name()))
         pipe_alive = await _pipe_exists()
         injected_trade_pids = _list_injected_trade_clients()
-        if not helper_alive and not main_alive and (not pipe_alive or not injected_trade_pids):
+        helper_ok = helper_alive if preserve_helper else not helper_alive
+        if helper_ok and not main_alive and (not pipe_alive or not injected_trade_pids):
             return
         await asyncio.sleep(0.5)
     raise TestFailure(
         "Trade harness cleanup did not quiesce the lane before relaunch "
-        f"(main_alive={main_alive}, helper_alive={helper_alive}, pipe_alive={pipe_alive}, "
+        f"(main_alive={main_alive}, helper_alive={helper_alive}, preserve_helper={preserve_helper}, pipe_alive={pipe_alive}, "
         f"injected_trade_pids={injected_trade_pids})"
     )
 
 
 def _parse_pid_from_log(log_path: Path) -> int:
     text = log_path.read_text(encoding="utf-8", errors="ignore")
-    m = re.search(r"GWLAUNCHER_PID=(\d+)", text)
-    if not m:
+    matches = re.findall(r"GWLAUNCHER_PID=(\d+)", text)
+    if not matches:
         raise TestFailure(f"Could not parse helper PID from launcher log: {log_path}")
-    return int(m.group(1))
+    return int(matches[-1])
 
 
 def _pid_is_running(pid: int | None) -> bool:
@@ -439,7 +428,14 @@ async def ensure_trade_helper_running(_attempt: int = 0) -> int:
     helper_launcher = _helper_launcher()
     helper_log = _helper_log()
 
-    _cleanup_stale_character_processes(helper_name)
+    if _helper_pid and _pid_is_running(_helper_pid) and _helper_status_ready(_helper_pid):
+        return _helper_pid
+
+    for row in _list_character_gw_processes(helper_name):
+        pid = int(row["pid"])
+        _log_cleanup_target("same_character_sweep", helper_name, pid)
+        _kill_pid(pid)
+        _wait_for_pid_exit(pid)
     _helper_pid = None
 
     assert_true(AUTOIT_EXE.exists(), f"AutoIt executable not found: {AUTOIT_EXE}")
@@ -453,14 +449,15 @@ async def ensure_trade_helper_running(_attempt: int = 0) -> int:
             helper_log.unlink()
         except OSError:
             pass
+    helper_log.parent.mkdir(parents=True, exist_ok=True)
+    helper_log.write_text("", encoding="utf-8")
     if helper_status.exists():
         try:
             helper_status.unlink()
         except OSError:
             pass
     helper_config = _helper_config_path()
-    if not helper_config.exists():
-        write_trade_helper_config(submit_gold=0, auto_submit=False)
+    write_trade_helper_config(submit_gold=0, auto_submit=False)
 
     launch = await asyncio.create_subprocess_exec(
         str(AUTOIT_EXE),
@@ -489,7 +486,17 @@ async def ensure_trade_helper_running(_attempt: int = 0) -> int:
     else:
         raise TestFailure(f"Timed out waiting for {helper_name} launcher log at {helper_log}")
 
-    await _wait_for_launcher_health(pid, helper_name)
+    try:
+        await _wait_for_launcher_health(pid, helper_name)
+    except TestFailure:
+        _log_cleanup_target("stale_failed_boot", helper_name, pid)
+        _kill_pid(pid)
+        _wait_for_pid_exit(pid)
+        _helper_pid = None
+        if _attempt < 1:
+            await asyncio.sleep(1.0)
+            return await ensure_trade_helper_running(_attempt + 1)
+        raise
 
     inject = await asyncio.create_subprocess_exec(
         str(injector_exe),
@@ -516,6 +523,14 @@ async def ensure_trade_helper_running(_attempt: int = 0) -> int:
     while time.monotonic() < deadline:
         if _helper_status_ready(pid):
             break
+        reason = _bootstrap_stuck_reason(pid)
+        if reason:
+            _log_cleanup_target("bootstrap_stuck", helper_name, pid)
+            _kill_pid(pid)
+            _helper_pid = None
+            if _attempt < 1:
+                return await ensure_trade_helper_running(_attempt + 1)
+            raise TestFailure(f"{helper_name} launcher failure: {reason}")
         await asyncio.sleep(0.5)
     else:
         _kill_pid(pid)
@@ -528,25 +543,17 @@ async def ensure_trade_helper_running(_attempt: int = 0) -> int:
 
 
 async def _pipe_exists() -> bool:
+    client = IpcClient(_pipe_name())
     try:
-        handle = ctypes.windll.kernel32.CreateFileW(
-            _pipe_name(),
-            0x80000000 | 0x40000000,  # GENERIC_READ | GENERIC_WRITE
-            0,
-            None,
-            3,  # OPEN_EXISTING
-            0,
-            None,
-        )
-        if handle == ctypes.c_void_p(-1).value:
-            return False
-        ctypes.windll.kernel32.CloseHandle(handle)
-        return True
+        if await client.connect(timeout=0.25):
+            client.disconnect()
+            return True
     except Exception:
-        return False
+        pass
+    return False
 
 
-async def ensure_trade_main_running() -> int:
+async def ensure_trade_main_running(*, preserve_helper: bool = False, _attempt: int = 0) -> int:
     """Launch a fresh Disco Panic client for this trade run and inject --llm."""
     global _disco_pid
     _validate_trade_lane_config()
@@ -554,8 +561,20 @@ async def ensure_trade_main_running() -> int:
     main_launcher = _main_launcher()
     main_log = _main_log()
 
-    cleanup_trade_clients()
-    await _wait_for_trade_lane_quiet()
+    if preserve_helper:
+        if _disco_pid and _pid_is_running(_disco_pid):
+            _log_cleanup_target("current_run_pid", main_name, _disco_pid)
+            _kill_pid(_disco_pid)
+            _wait_for_pid_exit(_disco_pid)
+        for row in _list_character_gw_processes(main_name):
+            pid = int(row["pid"])
+            _log_cleanup_target("same_character_sweep", main_name, pid)
+            _kill_pid(pid)
+            _wait_for_pid_exit(pid)
+        _disco_pid = None
+    else:
+        cleanup_trade_clients()
+    await _wait_for_trade_lane_quiet(preserve_helper=preserve_helper)
 
     assert_true(AUTOIT_EXE.exists(), f"AutoIt executable not found: {AUTOIT_EXE}")
     assert_true(main_launcher.exists(), f"{main_name} launcher script not found: {main_launcher}")
@@ -567,6 +586,8 @@ async def ensure_trade_main_running() -> int:
             main_log.unlink()
         except OSError:
             pass
+    main_log.parent.mkdir(parents=True, exist_ok=True)
+    main_log.write_text("", encoding="utf-8")
 
     launch = await asyncio.create_subprocess_exec(
         str(AUTOIT_EXE),
@@ -595,7 +616,17 @@ async def ensure_trade_main_running() -> int:
     else:
         raise TestFailure(f"Timed out waiting for {main_name} launcher log at {main_log}")
 
-    await _wait_for_launcher_health(pid, main_name)
+    try:
+        await _wait_for_launcher_health(pid, main_name)
+    except TestFailure:
+        _log_cleanup_target("stale_failed_boot", main_name, pid)
+        _kill_pid(pid)
+        _wait_for_pid_exit(pid)
+        _disco_pid = None
+        if _attempt < 1:
+            await asyncio.sleep(1.0)
+            return await ensure_trade_main_running(preserve_helper=preserve_helper, _attempt=_attempt + 1)
+        raise
 
     inject = await asyncio.create_subprocess_exec(
         str(injector_exe),
@@ -615,7 +646,7 @@ async def ensure_trade_main_running() -> int:
             _log_cleanup_target("stale_already_loaded", main_name, pid)
             _kill_pid(pid)
             await asyncio.sleep(1.0)
-            return await ensure_trade_main_running()
+            return await ensure_trade_main_running(preserve_helper=preserve_helper, _attempt=_attempt)
         raise TestFailure(
             "Disco injection failed: "
             f"rc={inject.returncode} stdout={inject_stdout.decode(errors='ignore')} "
@@ -630,6 +661,15 @@ async def ensure_trade_main_running() -> int:
             raise TestFailure(f"{main_name} launcher failure: GW PID {pid} exited after injection before bridge pipe appeared")
         if await _pipe_exists() and _pid_is_running(pid):
             return pid
+        reason = _bootstrap_stuck_reason(pid)
+        if reason:
+            _log_cleanup_target("bootstrap_stuck", main_name, pid)
+            _kill_pid(pid)
+            _disco_pid = None
+            if _attempt < 1:
+                await asyncio.sleep(1.0)
+                return await ensure_trade_main_running(preserve_helper=preserve_helper, _attempt=_attempt + 1)
+            raise TestFailure(f"{main_name} launcher failure: {reason}")
         await asyncio.sleep(0.5)
 
     raise TestFailure(f"Timed out waiting for bridge pipe {_pipe_name()} after launching {main_name}")

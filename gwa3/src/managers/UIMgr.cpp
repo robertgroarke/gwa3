@@ -3,6 +3,7 @@
 #include <gwa3/core/RenderHook.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/core/Scanner.h>
 
 #include <Windows.h>
 #include <algorithm>
@@ -12,14 +13,18 @@ namespace GWA3::UIMgr {
 
 // Forward declarations for functions used before their definition
 uint32_t GetChildFrameCount(uintptr_t frame);
+struct FrameArrayData;
 
 static uintptr_t s_sendFrameUIAddr = 0;
 using SendUIMessageFn = void(__cdecl*)(uint32_t msgid, void* wParam, void* lParam);
+using DoActionFn = void(__fastcall*)(void* ecx, void* edx, uint32_t msgid, void* arg1, void* arg2);
 
 static SendUIMessageFn s_sendUIMessageFn = nullptr;
+static DoActionFn s_doActionFn = nullptr;
 static bool s_initialized = false;
 static uintptr_t s_frameClickShellcode = 0;
 static uintptr_t s_frameClickAction = 0;
+static FrameArrayData* s_actionFrameCache = nullptr;
 
 static void CallSendFrameUI(void* thisPtr, uint32_t msgid, void* wParam, void* lParam) {
     uintptr_t fn = s_sendFrameUIAddr;
@@ -59,10 +64,28 @@ bool Initialize() {
     if (Offsets::UIMessage) {
         s_sendUIMessageFn = reinterpret_cast<SendUIMessageFn>(Offsets::UIMessage);
     }
+    if (Offsets::Action) {
+        s_doActionFn = reinterpret_cast<DoActionFn>(Offsets::Action);
+    }
+    if (uintptr_t frameCacheAddr = Scanner::Find("\x68\x00\x10\x00\x00\x8B\x1C\x98\x8D", "xxxxxxxxx", -4)) {
+        s_actionFrameCache = *reinterpret_cast<FrameArrayData**>(frameCacheAddr);
+    }
+    if (!s_actionFrameCache && Offsets::FrameArray) {
+        s_actionFrameCache = reinterpret_cast<FrameArrayData*>(Offsets::FrameArray);
+    }
+    uintptr_t doActionAddr = 0;
+    if (!s_doActionFn) {
+        doActionAddr = Scanner::Find("\x83\xFE\x0B\x75\x14\x68\x77\x01\x00\x00", "xxxxxxxxxx", -0x1B);
+    }
+    if (!s_doActionFn && doActionAddr) {
+        s_doActionFn = reinterpret_cast<DoActionFn>(doActionAddr);
+    }
 
     s_initialized = true;
-    Log::Info("UIMgr: Initialized (SendFrameUIMsg=0x%08X, UIMessage=0x%08X)",
-              Offsets::SendFrameUIMsg, Offsets::UIMessage);
+    Log::Info("UIMgr: Initialized (SendFrameUIMsg=0x%08X, UIMessage=0x%08X, DoAction=0x%08X, ActionFrameCache=0x%08X)",
+              Offsets::SendFrameUIMsg, Offsets::UIMessage,
+              reinterpret_cast<uintptr_t>(s_doActionFn),
+              reinterpret_cast<uintptr_t>(s_actionFrameCache));
     return true;
 }
 
@@ -73,9 +96,39 @@ struct FrameArrayData {
     uint32_t param;       // +0x0C — GW::Array m_param
 };
 
+struct ControlActionPacket {
+    uint32_t key = 0;
+    uint32_t unk1 = 0x4000;
+    uint32_t unk2 = 0;
+};
+
 static FrameArrayData* GetFrameArray() {
     if (!Offsets::FrameArray) return nullptr;
     return reinterpret_cast<FrameArrayData*>(Offsets::FrameArray);
+}
+
+static uintptr_t GetActionContext() {
+    auto* arr = s_actionFrameCache ? s_actionFrameCache : GetFrameArray();
+    if (!arr || !arr->buffer || arr->size <= 1) return 0;
+    const uintptr_t frame = arr->buffer[1];
+    if (frame < 0x10000) return 0;
+    return frame + 0xA0;
+}
+
+static bool SendControlAction(uint32_t msgid, ControlAction action) {
+    if (!s_doActionFn) return false;
+    const uintptr_t ctx = GetActionContext();
+    if (ctx < 0x10000) {
+        Log::Warn("UIMgr: SendControlAction missing action context msg=0x%X action=0x%X",
+                  msgid, static_cast<uint32_t>(action));
+        return false;
+    }
+    ControlActionPacket packet{};
+    packet.key = static_cast<uint32_t>(action);
+    s_doActionFn(reinterpret_cast<void*>(ctx), nullptr, msgid, &packet, nullptr);
+    Log::Info("UIMgr: SendControlAction ctx=0x%08X msg=0x%X action=0x%X",
+              static_cast<unsigned>(ctx), msgid, static_cast<uint32_t>(action));
+    return true;
 }
 
 uintptr_t GetFrameByHash(uint32_t hash) {
@@ -469,16 +522,6 @@ uintptr_t GetFrameContext(uintptr_t frame) {
     }
 }
 
-void SendFrameUIMessage(uintptr_t frame, uint32_t msgId, void* wParam, void* lParam) {
-    if (!s_sendFrameUIAddr || frame < 0x10000) return;
-
-    uintptr_t context = GetFrameContext(frame);
-    if (context < 0x10000) return;
-
-    void* thisPtr = reinterpret_cast<void*>(context + 0xA8);
-    CallSendFrameUI(thisPtr, msgId, wParam, lParam);
-}
-
 void SendUIMessage(uint32_t msgId, void* wParam, void* lParam) {
     if (!s_sendUIMessageFn) return;
     s_sendUIMessageFn(msgId, wParam, lParam);
@@ -504,6 +547,17 @@ struct MouseAction {
     uint32_t lparam;
 };
 
+struct ButtonMouseActionPacket {
+    uint32_t frame_id;
+    uint32_t child_offset_id;
+    uint32_t current_state;
+    uint32_t internal_ptr;
+    uint32_t zero_1;
+    uint32_t zero_2;
+    uint32_t field_1c4;
+    uint32_t zero_3;
+};
+
 // POD task for EnqueuePostRaw — no std::function, no heap
 struct ClickTask {
     uintptr_t sendFn;
@@ -512,6 +566,15 @@ struct ClickTask {
 };
 static_assert(sizeof(ClickTask) <= 64, "ClickTask exceeds InlineTask storage");
 
+struct FullClickTask {
+    uintptr_t sendFn;
+    uintptr_t thisPtr;
+    uint32_t frameId;
+    uint32_t childOffsetId;
+    uint32_t field1c4;
+};
+static_assert(sizeof(FullClickTask) <= 64, "FullClickTask exceeds InlineTask storage");
+
 static void ExecuteClickTask(void* storage) {
     auto* t = static_cast<ClickTask*>(storage);
     static MouseAction s_act;
@@ -519,6 +582,60 @@ static void ExecuteClickTask(void* storage) {
     void* tp = reinterpret_cast<void*>(t->thisPtr);
     uintptr_t fn = t->sendFn;
     void* wParam = &s_act;
+    __asm {
+        push 0
+        push wParam
+        push MSG_MOUSE_CLICK2
+        mov ecx, tp
+        call fn
+    }
+}
+
+static void ExecuteClickTaskFull(void* storage) {
+    auto* t = static_cast<FullClickTask*>(storage);
+    static ButtonMouseActionPacket s_pkt;
+    s_pkt.frame_id = t->frameId;
+    s_pkt.child_offset_id = t->childOffsetId;
+    s_pkt.internal_ptr = reinterpret_cast<uint32_t>(&s_pkt.zero_2);
+    s_pkt.zero_1 = 0;
+    s_pkt.zero_2 = 0;
+    s_pkt.field_1c4 = t->field1c4;
+    s_pkt.zero_3 = 0;
+    void* tp = reinterpret_cast<void*>(t->thisPtr);
+    uintptr_t fn = t->sendFn;
+    void* wParam = &s_pkt;
+    s_pkt.current_state = ACTION_MOUSE_DOWN;
+    __asm {
+        push 0
+        push wParam
+        push MSG_MOUSE_CLICK2
+        mov ecx, tp
+        call fn
+    }
+    s_pkt.current_state = ACTION_MOUSE_UP;
+    __asm {
+        push 0
+        push wParam
+        push MSG_MOUSE_CLICK2
+        mov ecx, tp
+        call fn
+    }
+}
+
+static void ExecuteClickTaskFullMouseClick(void* storage) {
+    auto* t = static_cast<FullClickTask*>(storage);
+    static ButtonMouseActionPacket s_pkt;
+    s_pkt.frame_id = t->frameId;
+    s_pkt.child_offset_id = t->childOffsetId;
+    s_pkt.internal_ptr = reinterpret_cast<uint32_t>(&s_pkt.zero_2);
+    s_pkt.zero_1 = 0;
+    s_pkt.zero_2 = 0;
+    s_pkt.field_1c4 = t->field1c4;
+    s_pkt.zero_3 = 0;
+    s_pkt.current_state = ACTION_MOUSE_CLICK;
+    void* tp = reinterpret_cast<void*>(t->thisPtr);
+    uintptr_t fn = t->sendFn;
+    void* wParam = &s_pkt;
     __asm {
         push 0
         push wParam
@@ -556,6 +673,15 @@ bool ButtonClickImmediate(uintptr_t frame) {
     void* tp = reinterpret_cast<void*>(context + 0xA8);
     void* wParam = &action;
     uintptr_t fn = s_sendFrameUIAddr;
+    Log::Info("UIMgr: ButtonClickImmediate send begin frame=0x%08X frameId=%u childOffset=%u context=0x%08X thisPtr=0x%08X fn=0x%08X msg=0x%X actionState=0x%X",
+              static_cast<unsigned>(frame),
+              action.frame_id,
+              action.child_offset_id,
+              static_cast<unsigned>(context),
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(tp)),
+              static_cast<unsigned>(fn),
+              MSG_MOUSE_CLICK2,
+              action.action_state);
     __asm {
         push 0
         push wParam
@@ -563,6 +689,10 @@ bool ButtonClickImmediate(uintptr_t frame) {
         mov ecx, tp
         call fn
     }
+    Log::Info("UIMgr: ButtonClickImmediate send end frame=0x%08X frameId=%u childOffset=%u",
+              static_cast<unsigned>(frame),
+              action.frame_id,
+              action.child_offset_id);
     Log::Info("UIMgr: ButtonClickImmediate frame=0x%08X frameId=%u childOffset=%u context=0x%08X",
               static_cast<unsigned>(frame),
               action.frame_id,
@@ -583,23 +713,31 @@ bool ButtonClickImmediateFull(uintptr_t frame) {
         return false;
     }
 
-    const uintptr_t context = GetFrameContext(frame);
+    const uintptr_t parentFrame = GetParentFrame(frame);
+    const uintptr_t context = parentFrame > 0x10000 ? parentFrame : GetFrameContext(frame);
     if (context < 0x10000) {
-        Log::Warn("UIMgr: ButtonClickImmediateFull invalid context for frame 0x%08X", frame);
+        Log::Warn("UIMgr: ButtonClickImmediateFull invalid parent/context for frame 0x%08X", frame);
         return false;
     }
 
-    MouseAction action{};
+    ButtonMouseActionPacket action{};
     action.frame_id = GetFrameId(frame);
     action.child_offset_id = GetChildOffsetId(frame);
-    action.wparam = 0;
-    action.lparam = 0;
+    action.internal_ptr = reinterpret_cast<uint32_t>(&action.zero_2);
+    action.zero_1 = 0;
+    action.zero_2 = 0;
+    __try {
+        action.field_1c4 = *reinterpret_cast<uint32_t*>(frame + 0x1C4);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        action.field_1c4 = 0;
+    }
+    action.zero_3 = 0;
 
     void* tp = reinterpret_cast<void*>(context + 0xA8);
     void* wParam = &action;
     uintptr_t fn = s_sendFrameUIAddr;
 
-    action.action_state = ACTION_MOUSE_DOWN;
+    action.current_state = ACTION_MOUSE_DOWN;
     __asm {
         push 0
         push wParam
@@ -607,7 +745,7 @@ bool ButtonClickImmediateFull(uintptr_t frame) {
         mov ecx, tp
         call fn
     }
-    action.action_state = ACTION_MOUSE_UP;
+    action.current_state = ACTION_MOUSE_UP;
     __asm {
         push 0
         push wParam
@@ -695,12 +833,181 @@ bool ButtonClick(uintptr_t frame) {
 
     FlushInstructionCache(GetCurrentProcess(), sc, 20);
 
-    // Match the stable GWCA-style button click path: SendFrameUIMsg with a
-    // single MouseUp action. The local FrameUI research notes that injecting
-    // an extra MouseDown here can leave pre-game UI in a bad state.
+    // Match the local GWA2_FrameUI reference: kMouseClick2 with a single
+    // MouseClick (0x8) action state.
     action.action_state = ACTION_MOUSE_UP;
     memcpy(reinterpret_cast<void*>(s_frameClickAction), &action, sizeof(action));
     return RenderHook::EnqueueCommand(s_frameClickShellcode);
+}
+
+bool ButtonClickMouseClick(uintptr_t frame) {
+    if (!s_sendFrameUIAddr || frame < 0x10000) {
+        Log::Warn("UIMgr: ButtonClickMouseClick no sendAddr or invalid frame");
+        return false;
+    }
+
+    const uint32_t state = GetFrameState(frame);
+    if (!(state & FRAME_CREATED)) {
+        Log::Warn("UIMgr: ButtonClickMouseClick frame 0x%08X not created (state=0x%X)", frame, state);
+        return false;
+    }
+
+    const uintptr_t context = GetFrameContext(frame);
+    if (context < 0x10000) {
+        Log::Warn("UIMgr: ButtonClickMouseClick invalid context for frame 0x%08X", frame);
+        return false;
+    }
+
+    MouseAction action{};
+    action.frame_id = GetFrameId(frame);
+    action.child_offset_id = GetChildOffsetId(frame);
+    action.action_state = ACTION_MOUSE_CLICK;
+    action.wparam = 0;
+    action.lparam = 0;
+
+    void* thisPtr = reinterpret_cast<void*>(context + 0xA8);
+    if (GameThread::IsInitialized()) {
+        ClickTask ct;
+        ct.sendFn = s_sendFrameUIAddr;
+        ct.thisPtr = reinterpret_cast<uintptr_t>(thisPtr);
+        ct.action = action;
+        Log::Info("UIMgr: ButtonClickMouseClick queueing pre-dispatch click frame=0x%08X frameId=%u childOffset=%u context=0x%08X",
+                  static_cast<unsigned>(frame),
+                  action.frame_id,
+                  action.child_offset_id,
+                  static_cast<unsigned>(context));
+        GameThread::EnqueueRaw(ExecuteClickTask, &ct, sizeof(ct));
+        return true;
+    }
+
+    if (!RenderHook::IsInitialized() || !EnsureFrameClickShellcode()) {
+        Log::Warn("UIMgr: ButtonClickMouseClick no dispatch mechanism available");
+        return false;
+    }
+
+    const uint32_t thisPtrU32 = static_cast<uint32_t>(context + 0xA8);
+    const uint32_t sendFrame = static_cast<uint32_t>(s_sendFrameUIAddr);
+    auto* sc = reinterpret_cast<uint8_t*>(s_frameClickShellcode);
+    sc[0] = 0xB9;
+    WriteLE32(sc + 1, thisPtrU32);
+    sc[5] = 0x6A;
+    sc[6] = 0x00;
+    sc[7] = 0x68;
+    WriteLE32(sc + 8, static_cast<uint32_t>(s_frameClickAction));
+    sc[12] = 0x6A;
+    sc[13] = static_cast<uint8_t>(MSG_MOUSE_CLICK2);
+    sc[14] = 0xE8;
+    int32_t rel = static_cast<int32_t>(sendFrame - (static_cast<uint32_t>(s_frameClickShellcode) + 19));
+    memcpy(sc + 15, &rel, sizeof(rel));
+    sc[19] = 0xC3;
+    FlushInstructionCache(GetCurrentProcess(), sc, 20);
+    action.action_state = ACTION_MOUSE_CLICK;
+    memcpy(reinterpret_cast<void*>(s_frameClickAction), &action, sizeof(action));
+    return RenderHook::EnqueueCommand(s_frameClickShellcode);
+}
+
+bool ButtonClickFull(uintptr_t frame) {
+    if (!s_sendFrameUIAddr || frame < 0x10000) {
+        Log::Warn("UIMgr: ButtonClickFull no sendAddr or invalid frame");
+        return false;
+    }
+
+    uint32_t state = GetFrameState(frame);
+    if (!(state & FRAME_CREATED)) {
+        Log::Warn("UIMgr: ButtonClickFull frame 0x%08X not created (state=0x%X)", frame, state);
+        return false;
+    }
+
+    const uintptr_t parentFrame = GetParentFrame(frame);
+    uintptr_t context = parentFrame > 0x10000 ? parentFrame : GetFrameContext(frame);
+    if (context < 0x10000) {
+        Log::Warn("UIMgr: ButtonClickFull invalid parent/context for frame 0x%08X", frame);
+        return false;
+    }
+
+    const uint32_t frameId = GetFrameId(frame);
+    const uint32_t childOffsetId = GetChildOffsetId(frame);
+    uint32_t field1c4 = 0;
+    __try {
+        field1c4 = *reinterpret_cast<uint32_t*>(frame + 0x1C4);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        field1c4 = 0;
+    }
+
+    void* thisPtr = reinterpret_cast<void*>(context + 0xA8);
+
+    if (GameThread::IsInitialized()) {
+        FullClickTask ct;
+        ct.sendFn = s_sendFrameUIAddr;
+        ct.thisPtr = reinterpret_cast<uintptr_t>(thisPtr);
+        ct.frameId = frameId;
+        ct.childOffsetId = childOffsetId;
+        ct.field1c4 = field1c4;
+
+        Log::Info("UIMgr: ButtonClickFull queueing post-dispatch full click frame=0x%08X frameId=%u childOffset=%u context=0x%08X",
+                  static_cast<unsigned>(frame),
+                  frameId,
+                  childOffsetId,
+                  static_cast<unsigned>(context));
+        GameThread::EnqueuePostRaw(ExecuteClickTaskFull, &ct, sizeof(ct));
+        return true;
+    }
+
+    return ButtonClickImmediateFull(frame);
+}
+
+bool ButtonClickFullMouseClick(uintptr_t frame) {
+    if (!s_sendFrameUIAddr || frame < 0x10000) {
+        Log::Warn("UIMgr: ButtonClickFullMouseClick no sendAddr or invalid frame");
+        return false;
+    }
+
+    const uint32_t state = GetFrameState(frame);
+    if (!(state & FRAME_CREATED)) {
+        Log::Warn("UIMgr: ButtonClickFullMouseClick frame 0x%08X not created (state=0x%X)", frame, state);
+        return false;
+    }
+
+    const uintptr_t parentFrame = GetParentFrame(frame);
+    const uintptr_t context = parentFrame > 0x10000 ? parentFrame : GetFrameContext(frame);
+    if (context < 0x10000) {
+        Log::Warn("UIMgr: ButtonClickFullMouseClick invalid parent/context for frame 0x%08X", frame);
+        return false;
+    }
+
+    ButtonMouseActionPacket action{};
+    action.frame_id = GetFrameId(frame);
+    action.child_offset_id = GetChildOffsetId(frame);
+    action.internal_ptr = reinterpret_cast<uint32_t>(&action.zero_2);
+    action.zero_1 = 0;
+    action.zero_2 = 0;
+    __try {
+        action.field_1c4 = *reinterpret_cast<uint32_t*>(frame + 0x1C4);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        action.field_1c4 = 0;
+    }
+    action.zero_3 = 0;
+    action.current_state = ACTION_MOUSE_CLICK;
+
+    void* thisPtr = reinterpret_cast<void*>(context + 0xA8);
+    if (GameThread::IsInitialized()) {
+        FullClickTask ct;
+        ct.sendFn = s_sendFrameUIAddr;
+        ct.thisPtr = reinterpret_cast<uintptr_t>(thisPtr);
+        ct.frameId = action.frame_id;
+        ct.childOffsetId = action.child_offset_id;
+        ct.field1c4 = action.field_1c4;
+
+        Log::Info("UIMgr: ButtonClickFullMouseClick queueing post-dispatch click frame=0x%08X frameId=%u childOffset=%u context=0x%08X",
+                  static_cast<unsigned>(frame),
+                  action.frame_id,
+                  action.child_offset_id,
+                  static_cast<unsigned>(context));
+        GameThread::EnqueuePostRaw(ExecuteClickTaskFullMouseClick, &ct, sizeof(ct));
+        return true;
+    }
+
+    return ButtonClickImmediateFull(frame);
 }
 
 bool ButtonClickByHash(uint32_t hash) {
@@ -940,6 +1247,66 @@ bool KeyPress(uintptr_t frame, uint32_t key) {
     Sleep(30);
     const bool upOk = KeyUp(frame, key);
     return downOk && upOk;
+}
+
+bool HasControlActionKeypress() {
+    return s_doActionFn != nullptr && GetActionContext() >= 0x10000;
+}
+
+bool ControlActionKeyDown(ControlAction action) {
+    return SendControlAction(0x1E, action);
+}
+
+bool ControlActionKeyUp(ControlAction action) {
+    return SendControlAction(0x20, action);
+}
+
+bool ControlActionKeyPress(ControlAction action) {
+    if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
+        GameThread::Enqueue([action]() {
+            ControlActionKeyPress(action);
+        });
+        return true;
+    }
+
+    const bool downOk = ControlActionKeyDown(action);
+    if (!downOk) return false;
+    if (GameThread::IsInitialized()) {
+        GameThread::Enqueue([action]() {
+            ControlActionKeyUp(action);
+        });
+        return true;
+    }
+    Sleep(30);
+    return ControlActionKeyUp(action);
+}
+
+bool ActionKeyDown(uint32_t action) {
+    return SendControlAction(0x1E, static_cast<ControlAction>(action));
+}
+
+bool ActionKeyUp(uint32_t action) {
+    return SendControlAction(0x20, static_cast<ControlAction>(action));
+}
+
+bool ActionKeyPress(uint32_t action) {
+    if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
+        GameThread::Enqueue([action]() {
+            ActionKeyPress(action);
+        });
+        return true;
+    }
+
+    const bool downOk = ActionKeyDown(action);
+    if (!downOk) return false;
+    if (GameThread::IsInitialized()) {
+        GameThread::Enqueue([action]() {
+            ActionKeyUp(action);
+        });
+        return true;
+    }
+    Sleep(30);
+    return ActionKeyUp(action);
 }
 
 void DebugDumpFramesForContext(uintptr_t context, const char* label, uint32_t maxCount) {

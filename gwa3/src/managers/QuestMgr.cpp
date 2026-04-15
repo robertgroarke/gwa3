@@ -1,4 +1,5 @@
 #include <gwa3/managers/QuestMgr.h>
+#include <gwa3/core/DialogHook.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
@@ -23,21 +24,7 @@ static constexpr uint32_t kSendSetActiveQuestUiMessage = 0x30000009u;
 static bool s_loggedNativeDialog = false;
 static bool s_loggedFallbackDialog = false;
 
-// WorldContext: BasePointer → deref → +0x18 → +0x2C
-static uintptr_t ResolveWorldContext() {
-    if (Offsets::BasePointer <= 0x10000) return 0;
-    __try {
-        uintptr_t p0 = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
-        if (p0 <= 0x10000) return 0;
-        uintptr_t p1 = *reinterpret_cast<uintptr_t*>(p0 + 0x18);
-        if (p1 <= 0x10000) return 0;
-        uintptr_t p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x2C);
-        if (p2 <= 0x10000) return 0;
-        return p2;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
+// WorldContext resolution delegated to Offsets::ResolveWorldContext()
 
 bool Initialize() {
     if (s_initialized) return true;
@@ -63,6 +50,9 @@ bool Initialize() {
         if (sendSignpostDialog > 0x10000) {
             s_sendSignpostDialogFn = reinterpret_cast<SendDialogFn>(sendSignpostDialog);
         }
+        DialogHook::SetNativeDialogFunctions(
+            reinterpret_cast<uintptr_t>(s_sendDialogFn),
+            reinterpret_cast<uintptr_t>(s_sendSignpostDialogFn));
     }
 
     s_initialized = true;
@@ -128,10 +118,6 @@ void SetActiveQuest(uint32_t questId) {
     CtoS::QuestSetActive(questId);
 }
 
-void AbandonQuest(uint32_t questId) {
-    CtoS::QuestAbandon(questId);
-}
-
 void RequestQuestInfo(uint32_t questId) {
     CtoS::SendPacket(2, Packets::QUEST_REQUEST_INFOS, questId);
 }
@@ -141,7 +127,7 @@ void SkipCinematic() {
 }
 
 uint32_t GetActiveQuestId() {
-    uintptr_t wc = ResolveWorldContext();
+    uintptr_t wc = Offsets::ResolveWorldContext();
     if (!wc) return 0;
     __try {
         return *reinterpret_cast<uint32_t*>(wc + 0x528);
@@ -151,7 +137,7 @@ uint32_t GetActiveQuestId() {
 }
 
 uint32_t GetQuestLogSize() {
-    uintptr_t wc = ResolveWorldContext();
+    uintptr_t wc = Offsets::ResolveWorldContext();
     if (!wc) return 0;
     __try {
         // GWArray<Quest> at WorldContext + 0x52C: buffer at +0, size at +8
@@ -164,7 +150,7 @@ uint32_t GetQuestLogSize() {
 }
 
 Quest* GetQuestByIndex(uint32_t index) {
-    uintptr_t wc = ResolveWorldContext();
+    uintptr_t wc = Offsets::ResolveWorldContext();
     if (!wc) return nullptr;
     __try {
         auto* arr = reinterpret_cast<GWArray<Quest>*>(wc + 0x52C);
@@ -177,7 +163,7 @@ Quest* GetQuestByIndex(uint32_t index) {
 
 Quest* GetQuestById(uint32_t questId) {
     if (questId == 0) return nullptr;
-    uintptr_t wc = ResolveWorldContext();
+    uintptr_t wc = Offsets::ResolveWorldContext();
     if (!wc) return nullptr;
     __try {
         auto* arr = reinterpret_cast<GWArray<Quest>*>(wc + 0x52C);

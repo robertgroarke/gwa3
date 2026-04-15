@@ -10,6 +10,8 @@ namespace GWA3::SkillMgr {
     // Skill usage
     void UseSkill(uint32_t slot, uint32_t targetAgentId = 0, uint32_t callTarget = 0);
     void UseHeroSkill(uint32_t heroIndex, uint32_t slot, uint32_t targetAgentId = 0);
+    void SetSparkflyPlayerUseSkillOverride(bool enabled);
+    void ResetSparkflyPlayerUseSkillCount();
 
     // Skillbar management
     void LoadSkillbar(const uint32_t skillIds[8], uint32_t heroIndex = 0);

@@ -53,9 +53,4 @@ namespace GWA3::PlayerMgr {
     // Player count in instance
     uint32_t GetAmountOfPlayersInInstance();
 
-    // ===== Profession =====
-
-    // Change secondary profession (heroIndex=0 for self)
-    bool ChangeSecondProfession(uint32_t profession, uint32_t heroIndex = 0);
-
 } // namespace GWA3::PlayerMgr

@@ -7,25 +7,6 @@ class TestFailure(Exception):
     """Raised when a test assertion fails."""
 
 
-def snapshot_get(snap: dict, dotpath: str):
-    """Navigate a nested dict with a dotted path. E.g., 'me.hp' or 'party.members.0.is_alive'."""
-    parts = dotpath.split(".")
-    current = snap
-    for part in parts:
-        if isinstance(current, dict):
-            if part not in current:
-                return None
-            current = current[part]
-        elif isinstance(current, list):
-            try:
-                current = current[int(part)]
-            except (IndexError, ValueError):
-                return None
-        else:
-            return None
-    return current
-
-
 def assert_keys_present(d: dict, keys: list[str], label: str = ""):
     """Verify all keys exist in a dict."""
     prefix = f"{label}: " if label else ""
@@ -53,12 +34,6 @@ def assert_in_range(value, low, high, label: str = ""):
 def assert_true(condition: bool, message: str = "assertion failed"):
     if not condition:
         raise TestFailure(message)
-
-
-def assert_equal(actual, expected, label: str = ""):
-    prefix = f"{label}: " if label else ""
-    if actual != expected:
-        raise TestFailure(f"{prefix}expected {expected!r}, got {actual!r}")
 
 
 def assert_gt(value, threshold, label: str = ""):

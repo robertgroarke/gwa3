@@ -27,6 +27,5 @@ namespace GWA3::GuildMgr {
     // Guild hall travel
     bool TravelGH();
     bool TravelGH(const GHKey& key);
-    bool LeaveGH();
 
 } // namespace GWA3::GuildMgr

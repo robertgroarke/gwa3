@@ -11,17 +11,13 @@ namespace GWA3::ItemMgr {
     void UseItem(uint32_t itemId);
     void EquipItem(uint32_t itemId);
     void DropItem(uint32_t itemId);
-    void DestroyItem(uint32_t itemId);
     void MoveItem(uint32_t itemId, uint32_t bagId, uint32_t slot);
     void PickUpItem(uint32_t itemAgentId);
     void IdentifyItem(uint32_t itemId, uint32_t kitId);
-    void SplitStack(uint32_t itemId, uint32_t quantity);
 
     // Salvage session
     void SalvageSessionOpen(uint32_t kitId, uint32_t itemId);
     void SalvageMaterials();
-    void SalvageUpgrade();
-    void SalvageSessionCancel();
     void SalvageSessionDone();
 
     // Merchant

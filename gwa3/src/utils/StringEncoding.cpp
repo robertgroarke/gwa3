@@ -10,6 +10,7 @@ namespace GWA3::StringEncoding {
 
 // GW's ValidateAsyncDecodeStr signature:
 //   void __cdecl ValidateAsyncDecodeStr(wchar_t* encodedStr, DecodeCallback callback, void* param)
+typedef void(__cdecl* DecodeCallback)(void*, wchar_t*);
 typedef void(__cdecl* ValidateAsyncDecodeStrFn)(wchar_t*, DecodeCallback, void*);
 
 static ValidateAsyncDecodeStrFn s_decodeStrFn = nullptr;
@@ -98,33 +99,6 @@ uint32_t DecodeStr(const wchar_t* encStr, wchar_t* outBuf, uint32_t outBufSize,
     }
 
     return ctx.charsWritten;
-}
-
-// --- Async decode ---
-
-bool DecodeStrAsync(const wchar_t* encStr, DecodeCallback callback, void* param) {
-    if (!s_decodeStrFn || !encStr || !callback) return false;
-    if (!IsValidEncStr(encStr)) return false;
-
-    // Copy encoded string — caller's buffer may go out of scope
-    size_t encLen = wcslen(encStr);
-    if (encLen > 512) encLen = 512;
-
-    // Allocate a copy that persists until the callback fires.
-    // The game's decode function should call the callback before returning
-    // from the game thread, so the stack copy in the lambda is fine.
-    wchar_t encCopy[513];
-    wmemcpy(encCopy, encStr, encLen);
-    encCopy[encLen] = L'\0';
-
-    GameThread::Enqueue([encCopy, callback, param]() {
-        // encCopy is captured by value (array in lambda struct)
-        wchar_t localCopy[513];
-        wmemcpy(localCopy, encCopy, 513);
-        s_decodeStrFn(localCopy, callback, param);
-    });
-
-    return true;
 }
 
 // IsValidEncStr, DecodeEncValue, UInt32ToEncStr are in EncStrCodec.cpp

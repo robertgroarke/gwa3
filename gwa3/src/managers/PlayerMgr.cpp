@@ -31,28 +31,12 @@ bool RemoveActiveTitle() {
     return true;
 }
 
-// WorldContext resolution: *BasePointer → +0x18 → +0x2C = WorldContext*
-// GWCA: GameContext(+0x2C)->WorldContext
-// AutoIt: [0, 0x18, 0x2C]
-static uintptr_t ResolveWorldContext() {
-    if (Offsets::BasePointer <= 0x10000) return 0;
-
-    __try {
-        uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
-        if (ctx <= 0x10000) return 0;
-        uintptr_t p1 = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
-        if (p1 <= 0x10000) return 0;
-        uintptr_t world = *reinterpret_cast<uintptr_t*>(p1 + 0x2C);
-        if (world <= 0x10000) return 0;
-        return world;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
+// WorldContext resolution delegated to Offsets::ResolveWorldContext()
+// Chain: *BasePointer → +0x18 → +0x2C = WorldContext*
 
 // TitleArray at WorldContext + 0x81C (GWCA WorldContext.h)
 static GWArray<Title>* GetTitleArray() {
-    uintptr_t world = ResolveWorldContext();
+    uintptr_t world = Offsets::ResolveWorldContext();
     if (!world) return nullptr;
 
     __try {
@@ -100,7 +84,7 @@ Title* GetActiveTitle() {
 // PlayerArray at WorldContext + 0x80C (GWCA WorldContext.h)
 // AutoIt: [0, 0x18, 0x2C, 0x80C]
 static GWArray<Player>* ResolvePlayerArray() {
-    uintptr_t world = ResolveWorldContext();
+    uintptr_t world = Offsets::ResolveWorldContext();
     if (!world) return nullptr;
 
     __try {
@@ -184,20 +168,6 @@ uint32_t GetAmountOfPlayersInInstance() {
     auto* arr = ResolvePlayerArray();
     if (!arr) return 0;
     return arr->size;
-}
-
-// ===== Profession =====
-
-bool ChangeSecondProfession(uint32_t profession, uint32_t heroIndex) {
-    if (heroIndex == 0) {
-        // Change own secondary profession
-        CtoS::SendPacket(2, Packets::PROFESSION_CHANGE, profession);
-    } else {
-        // Change hero's secondary profession
-        // GWCA sends this as a hero-specific packet
-        CtoS::SendPacket(3, Packets::PROFESSION_CHANGE, heroIndex, profession);
-    }
-    return true;
 }
 
 } // namespace GWA3::PlayerMgr

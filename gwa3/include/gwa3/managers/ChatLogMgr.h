@@ -44,10 +44,6 @@ namespace GWA3::ChatLogMgr {
     // Get the number of messages in the ring buffer.
     uint32_t GetMessageCount();
 
-    // Get a message by index (0 = oldest in buffer, count-1 = newest).
-    // Returns nullptr if out of range.
-    const ChatEntry* GetMessage(uint32_t index);
-
     // Get messages newer than the given timestamp. Returns count written to outBuf.
     // outBuf must point to an array of at least maxEntries ChatEntry*.
     uint32_t GetMessagesSince(uint32_t timestampMs, const ChatEntry** outBuf, uint32_t maxEntries);

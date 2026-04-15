@@ -29,6 +29,7 @@ namespace GWA3::CtoS {
     bool EnqueueGameCommand(GameCommandFn fn, const void* params, size_t paramSize);
     bool EnqueueBotshubCommand(const void* slot, size_t slotSize);
     bool IsBotshubQueueIdle();  // true when no pending botshub commands
+    bool IsBotshubCommandLaneAvailable();
 
     // Temporarily unhook/rehook the engine inline hook.
     // Use around map transitions to prevent stale-trampoline crashes.
@@ -44,7 +45,7 @@ namespace GWA3::CtoS {
     void MoveToCoord(float x, float y);
     void Dialog(uint32_t dialogId);
     void ChangeTarget(uint32_t agentId);
-    void AttackAgent(uint32_t agentId);
+    void ActionAttack(uint32_t agentId, uint32_t callTarget = 0);
     void CancelAction();
 
     // Map travel: id = MapID, region/district/lang per GW protocol
@@ -70,10 +71,10 @@ namespace GWA3::CtoS {
 
     // Skill
     void UseSkill(uint32_t skillSlot, uint32_t targetAgentId, uint32_t callTarget = 0);
-    void SwitchWeaponSet(uint32_t setIndex);
 
     // Trade
-    void TradePlayer(uint32_t agentId);
+    void TradeOfferItem(uint32_t itemId, uint32_t quantity);
+    bool TradeOfferItemBotshub(uint32_t itemId, uint32_t quantity);
     void TradeCancel();
     void TradeAccept();
 

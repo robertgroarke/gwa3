@@ -14,13 +14,6 @@ namespace GWA3::Offsets {
     // Returns false if any P0 or P1 pattern fails.
     bool ResolveAll();
 
-    // Check if offsets are resolved.
-    bool IsResolved();
-
-    // Re-read BasePointer from its scan address. Call after operations that may
-    // reallocate the game's WorldContext (salvage, map transitions, etc.).
-    void RefreshBasePointer();
-
     // Get count of resolved/failed patterns.
     int GetResolvedCount();
     int GetFailedCount();
@@ -174,5 +167,15 @@ namespace GWA3::Offsets {
 
     // ===== Frame UI (GWA3-new) =====
     extern uintptr_t SendFrameUIMsg;     // func — scanned via pattern 83 C1 DC E8
+
+    // ===== Centralized Context Resolution =====
+    // These follow the standard GW pointer chain from BasePointer.
+    // SEH-protected; return 0/nullptr on any fault.
+
+    // GameContext: *BasePointer -> +0x18
+    uintptr_t ResolveGameContext();
+
+    // WorldContext: *BasePointer -> +0x18 -> +0x2C
+    uintptr_t ResolveWorldContext();
 
 } // namespace GWA3::Offsets

@@ -48,14 +48,6 @@ void Travel(uint32_t mapId, uint32_t region, uint32_t district, uint32_t languag
     Log::Info("MapMgr: Travel enqueue returned to caller");
 }
 
-void TravelGuildHall() {
-    CtoS::SendPacket(1, Packets::GUILDHALL_TRAVEL);
-}
-
-void LeaveGuildHall() {
-    CtoS::SendPacket(1, Packets::GUILDHALL_LEAVE);
-}
-
 void ReturnToOutpost() {
     const uint32_t mapId = GetMapId();
     const AreaInfo* area = GetAreaInfo(mapId);
@@ -98,14 +90,6 @@ void EnterMission() {
     } else {
         CtoS::SendPacket(1, Packets::PARTY_ENTER_CHALLENGE);
     }
-}
-
-void EnterChallenge() {
-    CtoS::SendPacket(1, Packets::PARTY_ENTER_CHALLENGE);
-}
-
-void CancelEnterChallenge() {
-    CtoS::SendPacket(1, Packets::PARTY_CANCEL_ENTER_CHALLENGE);
 }
 
 void SetHardMode(bool enabled) {
@@ -186,25 +170,13 @@ uint32_t GetLoadingState() {
     return 1;
 }
 
-// GameContext: *BasePointer → +0x18 → deref
+// GameContext resolution delegated to Offsets::ResolveGameContext()
 // CharContext at GameContext+0x44, Cinematic at GameContext+0x30
-static uintptr_t ResolveGameContext() {
-    if (Offsets::BasePointer <= 0x10000) return 0;
-    __try {
-        uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
-        if (ctx <= 0x10000) return 0;
-        uintptr_t gc = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
-        if (gc <= 0x10000) return 0;
-        return gc;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
 
 bool GetIsObserving() {
     // CharContext at GameContext+0x44
     // observe_map_id at CharContext+0x228, current_map_id at +0x22C
-    uintptr_t gc = ResolveGameContext();
+    uintptr_t gc = Offsets::ResolveGameContext();
     if (!gc) return false;
 
     __try {
@@ -220,7 +192,7 @@ bool GetIsObserving() {
 
 bool GetIsInCinematic() {
     // Cinematic* at GameContext+0x30, check h0004 != 0
-    uintptr_t gc = ResolveGameContext();
+    uintptr_t gc = Offsets::ResolveGameContext();
     if (!gc) return false;
 
     __try {

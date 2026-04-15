@@ -27,21 +27,4 @@ bool Initialize() {
     return true;
 }
 
-void AddFriend(const wchar_t* name) {
-    if (!s_addFriendFn || !name) return;
-    const wchar_t* n = name; // capture for lambda
-    GameThread::Enqueue([n]() { s_addFriendFn(n); });
-}
-
-void RemoveFriend(const wchar_t* name) {
-    if (!s_removeFriendFn || !name) return;
-    const wchar_t* n = name;
-    GameThread::Enqueue([n]() { s_removeFriendFn(n); });
-}
-
-void SetPlayerStatus(uint32_t status) {
-    if (!s_setStatusFn) return;
-    GameThread::Enqueue([status]() { s_setStatusFn(status); });
-}
-
 } // namespace GWA3::FriendListMgr

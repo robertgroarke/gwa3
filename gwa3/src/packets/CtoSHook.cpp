@@ -3,7 +3,6 @@
 #include <gwa3/core/Log.h>
 
 #include <Windows.h>
-#include <cstdarg>
 #include <cstring>
 
 namespace GWA3::CtoSHook {
@@ -87,7 +86,7 @@ static __declspec(naked) void CommandPacketSendNaked() {
     }
 }
 
-static __declspec(naked) void CommandReturnNaked() {
+extern "C" void __declspec(naked) GWA3CtoSHookCommandReturnThunk() {
     __asm {
         mov ecx, dword ptr [s_savedIndex]
         mov edx, dword ptr [s_queueCounter]
@@ -195,7 +194,7 @@ bool Initialize() {
 
     uintptr_t hookAddr = Offsets::Render;
     s_returnAddr = hookAddr + kReplaySize;
-    s_commandReturnAddr = reinterpret_cast<uintptr_t>(&CommandReturnNaked);
+    s_commandReturnAddr = reinterpret_cast<uintptr_t>(&GWA3CtoSHookCommandReturnThunk);
     s_queueCounter = 0;
     s_savedCommand = 0;
     s_savedIndex = -1;
@@ -275,43 +274,6 @@ bool EnqueueCommand(uintptr_t command) {
 
     Log::Warn("CtoSHook: queue full, dropping command 0x%08X", command);
     return false;
-}
-
-bool SendPacketCommand(uint32_t size, uint32_t header, ...) {
-    if (!s_initialized && !Initialize()) return false;
-    if (size == 0 || size > 12) {
-        Log::Warn("CtoSHook: invalid packet size %u for header 0x%X", size, header);
-        return false;
-    }
-
-    if (Offsets::PacketLocation) {
-        uintptr_t fresh = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
-        if (fresh) s_packetLocation = fresh;
-    }
-
-    const uintptr_t slotAddr = NextPacketCommandSlot();
-    if (!slotAddr) return false;
-
-    auto* cmd = reinterpret_cast<PacketCommand*>(slotAddr);
-    cmd->entry = reinterpret_cast<uintptr_t>(&CommandPacketSendNaked);
-    cmd->sizeBytes = size * 4;
-    ZeroMemory(cmd->data, sizeof(cmd->data));
-    cmd->data[0] = header;
-
-    va_list args;
-    va_start(args, header);
-    for (uint32_t i = 1; i < size && i < 12; ++i) {
-        cmd->data[i] = va_arg(args, uint32_t);
-    }
-    va_end(args);
-
-    FlushInstructionCache(GetCurrentProcess(), cmd, sizeof(PacketCommand));
-
-    const bool queued = EnqueueCommand(slotAddr);
-    if (!queued) {
-        Log::Warn("CtoSHook: failed to enqueue packet command hdr=0x%X", header);
-    }
-    return queued;
 }
 
 bool IsInitialized() {

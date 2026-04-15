@@ -130,16 +130,4 @@ Patch& GetCameraUnlockPatch()    { return s_cameraUnlock; }
 Patch& GetLevelDataBypassPatch() { return s_levelDataBypass; }
 Patch& GetMapPortBypassPatch()   { return s_mapPortBypass; }
 
-void EnableAllPatches() {
-    if (s_cameraUnlock.staged)    s_cameraUnlock.Enable();
-    if (s_levelDataBypass.staged) s_levelDataBypass.Enable();
-    if (s_mapPortBypass.staged)   s_mapPortBypass.Enable();
-}
-
-void DisableAllPatches() {
-    if (s_cameraUnlock.enabled)    s_cameraUnlock.Disable();
-    if (s_levelDataBypass.enabled) s_levelDataBypass.Disable();
-    if (s_mapPortBypass.enabled)   s_mapPortBypass.Disable();
-}
-
 } // namespace GWA3::Memory

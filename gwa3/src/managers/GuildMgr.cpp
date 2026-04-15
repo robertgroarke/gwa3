@@ -103,9 +103,4 @@ bool TravelGH(const GHKey& key) {
     return true;
 }
 
-bool LeaveGH() {
-    CtoS::SendPacket(1, Packets::GUILDHALL_LEAVE);
-    return true;
-}
-
 } // namespace GWA3::GuildMgr

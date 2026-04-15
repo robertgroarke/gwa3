@@ -24,12 +24,6 @@ namespace GWA3::StringEncoding {
     uint32_t DecodeStr(const wchar_t* encStr, wchar_t* outBuf, uint32_t outBufSize,
                        uint32_t timeoutMs = 1000);
 
-    // Async decode with user callback.
-    // callback(param, decodedString) is called on the game thread when decoding completes.
-    // Returns true if the decode request was enqueued.
-    typedef void(__cdecl* DecodeCallback)(void* param, wchar_t* decodedString);
-    bool DecodeStrAsync(const wchar_t* encStr, DecodeCallback callback, void* param);
-
     // Validate that a string is in encoded format (starts with word >= 0x100).
     bool IsValidEncStr(const wchar_t* str);
 

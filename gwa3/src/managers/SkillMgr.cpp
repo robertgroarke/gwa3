@@ -7,7 +7,8 @@
 #include <gwa3/core/RenderHook.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/managers/AgentMgr.h>
-#include <gwa3/game/Party.h>
+#include <gwa3/managers/MapMgr.h>
+#include <gwa3/managers/PartyMgr.h>
 
 #include <Windows.h>
 #include <cstring>
@@ -25,6 +26,10 @@ static bool s_initialized = false;
 static bool s_loggedSkillbarMiss = false;
 static bool s_loggedUseSkillRenderLane = false;
 static bool s_loggedUseSkillEngineLane = false;
+static bool s_loggedUseSkillSparkflySuppressed = false;
+static bool s_loggedUseSkillSparkflyOverride = false;
+static volatile LONG s_allowSparkflyPlayerUseSkill = 0;
+static volatile LONG s_sparkflyPlayerUseSkillCount = 0;
 // Ring buffer of shellcode slots to prevent overwrites during rapid command queuing
 static constexpr int kShellcodeSlots = 16;
 static constexpr int kSlotSize = 32;
@@ -72,34 +77,12 @@ static uintptr_t GetSkillbarArrayBase() {
     }
 }
 
-static PartyInfo* ResolvePlayerParty() {
-    if (Offsets::BasePointer <= 0x10000) return nullptr;
-
-    __try {
-        const uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
-        if (ctx <= 0x10000) return nullptr;
-
-        const uintptr_t p1 = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
-        if (p1 <= 0x10000) return nullptr;
-
-        const uintptr_t party = *reinterpret_cast<uintptr_t*>(p1 + 0x4C);
-        if (party <= 0x10000) return nullptr;
-
-        const uintptr_t playerParty = *reinterpret_cast<uintptr_t*>(party + 0x54);
-        if (playerParty <= 0x10000) return nullptr;
-
-        return reinterpret_cast<PartyInfo*>(playerParty);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return nullptr;
-    }
-}
-
 static uint32_t ResolveSkillbarAgentId(uint32_t heroIndex) {
     if (heroIndex == 0) {
         return AgentMgr::GetMyId();
     }
 
-    PartyInfo* playerParty = ResolvePlayerParty();
+    PartyInfo* playerParty = PartyMgr::ResolvePlayerParty();
     if (!playerParty || !playerParty->heroes.buffer || heroIndex > playerParty->heroes.size) {
         return 0;
     }
@@ -203,6 +186,14 @@ bool Initialize() {
     return true;
 }
 
+void SetSparkflyPlayerUseSkillOverride(bool enabled) {
+    InterlockedExchange(&s_allowSparkflyPlayerUseSkill, enabled ? 1 : 0);
+}
+
+void ResetSparkflyPlayerUseSkillCount() {
+    InterlockedExchange(&s_sparkflyPlayerUseSkillCount, 0);
+}
+
 void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
     if (!s_useSkillFn) {
         // No native function resolved — can't use skill
@@ -219,6 +210,19 @@ void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
     if (!myId) {
         Log::Warn("SkillMgr: UseSkill skipped (MyID=%u slot=%u)", myId, slot);
         return;
+    }
+
+    const bool sparkflyMap = MapMgr::GetMapId() == 558u;
+    if (sparkflyMap && InterlockedCompareExchange(&s_allowSparkflyPlayerUseSkill, 0, 0) == 0) {
+        if (!s_loggedUseSkillSparkflySuppressed) {
+            Log::Warn("SkillMgr: Suppressing player UseSkill in Sparkfly to avoid live crash");
+            s_loggedUseSkillSparkflySuppressed = true;
+        }
+        return;
+    }
+    if (sparkflyMap && !s_loggedUseSkillSparkflyOverride) {
+        Log::Warn("SkillMgr: Allowing player UseSkill in Sparkfly under explicit override");
+        s_loggedUseSkillSparkflyOverride = true;
     }
 
     // Guard: don't call native UseSkill while the character is moving OR
@@ -249,6 +253,9 @@ void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
         if (!s_loggedUseSkillEngineLane) {
             Log::Info("SkillMgr: UseSkill using GameThread post-dispatch");
             s_loggedUseSkillEngineLane = true;
+        }
+        if (sparkflyMap) {
+            InterlockedIncrement(&s_sparkflyPlayerUseSkillCount);
         }
         GameThread::EnqueuePost([myId, slot, targetAgentId, callTarget]() {
             InvokeUseSkillRaw(myId, slot, targetAgentId, callTarget);

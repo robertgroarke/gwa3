@@ -4,6 +4,17 @@
 
 namespace GWA3::UIMgr {
 
+    enum class ControlAction : uint32_t {
+        UseSkill1 = 0xA4,
+        UseSkill2 = 0xA5,
+        UseSkill3 = 0xA6,
+        UseSkill4 = 0xA7,
+        UseSkill5 = 0xA8,
+        UseSkill6 = 0xA9,
+        UseSkill7 = 0xAA,
+        UseSkill8 = 0xAB,
+    };
+
     // Frame state flags
     constexpr uint32_t FRAME_CREATED  = 0x4;
     constexpr uint32_t FRAME_DISABLED = 0x10;
@@ -11,11 +22,12 @@ namespace GWA3::UIMgr {
 
     // Frame message IDs
     constexpr uint32_t MSG_MOUSE_CLICK2 = 0x31;
-    constexpr uint32_t MSG_INITIATE_TRADE = 0x10000033;
+    constexpr uint32_t MSG_INITIATE_TRADE = 0x100001A0;
 
     // MouseAction action states
     constexpr uint32_t ACTION_MOUSE_UP   = 0x7;
     constexpr uint32_t ACTION_MOUSE_DOWN = 0x6;
+    constexpr uint32_t ACTION_MOUSE_CLICK = 0x8;
 
     // Known frame hashes (character select and common UI)
     namespace Hashes {
@@ -50,8 +62,7 @@ namespace GWA3::UIMgr {
     // Frame context (parent frame for SendFrameUIMsg)
     uintptr_t GetFrameContext(uintptr_t frame);
 
-    // Send frame UI message (must be on game thread)
-    void SendFrameUIMessage(uintptr_t frame, uint32_t msgId, void* wParam, void* lParam);
+    // Send UI message (must be on game thread)
     void SendUIMessage(uint32_t msgId, void* wParam, void* lParam);
 
     // Child frame navigation
@@ -61,6 +72,7 @@ namespace GWA3::UIMgr {
 
     uintptr_t GetFrameById(uint32_t frameId);
     uintptr_t GetFrameByContextAndChildOffset(uintptr_t context, uint32_t childOffsetId, uintptr_t excludeFrame = 0);
+    uintptr_t GetVisibleFrameByChildOffset(uint32_t childOffsetId, uintptr_t excludeFrame = 0, uintptr_t excludeContext = 0);
 
     // Frame search
     uintptr_t GetVisibleFrameByChildOffsetAndChildCount(
@@ -83,7 +95,13 @@ namespace GWA3::UIMgr {
 
     // Key simulation
     bool KeyPress(uintptr_t frame, uint32_t vkCode);
-
+    bool HasControlActionKeypress();
+    bool ControlActionKeyDown(ControlAction action);
+    bool ControlActionKeyUp(ControlAction action);
+    bool ControlActionKeyPress(ControlAction action);
+    bool ActionKeyDown(uint32_t action);
+    bool ActionKeyUp(uint32_t action);
+    bool ActionKeyPress(uint32_t action);
     // Mouse action testing
     bool TestMouseClickAction(uintptr_t frame, uint32_t currentState, uint32_t wparam, uint32_t lparam);
     bool TestMouseAction(uintptr_t frame, uint32_t currentState, uint32_t wparam, uint32_t lparam);
@@ -92,10 +110,13 @@ namespace GWA3::UIMgr {
     void SendUIMessageAsm(uint32_t msgId, void* wParam, void* lParam);
 
     // Button click (GWA3-021)
-    // Sends MouseUp(0x7) via SendFrameUIMsg with msgid=0x31
+    // Default path uses MouseUp(0x7); trade experiments can opt into MouseClick(0x8).
     bool ButtonClickImmediate(uintptr_t frame);
     bool ButtonClickImmediateFull(uintptr_t frame);
     bool ButtonClick(uintptr_t frame);
+    bool ButtonClickMouseClick(uintptr_t frame);
+    bool ButtonClickFullMouseClick(uintptr_t frame);
+    bool ButtonClickFull(uintptr_t frame);
     bool ButtonClickByHash(uint32_t hash);
 
 } // namespace GWA3::UIMgr

@@ -42,24 +42,12 @@ namespace CallbackRegistry {
                                    const UICallback& callback, int altitude = -0x8000);
     void RemoveUIMessageCallback(HookEntry* entry, uint32_t messageId);
 
-    // ===== FrameUIMessage callbacks (per-frame-message hash) =====
-    bool RegisterFrameUIMessageCallback(HookEntry* entry, uint32_t messageId,
-                                        const UICallback& callback, int altitude = -0x8000);
-    void RemoveFrameUIMessageCallback(HookEntry* entry, uint32_t messageId);
-
-    // ===== CreateUIComponent callbacks (single global list) =====
-    bool RegisterCreateUIComponentCallback(HookEntry* entry,
-                                           const UICallback& callback, int altitude = -0x8000);
-    void RemoveCreateUIComponentCallback(HookEntry* entry);
-
     // ===== Bulk cleanup =====
     // Remove ALL callbacks registered with this HookEntry across all families.
     void RemoveCallbacks(HookEntry* entry);
 
     // ===== Dispatch (called by UIMgr/game hooks) =====
     void DispatchUIMessage(uint32_t messageId, void* wparam, void* lparam);
-    void DispatchFrameUIMessage(uint32_t messageId, void* wparam, void* lparam);
-    void DispatchCreateUIComponent(uint32_t componentId, void* wparam, void* lparam);
 
 } // namespace CallbackRegistry
 

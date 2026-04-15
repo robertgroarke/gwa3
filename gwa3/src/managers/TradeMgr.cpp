@@ -17,8 +17,25 @@
 #include <MinHook.h>
 #include <Windows.h>
 #include <cstring>
+#include <thread>
 
 namespace GWA3::TradeMgr {
+
+namespace {
+
+void QueueDelayedOfferRetry(uint32_t itemId, uint32_t quantity, uint32_t attemptsRemaining) {
+    if (attemptsRemaining == 0) {
+        return;
+    }
+    std::thread([itemId, quantity, attemptsRemaining]() {
+        Sleep(150);
+        GameThread::Enqueue([itemId, quantity, attemptsRemaining]() {
+            OfferItem(itemId, quantity, attemptsRemaining - 1);
+        });
+    }).detach();
+}
+
+}
 
 struct QueuedFrameClick {
     uint32_t frame_id;
@@ -41,6 +58,7 @@ static uintptr_t s_crafterTransactScratch[kCrafterScratchSlots] = {};
 static constexpr uint32_t kTradeHookPatchSize = 5;
 static uintptr_t s_tradeCartTrampoline = 0;
 static uint8_t s_tradeCartSavedBytes[kTradeHookPatchSize] = {};
+static bool s_tradeCartHookEnabled = false;
 static volatile LONG s_tradeWindowContext = 0;
 static volatile LONG s_tradeWindowFrame = 0;
 static volatile LONG s_tradeWindowCaptureCount = 0;
@@ -751,7 +769,22 @@ static bool InstallTradeCartHook() {
     }
 
     Log::Info("TradeMgr: UpdateTradeCart hook installed at 0x%08X", static_cast<unsigned>(hookAddr));
+    s_tradeCartHookEnabled = true;
     return true;
+}
+
+static void DisableTradeCartHookForOffer() {
+    if (!s_tradeCartHookEnabled || Offsets::UpdateTradeCart <= 0x10000) {
+        return;
+    }
+    const MH_STATUS mhStatus = MH_DisableHook(reinterpret_cast<LPVOID>(Offsets::UpdateTradeCart));
+    if (mhStatus == MH_OK) {
+        s_tradeCartHookEnabled = false;
+        Log::Info("TradeMgr: UpdateTradeCart hook disabled before native trade offer");
+    } else {
+        Log::Warn("TradeMgr: MH_DisableHook failed for UpdateTradeCart before offer: %s",
+                  MH_StatusToString(mhStatus));
+    }
 }
 
 static void TransactionBuyNative(uint32_t quantity, uint32_t itemId, uint32_t totalValue) {
@@ -1029,11 +1062,9 @@ bool Initialize() {
     } else {
         Log::Warn("TradeMgr: UpdateTradeCart hook disabled for live player-trade debug");
     }
-    EnsureTradeUiTap();
+    Log::Warn("TradeMgr: Trade UI tap disabled for player-trade crash isolation");
     EnsureMerchantTransactCallback();
-    if (!InstallPartyWindowButtonHook()) {
-        Log::Warn("TradeMgr: PartyWindowButtonCallback hook unavailable");
-    }
+    Log::Warn("TradeMgr: PartyWindowButtonCallback hook disabled for player-trade crash isolation");
     s_initialized = true;
     Log::Info("TradeMgr: Initialized (OfferTradeItem=0x%08X UpdateTradeCart=0x%08X)",
               static_cast<unsigned>(Offsets::OfferTradeItem),
@@ -1314,17 +1345,6 @@ static bool EnsureChooseQuantityPopupHook() {
         uintptr_t candidateStart = Scanner::ToFunctionStart(candidate, 0x1000);
         if (candidateStart > 0x10000) {
             candidateStart = recoverCanonicalFunctionStart(candidate, candidateStart);
-            if (i < 2) {
-                const uintptr_t delta = candidate > candidateStart ? (candidate - candidateStart) : 0;
-                if (delta < 0x200) {
-                    Log::Warn("TradeMgr: ChooseQuantityPopup rejecting %s candidate addr=0x%08X start=0x%08X delta=0x%X as likely interior block",
-                              kChooseQuantityAssertLabels[i],
-                              static_cast<unsigned>(candidate),
-                              static_cast<unsigned>(candidateStart),
-                              static_cast<unsigned>(delta));
-                    candidateStart = 0;
-                }
-            }
         }
         const uintptr_t minAddr = candidate > 0x100 ? candidate - 0x100 : 0;
         for (uintptr_t p = candidate; candidateStart <= 0x10000 && p > minAddr + 1; --p) {
@@ -1408,9 +1428,9 @@ static bool DrainQueuedPromptClicks(const QueuedFrameClick* clicks, size_t count
             anyPending = true;
             const uintptr_t frame = UIMgr::GetFrameById(clicks[i].frame_id);
             if (frame < 0x10000) continue;
-            bool clicked = UIMgr::ButtonClickImmediateFull(frame);
+            bool clicked = UIMgr::ButtonClick(frame);
             if (!clicked) {
-                clicked = UIMgr::ButtonClick(frame);
+                clicked = UIMgr::ButtonClickImmediateFull(frame);
             }
             if (clicked) {
                 pending[i] = false;
@@ -1465,11 +1485,8 @@ bool EnableTradeWindowCaptureForPlayerTrade() {
     return installed;
 }
 
-void InitiateTrade(uint32_t agentId, uint32_t requestedPlayerNumber) {
+void InitiateTradeUiOnly(uint32_t agentId, uint32_t requestedPlayerNumber) {
     if (agentId == 0) return;
-    InterlockedExchange(&s_tradeWindowContext, 0);
-    InterlockedExchange(&s_tradeWindowFrame, 0);
-    InterlockedExchange(&s_tradeWindowCaptureCount, 0);
     uint32_t playerNumber = requestedPlayerNumber;
     if (auto* agent = AgentMgr::GetAgentByID(agentId)) {
         if (!playerNumber && agent->type == 0xDB) {
@@ -1479,21 +1496,16 @@ void InitiateTrade(uint32_t agentId, uint32_t requestedPlayerNumber) {
 
     const uint32_t tradeTarget = agentId;
     const uint32_t currentTargetBefore = AgentMgr::GetTargetId();
-    Log::Info("TradeMgr: InitiateTrade using native-player-interact + UIMessage path agent=%u requestedPlayerNumber=%u resolvedPlayerNumber=%u targetAgent=%u currentTargetBefore=%u",
+    Log::Info("TradeMgr: InitiateTradeUiOnly using UIMessage path agent=%u requestedPlayerNumber=%u resolvedPlayerNumber=%u targetAgent=%u currentTargetBefore=%u",
               agentId,
               requestedPlayerNumber,
               playerNumber,
               tradeTarget,
               currentTargetBefore);
-    if (tradeTarget != currentTargetBefore) {
-        AgentMgr::ChangeTarget(tradeTarget);
-    }
-    AgentMgr::InteractPlayer(tradeTarget);
-    AgentMgr::CallTarget(tradeTarget);
     const uint32_t currentTargetAfter = AgentMgr::GetTargetId();
     const uintptr_t tradeButtonFrameRoot = UIMgr::GetFrameByHash(kTradeButtonFrameHash);
     const uintptr_t tradeButtonContext = tradeButtonFrameRoot ? UIMgr::GetFrameContext(tradeButtonFrameRoot) : 0u;
-    Log::Info("TradeMgr: InitiateTrade state after ChangeTarget+native InteractPlayer+CallTarget currentTargetAfter=%u tradeButtonRoot=0x%08X rootState=0x%X rootChildOffset=%u rootContext=0x%08X",
+    Log::Info("TradeMgr: InitiateTradeUiOnly state before UIMessage currentTargetAfter=%u tradeButtonRoot=0x%08X rootState=0x%X rootChildOffset=%u rootContext=0x%08X",
               currentTargetAfter,
               static_cast<unsigned>(tradeButtonFrameRoot),
               tradeButtonFrameRoot ? UIMgr::GetFrameState(tradeButtonFrameRoot) : 0u,
@@ -1508,6 +1520,9 @@ void InitiateTrade(uint32_t agentId, uint32_t requestedPlayerNumber) {
     const uintptr_t actionSecondaryByContext = tradeButtonContext
         ? UIMgr::GetFrameByContextAndChildOffset(tradeButtonContext, kTradeButtonActionSecondaryChildOffsetId, tradeButtonFrameRoot)
         : 0u;
+    const uintptr_t rootChild0 = tradeButtonFrameRoot
+        ? UIMgr::GetChildFrameByIndex(tradeButtonFrameRoot, 0)
+        : 0u;
     const uintptr_t altByHash = UIMgr::GetFrameByHash(kTradeButtonAltHash);
     const uintptr_t altByContext = tradeButtonContext
         ? UIMgr::GetFrameByContextAndChildOffset(tradeButtonContext, kTradeButtonAltChildOffsetId, tradeButtonFrameRoot)
@@ -1517,39 +1532,194 @@ void InitiateTrade(uint32_t agentId, uint32_t requestedPlayerNumber) {
         : actionSecondaryByContext;
 
     if (tradeButtonFrameRoot) {
-        const bool clickedRoot = UIMgr::ButtonClick(tradeButtonFrameRoot);
-        bool clickedFollowup = false;
-        if (followupFrame && followupFrame != tradeButtonFrameRoot) {
-            clickedFollowup = UIMgr::ButtonClick(followupFrame);
-        }
-        Log::Info("TradeMgr: InitiateTrade trade-button click root=%u followup=%u rootFrame=0x%08X followupFrame=0x%08X action123=0x%08X action122=0x%08X altByHash=0x%08X altByContext=0x%08X",
-                  clickedRoot ? 1u : 0u,
-                  clickedFollowup ? 1u : 0u,
-                  static_cast<unsigned>(tradeButtonFrameRoot),
-                  static_cast<unsigned>(followupFrame),
-                  static_cast<unsigned>(actionPrimaryByContext),
-                  static_cast<unsigned>(actionSecondaryByContext),
-                  static_cast<unsigned>(altByHash),
-                  static_cast<unsigned>(altByContext));
-        EnableTradeWindowCaptureForPlayerTrade();
-        return;
+        UIMgr::DebugDumpChildFrames(tradeButtonFrameRoot, "trade_button_root", 12);
     }
 
-    Log::Warn("TradeMgr: InitiateTrade trade button missing; falling back to UIMessage(0x%08X, agent=%u)",
-              kUiInitiateTrade,
-              tradeTarget);
+    const uintptr_t clickFrame = rootChild0
+        ? rootChild0
+        : (tradeButtonFrameRoot
+            ? tradeButtonFrameRoot
+        : (altByContext ? altByContext
+            : (actionPrimaryByContext ? actionPrimaryByContext
+                : (actionSecondaryByContext ? actionSecondaryByContext : altByHash))));
+    Log::Info("TradeMgr: InitiateTradeUiOnly clicking frame-plane trade action tradeTarget=%u rootFrame=0x%08X rootChild0=0x%08X followupFrame=0x%08X action123=0x%08X action122=0x%08X altByHash=0x%08X altByContext=0x%08X clickFrame=0x%08X",
+              tradeTarget,
+              static_cast<unsigned>(tradeButtonFrameRoot),
+              static_cast<unsigned>(rootChild0),
+              static_cast<unsigned>(followupFrame),
+              static_cast<unsigned>(actionPrimaryByContext),
+              static_cast<unsigned>(actionSecondaryByContext),
+              static_cast<unsigned>(altByHash),
+              static_cast<unsigned>(altByContext),
+              static_cast<unsigned>(clickFrame));
+    if (clickFrame) {
+        const bool clicked = UIMgr::ButtonClick(clickFrame);
+        Log::Info("TradeMgr: InitiateTradeUiOnly frame-plane click result=%u frame=0x%08X",
+                  clicked ? 1u : 0u,
+                  static_cast<unsigned>(clickFrame));
+        if (s_tradeHackPatched) {
+            Log::Info("TradeMgr: InitiateTradeUiOnly leaving trade patch enabled through trade-open transition");
+        }
+        return;
+    }
+    Log::Warn("TradeMgr: InitiateTradeUiOnly no clickable trade frame found; falling back to UIMessage");
     UIMgr::SendUIMessageAsm(kUiInitiateTrade, reinterpret_cast<void*>(static_cast<uintptr_t>(tradeTarget)), nullptr);
+    if (s_tradeHackPatched) {
+        Log::Info("TradeMgr: InitiateTradeUiOnly leaving trade patch enabled through UIMessage fallback transition");
+    }
 }
 
-void CancelTrade() {
+void InitiateTrade(uint32_t agentId, uint32_t requestedPlayerNumber) {
+    if (agentId == 0) return;
+    InterlockedExchange(&s_tradeWindowContext, 0);
+    InterlockedExchange(&s_tradeWindowFrame, 0);
+    InterlockedExchange(&s_tradeWindowCaptureCount, 0);
+    EnableTradeWindowCaptureForPlayerTrade();
+    if (!s_tradeHackPatched) {
+        ToggleTradePatch(true);
+    }
+    const uint32_t currentTargetBefore = AgentMgr::GetTargetId();
+    Log::Info("TradeMgr: InitiateTrade stage1 agent=%u requestedPlayerNumber=%u currentTargetBefore=%u",
+              agentId, requestedPlayerNumber, currentTargetBefore);
+    AgentMgr::CancelAction();
+    Log::Info("TradeMgr: InitiateTrade stage1 after CancelAction");
+    AgentMgr::ChangeTarget(agentId);
+    const uint32_t currentTargetAfterChange = AgentMgr::GetTargetId();
+    Log::Info("TradeMgr: InitiateTrade stage1 after ChangeTarget currentTarget=%u", currentTargetAfterChange);
+    GameThread::EnqueuePost([agentId, requestedPlayerNumber]() {
+        Log::Info("TradeMgr: InitiateTrade stage2 scheduling extra-frame UI dispatch agent=%u requestedPlayerNumber=%u",
+                  agentId, requestedPlayerNumber);
+        GameThread::EnqueuePost([agentId, requestedPlayerNumber]() {
+            Log::Info("TradeMgr: InitiateTrade stage3 scheduling next-frame UI dispatch agent=%u requestedPlayerNumber=%u",
+                      agentId, requestedPlayerNumber);
+            GameThread::EnqueueSerialPre([agentId, requestedPlayerNumber]() {
+                InitiateTradeUiOnly(agentId, requestedPlayerNumber);
+            });
+        });
+    });
+}
+
+void CancelTrade(uint32_t actionRowIndex, int32_t preferredChildIndex, uint32_t transportMode) {
+    const uintptr_t uiFrame = static_cast<uintptr_t>(GetTradeWindowUiFrame());
+    const uintptr_t uiCtx = static_cast<uintptr_t>(GetTradeWindowUiContext());
+    Log::Info("TradeMgr: CancelTrade uiFrame=0x%08X uiState=0x%X uiCtx=0x%08X childCount=%u row=%u preferredChild=%d transport=%u",
+              static_cast<unsigned>(uiFrame),
+              GetTradeWindowUiState(),
+              static_cast<unsigned>(uiCtx),
+              uiFrame ? UIMgr::GetChildFrameCount(uiFrame) : 0u,
+              actionRowIndex,
+              preferredChildIndex,
+              transportMode);
+    if (uiFrame > 0x10000) {
+        UIMgr::DebugDumpChildFrames(uiFrame, "trade_window_root", 24);
+        for (uint32_t i = 7; i <= 10; ++i) {
+            const uintptr_t child = UIMgr::GetChildFrameByIndex(uiFrame, i);
+            if (child > 0x10000) {
+                char label[64];
+                sprintf_s(label, "trade_window_root[%u]", i);
+                UIMgr::DebugDumpChildFrames(child, label, 16);
+            }
+        }
+    }
+    if (uiCtx > 0x10000) {
+        UIMgr::DebugDumpFramesForContext(uiCtx, "trade_window_context", 64);
+    }
+    if (transportMode != 9u && uiFrame > 0x10000) {
+        const uintptr_t actionRow = UIMgr::GetChildFrameByIndex(uiFrame, actionRowIndex);
+        if (actionRow > 0x10000) {
+            uint32_t cancelCandidates[6] = {};
+            uint32_t candidateCount = 0;
+            if (preferredChildIndex >= 0) {
+                cancelCandidates[candidateCount++] = static_cast<uint32_t>(preferredChildIndex);
+            } else {
+                const uint32_t defaults[] = {4u, 5u, 0u, 1u, 2u, 3u};
+                for (uint32_t idx : defaults) cancelCandidates[candidateCount++] = idx;
+            }
+            for (uint32_t ci = 0; ci < candidateCount; ++ci) {
+                const uint32_t idx = cancelCandidates[ci];
+                const uintptr_t candidate = UIMgr::GetChildFrameByIndex(actionRow, idx);
+                if (candidate <= 0x10000) continue;
+                if (transportMode == 2u) {
+                    Log::Info("TradeMgr: CancelTrade trying UI candidate row[%u][%u] mouse-up frame=0x%08X frameId=%u childOffset=%u",
+                              actionRowIndex,
+                              idx,
+                              static_cast<unsigned>(candidate),
+                              UIMgr::GetFrameId(candidate),
+                              UIMgr::GetChildOffsetId(candidate));
+                    if (UIMgr::ButtonClick(candidate)) {
+                        Log::Info("TradeMgr: CancelTrade UI mouse-up accepted on row[%u][%u]", actionRowIndex, idx);
+                        return;
+                    }
+                    continue;
+                }
+                if (transportMode == 3u) {
+                    Log::Info("TradeMgr: CancelTrade trying UI candidate row[%u][%u] full-mouse-click frame=0x%08X frameId=%u childOffset=%u",
+                              actionRowIndex,
+                              idx,
+                              static_cast<unsigned>(candidate),
+                              UIMgr::GetFrameId(candidate),
+                              UIMgr::GetChildOffsetId(candidate));
+                    if (UIMgr::ButtonClickFullMouseClick(candidate)) {
+                        Log::Info("TradeMgr: CancelTrade UI full-mouse-click accepted on row[%u][%u]", actionRowIndex, idx);
+                        return;
+                    }
+                    continue;
+                }
+                if (transportMode == 4u) {
+                    Log::Info("TradeMgr: CancelTrade trying UI candidate row[%u][%u] full-mouse-up frame=0x%08X frameId=%u childOffset=%u",
+                              actionRowIndex,
+                              idx,
+                              static_cast<unsigned>(candidate),
+                              UIMgr::GetFrameId(candidate),
+                              UIMgr::GetChildOffsetId(candidate));
+                    if (UIMgr::ButtonClickFull(candidate)) {
+                        Log::Info("TradeMgr: CancelTrade UI full-mouse-up accepted on row[%u][%u]", actionRowIndex, idx);
+                        return;
+                    }
+                    continue;
+                }
+                Log::Info("TradeMgr: CancelTrade trying UI candidate row[%u][%u] mouse-click frame=0x%08X frameId=%u childOffset=%u",
+                          actionRowIndex,
+                          idx,
+                          static_cast<unsigned>(candidate),
+                          UIMgr::GetFrameId(candidate),
+                          UIMgr::GetChildOffsetId(candidate));
+                if (UIMgr::ButtonClickMouseClick(candidate)) {
+                    Log::Info("TradeMgr: CancelTrade UI mouse-click accepted on row[%u][%u]", actionRowIndex, idx);
+                    return;
+                }
+                if (transportMode == 1u) {
+                    continue;
+                }
+                Log::Info("TradeMgr: CancelTrade trying UI candidate row[%u][%u] mouse-up frame=0x%08X frameId=%u childOffset=%u",
+                          actionRowIndex,
+                          idx,
+                          static_cast<unsigned>(candidate),
+                          UIMgr::GetFrameId(candidate),
+                          UIMgr::GetChildOffsetId(candidate));
+                if (UIMgr::ButtonClick(candidate)) {
+                    Log::Info("TradeMgr: CancelTrade UI mouse-up accepted on row[%u][%u]", actionRowIndex, idx);
+                    return;
+                }
+            }
+            Log::Warn("TradeMgr: CancelTrade UI candidates present but no click succeeded");
+            return;
+        }
+    }
+    if (transportMode == 9u) {
+        Log::Info("TradeMgr: CancelTrade transport=9 forcing native cancel after disabling trade patch");
+    }
     if (s_tradeHackPatched) {
         ToggleTradePatch(false);
     }
     if (Offsets::TradeCancel > 0x10000) {
         TradeVoidNative fn = reinterpret_cast<TradeVoidNative>(Offsets::TradeCancel);
+        Log::Info("TradeMgr: CancelTrade native call fn=0x%08X", static_cast<unsigned>(Offsets::TradeCancel));
         fn();
+        Log::Info("TradeMgr: CancelTrade native call returned");
         return;
     }
+    Log::Info("TradeMgr: CancelTrade raw packet fallback");
     CtoS::TradeCancel();
 }
 
@@ -1563,15 +1733,11 @@ void AcceptTrade() {
     CtoS::TradeAccept();
 }
 
-void OfferItem(uint32_t itemId, uint32_t quantity) {
+void OfferItem(uint32_t itemId, uint32_t quantity, uint32_t attemptsRemaining) {
     uintptr_t ctx = static_cast<uintptr_t>(s_tradeWindowContext);
     const uintptr_t capturedFrame = static_cast<uintptr_t>(s_tradeWindowFrame);
     const uintptr_t uiFrame = static_cast<uintptr_t>(GetTradeWindowUiFrame());
     const uintptr_t uiCtx = static_cast<uintptr_t>(GetTradeWindowUiContext());
-    const bool usingUiFallback = ctx <= 0x10000 && uiCtx > 0x10000;
-    if (usingUiFallback) {
-        ctx = uiCtx;
-    }
     Log::Info("TradeMgr: OfferItem request item=%u qty=%u ctx=0x%08X frame=0x%08X uiCtx=0x%08X uiFrame=0x%08X fn=0x%08X captures=%ld usingUiFallback=%u",
               itemId,
               quantity,
@@ -1581,7 +1747,10 @@ void OfferItem(uint32_t itemId, uint32_t quantity) {
               static_cast<unsigned>(uiFrame),
               static_cast<unsigned>(Offsets::OfferTradeItem),
               s_tradeWindowCaptureCount,
-              usingUiFallback ? 1u : 0u);
+              attemptsRemaining);
+    if (s_tradeHackPatched) {
+        Log::Info("TradeMgr: OfferItem keeping trade patch enabled for native offer call");
+    }
     if (Offsets::OfferTradeItem > 0x10000 && ctx > 0x10000) {
         auto* window = reinterpret_cast<TradeWindowView*>(ctx);
         __try {
@@ -1590,42 +1759,50 @@ void OfferItem(uint32_t itemId, uint32_t quantity) {
                       window->items_count,
                       window->items_max,
                       static_cast<unsigned>(window->frame_id));
-            const bool plausibleUiFallback =
-                !usingUiFallback
-                || ((window->frame_id == uiFrame || uiFrame == 0)
-                    && window->items_count <= window->items_max
-                    && window->items_max <= 64);
-            if (window->state == 0 && plausibleUiFallback) {
+            if (window->state == 0) {
+                DisableTradeCartHookForOffer();
                 OfferTradeItemNative fn = reinterpret_cast<OfferTradeItemNative>(Offsets::OfferTradeItem);
                 fn(window, nullptr, itemId, quantity, 1);
                 Log::Info("TradeMgr: OfferItem native call returned");
                 return;
             }
-            Log::Warn("TradeMgr: OfferItem native path blocked; trade window state=0x%X frame=0x%X plausibleUiFallback=%u",
+            Log::Warn("TradeMgr: OfferItem native path blocked; trade window state=0x%X frame=0x%X attemptsRemaining=%u",
                       window->state,
                       static_cast<unsigned>(window->frame_id),
-                      plausibleUiFallback ? 1u : 0u);
+                      attemptsRemaining);
+            QueueDelayedOfferRetry(itemId, quantity, attemptsRemaining);
             return;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
-            Log::Warn("TradeMgr: OfferItem native path faulted; falling back to raw packet");
+            Log::Warn("TradeMgr: OfferItem native path faulted");
+            return;
         }
     }
 
-    Log::Warn("TradeMgr: OfferItem native context unavailable (ctx=0x%08X fn=0x%08X); falling back to raw packet",
+    Log::Warn("TradeMgr: OfferItem native context unavailable (ctx=0x%08X fn=0x%08X)",
               static_cast<unsigned>(ctx),
               static_cast<unsigned>(Offsets::OfferTradeItem));
-    if (!s_tradeHackPatched) {
-        ToggleTradePatch(true);
+}
+
+void OfferItemPacket(uint32_t itemId, uint32_t quantity) {
+    if (quantity == 0) {
+        quantity = 1;
     }
-    CtoS::SendPacket(3, Packets::TRADE_OFFER_ITEM, itemId, quantity);
+    if (s_tradeHackPatched) {
+        Log::Info("TradeMgr: OfferItemPacket restoring trade patch before raw offer packet");
+        ToggleTradePatch(false);
+    }
+    const bool laneAvailable = CtoS::IsBotshubCommandLaneAvailable();
+    Log::Info("TradeMgr: OfferItemPacket item=%u qty=%u laneAvailable=%d", itemId, quantity, laneAvailable ? 1 : 0);
+    if (laneAvailable && CtoS::TradeOfferItemBotshub(itemId, quantity)) {
+        return;
+    }
+    Log::Warn("TradeMgr: OfferItemPacket falling back to direct raw packet item=%u qty=%u", itemId, quantity);
+    CtoS::TradeOfferItem(itemId, quantity);
 }
 
 void OfferItemPromptQuantity(uint32_t itemId) {
     uintptr_t ctx = static_cast<uintptr_t>(s_tradeWindowContext);
     const uintptr_t uiCtx = static_cast<uintptr_t>(GetTradeWindowUiContext());
-    if (ctx <= 0x10000 && uiCtx > 0x10000) {
-        ctx = uiCtx;
-    }
     Log::Info("TradeMgr: OfferItemPromptQuantity request item=%u ctx=0x%08X uiCtx=0x%08X fn=0x%08X",
               itemId,
               static_cast<unsigned>(ctx),
@@ -1646,6 +1823,7 @@ void OfferItemPromptQuantity(uint32_t itemId) {
             Log::Warn("TradeMgr: OfferItemPromptQuantity blocked; trade window state=0x%X", window->state);
             return;
         }
+        DisableTradeCartHookForOffer();
         OfferTradeItemNative fn = reinterpret_cast<OfferTradeItemNative>(Offsets::OfferTradeItem);
         fn(window, nullptr, itemId, 0, 1);
         Log::Info("TradeMgr: OfferItemPromptQuantity native call returned");
@@ -1826,9 +2004,9 @@ bool ConfirmTradeQuantityPromptValue(uint32_t quantity) {
         const size_t okButtonCount = CollectPromptOkButtons(frame, okButtons, _countof(okButtons));
         for (size_t okIndex = 0; okIndex < okButtonCount; ++okIndex) {
             const uintptr_t okBtn = okButtons[okIndex];
-            bool clickedOk = UIMgr::ButtonClickImmediateFull(okBtn);
+            bool clickedOk = UIMgr::ButtonClick(okBtn);
             if (!clickedOk) {
-                clickedOk = UIMgr::ButtonClick(okBtn);
+                clickedOk = UIMgr::ButtonClickImmediateFull(okBtn);
             }
             Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue spinner path okIndex=%u okFrame=0x%08X okFrameId=%u clicked=%u quantity=%u",
                       static_cast<unsigned>(okIndex),
@@ -2114,29 +2292,6 @@ bool BuyMerchantItem(uint32_t itemId, uint32_t quantity) {
     return true;
 }
 
-bool BuyMerchantItemByModelId(uint32_t modelId, uint32_t quantity) {
-    Item* item = GetMerchantItemByModelId(modelId);
-    if (!item || quantity == 0) return false;
-
-    const uint32_t itemId = item->item_id;
-    const uint32_t unitValue = item->value * 2;
-    if (!itemId || unitValue == 0 || !Offsets::Transaction) return false;
-
-    const uint32_t totalValue = unitValue * quantity;
-    GameThread::Enqueue([itemId, quantity, totalValue]() {
-        TransactionBuyNative(quantity, itemId, totalValue);
-    });
-    return true;
-}
-
-bool SellMerchantItem(uint32_t itemId, uint32_t quantity, uint32_t totalValue) {
-    if (!itemId || !Offsets::Transaction) return false;
-    GameThread::Enqueue([itemId, quantity, totalValue]() {
-        TransactionSellNative(quantity, itemId, totalValue);
-    });
-    return true;
-}
-
 bool SellInventoryItem(uint32_t itemId, uint32_t quantity) {
     Item* item = ItemMgr::GetItemById(itemId);
     if (!item || !Offsets::Transaction) return false;
@@ -2184,11 +2339,6 @@ bool RequestTraderQuoteByItemId(uint32_t itemId) {
 
     FlushInstructionCache(GetCurrentProcess(), sc, static_cast<DWORD>(i));
     return RenderHook::EnqueueCommand(scAddr);
-}
-
-bool RequestTraderQuoteByModelId(uint32_t modelId) {
-    const uint32_t itemId = GetMerchantItemIdByModelId(modelId);
-    return itemId != 0 && RequestTraderQuoteByItemId(itemId);
 }
 
 bool RequestCrafterQuoteByItemId(uint32_t itemId) {

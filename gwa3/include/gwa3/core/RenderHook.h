@@ -29,7 +29,4 @@ namespace GWA3::RenderHook {
     // Check if the JMP patch is still intact at the hook site
     bool IsHookIntact();
 
-    // Crash detection helper (not used directly — watchdog thread compares heartbeats)
-    bool IsCrashDetected();
-
 } // namespace GWA3::RenderHook

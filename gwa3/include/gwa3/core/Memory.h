@@ -37,10 +37,6 @@ namespace GWA3::Memory {
         bool Toggle();
     };
 
-    // Global patcher — manages a collection of named patches.
-    void EnableAllPatches();
-    void DisableAllPatches();
-
     // Register named patches for known game-side modifications.
     Patch& GetCameraUnlockPatch();
     Patch& GetLevelDataBypassPatch();

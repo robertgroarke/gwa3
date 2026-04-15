@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import uuid
 import time
@@ -48,18 +47,6 @@ class BridgeTestCase:
     async def tearDown(self):
         """Disconnect from pipe."""
         self.ipc.disconnect()
-
-    async def _drain(self, timeout: float = 0.5):
-        """Read all pending pipe messages, buffering them by type."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            try:
-                msg = await asyncio.wait_for(self.ipc.read_message(), timeout=0.1)
-                if msg is None:
-                    break
-                self._route_message(msg)
-            except asyncio.TimeoutError:
-                break
 
     def _route_message(self, msg: dict):
         """Sort a message into the appropriate buffer."""

@@ -23,10 +23,6 @@ void EquipItem(uint32_t itemId)     { CtoS::EquipItem(itemId); }
 void DropItem(uint32_t itemId)      { CtoS::DropItem(itemId); }
 void PickUpItem(uint32_t agentId)   { AgentMgr::InteractItem(agentId, false); }
 
-void DestroyItem(uint32_t itemId) {
-    CtoS::SendPacket(2, Packets::ITEM_DESTROY, itemId);
-}
-
 void MoveItem(uint32_t itemId, uint32_t bagId, uint32_t slot) {
     uint32_t packetBagId = bagId;
     Bag* bag = GetBag(bagId);
@@ -41,24 +37,12 @@ void IdentifyItem(uint32_t itemId, uint32_t kitId) {
     CtoS::SendPacket(3, Packets::ITEM_IDENTIFY, kitId, itemId);
 }
 
-void SplitStack(uint32_t itemId, uint32_t quantity) {
-    CtoS::SendPacket(3, Packets::ITEM_SPLIT_STACK, itemId, quantity);
-}
-
 void SalvageSessionOpen(uint32_t kitId, uint32_t itemId) {
     CtoS::SendPacket(3, Packets::SALVAGE_SESSION_OPEN, kitId, itemId);
 }
 
 void SalvageMaterials() {
     CtoS::SendPacket(1, Packets::SALVAGE_MATERIALS);
-}
-
-void SalvageUpgrade() {
-    CtoS::SendPacket(1, Packets::SALVAGE_UPGRADE);
-}
-
-void SalvageSessionCancel() {
-    CtoS::SendPacket(1, Packets::SALVAGE_SESSION_CANCEL);
 }
 
 void SalvageSessionDone() {

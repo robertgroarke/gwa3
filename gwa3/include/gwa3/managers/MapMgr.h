@@ -9,12 +9,8 @@ namespace GWA3::MapMgr {
 
     // Travel
     void Travel(uint32_t mapId, uint32_t region = 0, uint32_t district = 0, uint32_t language = 0);
-    void TravelGuildHall();
-    void LeaveGuildHall();
     void ReturnToOutpost();
     void EnterMission();
-    void EnterChallenge();
-    void CancelEnterChallenge();
 
     // Difficulty
     void SetHardMode(bool enabled);

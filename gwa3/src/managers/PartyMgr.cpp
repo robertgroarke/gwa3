@@ -19,7 +19,7 @@ static bool s_initialized = false;
 using AddHeroFn = void(__cdecl*)(uint32_t);
 static AddHeroFn s_addHeroFn = nullptr;
 
-static uintptr_t ResolvePartyContext() {
+uintptr_t ResolvePartyContext() {
     if (Offsets::BasePointer <= 0x10000) return 0;
 
     __try {
@@ -35,7 +35,7 @@ static uintptr_t ResolvePartyContext() {
     }
 }
 
-static PartyInfo* ResolvePlayerParty() {
+PartyInfo* ResolvePlayerParty() {
     const uintptr_t partyContext = ResolvePartyContext();
     if (partyContext <= 0x10000) return nullptr;
 
@@ -77,6 +77,7 @@ void AddHero(uint32_t heroId) {
     }
     CtoS::HeroAdd(heroId);
 }
+
 void KickHero(uint32_t heroId)   { CtoS::HeroKick(heroId); }
 void KickAllHeroes() {
     // Confirmed on the current client/test environment: HERO_KICK with the
@@ -98,9 +99,6 @@ void KickAllHeroes() {
     // Fallback only when party state is unavailable.
     CtoS::SendPacket(2, Packets::HERO_KICK, 0x27u);
 }
-
-void AddHenchman(uint32_t id)    { CtoS::SendPacket(2, Packets::PARTY_INVITE_NPC, id); }
-void KickHenchman(uint32_t id)   { CtoS::SendPacket(2, Packets::PARTY_KICK_NPC, id); }
 
 void SetHeroBehavior(uint32_t heroIndex, uint32_t behavior) {
     CtoS::HeroBehavior(heroIndex, behavior);
@@ -127,26 +125,6 @@ void LockHeroTarget(uint32_t heroIndex, uint32_t targetId) {
     CtoS::SendPacket(3, Packets::HERO_LOCK_TARGET, heroIndex, targetId);
 }
 
-void LeaveParty() {
-    CtoS::SendPacket(1, Packets::PARTY_LEAVE);
-}
-
-void InvitePlayer(uint32_t agentId) {
-    CtoS::SendPacket(2, Packets::PARTY_INVITE_PLAYER, agentId);
-}
-
-void KickPlayer(uint32_t playerId) {
-    CtoS::SendPacket(2, Packets::PARTY_KICK_PLAYER, playerId);
-}
-
-void AcceptInvite(uint32_t partyId) {
-    CtoS::SendPacket(2, Packets::PARTY_ACCEPT_INVITE, partyId);
-}
-
-void RefuseInvite(uint32_t partyId) {
-    CtoS::SendPacket(2, Packets::PARTY_ACCEPT_REFUSE, partyId);
-}
-
 void Tick(bool ready) {
     CtoS::SendPacket(2, Packets::PARTY_READY_STATUS, ready ? 1u : 0u);
 }
@@ -168,35 +146,8 @@ bool GetIsPartyDefeated() {
     return (ReadPartyFlags() & 0x20) != 0;
 }
 
-uint32_t CountVisibleHeroes() {
-    if (Offsets::AgentBase <= 0x10000) return 0;
-
-    __try {
-        uintptr_t agentArr = *reinterpret_cast<uintptr_t*>(Offsets::AgentBase);
-        if (agentArr <= 0x10000) return 0;
-
-        const uint32_t myId = AgentMgr::GetMyId();
-        const uint32_t maxAgents = *reinterpret_cast<uint32_t*>(Offsets::AgentBase + 0x8);
-        uint32_t count = 0;
-
-        for (uint32_t i = 1; i < maxAgents && i < 4096; ++i) {
-            uintptr_t agentPtr = *reinterpret_cast<uintptr_t*>(agentArr + i * 4);
-            if (agentPtr <= 0x10000) continue;
-
-            auto* living = reinterpret_cast<AgentLiving*>(agentPtr);
-            if (living->agent_id == myId) continue;
-            if (living->type != 0xDB) continue;
-            if (living->allegiance != 1) continue;
-            if (living->hp <= 0.0f) continue;
-
-            if (SkillMgr::GetSkillbarByAgentId(living->agent_id) != nullptr) {
-                count++;
-            }
-        }
-        return count;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
+bool GetIsHardMode() {
+    return (ReadPartyFlags() & 0x10) != 0;
 }
 
 uint32_t CountPartyHeroes() {

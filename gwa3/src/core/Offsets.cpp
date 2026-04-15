@@ -283,8 +283,10 @@ static const PatternDef s_patterns[] = {
     // GWCA's older UpdateTradeCart anchor drifted from ...3D EF 00 00 10...
     // to ...3D F1 00 00 10 0F 87 B8... on the current client build.
     PAT("UpdateTradeCart",  UpdateTradeCart, "\x57\x8B\x7D\x0C\x3D\xF1\x00\x00\x10\x0F\x87\xB8", "xxxxxxxxxxxx",  -0x24, Priority::P2, PatternType::Func),
-    // AutoIt ToggleTradePatch target: pattern omits the leading 0x55 so offset -1 lands on the prologue byte.
-    PAT("TradeHackPatch",   TradeHackPatch,  "\x8B\xEC\x8B\x45\x08\x83\xF8\x46",             "xxxxxxxx",      -0x1, Priority::P2, PatternType::Ptr),
+    // AutoIt ToggleTradePatch target: historical builds used cmp eax,0x46.
+    // Current client drifted to the same tiny guard/thunk family with cmp eax,0x3D.
+    // We still omit the leading 0x55 so offset -1 lands on the prologue byte that AutoIt patches to C3.
+    PAT("TradeHackPatch",   TradeHackPatch,  "\x8B\xEC\x8B\x45\x08\x83\xF8\x3D",             "xxxxxxxx",      -0x1, Priority::P2, PatternType::Ptr),
 
     // ===== Chat GWCA (P2) =====
     PAT("SendChatFunc",  SendChatFunc,  "\x8D\x85\xE0\xFE\xFF\xFF\x50\x68\x1C\x01",     "xxxxxxxxx",  -0x3E, Priority::P2, PatternType::Func),
@@ -454,6 +456,22 @@ static void PostProcessOffsets() {
     // Effects: DropBuff scan result contains E8 near call
     if (DropBuff)       DropBuff       = Scanner::FunctionFromNearCall(DropBuff);
 
+    // Engine hook: prefer the original AutoIt MainProc hook site when present.
+    // That is the lane GWA2 used to drain CommandUseSkill/CommandMove/CommandChangeTarget.
+    {
+        uintptr_t autoItEngine = Scanner::Find(
+            "\x56\xB9\xF8\x34\xC8\x00\xE8\x21\x78\xCB\xFF",
+            "xxxxxxxxxxx",
+            -0x82);
+        if (autoItEngine > 0x10000) {
+            Log::Info("Offsets: Engine AutoIt candidate = 0x%08X (legacy pattern was 0x%08X)",
+                      autoItEngine, Engine);
+            Engine = autoItEngine;
+        } else {
+            Log::Info("Offsets: Engine AutoIt candidate not found; keeping legacy hook 0x%08X", Engine);
+        }
+    }
+
     // Agent interaction: InteractAgent scan+0x41 should contain E8 near call to dispatcher.
     // GWCA offsets may shift between GW builds, so search nearby for the relevant E8s.
     if (InteractAgent) {
@@ -588,17 +606,35 @@ static void PostProcessOffsets() {
               BasePointer, MyID, AgentBase, InstanceInfo);
 }
 
-bool IsResolved()       { return s_resolved; }
 int GetResolvedCount()  { return s_resolvedCount; }
 int GetFailedCount()    { return s_failedCount; }
 
-void RefreshBasePointer() {
-    if (BasePointerScanAddr) {
-        uintptr_t newVal = Deref(BasePointerScanAddr);
-        if (newVal && newVal != BasePointer) {
-            Log::Info("Offsets: BasePointer refreshed 0x%08X -> 0x%08X", BasePointer, newVal);
-            BasePointer = newVal;
-        }
+// ===== Centralized Context Resolution =====
+// These consolidate the identical pointer-chain traversals that were previously
+// copy-pasted across EffectMgr, PlayerMgr, QuestMgr, MapMgr, GameSnapshot, etc.
+
+uintptr_t ResolveGameContext() {
+    if (BasePointer <= 0x10000) return 0;
+    __try {
+        uintptr_t ctx = *reinterpret_cast<uintptr_t*>(BasePointer);
+        if (ctx <= 0x10000) return 0;
+        uintptr_t gc = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
+        if (gc <= 0x10000) return 0;
+        return gc;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+uintptr_t ResolveWorldContext() {
+    uintptr_t gc = ResolveGameContext();
+    if (gc <= 0x10000) return 0;
+    __try {
+        uintptr_t wc = *reinterpret_cast<uintptr_t*>(gc + 0x2C);
+        if (wc <= 0x10000) return 0;
+        return wc;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
     }
 }
 

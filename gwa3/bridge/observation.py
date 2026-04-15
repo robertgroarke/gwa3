@@ -31,14 +31,6 @@ class ObservationWindow:
         """Return the most recent snapshot."""
         return self._snapshots[-1] if self._snapshots else None
 
-    @property
-    def latest_full(self) -> dict | None:
-        """Return the most recent tier 3 (full) snapshot."""
-        for snap in reversed(self._snapshots):
-            if snap.get("tier") == 3:
-                return snap
-        return None
-
     def get_recent_events(self, count: int = 10) -> list[dict]:
         """Return the most recent events."""
         return list(self._events)[-count:]

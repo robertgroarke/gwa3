@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+extern "C" void GWA3CtoSHookCommandReturnThunk();
+
 namespace GWA3::CtoSHook {
 
     // Install a mid-function hook at Offsets::Render for CtoS shellcode dispatch.
@@ -15,11 +17,6 @@ namespace GWA3::CtoSHook {
     // The command must be a VirtualAlloc'd buffer with executable shellcode
     // ending in RET (0xC3).
     bool EnqueueCommand(uintptr_t command);
-
-    // Experimental AutoIt-style packet lane.
-    // This is intentionally isolated from the main CtoS sender-thread path and is
-    // only meant for interaction-command experiments while we compare hook context.
-    bool SendPacketCommand(uint32_t size, uint32_t header, ...);
 
     bool IsInitialized();
     uint32_t GetHeartbeat();

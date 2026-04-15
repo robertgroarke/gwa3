@@ -18,6 +18,8 @@ static PacketSendFn s_packetSendFn = nullptr;
 static uintptr_t s_packetLocation = 0;
 static bool s_initialized = false;
 
+static void IssuePacketSend(const uint32_t* data, uint32_t sizeBytes);
+
 // ===== Engine inline hook for CtoS dispatch =====
 // Hooks at Offsets::Engine (0x00C93C91) -- a DIFFERENT function from the
 // Render/FrApi function (0x00AE3D10) that GameThread hooks.
@@ -207,6 +209,35 @@ static int __stdcall ShouldDeferBotshubCommands() {
 // 108-byte buffer for fsave/frstor (x87 FPU state, 28 dwords).
 // Statically allocated — the engine detour is single-threaded per process.
 static __declspec(align(16)) uint8_t s_fpuSaveArea[108];
+
+namespace {
+
+struct TradeOfferItemBotshubCommand {
+    uintptr_t fn;
+    uint32_t item_id;
+    uint32_t quantity;
+};
+
+void __cdecl TradeOfferItemCommandThunk(uint32_t itemId, uint32_t quantity) {
+    if (!s_initialized && !Initialize()) {
+        Log::Warn("CtoS: TradeOfferItemCommandThunk dropped item=%u qty=%u -- not initialized", itemId, quantity);
+        return;
+    }
+    const uint32_t data[3] = { Packets::TRADE_ADD_ITEM, itemId, quantity };
+    IssuePacketSend(data, sizeof(data));
+}
+
+__declspec(naked) void BotshubTradeOfferItemCommandStub() {
+    __asm {
+        push dword ptr [eax+8]
+        push dword ptr [eax+4]
+        call TradeOfferItemCommandThunk
+        add esp, 8
+        jmp GWA3BotshubCommandReturnThunk
+    }
+}
+
+} // namespace
 
 extern "C" void __declspec(naked) GWA3BotshubCommandReturnThunk() {
     __asm {
@@ -441,6 +472,10 @@ bool IsBotshubQueueIdle() {
     return s_botshubCmdHead == s_botshubCmdTail;
 }
 
+bool IsBotshubCommandLaneAvailable() {
+    return s_engineInitialized && !s_engineSuspended;
+}
+
 void SuspendEngineHook() {
     if (!s_engineInitialized || !s_engineHookAddr) return;
     s_engineSuspended = true;  // Tell watchdog to stop re-patching
@@ -526,8 +561,12 @@ static void IssuePacketSend(const uint32_t* data, uint32_t sizeBytes) {
         uintptr_t fresh = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
         if (fresh) { loc = fresh; s_packetLocation = fresh; }
     }
+    Log::Info("CtoS: IssuePacketSend hdr=0x%X size=%u loc=0x%08X fn=0x%08X",
+              data[0], sizeBytes, static_cast<unsigned>(loc),
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_packetSendFn)));
     __try {
         s_packetSendFn(reinterpret_cast<void*>(loc), sizeBytes, const_cast<uint32_t*>(data));
+        Log::Info("CtoS: IssuePacketSend returned hdr=0x%X", data[0]);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log::Error("CtoS: PacketSend exception 0x%08X hdr=0x%X",
                    GetExceptionCode(), data[0]);
@@ -569,6 +608,7 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
         PktCopy copy{};
         memcpy(copy.d, data, sizeBytes);
         copy.sz = sizeBytes;
+        Log::Info("CtoS: SendPacket queueing on GameThread hdr=0x%X size=%u", header, sizeBytes);
         GameThread::Enqueue([copy]() {
             IssuePacketSend(copy.d, copy.sz);
         });
@@ -597,8 +637,8 @@ void ChangeTarget(uint32_t agentId) {
     SendPacket(2, Packets::TARGET_AGENT, agentId);
 }
 
-void AttackAgent(uint32_t agentId) {
-    SendPacket(2, Packets::ATTACK_AGENT, agentId);
+void ActionAttack(uint32_t agentId, uint32_t callTarget) {
+    SendPacket(3, Packets::ACTION_ATTACK, agentId, callTarget);
 }
 
 void CancelAction() {
@@ -667,12 +707,22 @@ void UseSkill(uint32_t skillSlot, uint32_t targetAgentId, uint32_t callTarget) {
     SendPacket(4, Packets::USE_SKILL, skillSlot, targetAgentId, callTarget);
 }
 
-void SwitchWeaponSet(uint32_t setIndex) {
-    SendPacket(2, Packets::SWITCH_SET, setIndex);
+void TradeOfferItem(uint32_t itemId, uint32_t quantity) {
+    SendPacket(3, Packets::TRADE_ADD_ITEM, itemId, quantity);
 }
 
-void TradePlayer(uint32_t agentId) {
-    SendPacket(2, Packets::TRADE_INITIATE, agentId);
+bool TradeOfferItemBotshub(uint32_t itemId, uint32_t quantity) {
+    if (!Initialize()) {
+        Log::Warn("CtoS: TradeOfferItemBotshub dropped item=%u qty=%u -- not initialized", itemId, quantity);
+        return false;
+    }
+    TradeOfferItemBotshubCommand cmd{};
+    cmd.fn = reinterpret_cast<uintptr_t>(&BotshubTradeOfferItemCommandStub);
+    cmd.item_id = itemId;
+    cmd.quantity = quantity;
+    const bool queued = EnqueueBotshubCommand(&cmd, sizeof(cmd));
+    Log::Info("CtoS: TradeOfferItemBotshub item=%u qty=%u queued=%d", itemId, quantity, queued ? 1 : 0);
+    return queued;
 }
 
 void TradeCancel() {

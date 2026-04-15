@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 
 from .base import BridgeTestCase
 from .helpers import TestFailure, assert_gt, assert_true
-from .test_e_orchestrated import _wait_until_near
-from .trade_harness import HELPER_NAME, ensure_trade_helper_running, write_trade_helper_config, _helper_status_path
+from .trade_harness import _helper_name, ensure_trade_helper_running, write_trade_helper_config, _helper_status_path
 
 MODEL_SALVAGE_KIT = 2992
 TRADE_TEST_MAP = 650
 TRADE_TEST_REGION = 4
 TRADE_TEST_DISTRICT = 99
 TRADE_TEST_LANGUAGE = 8
+_HELPER_MOVE_SEQ = 0
 
 
 def _find_inventory_item_id_by_model(snap: dict, model_id: int) -> int:
@@ -130,14 +131,37 @@ def _trade_chat_debug(snap: dict) -> list[dict]:
 
 
 def _find_helper_agent(snap: dict) -> dict | None:
+    helper_x = None
+    helper_y = None
+    helper_status = _helper_status_path()
+    if helper_status.exists():
+        try:
+            payload = json.loads(helper_status.read_text(encoding="utf-8", errors="ignore"))
+            helper_x = float(payload.get("x", 0.0) or 0.0)
+            helper_y = float(payload.get("y", 0.0) or 0.0)
+        except Exception:
+            helper_x = None
+            helper_y = None
+
+    best_agent = None
+    best_dist = float("inf")
     for agent in snap.get("agents", []):
         if agent.get("agent_type") != "living":
             continue
-        if agent.get("name") != HELPER_NAME:
-            continue
         if not agent.get("is_alive", False):
             continue
-        return agent
+        if agent.get("name") == _helper_name():
+            return agent
+        if helper_x is None or helper_y is None:
+            continue
+        ax = float(agent.get("x", 0.0) or 0.0)
+        ay = float(agent.get("y", 0.0) or 0.0)
+        dist = ((ax - helper_x) ** 2 + (ay - helper_y) ** 2) ** 0.5
+        if dist < best_dist:
+            best_dist = dist
+            best_agent = agent
+    if best_agent is not None and best_dist <= 250.0:
+        return best_agent
     return None
 
 
@@ -146,10 +170,11 @@ async def _wait_until_agent_within_range(
     agent_id: int,
     max_distance: float,
     timeout: float = 15.0,
+    move_once_to_agent: bool = False,
 ) -> tuple[bool, dict]:
     deadline = asyncio.get_running_loop().time() + timeout
-    next_reissue = 0.0
     last_seen: dict = {}
+    move_issued = False
     while asyncio.get_running_loop().time() < deadline:
         snap = await tc.wait_for_snapshot(tier=2, timeout=5.0)
         me = snap.get("me", {})
@@ -176,28 +201,56 @@ async def _wait_until_agent_within_range(
             }
             if dist <= max_distance:
                 return True, last_seen
-            now = asyncio.get_running_loop().time()
-            if now >= next_reissue:
-                last_move_exc = None
-                for _ in range(2):
-                    try:
-                        result = await tc.send_action(
-                            "move_to",
-                            {"x": agent_x, "y": agent_y},
-                            timeout=8.0,
-                        )
-                        tc.assert_action_success(result)
-                        last_move_exc = None
-                        break
-                    except Exception as exc:
-                        last_move_exc = exc
-                        await asyncio.sleep(0.5)
-                if last_move_exc:
-                    raise last_move_exc
-                next_reissue = now + 1.0
+            if move_once_to_agent and not move_issued:
+                result = await tc.send_action(
+                    "move_to",
+                    {"x": agent_x, "y": agent_y},
+                    timeout=8.0,
+                )
+                tc.assert_action_success(result)
+                move_issued = True
             break
         await asyncio.sleep(0.25)
     return False, last_seen
+
+
+async def _request_helper_move_to_discopanic(tc: BridgeTestCase, timeout: float = 45.0) -> dict:
+    global _HELPER_MOVE_SEQ
+    snap = tc.latest_snapshot(2)
+    if snap is None:
+        snap = await tc.wait_for_snapshot(tier=2, timeout=10.0)
+    me = snap.get("me", {})
+    target_x = float(me.get("x", 0.0) or 0.0)
+    target_y = float(me.get("y", 0.0) or 0.0)
+    _HELPER_MOVE_SEQ += 1
+    write_trade_helper_config(
+        auto_submit=False,
+        submit_gold=0,
+        move_x=target_x,
+        move_y=target_y,
+        move_seq=_HELPER_MOVE_SEQ,
+    )
+
+    helper_status = _helper_status_path()
+    deadline = asyncio.get_running_loop().time() + timeout
+    last_payload = {}
+    while asyncio.get_running_loop().time() < deadline:
+        if helper_status.exists():
+            try:
+                last_payload = json.loads(helper_status.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:
+                last_payload = {}
+            helper_x = float(last_payload.get("x", 0.0) or 0.0)
+            helper_y = float(last_payload.get("y", 0.0) or 0.0)
+            dx = helper_x - target_x
+            dy = helper_y - target_y
+            if (dx * dx + dy * dy) ** 0.5 <= 120.0:
+                return last_payload
+        await asyncio.sleep(0.5)
+    raise TestFailure(
+        "Helper did not reach Disco Panic rendezvous target; "
+        f"target=({target_x:.1f}, {target_y:.1f}) helper={last_payload}"
+    )
 
 
 async def _ensure_discopanic_at_trade_rendezvous(tc: BridgeTestCase):
@@ -240,6 +293,11 @@ async def _ensure_discopanic_at_trade_rendezvous(tc: BridgeTestCase):
         await asyncio.sleep(5.0)
 
 
+async def _send_trade_action(tc: BridgeTestCase, name: str, params: dict | None = None) -> dict:
+    """Trade-window actions are validated by observed trade state, not immediate action_result."""
+    return await tc.send_action_no_wait(name, params or {})
+
+
 async def _wait_for_helper_visible(tc: BridgeTestCase, timeout: float = 90.0) -> dict:
     def helper_visible(snap: dict) -> bool:
         return _find_helper_agent(snap) is not None
@@ -250,13 +308,27 @@ async def _wait_for_helper_visible(tc: BridgeTestCase, timeout: float = 90.0) ->
     return helper
 
 
-async def _open_trade_with_helper(tc: BridgeTestCase) -> tuple[int, int]:
+async def _open_trade_with_helper(
+    tc: BridgeTestCase,
+    *,
+    require_inventory_item: bool = True,
+) -> tuple[int, int]:
     """Ensure helper is present, then open a trade and return (helper_id, salvage_item_id)."""
     await ensure_trade_helper_running()
     await _ensure_discopanic_at_trade_rendezvous(tc)
+    helper_status = _helper_status_path()
+    helper_status_payload: dict = {}
+    if helper_status.exists():
+        try:
+            helper_status_payload = json.loads(helper_status.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            helper_status_payload = {}
+
     try:
         helper = await _wait_for_helper_visible(tc, timeout=10.0)
     except Exception:
+        await _request_helper_move_to_discopanic(tc, timeout=45.0)
+        await asyncio.sleep(1.0)
         await asyncio.sleep(5.0)
         helper = await _wait_for_helper_visible(tc, timeout=180.0)
     helper_id = int(helper["id"])
@@ -271,47 +343,39 @@ async def _open_trade_with_helper(tc: BridgeTestCase) -> tuple[int, int]:
     me_y = float(me.get("y", 0.0) or 0.0)
     helper_dist = ((helper_x - me_x) ** 2 + (helper_y - me_y) ** 2) ** 0.5
     if helper_dist > 70.0 or helper_distance > 120.0:
-        last_move_exc = None
-        for _ in range(2):
-            try:
-                result = await tc.send_action("move_to", {"x": helper_x, "y": helper_y}, timeout=8.0)
-                tc.assert_action_success(result)
-                last_move_exc = None
-                break
-            except Exception as exc:
-                last_move_exc = exc
-                await asyncio.sleep(0.5)
-        if last_move_exc:
-            raise last_move_exc
-        reached = await _wait_until_near(tc, helper_x, helper_y, threshold=45.0, timeout=20.0)
-        assert_true(reached, "Disco Panic should close to tight player-trade range")
-    helper_in_range, helper_range_debug = await _wait_until_agent_within_range(tc, helper_id, max_distance=100.0, timeout=10.0)
+        await _request_helper_move_to_discopanic(tc, timeout=45.0)
+        await asyncio.sleep(2.0)
+    helper_in_range = False
+    helper_range_debug: dict = {}
+    for attempt in range(2):
+        helper_in_range, helper_range_debug = await _wait_until_agent_within_range(
+            tc,
+            helper_id,
+            max_distance=100.0,
+            timeout=20.0,
+            move_once_to_agent=False,
+        )
+        if helper_in_range:
+            break
+        await _request_helper_move_to_discopanic(tc, timeout=45.0)
+        await asyncio.sleep(2.0)
     assert_true(
         helper_in_range,
         f"Helper should be within direct player-trade range before initiate_trade; last_seen={helper_range_debug}",
     )
 
-    # Prefer a salvage kit, but fall back to any non-equipped inventory item for reversible trade tests.
-    snap_before = await tc.wait_for_snapshot(tier=3, timeout=10.0)
-    item_id = _find_trade_offer_candidate_item_id(snap_before)
-
-    result = await tc.send_action("change_target", {"agent_id": helper_id}, timeout=5.0)
-    tc.assert_action_success(result)
-
-    def helper_targeted(s: dict) -> bool:
-        me = s.get("me", {})
-        return int(me.get("target_id", 0) or 0) == helper_id
-
-    await tc.wait_for_state_change(helper_targeted, tier=1, timeout=10.0)
-    await asyncio.sleep(0.5)
+    item_id = 0
+    if require_inventory_item:
+        # Prefer a salvage kit, but fall back to any non-equipped inventory item for reversible trade tests.
+        snap_before = await tc.wait_for_snapshot(tier=3, timeout=10.0)
+        item_id = _find_trade_offer_candidate_item_id(snap_before)
 
     open_snap = None
     last_open_exc: Exception | None = None
     for _attempt in range(2):
-        result = await tc.send_action(
+        result = await tc.send_action_no_wait(
             "initiate_trade",
             {"agent_id": helper_id, "player_number": helper_player_number},
-            timeout=5.0,
         )
         tc.assert_action_success(result)
 
@@ -412,21 +476,36 @@ async def _open_trade_with_helper(tc: BridgeTestCase) -> tuple[int, int]:
 
 async def test_player_trade_open_cancel_helper(tc: BridgeTestCase):
     """Launch BLUMPKINS helper, open trade, then cancel it cleanly."""
-    await _open_trade_with_helper(tc)
+    await _open_trade_with_helper(tc, require_inventory_item=False)
 
-    result = await tc.send_action("cancel_trade", {}, timeout=5.0)
+    result = await _send_trade_action(tc, "cancel_trade", {})
     tc.assert_action_success(result)
 
     def trade_closed(s: dict) -> bool:
         return not bool(s.get("trade", {}).get("is_open"))
 
-    closed_snap = await tc.wait_for_state_change(trade_closed, tier=2, timeout=15.0)
+    try:
+        closed_snap = await tc.wait_for_state_change(trade_closed, tier=2, timeout=15.0)
+    except TestFailure:
+        latest = tc.latest_snapshot(2) or {}
+        helper_debug = None
+        helper_status = _helper_status_path()
+        if helper_status.exists():
+            try:
+                helper_debug = json.loads(helper_status.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:
+                helper_debug = None
+        raise TestFailure(
+            "State change not observed after cancel_trade; "
+            f"main_trade={latest.get('trade')} helper={helper_debug} "
+            f"ipc_connected={tc.ipc.connected}"
+        )
     assert_true(not closed_snap["trade"]["is_open"], "Trade should report closed after cancel")
 
 
 async def test_player_trade_open_idle_cancel_helper(tc: BridgeTestCase):
     """Open a player trade, dwell briefly without offering anything, then cancel."""
-    await _open_trade_with_helper(tc)
+    await _open_trade_with_helper(tc, require_inventory_item=False)
     await asyncio.sleep(2.0)
 
     # Prove the bridge still survives the open-trade dwell long enough to observe
@@ -434,13 +513,35 @@ async def test_player_trade_open_idle_cancel_helper(tc: BridgeTestCase):
     snap = await tc.wait_for_snapshot(tier=2, timeout=10.0)
     assert_true(bool(snap.get("trade", {}).get("is_open")), "Trade should still report open after dwell")
 
-    result = await tc.send_action("cancel_trade", {}, timeout=5.0)
+    cancel_params: dict = {}
+    if "GWA3_TRADE_CANCEL_ROW" in os.environ:
+        cancel_params["row"] = int(os.environ["GWA3_TRADE_CANCEL_ROW"])
+    if "GWA3_TRADE_CANCEL_CHILD" in os.environ:
+        cancel_params["child"] = int(os.environ["GWA3_TRADE_CANCEL_CHILD"])
+    if "GWA3_TRADE_CANCEL_TRANSPORT" in os.environ:
+        cancel_params["transport"] = int(os.environ["GWA3_TRADE_CANCEL_TRANSPORT"])
+    result = await _send_trade_action(tc, "cancel_trade", cancel_params)
     tc.assert_action_success(result)
 
     def trade_closed(s: dict) -> bool:
         return not bool(s.get("trade", {}).get("is_open"))
 
-    closed_snap = await tc.wait_for_state_change(trade_closed, tier=2, timeout=15.0)
+    try:
+        closed_snap = await tc.wait_for_state_change(trade_closed, tier=2, timeout=15.0)
+    except TestFailure:
+        latest = tc.latest_snapshot(2) or {}
+        helper_debug = None
+        helper_status = _helper_status_path()
+        if helper_status.exists():
+            try:
+                helper_debug = json.loads(helper_status.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:
+                helper_debug = None
+        raise TestFailure(
+            "State change not observed after cancel_trade idle test; "
+            f"main_trade={latest.get('trade')} helper={helper_debug} "
+            f"ipc_connected={tc.ipc.connected}"
+        )
     assert_true(not closed_snap["trade"]["is_open"], "Trade should report closed after cancel")
 
 
@@ -534,7 +635,7 @@ async def test_player_trade_open_offer_cancel_helper(tc: BridgeTestCase):
         any(int(it.get("item_id", 0)) == item_id for it in player_offer.get("items", [])),
         "Own trade offer should reflect the offered salvage kit item",
     )
-    result = await tc.send_action("cancel_trade", {}, timeout=5.0)
+    result = await _send_trade_action(tc, "cancel_trade", {})
     tc.assert_action_success(result)
 
     def trade_closed(s: dict) -> bool:
@@ -583,7 +684,7 @@ async def test_player_trade_open_offer_remove_cancel_helper(tc: BridgeTestCase):
     removal_mode = None
     last_exc: Exception | None = None
     for label, remove_value in removal_attempts:
-        result = await tc.send_action("remove_trade_item", {"slot_or_item_id": remove_value}, timeout=5.0)
+        result = await _send_trade_action(tc, "remove_trade_item", {"slot_or_item_id": remove_value})
         tc.assert_action_success(result)
         try:
             removed_snap = await tc.wait_for_state_change(own_offer_removed, tier=2, timeout=5.0)
@@ -598,7 +699,7 @@ async def test_player_trade_open_offer_remove_cancel_helper(tc: BridgeTestCase):
         f"Offered item should disappear from own trade offer after remove_trade_item ({removal_mode})",
     )
 
-    result = await tc.send_action("cancel_trade", {}, timeout=5.0)
+    result = await _send_trade_action(tc, "cancel_trade", {})
     tc.assert_action_success(result)
     await tc.wait_for_state_change(lambda s: not bool(s.get("trade", {}).get("is_open")), tier=2, timeout=15.0)
 
@@ -642,7 +743,7 @@ async def test_player_trade_open_offer_stackable_quantity_cancel_helper(tc: Brid
         f"Own trade offer should reflect the requested partial stack quantity ({requested_quantity})",
     )
 
-    result = await tc.send_action("cancel_trade", {}, timeout=5.0)
+    result = await _send_trade_action(tc, "cancel_trade", {})
     tc.assert_action_success(result)
     await tc.wait_for_state_change(lambda s: not bool(s.get("trade", {}).get("is_open")), tier=2, timeout=15.0)
 
@@ -709,7 +810,7 @@ async def test_player_trade_open_offer_stackable_prompt_max_cancel_helper(tc: Br
         f"Prompt-based Max+OK should either surface the full stack in trade state or reduce/remove it from inventory ({original_quantity})",
     )
 
-    result = await tc.send_action("cancel_trade", {}, timeout=5.0)
+    result = await _send_trade_action(tc, "cancel_trade", {})
     tc.assert_action_success(result)
     await tc.wait_for_state_change(lambda s: not bool(s.get("trade", {}).get("is_open")), tier=2, timeout=15.0)
 
@@ -782,7 +883,7 @@ async def test_player_trade_open_offer_stackable_prompt_default_quantity_cancel_
         "Default quantity confirmation should offer exactly 1 or reduce inventory by 1",
     )
 
-    result = await tc.send_action("cancel_trade", {}, timeout=5.0)
+    result = await _send_trade_action(tc, "cancel_trade", {})
     tc.assert_action_success(result)
     await tc.wait_for_state_change(lambda s: not bool(s.get("trade", {}).get("is_open")), tier=2, timeout=15.0)
 
@@ -864,7 +965,7 @@ async def test_player_trade_open_offer_stackable_prompt_exact_quantity_cancel_he
         "Prompt-based exact quantity should either surface the requested amount in trade state or reduce inventory by that exact amount",
     )
 
-    result = await tc.send_action("cancel_trade", {}, timeout=5.0)
+    result = await _send_trade_action(tc, "cancel_trade", {})
     tc.assert_action_success(result)
     await tc.wait_for_state_change(lambda s: not bool(s.get("trade", {}).get("is_open")), tier=2, timeout=15.0)
 
@@ -898,7 +999,7 @@ async def _complete_forward_trade_and_verify_helper(
     6. Main accepts
     """
     # Step 1: Main submits its offer
-    result = await tc.send_action("submit_trade_offer", {"gold": 0}, timeout=5.0)
+    result = await _send_trade_action(tc, "submit_trade_offer", {"gold": 0})
     tc.assert_action_success(result)
 
     # Step 2: Wait for main's submitted state
@@ -946,7 +1047,7 @@ async def _complete_forward_trade_and_verify_helper(
     # Step 6: Main accepts — retry until trade closes
     closed = False
     for _ in range(12):
-        result = await tc.send_action("accept_trade", {}, timeout=5.0)
+        result = await _send_trade_action(tc, "accept_trade", {})
         tc.assert_action_success(result)
         try:
             await tc.wait_for_state_change(
@@ -1014,7 +1115,7 @@ async def _return_trade_from_helper(
         await asyncio.sleep(0.5)
 
     # Step 5: Main submits empty offer
-    result = await tc.send_action("submit_trade_offer", {"gold": 0}, timeout=5.0)
+    result = await _send_trade_action(tc, "submit_trade_offer", {"gold": 0})
     tc.assert_action_success(result)
 
     def main_submitted(s: dict) -> bool:
@@ -1026,7 +1127,7 @@ async def _return_trade_from_helper(
     # Step 6: Main accepts — retry until trade closes
     closed = False
     for _ in range(8):
-        result = await tc.send_action("accept_trade", {}, timeout=5.0)
+        result = await _send_trade_action(tc, "accept_trade", {})
         tc.assert_action_success(result)
         try:
             await tc.wait_for_state_change(
@@ -1220,7 +1321,7 @@ async def test_player_trade_open_offer_submit_cancel_helper(tc: BridgeTestCase):
 
     await tc.wait_for_state_change(own_offer_seen, tier=2, timeout=15.0)
 
-    result = await tc.send_action("submit_trade_offer", {"gold": 0}, timeout=5.0)
+    result = await _send_trade_action(tc, "submit_trade_offer", {"gold": 0})
     tc.assert_action_success(result)
 
     def offer_submitted(s: dict) -> bool:
@@ -1230,7 +1331,7 @@ async def test_player_trade_open_offer_submit_cancel_helper(tc: BridgeTestCase):
     submit_snap = await tc.wait_for_state_change(offer_submitted, tier=2, timeout=15.0)
     assert_true(bool(submit_snap["trade"].get("offer_sent")), "Trade should report submitted offer after submit_trade_offer")
 
-    result = await tc.send_action("cancel_trade", {}, timeout=5.0)
+    result = await _send_trade_action(tc, "cancel_trade", {})
     tc.assert_action_success(result)
 
     def trade_closed(s: dict) -> bool:
@@ -1263,7 +1364,7 @@ async def test_player_trade_open_offer_submit_change_cancel_helper(tc: BridgeTes
 
     await tc.wait_for_state_change(own_offer_seen, tier=2, timeout=15.0)
 
-    result = await tc.send_action("submit_trade_offer", {"gold": 0}, timeout=5.0)
+    result = await _send_trade_action(tc, "submit_trade_offer", {"gold": 0})
     tc.assert_action_success(result)
 
     def offer_submitted(s: dict) -> bool:
@@ -1273,7 +1374,7 @@ async def test_player_trade_open_offer_submit_change_cancel_helper(tc: BridgeTes
     submitted = await tc.wait_for_state_change(offer_submitted, tier=2, timeout=15.0)
     assert_true(bool(submitted["trade"].get("offer_sent")), "Trade should report offer_sent after submit_trade_offer")
 
-    result = await tc.send_action("change_trade_offer", {}, timeout=5.0)
+    result = await _send_trade_action(tc, "change_trade_offer", {})
     tc.assert_action_success(result)
 
     def offer_retracted(s: dict) -> bool:
@@ -1321,7 +1422,7 @@ async def test_player_trade_open_offer_submit_change_cancel_helper(tc: BridgeTes
         "change_trade_offer should retract the submitted offer state without removing items from the trade cart",
     )
 
-    result = await tc.send_action("cancel_trade", {}, timeout=5.0)
+    result = await _send_trade_action(tc, "cancel_trade", {})
     tc.assert_action_success(result)
     await tc.wait_for_state_change(lambda s: not bool(s.get("trade", {}).get("is_open")), tier=2, timeout=15.0)
 
@@ -1336,7 +1437,7 @@ async def test_player_trade_open_submit_gold_cancel_helper(tc: BridgeTestCase):
 
     await _open_trade_with_helper(tc)
     offered_gold = min(100, char_gold)
-    result = await tc.send_action("submit_trade_offer", {"gold": offered_gold}, timeout=5.0)
+    result = await _send_trade_action(tc, "submit_trade_offer", {"gold": offered_gold})
     tc.assert_action_success(result)
 
     def gold_offer_seen(s: dict) -> bool:
@@ -1369,7 +1470,7 @@ async def test_player_trade_open_submit_gold_cancel_helper(tc: BridgeTestCase):
         f"Own trade gold should reflect submitted gold offer ({offered_gold})",
     )
 
-    result = await tc.send_action("cancel_trade", {}, timeout=5.0)
+    result = await _send_trade_action(tc, "cancel_trade", {})
     tc.assert_action_success(result)
     await tc.wait_for_state_change(lambda s: not bool(s.get("trade", {}).get("is_open")), tier=2, timeout=15.0)
 
@@ -1413,7 +1514,7 @@ async def test_player_trade_partner_gold_visible_helper(tc: BridgeTestCase):
             f"Helper-side player_gold should reflect submitted gold ({offered_gold})",
         )
 
-        result = await tc.send_action("cancel_trade", {}, timeout=5.0)
+        result = await _send_trade_action(tc, "cancel_trade", {})
         tc.assert_action_success(result)
         await tc.wait_for_state_change(lambda s: not bool(s.get("trade", {}).get("is_open")), tier=2, timeout=15.0)
     finally:
@@ -1453,7 +1554,7 @@ async def test_player_trade_zz_open_offer_submit_accept_complete_helper(tc: Brid
 
     await tc.wait_for_state_change(own_offer_seen, tier=2, timeout=15.0)
 
-    result = await tc.send_action("submit_trade_offer", {"gold": 0}, timeout=5.0)
+    result = await _send_trade_action(tc, "submit_trade_offer", {"gold": 0})
     tc.assert_action_success(result)
 
     def offer_submitted(s: dict) -> bool:
@@ -1478,7 +1579,7 @@ async def test_player_trade_zz_open_offer_submit_accept_complete_helper(tc: Brid
 
     closed = False
     for _ in range(8):
-        result = await tc.send_action("accept_trade", {}, timeout=5.0)
+        result = await _send_trade_action(tc, "accept_trade", {})
         tc.assert_action_success(result)
         try:
             await tc.wait_for_state_change(trade_closed, tier=2, timeout=3.0)

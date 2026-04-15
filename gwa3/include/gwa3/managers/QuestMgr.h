@@ -14,7 +14,6 @@ namespace GWA3::QuestMgr {
 
     // Quest management
     void SetActiveQuest(uint32_t questId);
-    void AbandonQuest(uint32_t questId);
     void RequestQuestInfo(uint32_t questId);
 
     // Cinematic
