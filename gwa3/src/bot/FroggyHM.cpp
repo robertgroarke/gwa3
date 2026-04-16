@@ -16,12 +16,14 @@
 #include <gwa3/packets/CtoSHook.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
+#include <gwa3/core/DialogHook.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
 
 #include <Windows.h>
 #include <cmath>
+#include <cstdlib>
 #include <cstdarg>
 #include <cstdio>
 
@@ -45,6 +47,36 @@ static constexpr uint32_t DIALOG_QUEST_ACCEPT   = 0x833901;
 static constexpr uint32_t DIALOG_QUEST_BODY     = 0x8101;
 static constexpr uint32_t DIALOG_NPC_TALK       = 0x2AE6;
 static constexpr uint32_t DIALOG_DUNGEON_ENTRY  = 0x833905;
+
+struct NearbyNpcCandidate {
+    uint32_t agentId = 0;
+    uint16_t playerNumber = 0;
+    uint32_t npcId = 0;
+    uint32_t effects = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    float distanceToSearch = 0.0f;
+    float distanceToPlayer = 0.0f;
+    uint32_t score = 0xFFFFFFFFu;
+};
+
+static bool IsTekksRewardState(const Quest* quest) {
+    if (!quest) return false;
+    switch (quest->log_state) {
+    case 3:
+    case 34:
+    case 35:
+    case 79:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static size_t CollectNearbyNpcCandidates(float x, float y, float maxDist, NearbyNpcCandidate* out, size_t maxOut);
+static void LogNearbyNpcCandidates(const char* label, float x, float y, float maxDist, NearbyNpcCandidate* candidates, size_t count);
+static bool TryBuildNearbyNpcCandidate(uint32_t agentId, float searchX, float searchY, float maxDist, NearbyNpcCandidate& out);
+static void LogAgentIdentity(const char* label, uint32_t agentId);
 
 // ===== Waypoint =====
 
@@ -1378,6 +1410,28 @@ static float GetNearestEnemyDistance(float maxRange = 99999.0f) {
     return found ? sqrtf(bestDistSq) : maxRange;
 }
 
+static uint32_t CountEnemiesInRange(float maxRange) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return 0;
+
+    const float maxDistSq = maxRange * maxRange;
+    uint32_t count = 0;
+    const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1; i < maxAgents; i++) {
+        auto* a = AgentMgr::GetAgentByID(i);
+        if (!a || a->type != 0xDB) continue;
+        auto* living = static_cast<AgentLiving*>(a);
+        if (living->allegiance != 3) continue;
+        if (living->hp <= 0.0f) continue;
+        const float distSq = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+        if (distSq <= maxDistSq) {
+            ++count;
+        }
+    }
+
+    return count;
+}
+
 static bool CanAttackInAggro(float aggroRange, uint32_t* outTargetId = nullptr) {
     const uint32_t bestTargetId = GetBestEnemy(aggroRange);
     if (outTargetId) *outTargetId = bestTargetId;
@@ -1499,11 +1553,65 @@ static void WaitMs(DWORD ms) {
     Sleep(ms);
 }
 
+template <typename Predicate>
+static bool WaitForPredicate(DWORD timeoutMs, Predicate&& predicate, DWORD pollMs = 50) {
+    const DWORD start = GetTickCount();
+    while ((GetTickCount() - start) < timeoutMs) {
+        if (predicate()) {
+            return true;
+        }
+        Sleep(pollMs);
+    }
+    return predicate();
+}
+
+static bool WaitForMapReady(uint32_t mapId, DWORD timeoutMs) {
+    return WaitForPredicate(timeoutMs, [mapId]() {
+        return MapMgr::GetMapId() == mapId &&
+               MapMgr::GetIsMapLoaded() &&
+               AgentMgr::GetMyId() > 0;
+    }, 250);
+}
+
+static bool WaitForLocalPositionSettle(DWORD timeoutMs, float maxDeltaPerSample = 20.0f) {
+    float lastX = 0.0f;
+    float lastY = 0.0f;
+    bool haveLast = false;
+    int settledSamples = 0;
+    const DWORD start = GetTickCount();
+    while ((GetTickCount() - start) < timeoutMs) {
+        auto* me = AgentMgr::GetMyAgent();
+        if (!me) {
+            Sleep(100);
+            continue;
+        }
+        const float x = me->x;
+        const float y = me->y;
+        if (haveLast) {
+            const float delta = AgentMgr::GetDistance(lastX, lastY, x, y);
+            if (delta <= maxDeltaPerSample) {
+                if (++settledSamples >= 3) {
+                    return true;
+                }
+            } else {
+                settledSamples = 0;
+            }
+        }
+        lastX = x;
+        lastY = y;
+        haveLast = true;
+        Sleep(150);
+    }
+    return false;
+}
+
 static void LogLvl1ToLvl2TransitionState(const char* stage, uint32_t portalId, DWORD elapsedMs, DWORD attempt) {
+    static constexpr float kLvl1PortalX = 7665.0f;
+    static constexpr float kLvl1PortalY = -19050.0f;
     auto* me = AgentMgr::GetMyAgent();
     const float meX = me ? me->x : 0.0f;
     const float meY = me ? me->y : 0.0f;
-    const float distToExit = me ? AgentMgr::GetDistance(me->x, me->y, 7665.0f, -19050.0f) : -1.0f;
+    const float distToExit = me ? AgentMgr::GetDistance(me->x, me->y, kLvl1PortalX, kLvl1PortalY) : -1.0f;
     const uint32_t mapId = MapMgr::GetMapId();
     const int loaded = MapMgr::GetIsMapLoaded() ? 1 : 0;
     const uint32_t targetId = AgentMgr::GetTargetId();
@@ -1526,6 +1634,20 @@ static void LogLvl1ToLvl2TransitionState(const char* stage, uint32_t portalId, D
             }
         }
     }
+
+    s_dungeonLoopTelemetry.map_loaded = loaded != 0;
+    s_dungeonLoopTelemetry.player_alive = me != nullptr && me->hp > 0.0f;
+    s_dungeonLoopTelemetry.player_hp = me ? me->hp : 0.0f;
+    s_dungeonLoopTelemetry.player_x = meX;
+    s_dungeonLoopTelemetry.player_y = meY;
+    s_dungeonLoopTelemetry.target_id = targetId;
+    s_dungeonLoopTelemetry.dist_to_exit = distToExit;
+    s_dungeonLoopTelemetry.nearest_enemy_dist = me ? GetNearestEnemyDistance(5000.0f) : -1.0f;
+    s_dungeonLoopTelemetry.nearby_enemy_count = me ? CountEnemiesInRange(1800.0f) : 0;
+    s_dungeonLoopTelemetry.lvl1_portal_id = portalId;
+    s_dungeonLoopTelemetry.lvl1_portal_x = portalX;
+    s_dungeonLoopTelemetry.lvl1_portal_y = portalY;
+    s_dungeonLoopTelemetry.lvl1_portal_dist = portalDist;
 
     LogBot("Lvl1 to Lvl2 [%s] attempt=%lu elapsed=%lums map=%u loaded=%d me=(%.0f, %.0f) distToExit=%.0f target=%u portal=%u type=0x%X gadget=%u portalPos=(%.0f, %.0f) portalDist=%.0f",
            stage,
@@ -1551,6 +1673,49 @@ static void MoveToAndWait(float x, float y, float threshold = 250.0f) {
     while (DistanceTo(x, y) > threshold && (GetTickCount() - start) < 30000) {
         if (IsDead()) return;
         WaitMs(250);
+    }
+}
+
+static float RandomizedMoveCoord(float center, float radius) {
+    static bool seeded = false;
+    if (!seeded) {
+        srand(GetTickCount());
+        seeded = true;
+    }
+    const float unit = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+    return center + ((unit * 2.0f) - 1.0f) * radius;
+}
+
+static void MoveToLikeAutoIt(float x, float y, float randomRadius = 50.0f, DWORD maxMs = 5000) {
+    const uint32_t initialMapId = MapMgr::GetMapId();
+    int blocked = 0;
+    float destX = RandomizedMoveCoord(x, randomRadius);
+    float destY = RandomizedMoveCoord(y, randomRadius);
+    AgentMgr::Move(destX, destY);
+
+    const DWORD start = GetTickCount();
+    while ((GetTickCount() - start) < maxMs) {
+        if (IsDead()) return;
+        if (MapMgr::GetMapId() != initialMapId) return;
+
+        auto* me = AgentMgr::GetMyAgent();
+        if (!me) return;
+
+        if (AgentMgr::GetDistance(me->x, me->y, destX, destY) < 25.0f) {
+            return;
+        }
+
+        if (me->move_x == 0.0f && me->move_y == 0.0f) {
+            ++blocked;
+            destX = RandomizedMoveCoord(x, randomRadius);
+            destY = RandomizedMoveCoord(y, randomRadius);
+            AgentMgr::Move(destX, destY);
+            if (blocked > 14) {
+                return;
+            }
+        }
+
+        WaitMs(100);
     }
 }
 
@@ -1638,41 +1803,30 @@ static void MoveToAndWait(float x, float y, float threshold = 250.0f) {
                     continue;
                 }
 
-                // GWA3-135: Track per-target combat duration
                 if (bestId != currentTargetId) {
                     currentTargetId = bestId;
                     targetFightStart = GetTickCount();
-                    LogBot("AggroMoveToEx engaging foe=%u waypoint=(%.0f, %.0f) dist=%.0f",
+                    LogBot("AggroMoveToEx engaging local pack from foe=%u waypoint=(%.0f, %.0f) dist=%.0f",
                            bestId, x, y, nearestDistance);
                 }
-                DWORD fightDuration = GetTickCount() - targetFightStart;
+                const DWORD fightDuration = GetTickCount() - targetFightStart;
                 if (fightDuration > 120000) {
-                    // 2 minutes on same target â€” disengage, skip to next waypoint
-                    LogBot("Combat timeout: 120s on target %u â€” disengaging", bestId);
+                    LogBot("Combat timeout: 120s while clearing local pack near target %u â€” disengaging",
+                           bestId);
                     UnflagAllHeroes();
                     currentTargetId = 0;
                     break;
                 }
-                if (fightDuration > 60000 && fightDuration < 61000) {
-                    LogBot("Combat warning: 60s on target %u", bestId);
-                }
-                auto* me = AgentMgr::GetMyAgent();
-                if (AgentMgr::IsCasting(me)) {
-                    WaitMs(50);
-                    continue;
-                }
 
-                // Flag heroes to fight position
                 const bool allowHeroFlags = true;
                 __try {
                     auto* foeAgent = AgentMgr::GetAgentByID(bestId);
                     if (allowHeroFlags && foeAgent) {
                         FlagAllHeroes(foeAgent->x, foeAgent->y);
                     }
-                    AgentMgr::ChangeTarget(bestId);
-                    FightTarget(bestId, fightRange);
+                    FightEnemiesInAggro(fightRange, false, nullptr);
                 } __except (EXCEPTION_EXECUTE_HANDLER) {
-                    LogBot("AggroMoveToEx combat fault on foe=%u waypoint=(%.0f, %.0f); falling back to auto-attack",
+                    LogBot("AggroMoveToEx local-clear fault near foe=%u waypoint=(%.0f, %.0f); falling back to auto-attack",
                            bestId, x, y);
                     if (allowHeroFlags) {
                         UnflagAllHeroes();
@@ -1682,24 +1836,11 @@ static void MoveToAndWait(float x, float y, float threshold = 250.0f) {
                     currentTargetId = 0;
                     continue;
                 }
-                // Brief wait for skill activation
-                WaitMs(500);
-                // Continue fighting if enemy still alive
-                auto* foe = AgentMgr::GetAgentByID(bestId);
-                if (foe && foe->type == 0xDB) {
-                    auto* living = static_cast<AgentLiving*>(foe);
-                    if (living->hp > 0.0f) {
-                        WaitMs(500);
-                        continue; // keep fighting same target
-                    }
-                }
-                currentTargetId = 0; // target dead, reset timer
-                // Combat resolved â€” unflag heroes
+
                 if (allowHeroFlags) {
                     UnflagAllHeroes();
                 }
-                // Enemy dead or gone â€” pick up loot
-                PickupNearbyLoot(600.0f);
+                currentTargetId = 0;
                 AgentMgr::Move(x, y);
                 lastMoveIssue = GetTickCount();
                 continue;
@@ -1735,6 +1876,66 @@ static void SuspendTransitionSensitiveHooks() {
 static void ResumeTransitionSensitiveHooks() {
     CtoS::ResumeEngineHook();
     DialogMgr::Initialize();
+}
+
+static bool ReturnToSparkflyFromBogroot() {
+    static constexpr float kBogrootExitStageX = 14876.0f;
+    static constexpr float kBogrootExitStageY = 632.0f;
+    static constexpr float kBogrootExitPushX = 14700.0f;
+    static constexpr float kBogrootExitPushY = 450.0f;
+
+    if (MapMgr::GetMapId() != MAP_BOGROOT_LVL1) {
+        return false;
+    }
+
+    MoveToAndWait(kBogrootExitStageX, kBogrootExitStageY, 300.0f);
+    AgentMgr::Move(kBogrootExitPushX, kBogrootExitPushY);
+    WaitMs(1000);
+
+    SuspendTransitionSensitiveHooks();
+    const bool returned = WaitForPredicate(60000, []() {
+        if (MapMgr::GetMapId() == MAP_SPARKFLY_SWAMP) {
+            return true;
+        }
+        AgentMgr::Move(14700.0f, 450.0f);
+        return false;
+    }, 250);
+    ResumeTransitionSensitiveHooks();
+
+    if (!returned) {
+        return false;
+    }
+
+    WaitMs(3000);
+    return WaitForMapReady(MAP_SPARKFLY_SWAMP, 30000);
+}
+
+static bool EnterBogrootFromSparkfly() {
+    if (MapMgr::GetMapId() != MAP_SPARKFLY_SWAMP) {
+        return false;
+    }
+
+    MoveToAndWait(12228, 22677);
+    MoveToAndWait(12470, 25036);
+    AgentMgr::Move(12968, 26219);
+    WaitMs(1000);
+
+    SuspendTransitionSensitiveHooks();
+    const bool entered = WaitForPredicate(60000, []() {
+        if (MapMgr::GetMapId() == MAP_BOGROOT_LVL1) {
+            return true;
+        }
+        AgentMgr::Move(13097, 26393);
+        return false;
+    }, 250);
+    ResumeTransitionSensitiveHooks();
+
+    if (!entered) {
+        return false;
+    }
+
+    WaitMs(3000);
+    return WaitForMapReady(MAP_BOGROOT_LVL1, 30000);
 }
 
 static void GrabDungeonBlessing(float shrineX, float shrineY); // forward decl
@@ -1798,6 +1999,11 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
         }
 
         LogBot("Moving to waypoint %d: %s (%.0f, %.0f)", i, wps[i].label, wps[i].x, wps[i].y);
+        s_dungeonLoopTelemetry.last_waypoint_index = static_cast<uint32_t>(i);
+        s_dungeonLoopTelemetry.waypoint_iterations++;
+        strncpy_s(s_dungeonLoopTelemetry.last_waypoint_label,
+                  wps[i].label ? wps[i].label : "",
+                  _TRUNCATE);
 
         // Special waypoint handling
         if (strcmp(wps[i].label, "Blessing") == 0) {
@@ -1811,55 +2017,39 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
             continue;
         }
         if (strcmp(wps[i].label, "Lvl1 to Lvl2") == 0) {
-            SuspendTransitionSensitiveHooks();
-            uint32_t portalId = FindNearestSignpost(7665.0f, -19050.0f, 1500.0f);
-            if (portalId) {
-                LogBot("Lvl1 to Lvl2: found portal signpost agent=%u", portalId);
-                if (auto* portal = AgentMgr::GetAgentByID(portalId)) {
-                    MoveToAndWait(portal->x, portal->y, 150.0f);
-                }
-            } else {
-                LogBot("Lvl1 to Lvl2: no signpost found near portal coords, using movement-only push");
-            }
+            static constexpr float kLvl1PortalX = 7665.0f;
+            static constexpr float kLvl1PortalY = -19050.0f;
+            s_dungeonLoopTelemetry.lvl1_to_lvl2_started = true;
             DWORD start = GetTickCount();
             DWORD lastLogAt = 0;
-            DWORD lastRefreshAt = 0;
             DWORD attempt = 0;
+            uint32_t portalId = FindNearestSignpost(kLvl1PortalX, kLvl1PortalY, 1200.0f);
+            LogBot("Lvl1 to Lvl2: AutoIt-aligned move=(%.0f, %.0f) portal=%u",
+                   kLvl1PortalX, kLvl1PortalY, portalId);
             LogLvl1ToLvl2TransitionState("start", portalId, 0, attempt);
             while ((GetTickCount() - start) < 60000) {
                 ++attempt;
+                s_dungeonLoopTelemetry.lvl1_to_lvl2_attempts = attempt;
                 const DWORD elapsed = GetTickCount() - start;
-                if ((!portalId || !AgentMgr::GetAgentExists(portalId)) && (elapsed - lastRefreshAt) >= 1000) {
-                    const uint32_t refreshedPortalId = FindNearestSignpost(7665.0f, -19050.0f, 1500.0f);
+                if (elapsed - lastLogAt >= 2000) {
+                    const uint32_t refreshedPortalId = FindNearestSignpost(kLvl1PortalX, kLvl1PortalY, 1200.0f);
                     if (refreshedPortalId != portalId) {
-                        LogBot("Lvl1 to Lvl2: portal refresh old=%u new=%u elapsed=%lums",
-                               portalId,
-                               refreshedPortalId,
-                               static_cast<unsigned long>(elapsed));
+                        LogBot("Lvl1 to Lvl2: portal refresh old=%u new=%u", portalId, refreshedPortalId);
                         portalId = refreshedPortalId;
                     }
-                    lastRefreshAt = elapsed;
-                }
-                if (elapsed - lastLogAt >= 2000) {
                     LogLvl1ToLvl2TransitionState("loop", portalId, elapsed, attempt);
                     lastLogAt = elapsed;
                 }
-                if (portalId) {
-                    AgentMgr::InteractSignpost(portalId);
-                    WaitMs(250);
-                }
-                AgentMgr::Move(7665, -19050);
-                WaitMs(500);
+                AgentMgr::Move(kLvl1PortalX, kLvl1PortalY);
+                WaitMs(250);
                 if (MapMgr::GetMapId() == MAP_BOGROOT_LVL2) {
                     LogLvl1ToLvl2TransitionState("entered_lvl2", portalId, GetTickCount() - start, attempt);
                     s_dungeonLoopTelemetry.entered_lvl2 = true;
                     WaitMs(3000);
-                    ResumeTransitionSensitiveHooks();
                     return;
                 }
             }
             LogLvl1ToLvl2TransitionState("timeout", portalId, GetTickCount() - start, attempt);
-            ResumeTransitionSensitiveHooks();
             return;
         }
         if (strcmp(wps[i].label, "Dungeon Key") == 0) {
@@ -1882,19 +2072,108 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
             } else {
                 MoveToAndWait(wps[i].x, wps[i].y);
             }
-            LogBot("Dungeon Door Checkpoint reached at wp %d", i);
+
+            // GWA3-QD: Death check — same fix as Quest Door Checkpoint
+            if (IsDead()) {
+                s_wipeCount++;
+                LogBot("Dungeon Door Checkpoint: WIPE detected at wp %d — wipe #%u", i, s_wipeCount);
+                DWORD wipeStart = GetTickCount();
+                while (IsDead() && (GetTickCount() - wipeStart) < 120000) {
+                    WaitMs(500);
+                }
+                if (IsDead()) {
+                    LogBot("Dungeon Door Checkpoint: party defeated — returning to outpost");
+                    MapMgr::ReturnToOutpost();
+                    return;
+                }
+                if (s_wipeCount >= 2) {
+                    UseDpRemovalIfNeeded();
+                    WaitMs(500);
+                }
+                int restartIdx = GetWipeRestartWaypoint(wps, count);
+                LogBot("Dungeon Door Checkpoint: resuming from checkpoint %d after wipe (was at %d)", restartIdx, i);
+                i = restartIdx;
+                continue;
+            }
+
+            const int nearest = GetNearestWaypointIndex(wps, count);
+            if (nearest < i) {
+                LogBot("Failed dungeon door at wp %d; nearest=%d, backtracking", i, nearest);
+                for (int j = i - 1; j >= 0 && j >= i - 3; --j) {
+                    if (wps[j].fightRange > 0 && IsMapLoaded()) {
+                        AggroMoveToEx(wps[j].x, wps[j].y, wps[j].fightRange);
+                    } else {
+                        MoveToAndWait(wps[j].x, wps[j].y);
+                    }
+                }
+                i = GetNearestWaypointIndex(wps, count);
+            }
+            LogBot("Dungeon Door Checkpoint reached at wp %d nearest=%d", i, nearest);
             continue;
         }
         if (strcmp(wps[i].label, "Quest Door Checkpoint") == 0) {
-            // Bogroot's quest-door checkpoint is followed by a duplicate
-            // coordinate waypoint. Nearest-waypoint heuristics are not stable
-            // here, so rely on forward route progression instead of aborting.
             if (wps[i].fightRange > 0 && IsMapLoaded()) {
                 AggroMoveToEx(wps[i].x, wps[i].y, wps[i].fightRange);
             } else {
                 MoveToAndWait(wps[i].x, wps[i].y);
             }
-            LogBot("Quest Door Checkpoint reached at wp %d", i);
+
+            // GWA3-QD: Death check after combat move — a wipe during
+            // AggroMoveToEx leaves GetMyAgent() null or hp<=0, which makes
+            // GetNearestWaypointIndex return 0 and falsely triggers the
+            // "quest door closed" path.  Handle the wipe first.
+            if (IsDead()) {
+                s_wipeCount++;
+                LogBot("Quest Door Checkpoint: WIPE detected after AggroMoveToEx at wp %d — wipe #%u", i, s_wipeCount);
+                DWORD wipeStart = GetTickCount();
+                while (IsDead() && (GetTickCount() - wipeStart) < 120000) {
+                    WaitMs(500);
+                }
+                if (IsDead()) {
+                    LogBot("Quest Door Checkpoint: party defeated — returning to outpost");
+                    MapMgr::ReturnToOutpost();
+                    return;
+                }
+                if (s_wipeCount >= 2) {
+                    LogBot("Quest Door Checkpoint: multiple wipes (%u) — using DP removal", s_wipeCount);
+                    UseDpRemovalIfNeeded();
+                    WaitMs(500);
+                }
+                int restartIdx = GetWipeRestartWaypoint(wps, count);
+                LogBot("Quest Door Checkpoint: resuming from checkpoint %d after wipe (was at %d)", restartIdx, i);
+                i = restartIdx;
+                continue;
+            }
+
+            // Diagnostic: log position and distances after reaching checkpoint
+            {
+                auto* me = AgentMgr::GetMyAgent();
+                const float myX = me ? me->x : 0.0f;
+                const float myY = me ? me->y : 0.0f;
+                const float distToWp = me ? AgentMgr::GetDistance(myX, myY, wps[i].x, wps[i].y) : -1.0f;
+                LogBot("Quest Door Checkpoint diag: pos=(%.0f, %.0f) distToCheckpoint=%.0f alive=%d mapLoaded=%d",
+                       myX, myY, distToWp, me && me->hp > 0.0f ? 1 : 0, IsMapLoaded() ? 1 : 0);
+            }
+
+            const int nearest = GetNearestWaypointIndex(wps, count);
+            if (nearest < i) {
+                LogBot("Failed first door at wp %d; nearest=%d, returning to Sparkfly for quest refresh",
+                       i,
+                       nearest);
+                for (int j = i - 1; j >= 0 && j >= i - 3; --j) {
+                    if (wps[j].fightRange > 0 && IsMapLoaded()) {
+                        AggroMoveToEx(wps[j].x, wps[j].y, wps[j].fightRange);
+                    } else {
+                        MoveToAndWait(wps[j].x, wps[j].y);
+                    }
+                }
+                const bool returned = ReturnToSparkflyFromBogroot();
+                s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
+                s_dungeonLoopTelemetry.returned_to_sparkfly =
+                    returned && MapMgr::GetMapId() == MAP_SPARKFLY_SWAMP;
+                return;
+            }
+            LogBot("Quest Door Checkpoint reached at wp %d nearest=%d", i, nearest);
             continue;
         }
         if (strcmp(wps[i].label, "Boss") == 0) {
@@ -1932,9 +2211,9 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
                 if (npc) MoveToAndWait(npc->x, npc->y, 120.0f);
                 AgentMgr::ChangeTarget(tekksId);
                 WaitMs(250);
-                // GoNPC interaction
+                // Native interact loop on the current client; raw 0x39 is unstable.
                 for (int go = 0; go < 3; ++go) {
-                    CtoS::SendPacket(3, Packets::INTERACT_NPC, tekksId, 0u);
+                    AgentMgr::InteractNPC(tekksId);
                     WaitMs(500);
                 }
                 WaitMs(1000);
@@ -2031,9 +2310,54 @@ static void UnflagAllHeroes() {
 
 // ===== Quest Dialog Retry (GWA3-108) =====
 
+static void SendPacketDialog(uint32_t dialogId) {
+    DialogHook::RecordDialogSend(dialogId);
+    // Raw dialog packets are unstable on the current Marvin client. Keep the
+    // AutoIt ordering, but dispatch through the game's native dialog function.
+    QuestMgr::Dialog(dialogId);
+}
+
+static void LogQuestObjectiveState(const char* label, const Quest* quest) {
+    if (!quest) {
+        return;
+    }
+
+    const auto* objective = reinterpret_cast<const uint8_t*>(quest->objectives);
+    uint8_t bytes[8] = {};
+    bool captured = false;
+    __try {
+        if (objective) {
+            for (size_t i = 0; i < std::size(bytes); ++i) {
+                bytes[i] = objective[i];
+            }
+            captured = true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        captured = false;
+    }
+
+    if (captured) {
+        LogBot("%s quest objectives=%p bytes=%02X %02X %02X %02X %02X %02X %02X %02X",
+               label,
+               quest->objectives,
+               bytes[0],
+               bytes[1],
+               bytes[2],
+               bytes[3],
+               bytes[4],
+               bytes[5],
+               bytes[6],
+               bytes[7]);
+    } else {
+        LogBot("%s quest objectives=%p bytes=<unreadable>",
+               label,
+               quest->objectives);
+    }
+}
+
 static bool SendDialogWithRetry(uint32_t dialogId, int maxRetries, DWORD delayMs) {
     for (int attempt = 0; attempt < maxRetries; attempt++) {
-        QuestMgr::Dialog(dialogId);
+        SendPacketDialog(dialogId);
         WaitMs(delayMs);
 
         // Check if dialog was processed (we can't directly verify,
@@ -2050,44 +2374,309 @@ static bool PrepareTekksDungeonEntry() {
     static constexpr float kTekksStageY = 22485.0f;
     static constexpr float kTekksSearchX = 12396.0f;
     static constexpr float kTekksSearchY = 22407.0f;
+    static constexpr float kBogrootExitStageX = 14876.0f;
+    static constexpr float kBogrootExitStageY = 632.0f;
+    static constexpr float kBogrootExitPushX = 14700.0f;
+    static constexpr float kBogrootExitPushY = 450.0f;
+    struct InteractVariant {
+        AgentMgr::NpcInteractMode mode;
+        const char* name;
+    };
+    static constexpr InteractVariant kVariants[] = {
+        {AgentMgr::NpcInteractMode::NativePreNoCallTarget, "native-pre-ct0"},
+        {AgentMgr::NpcInteractMode::NativePostNoCallTarget, "native-post-ct0"},
+        {AgentMgr::NpcInteractMode::NativePreCallTarget, "native-pre-ct1"},
+        {AgentMgr::NpcInteractMode::NativePostCallTarget, "native-post-ct1"},
+        {AgentMgr::NpcInteractMode::WorldActionCallTarget, "ui-world-action-ct1"},
+        {AgentMgr::NpcInteractMode::WorldActionNoCallTarget, "ui-world-action-ct0"},
+    };
 
-    LogBot("Preparing Tekks dungeon entry sequence");
-    MoveToAndWait(kTekksStageX, kTekksStageY, 500.0f);
-    WaitMs(500);
-
-    const uint32_t tekksId = FindNearestNpcByAllegiance(kTekksSearchX, kTekksSearchY, 1800.0f);
-    if (tekksId != 0) {
-        if (auto* npc = AgentMgr::GetAgentByID(tekksId)) {
-            MoveToAndWait(npc->x, npc->y, 120.0f);
+    Log::Info("Froggy: Preparing Tekks dungeon entry sequence");
+    uint32_t tekksId = 0;
+    NearbyNpcCandidate tekksCandidates[8] = {};
+    size_t tekksCandidateCount = 0;
+    size_t initialTekksCandidateCount = 0;
+    const auto logTekksQuestSnapshot = [&](const char* label) {
+        Quest* quest = QuestMgr::GetQuestById(QUEST_TEKKS_WAR);
+        Log::Info("Froggy: %s activeQuest=0x%X questPresent=%d questLogSize=%u lastDialog=0x%X",
+                  label,
+                  QuestMgr::GetActiveQuestId(),
+                  quest != nullptr ? 1 : 0,
+                  QuestMgr::GetQuestLogSize(),
+                  DialogMgr::GetLastDialogId());
+        if (quest != nullptr) {
+            Log::Info("Froggy: %s quest: id=0x%X logState=%u map_from=%u map_to=%u marker=(%.0f, %.0f)",
+                      label,
+                      quest->quest_id,
+                      quest->log_state,
+                      quest->map_from,
+                      quest->map_to,
+                      quest->marker_x,
+                      quest->marker_y);
+            LogQuestObjectiveState(label, quest);
         }
-        AgentMgr::ChangeTarget(tekksId);
-        WaitMs(250);
-        DialogMgr::ResetHookState();
-        const bool npcHooked = DialogMgr::NPCHook(tekksId, 2000u);
-        LogBot("Tekks NPCHook agent=%u hooked=%d lastUi=0x%X lastDialog=0x%X",
-               tekksId,
-               npcHooked ? 1 : 0,
-               DialogMgr::GetLastUIMessageId(),
-               DialogMgr::GetLastDialogId());
-    } else {
-        LogBot("Tekks NPC not found near expected coordinates; sending dialog sequence without NPCHook");
+    };
+    const auto stageAtTekks = [&]() -> bool {
+        MoveToAndWait(kTekksStageX, kTekksStageY, 500.0f);
+        WaitMs(500);
+        DebugClearAggroInPlace(1250.0f);
+        AgentMgr::CancelAction();
+        WaitMs(500);
+
+        tekksCandidateCount = CollectNearbyNpcCandidates(kTekksSearchX, kTekksSearchY, 1800.0f, tekksCandidates, _countof(tekksCandidates));
+        initialTekksCandidateCount = tekksCandidateCount;
+        LogNearbyNpcCandidates("Tekks", kTekksSearchX, kTekksSearchY, 1800.0f, tekksCandidates, tekksCandidateCount);
+        if (tekksCandidateCount == 0 || tekksCandidates[0].agentId == 0) {
+            Log::Info("Froggy: Tekks NPC not found near expected coordinates");
+            return false;
+        }
+
+        tekksId = tekksCandidates[0].agentId;
+        MoveToAndWait(kTekksSearchX, kTekksSearchY, 120.0f);
+        WaitForLocalPositionSettle(1000, 15.0f);
+        WaitMs(800);
+        return true;
+    };
+
+    struct TekksInteractResult {
+        bool interactionObserved = false;
+        bool dialogVisible = false;
+        uint32_t agentId = 0;
+    };
+
+    const auto goToTekks = [&](const char* label) -> TekksInteractResult {
+        TekksInteractResult result = {};
+        if (!tekksId) {
+            Log::Info("Froggy: Tekks %s: no NPC id resolved", label);
+            return result;
+        }
+        for (size_t candidateIndex = 0; candidateIndex < tekksCandidateCount && !result.dialogVisible; ++candidateIndex) {
+            const auto& candidate = tekksCandidates[candidateIndex];
+            if (!candidate.agentId) continue;
+            if (candidateIndex > 0 && candidateIndex < initialTekksCandidateCount) {
+                Log::Info("Froggy: Tekks %s skipping alternate candidate[%u] during stable pass", label, static_cast<unsigned>(candidateIndex));
+                continue;
+            }
+            auto* tekks = AgentMgr::GetAgentByID(candidate.agentId);
+            Log::Info("Froggy: Tekks %s trying candidate[%u] agent=%u player=%u npc_id=%u pos=(%.0f, %.0f)",
+                      label,
+                      static_cast<unsigned>(candidateIndex),
+                      candidate.agentId,
+                      candidate.playerNumber,
+                      candidate.npcId,
+                      candidate.x,
+                      candidate.y);
+            for (const auto& variant : kVariants) {
+                for (int attempt = 0; attempt < 3; ++attempt) {
+                    MoveToAndWait(kTekksSearchX, kTekksSearchY, 120.0f);
+                    WaitForLocalPositionSettle(750, 12.0f);
+                    DialogMgr::ClearDialog();
+                    DialogMgr::ResetHookState();
+                    DialogMgr::ResetRecentUITrace();
+                    AgentMgr::CancelAction();
+                    WaitMs(150);
+
+                    const bool uiObserved =
+                        DialogMgr::NPCHookEx(candidate.agentId, variant.mode, 1500u + ChatMgr::GetPing());
+                    const bool dialogVisible = WaitForPredicate(1200, [&]() {
+                        return DialogMgr::IsDialogOpen() ||
+                               DialogMgr::GetButtonCount() > 0 ||
+                               DialogMgr::GetDialogSenderAgentId() == candidate.agentId;
+                    }, 25);
+                    Quest* quest = QuestMgr::GetQuestById(QUEST_TEKKS_WAR);
+                    const float dist = tekks ? AgentMgr::GetDistance(
+                        tekks->x, tekks->y, AgentMgr::GetMyAgent()->x, AgentMgr::GetMyAgent()->y) : -1.0f;
+                    Log::Info("Froggy: Tekks %s candidate[%u] mode=%s attempt=%d dist=%.0f uiObserved=%d target=%u lastUi=0x%X observed=0x%X lastDialog=0x%X dialogOpen=%d sender=%u buttons=%u activeQuest=0x%X questPresent=%d logState=%u",
+                              label,
+                              static_cast<unsigned>(candidateIndex),
+                              variant.name,
+                              attempt + 1,
+                              dist,
+                              uiObserved ? 1 : 0,
+                              AgentMgr::GetTargetId(),
+                              DialogMgr::GetLastUIMessageId(),
+                              DialogMgr::GetObservedUIMessageId(),
+                              DialogMgr::GetLastDialogId(),
+                              dialogVisible ? 1 : 0,
+                              DialogMgr::GetDialogSenderAgentId(),
+                              DialogMgr::GetButtonCount(),
+                              QuestMgr::GetActiveQuestId(),
+                              quest != nullptr ? 1 : 0,
+                              quest ? quest->log_state : 0u);
+                    const uint32_t redirectedTargetId = AgentMgr::GetTargetId();
+                    if (redirectedTargetId != 0 && redirectedTargetId != candidate.agentId) {
+                        LogAgentIdentity("Tekks redirected target", redirectedTargetId);
+                        if (tekksCandidateCount < _countof(tekksCandidates)) {
+                            bool alreadyKnown = false;
+                            for (size_t known = 0; known < tekksCandidateCount; ++known) {
+                                if (tekksCandidates[known].agentId == redirectedTargetId) {
+                                    alreadyKnown = true;
+                                    break;
+                                }
+                            }
+                            if (!alreadyKnown) {
+                                NearbyNpcCandidate redirected = {};
+                                if (TryBuildNearbyNpcCandidate(redirectedTargetId, kTekksSearchX, kTekksSearchY, 1800.0f, redirected)) {
+                                    tekksCandidates[tekksCandidateCount++] = redirected;
+                                    Log::Info("Froggy: Tekks discovered redirected NPC candidate agent=%u player=%u npc_id=%u pos=(%.0f, %.0f)",
+                                              redirected.agentId,
+                                              redirected.playerNumber,
+                                              redirected.npcId,
+                                              redirected.x,
+                                              redirected.y);
+                                }
+                            }
+                        }
+                    }
+                    if (uiObserved) {
+                        result.interactionObserved = true;
+                        result.agentId = candidate.agentId;
+                    }
+                    if (dialogVisible) {
+                        tekksId = candidate.agentId;
+                        result.interactionObserved = true;
+                        result.dialogVisible = true;
+                        result.agentId = candidate.agentId;
+                        break;
+                    }
+                }
+            }
+        }
+        return result;
+    };
+
+    if (!stageAtTekks()) {
+        return false;
     }
 
-    SendDialogWithRetry(DIALOG_QUEST_ACCEPT, 2, 250);
+    // Match Froggy_HM_v1.6 TakeQuest0 as closely as possible:
+    // NPCHook -> DialogHook(0x833901) -> QuestReward -> AcceptQuest -> DialogHook(0x2AE6) -> Dialog(0x833905)
+    const TekksInteractResult tekksInteract = goToTekks("npc-hook");
+    Log::Info("Froggy: Tekks npc-hook interactionObserved=%d dialogVisible=%d agent=%u target=%u lastDialog=0x%X dialogOpen=%d sender=%u buttons=%u",
+              tekksInteract.interactionObserved ? 1 : 0,
+              tekksInteract.dialogVisible ? 1 : 0,
+              tekksInteract.agentId,
+              AgentMgr::GetTargetId(),
+              DialogMgr::GetLastDialogId(),
+              DialogMgr::IsDialogOpen() ? 1 : 0,
+              DialogMgr::GetDialogSenderAgentId(),
+              DialogMgr::GetButtonCount());
+    if (!tekksInteract.interactionObserved) {
+        logTekksQuestSnapshot("Tekks npc-hook failed snapshot");
+        return false;
+    }
+    if (!tekksInteract.dialogVisible) {
+        Log::Info("Froggy: Tekks npc-hook did not expose a visible dialog; continuing on observed interaction activity");
+    }
+
+    const bool acceptHooked = DialogMgr::DialogHook(DIALOG_QUEST_ACCEPT, 1500u + ChatMgr::GetPing());
+    WaitMs(300 + ChatMgr::GetPing());
+    QuestMgr::RequestQuestInfo(QUEST_TEKKS_WAR);
+    WaitMs(150);
+    Log::Info("Froggy: Tekks accept-hook observed=%d activeQuest=0x%X questPresent=%d lastDialog=0x%X",
+              acceptHooked ? 1 : 0,
+              QuestMgr::GetActiveQuestId(),
+              QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr ? 1 : 0,
+              DialogMgr::GetLastDialogId());
+    logTekksQuestSnapshot("Tekks accept-hook snapshot");
+
     if (QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr) {
-        SendDialogWithRetry(DIALOG_QUEST_REWARD, 3, 250);
-        WaitMs(250);
-        SendDialogWithRetry(DIALOG_QUEST_ACCEPT, 2, 250);
+        const DWORD rewardDeadline = GetTickCount() + 1200;
+        int rewardAttempts = 0;
+        do {
+            ++rewardAttempts;
+            SendPacketDialog(DIALOG_QUEST_REWARD);
+            WaitMs(200 + ChatMgr::GetPing());
+            QuestMgr::RequestQuestInfo(QUEST_TEKKS_WAR);
+            WaitMs(75);
+        } while (QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr &&
+                 GetTickCount() < rewardDeadline);
+        Log::Info("Froggy: Tekks reward pass attempts=%d questPresent=%d activeQuest=0x%X lastDialog=0x%X",
+                  rewardAttempts,
+                  QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr ? 1 : 0,
+                  QuestMgr::GetActiveQuestId(),
+                  DialogMgr::GetLastDialogId());
+        logTekksQuestSnapshot("Tekks reward-pass snapshot");
+    } else {
+        Log::Info("Froggy: Tekks reward pass skipped because quest is not currently in log");
     }
-    SendDialogWithRetry(DIALOG_NPC_TALK, 2, 250);
-    SendDialogWithRetry(DIALOG_DUNGEON_ENTRY, 2, 250);
-    WaitMs(500);
 
-    LogBot("Tekks dungeon entry sequence complete activeQuest=0x%X questPresent=%d lastDialog=0x%X",
-           QuestMgr::GetActiveQuestId(),
-           QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr ? 1 : 0,
-           DialogMgr::GetLastDialogId());
-    return true;
+    SendPacketDialog(DIALOG_QUEST_ACCEPT);
+    WaitMs(350 + ChatMgr::GetPing());
+    QuestMgr::RequestQuestInfo(QUEST_TEKKS_WAR);
+    WaitMs(150);
+    if (QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr) {
+        QuestMgr::SetActiveQuest(QUEST_TEKKS_WAR);
+        WaitMs(150);
+    }
+    Log::Info("Froggy: Tekks accept activeQuest=0x%X questPresent=%d lastDialog=0x%X",
+              QuestMgr::GetActiveQuestId(),
+              QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr ? 1 : 0,
+              DialogMgr::GetLastDialogId());
+    logTekksQuestSnapshot("Tekks accept snapshot");
+
+    bool talkLatched = false;
+    bool dungeonEntryLatched = false;
+    for (int pass = 0; pass < 2 && !(talkLatched && dungeonEntryLatched); ++pass) {
+        const TekksInteractResult bodyInteract = goToTekks(pass == 0 ? "body-entry pass 1" : "body-entry pass 2");
+        Log::Info("Froggy: Tekks body-entry pass %d interactionObserved=%d dialogVisible=%d agent=%u target=%u lastDialog=0x%X",
+                  pass + 1,
+                  bodyInteract.interactionObserved ? 1 : 0,
+                  bodyInteract.dialogVisible ? 1 : 0,
+                  bodyInteract.agentId,
+                  AgentMgr::GetTargetId(),
+                  DialogMgr::GetLastDialogId());
+        if (!bodyInteract.interactionObserved) {
+            continue;
+        }
+
+        DialogMgr::ResetHookState();
+        DialogMgr::ResetRecentUITrace();
+        const bool talkObserved = DialogMgr::DialogHook(DIALOG_NPC_TALK, 1500u + ChatMgr::GetPing());
+        WaitMs(250 + ChatMgr::GetPing());
+        talkLatched = DialogMgr::GetLastDialogId() == DIALOG_NPC_TALK;
+        Log::Info("Froggy: Tekks talk/body pass %d observed=%d latched=%d lastUi=0x%X observedUi=0x%X lastDialog=0x%X dialogOpen=%d sender=%u buttons=%u",
+                  pass + 1,
+                  talkObserved ? 1 : 0,
+                  talkLatched ? 1 : 0,
+                  DialogMgr::GetLastUIMessageId(),
+                  DialogMgr::GetObservedUIMessageId(),
+                  DialogMgr::GetLastDialogId(),
+                  DialogMgr::IsDialogOpen() ? 1 : 0,
+                  DialogMgr::GetDialogSenderAgentId(),
+                  DialogMgr::GetButtonCount());
+        if (!talkLatched) {
+            continue;
+        }
+
+        DialogMgr::ResetHookState();
+        DialogMgr::ResetRecentUITrace();
+        SendPacketDialog(DIALOG_DUNGEON_ENTRY);
+        WaitMs(600 + ChatMgr::GetPing());
+        QuestMgr::RequestQuestInfo(QUEST_TEKKS_WAR);
+        WaitMs(150);
+        dungeonEntryLatched = DialogMgr::GetLastDialogId() == DIALOG_DUNGEON_ENTRY;
+        Log::Info("Froggy: Tekks dungeon-entry pass %d latched=%d activeQuest=0x%X questPresent=%d lastUi=0x%X observedUi=0x%X lastDialog=0x%X",
+                  pass + 1,
+                  dungeonEntryLatched ? 1 : 0,
+                  QuestMgr::GetActiveQuestId(),
+                  QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr ? 1 : 0,
+                  DialogMgr::GetLastUIMessageId(),
+                  DialogMgr::GetObservedUIMessageId(),
+                  DialogMgr::GetLastDialogId());
+        logTekksQuestSnapshot(pass == 0 ? "Tekks dungeon-entry pass 1 snapshot" : "Tekks dungeon-entry pass 2 snapshot");
+    }
+
+    const bool questPresent = QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr;
+    Log::Info("Froggy: Tekks dungeon entry sequence complete interactionObserved=%d talkLatched=%d dungeonEntryLatched=%d activeQuest=0x%X questPresent=%d lastDialog=0x%X",
+              tekksInteract.interactionObserved ? 1 : 0,
+              talkLatched ? 1 : 0,
+              dungeonEntryLatched ? 1 : 0,
+              QuestMgr::GetActiveQuestId(),
+              questPresent ? 1 : 0,
+              DialogMgr::GetLastDialogId());
+    logTekksQuestSnapshot("Tekks dungeon-entry complete snapshot");
+    return tekksInteract.interactionObserved && talkLatched && dungeonEntryLatched && questPresent;
 }
 
 // ===== Loot Pickup (GWA3-098) =====
@@ -2532,6 +3121,158 @@ static uint32_t FindNearestNpcByAllegiance(float x, float y, float maxDist) {
     return bestId;
 }
 
+static size_t CollectNearbyNpcCandidates(float x, float y, float maxDist, NearbyNpcCandidate* out, size_t maxOut) {
+    if (!out || maxOut == 0) return 0;
+    for (size_t i = 0; i < maxOut; ++i) {
+        out[i] = {};
+    }
+
+    auto* me = AgentMgr::GetMyAgent();
+    const float meX = me ? me->x : x;
+    const float meY = me ? me->y : y;
+    const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    const float maxDistSq = maxDist * maxDist;
+    size_t count = 0;
+
+    for (uint32_t i = 1; i < maxAgents; ++i) {
+        auto* agent = AgentMgr::GetAgentByID(i);
+        if (!agent || agent->type != 0xDB) continue;
+
+        NearbyNpcCandidate candidate = {};
+        __try {
+            auto* living = static_cast<AgentLiving*>(agent);
+            if (living->allegiance != 6u) continue;
+            if (living->hp <= 0.0f) continue;
+            if ((living->effects & 0x0010u) != 0u) continue;
+
+            const float distSq = AgentMgr::GetSquaredDistance(x, y, living->x, living->y);
+            if (distSq > maxDistSq) continue;
+
+            candidate.agentId = living->agent_id;
+            candidate.playerNumber = living->player_number;
+            candidate.npcId = living->transmog_npc_id;
+            candidate.effects = living->effects;
+            candidate.x = living->x;
+            candidate.y = living->y;
+            candidate.distanceToSearch = sqrtf(distSq);
+            candidate.distanceToPlayer = AgentMgr::GetDistance(meX, meY, living->x, living->y);
+            candidate.score = static_cast<uint32_t>(candidate.distanceToSearch);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            continue;
+        }
+
+        size_t insertAt = maxOut;
+        for (size_t slot = 0; slot < maxOut; ++slot) {
+            if (out[slot].agentId == 0 || candidate.score < out[slot].score) {
+                insertAt = slot;
+                break;
+            }
+        }
+        if (insertAt == maxOut) continue;
+
+        for (size_t slot = maxOut - 1; slot > insertAt; --slot) {
+            out[slot] = out[slot - 1];
+        }
+        out[insertAt] = candidate;
+        if (count < maxOut) ++count;
+    }
+
+    return count;
+}
+
+static void LogNearbyNpcCandidates(const char* label, float x, float y, float maxDist, NearbyNpcCandidate* candidates, size_t count) {
+    Log::Info("Froggy: %s NPC candidates near (%.0f, %.0f) within %.0f: %u",
+              label,
+              x,
+              y,
+              maxDist,
+              static_cast<unsigned>(count));
+    for (size_t i = 0; i < count; ++i) {
+        const auto& c = candidates[i];
+        Log::Info("Froggy:   cand[%u]: agent=%u player=%u npc_id=%u effects=0x%08X searchDist=%.0f playerDist=%.0f pos=(%.0f, %.0f)",
+                  static_cast<unsigned>(i),
+                  c.agentId,
+                  c.playerNumber,
+                  c.npcId,
+                  c.effects,
+                  c.distanceToSearch,
+                  c.distanceToPlayer,
+                  c.x,
+                  c.y);
+    }
+}
+
+static bool TryBuildNearbyNpcCandidate(uint32_t agentId, float searchX, float searchY, float maxDist, NearbyNpcCandidate& out) {
+    out = {};
+    auto* agent = AgentMgr::GetAgentByID(agentId);
+    if (!agent || agent->type != 0xDB) return false;
+
+    auto* me = AgentMgr::GetMyAgent();
+    const float meX = me ? me->x : searchX;
+    const float meY = me ? me->y : searchY;
+    const float maxDistSq = maxDist * maxDist;
+
+    __try {
+        auto* living = static_cast<AgentLiving*>(agent);
+        if (living->allegiance != 6u) return false;
+        if (living->hp <= 0.0f) return false;
+        if ((living->effects & 0x0010u) != 0u) return false;
+        const float distSq = AgentMgr::GetSquaredDistance(searchX, searchY, living->x, living->y);
+        if (distSq > maxDistSq) return false;
+
+        out.agentId = living->agent_id;
+        out.playerNumber = living->player_number;
+        out.npcId = living->transmog_npc_id;
+        out.effects = living->effects;
+        out.x = living->x;
+        out.y = living->y;
+        out.distanceToSearch = sqrtf(distSq);
+        out.distanceToPlayer = AgentMgr::GetDistance(meX, meY, living->x, living->y);
+        out.score = static_cast<uint32_t>(out.distanceToSearch);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static void LogAgentIdentity(const char* label, uint32_t agentId) {
+    auto* agent = AgentMgr::GetAgentByID(agentId);
+    if (!agent) {
+        Log::Info("Froggy: %s agent=%u <null>", label, agentId);
+        return;
+    }
+
+    __try {
+        Log::Info("Froggy: %s agent=%u type=0x%X pos=(%.0f, %.0f)",
+                  label,
+                  agentId,
+                  agent->type,
+                  agent->x,
+                  agent->y);
+        if (agent->type == 0xDB) {
+            auto* living = static_cast<AgentLiving*>(agent);
+            Log::Info("Froggy: %s living agent=%u allegiance=%u hp=%.2f effects=0x%08X player=%u npc_id=%u model_type=%u",
+                      label,
+                      agentId,
+                      living->allegiance,
+                      living->hp,
+                      living->effects,
+                      living->player_number,
+                      living->transmog_npc_id,
+                      living->agent_model_type);
+        } else if (agent->type == 0x200) {
+            auto* gadget = static_cast<AgentGadget*>(agent);
+            Log::Info("Froggy: %s gadget agent=%u gadget_id=%u extra_type=%u",
+                      label,
+                      agentId,
+                      gadget->gadget_id,
+                      gadget->extra_type);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Info("Froggy: %s agent=%u <read fault>", label, agentId);
+    }
+}
+
 // Find the nearest signpost/gadget agent (type 0x200) near given coordinates.
 static uint32_t FindNearestSignpost(float x, float y, float maxDist) {
     uint32_t maxAgents = AgentMgr::GetMaxAgents();
@@ -2629,12 +3370,12 @@ static int UseSkillsInSlotOrder(uint32_t targetId, float aggroRange, bool waitFo
 }
 
 static bool OpenMerchantContextWithVariants(uint32_t npcId) {
-    LogBot("Merchant open via proven legacy GoNPC path...");
+    LogBot("Merchant open via native interact loop...");
     AgentMgr::ChangeTarget(npcId);
     WaitMs(250);
     for (int goAttempt = 1; goAttempt <= 3; ++goAttempt) {
-        LogBot("  GoNPC attempt %d: SendPacket(3, 0x39, %u, 0)", goAttempt, npcId);
-        CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
+        LogBot("  InteractNPC attempt %d: agent=%u", goAttempt, npcId);
+        AgentMgr::InteractNPC(npcId);
         WaitMs(500);
     }
     WaitMs(2500);
@@ -2945,24 +3686,29 @@ static void GrabDungeonBlessing(float shrineX, float shrineY) {
         MoveToAndWait(npc->x, npc->y, 120.0f);
     }
 
-    // Disable DialogMgr StoC hooks to prevent StringEncoding crash in dungeon
-    DialogMgr::Shutdown();
+    DialogMgr::ResetHookState();
+    DialogMgr::ResetRecentUITrace();
 
-    // GoNPC (0x39) x3 â€” matches AutoIt GoNearestNPCToCoords retry pattern
+    // Preserve the AutoIt lifecycle (target -> interact -> dialog 0x84), but
+    // stay on the stable native interact lane on the current client.
+    AgentMgr::CancelAction();
     AgentMgr::ChangeTarget(npcId);
     WaitMs(500);
     for (int attempt = 1; attempt <= 3; ++attempt) {
-        CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
+        AgentMgr::InteractNPC(npcId);
+        LogBot("Blessing: native InteractNPC attempt %d agent=%u lastUi=0x%X sender=%u lastDialog=0x%X",
+               attempt,
+               npcId,
+               DialogMgr::GetLastUIMessageId(),
+               DialogMgr::GetDialogSenderAgentId(),
+               DialogMgr::GetLastDialogId());
         WaitMs(1000);
     }
 
     // Dialog (0x3B, 0x84) â€” AutoIt DIALOG_SEND header, not DIALOG_SEND_LIVING
-    CtoS::SendPacket(2, Packets::DIALOG_SEND, DIALOG_ACCEPT_BLESSING);
+    QuestMgr::Dialog(DIALOG_ACCEPT_BLESSING);
     LogBot("Blessing: sent Dialog(0x%X)", DIALOG_ACCEPT_BLESSING);
     WaitMs(2000);
-
-    // Re-enable DialogMgr
-    DialogMgr::Initialize();
 
     // Verify
     if (HasBlessing()) {
@@ -3361,7 +4107,10 @@ BotState HandleDungeon(BotConfig& cfg) {
         // AutoIt-faithful Tekks interaction: interact with Tekks, refresh the
         // quest dialog state, then send the dungeon-entry dialog so the door
         // actually opens before we walk the portal.
-        PrepareTekksDungeonEntry();
+        if (!PrepareTekksDungeonEntry()) {
+            LogBot("Tekks dungeon entry preparation failed; aborting Sparkfly dungeon push");
+            return BotState::Error;
+        }
 
         // Move to dungeon entrance
         MoveToAndWait(12228, 22677);
@@ -4085,6 +4834,26 @@ bool DebugAggroMoveTo(float x, float y, float fightRange) {
     return DistanceTo(x, y) <= arrivalThreshold;
 }
 
+bool DebugClearAggroInPlace(float fightRange) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded()) {
+        return false;
+    }
+
+    const float nearestBefore = GetNearestEnemyDistance(fightRange + 500.0f);
+    LogBot("DebugClearAggroInPlace start fightRange=%.0f nearestBefore=%.0f", fightRange, nearestBefore);
+    AgentMgr::CancelAction();
+    WaitMs(100);
+    FightEnemiesInAggro(fightRange, false, &s_sparkflyTraversalCombatStats);
+    AgentMgr::CancelAction();
+    WaitMs(250);
+    const float nearestAfter = GetNearestEnemyDistance(fightRange + 500.0f);
+    LogBot("DebugClearAggroInPlace end nearestAfter=%.0f cleared=%d",
+           nearestAfter,
+           nearestAfter > fightRange ? 1 : 0);
+    return nearestAfter > fightRange;
+}
+
 bool DebugRunSparkflyRouteToTekks() {
     auto* me = AgentMgr::GetMyAgent();
     if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != MAP_SPARKFLY_SWAMP) {
@@ -4108,6 +4877,25 @@ bool DebugRunSparkflyRouteToTekks() {
     const bool reached = remaining <= kTekksStageThreshold;
     LogBot("DebugRunSparkflyRouteToTekks end remaining=%.0f reached=%d", remaining, reached ? 1 : 0);
     return reached;
+}
+
+bool DebugPrepareTekksDungeonEntry() {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != MAP_SPARKFLY_SWAMP) {
+        LogBot("DebugPrepareTekksDungeonEntry aborted map=%u loaded=%d hp=%.3f",
+               MapMgr::GetMapId(),
+               MapMgr::GetIsMapLoaded() ? 1 : 0,
+               me ? me->hp : 0.0f);
+        return false;
+    }
+
+    LogBot("DebugPrepareTekksDungeonEntry start");
+    const bool prepared = PrepareTekksDungeonEntry();
+    LogBot("DebugPrepareTekksDungeonEntry end prepared=%d activeQuest=0x%X lastDialog=0x%X",
+           prepared ? 1 : 0,
+           QuestMgr::GetActiveQuestId(),
+           DialogMgr::GetLastDialogId());
+    return prepared;
 }
 
 bool ExecuteBuiltinCombatStep(uint32_t targetId, bool quickStep) {
@@ -4364,20 +5152,38 @@ DungeonLoopTelemetry GetDungeonLoopTelemetry() {
 bool DebugRunDungeonLoopFromCurrentMap() {
     ResetDungeonLoopTelemetry();
 
-    const uint32_t startMapId = MapMgr::GetMapId();
-    if (startMapId == MAP_BOGROOT_LVL1) {
-        s_dungeonLoopTelemetry.started_in_lvl1 = true;
-        FollowWaypoints(BOGROOT_LVL1, sizeof(BOGROOT_LVL1) / sizeof(BOGROOT_LVL1[0]), true);
-    } else if (startMapId == MAP_BOGROOT_LVL2) {
-        s_dungeonLoopTelemetry.started_in_lvl2 = true;
-    } else {
-        s_dungeonLoopTelemetry.final_map_id = startMapId;
-        return false;
-    }
+    int refreshRetries = 0;
+    while (true) {
+        const uint32_t mapId = MapMgr::GetMapId();
+        if (mapId == MAP_BOGROOT_LVL1) {
+            s_dungeonLoopTelemetry.started_in_lvl1 = true;
+            FollowWaypoints(BOGROOT_LVL1, sizeof(BOGROOT_LVL1) / sizeof(BOGROOT_LVL1[0]), true);
+        } else if (mapId == MAP_BOGROOT_LVL2) {
+            s_dungeonLoopTelemetry.started_in_lvl2 = true;
+        } else if (mapId == MAP_SPARKFLY_SWAMP &&
+                   !s_dungeonLoopTelemetry.entered_lvl2 &&
+                   refreshRetries < 1) {
+            ++refreshRetries;
+            if (!PrepareTekksDungeonEntry()) {
+                break;
+            }
+            if (!EnterBogrootFromSparkfly()) {
+                break;
+            }
+            continue;
+        } else {
+            s_dungeonLoopTelemetry.final_map_id = mapId;
+            return false;
+        }
 
-    if (MapMgr::GetMapId() == MAP_BOGROOT_LVL2) {
-        s_dungeonLoopTelemetry.started_in_lvl2 = true;
-        FollowWaypoints(BOGROOT_LVL2, sizeof(BOGROOT_LVL2) / sizeof(BOGROOT_LVL2[0]), true);
+        if (MapMgr::GetMapId() == MAP_BOGROOT_LVL2) {
+            s_dungeonLoopTelemetry.started_in_lvl2 = true;
+            FollowWaypoints(BOGROOT_LVL2, sizeof(BOGROOT_LVL2) / sizeof(BOGROOT_LVL2[0]), true);
+        }
+
+        if (MapMgr::GetMapId() != MAP_SPARKFLY_SWAMP) {
+            break;
+        }
     }
 
     s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
