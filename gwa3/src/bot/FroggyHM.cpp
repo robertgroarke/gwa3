@@ -2409,62 +2409,71 @@ static bool PrepareTekksDungeonEntry() {
     Log::Info("Froggy: Tekks NPC found agent=%u", tekksId);
     logTekksQuestSnapshot("Tekks pre-interact snapshot");
 
-    // ---- AutoIt-faithful GoNPC interaction ----
+    // ---- NPC interaction to open dialog ----
     // AutoIt TakeQuest0 flow:
-    //   GoNPC($NPC)       -> sends raw 0x39 packet, game walks to NPC and opens dialog
+    //   GoNPC($NPC)       -> interacts with NPC (walk + dialog)
     //   Sleep(2000)        -> wait for dialog window
     //   QuestReward(...)   -> Dialog(0x833907) if quest needs completing
     //   AcceptQuest(...)   -> Dialog(0x833901) to accept quest
-    //   Dialog(0x2AE6)     -> navigate dialog tree
-    //   Dialog(0x833905)   -> enter dungeon
+    //   Dialog(0x2AE6)     -> navigate dialog tree (completes "Talk to Tekks" objective)
+    //   Dialog(0x833905)   -> enter dungeon (opens quest door)
     //
-    // The key difference from the old code: we MUST use GoNPC (raw 0x39 packet)
-    // to open the dialog window. InteractNPCEx (native function calls) generates
-    // UI activity but never opens the actual server-side dialog window.
+    // Raw 0x39 GoNPC packet crashes through CtoS engine hook.
+    // Use native InteractNPC function instead (bypasses CtoS).
+    // Previous code used InteractNPCEx from 332 units away — too far.
+    // Fix: move within interaction range first, then use native interact.
     bool dialogOpened = false;
-    for (int retry = 0; retry < 3 && !dialogOpened; ++retry) {
-        // Move close to Tekks
+    for (int retry = 0; retry < 5 && !dialogOpened; ++retry) {
+        // Refresh Tekks position and move close
         auto* tekks = AgentMgr::GetAgentByID(tekksId);
         if (tekks) {
-            MoveToAndWait(tekks->x, tekks->y, 120.0f);
+            MoveToAndWait(tekks->x, tekks->y, 100.0f);
             WaitForLocalPositionSettle(1000, 15.0f);
         }
         AgentMgr::CancelAction();
-        WaitMs(200);
+        WaitMs(300);
 
         // Clear dialog state
         DialogMgr::ClearDialog();
         DialogMgr::ResetHookState();
         DialogMgr::ResetRecentUITrace();
 
-        // Send GoNPC packet (raw 0x39) — this is what AutoIt does
-        Log::Info("Froggy: Tekks GoNPC attempt %d agent=%u", retry + 1, tekksId);
-        DialogMgr::GoNPC(tekksId);
+        // Use native InteractNPC (not raw packet — raw 0x39 crashes via CtoS hook)
+        Log::Info("Froggy: Tekks InteractNPC attempt %d agent=%u", retry + 1, tekksId);
+        AgentMgr::InteractNPC(tekksId);
 
-        // Wait for dialog window to open (AutoIt uses Sleep(2000) or UIHook)
-        dialogOpened = WaitForPredicate(5000, []() {
+        // Wait for dialog window to open — give 8 seconds for walk + interaction
+        dialogOpened = WaitForPredicate(8000, []() {
             return DialogMgr::IsDialogOpen() ||
                    DialogMgr::GetButtonCount() > 0 ||
                    DialogMgr::GetDialogSenderAgentId() != 0;
-        }, 50);
+        }, 100);
 
-        Log::Info("Froggy: Tekks GoNPC attempt %d result: dialogOpen=%d buttons=%u sender=%u lastDialog=0x%X",
+        auto* me = AgentMgr::GetMyAgent();
+        const float distNow = (me && tekks) ? AgentMgr::GetDistance(me->x, me->y, tekks->x, tekks->y) : -1.0f;
+        Log::Info("Froggy: Tekks interact attempt %d result: dialogOpen=%d buttons=%u sender=%u lastDialog=0x%X dist=%.0f",
                   retry + 1,
                   DialogMgr::IsDialogOpen() ? 1 : 0,
                   DialogMgr::GetButtonCount(),
                   DialogMgr::GetDialogSenderAgentId(),
-                  DialogMgr::GetLastDialogId());
+                  DialogMgr::GetLastDialogId(),
+                  distNow);
 
         if (!dialogOpened) {
             Log::Info("Froggy: Tekks dialog did not open on attempt %d, retrying...", retry + 1);
-            WaitMs(1000);
+            // Try different approach on retries: ChangeTarget then InteractNPC
+            if (retry >= 1) {
+                AgentMgr::ChangeTarget(tekksId);
+                WaitMs(500);
+            }
+            WaitMs(500);
         }
     }
 
     if (!dialogOpened) {
-        // Fallback: even if dialog didn't visibly open, try sending dialogs anyway
-        // (matches old behavior as last resort)
-        Log::Info("Froggy: Tekks dialog never opened after 3 GoNPC attempts — trying blind dialog sends");
+        // Even if dialog wasn't detected, try sending dialogs anyway and rely on
+        // the quest door checkpoint to detect if it actually worked.
+        Log::Info("Froggy: Tekks dialog never opened after 5 interact attempts — trying blind dialog sends");
     }
 
     // ---- Send dialog sequence (AutoIt: QuestReward -> AcceptQuest -> Dialog(0x2AE6) -> Dialog(0x833905)) ----
