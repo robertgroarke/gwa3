@@ -2438,9 +2438,20 @@ static bool PrepareTekksDungeonEntry() {
         DialogMgr::ResetHookState();
         DialogMgr::ResetRecentUITrace();
 
-        // Use native InteractNPC (not raw packet — raw 0x39 crashes via CtoS hook)
-        Log::Info("Froggy: Tekks InteractNPC attempt %d agent=%u", retry + 1, tekksId);
-        AgentMgr::InteractNPC(tekksId);
+        // Try native InteractNPC first, then 8-byte packet fallback on retries.
+        // (12-byte GoNPC packet crashes via CtoS hook — avoid it.)
+        if (retry < 3) {
+            Log::Info("Froggy: Tekks InteractNPC attempt %d agent=%u (native)", retry + 1, tekksId);
+            AgentMgr::ChangeTarget(tekksId);
+            WaitMs(200);
+            AgentMgr::InteractNPC(tekksId);
+        } else {
+            // Fallback: 8-byte 0x39 packet (used by merchant/integration tests)
+            Log::Info("Froggy: Tekks InteractNPC attempt %d agent=%u (packet-8byte)", retry + 1, tekksId);
+            AgentMgr::ChangeTarget(tekksId);
+            WaitMs(200);
+            AgentMgr::InteractNPCEx(tekksId, AgentMgr::NpcInteractMode::PacketNpc8);
+        }
 
         // Wait for dialog window to open — give 8 seconds for walk + interaction
         dialogOpened = WaitForPredicate(8000, []() {
@@ -2461,11 +2472,6 @@ static bool PrepareTekksDungeonEntry() {
 
         if (!dialogOpened) {
             Log::Info("Froggy: Tekks dialog did not open on attempt %d, retrying...", retry + 1);
-            // Try different approach on retries: ChangeTarget then InteractNPC
-            if (retry >= 1) {
-                AgentMgr::ChangeTarget(tekksId);
-                WaitMs(500);
-            }
             WaitMs(500);
         }
     }
