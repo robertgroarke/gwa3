@@ -679,8 +679,26 @@ void SendPacketDirect(uint32_t size, uint32_t header, ...) {
     va_end(args);
 
     const uint32_t sizeBytes = size * 4;
-    Log::Info("CtoS: SendPacketDirect hdr=0x%X size=%u (bypassing engine hook)", header, sizeBytes);
-    IssuePacketSend(data, sizeBytes);
+
+    // Dispatch via GameThread::EnqueuePost (post-dispatch phase) to ensure
+    // we're on the game thread when PacketSend runs, but bypass the engine
+    // hook's pre-dispatch queue which has FPU/stack corruption issues.
+    // Direct IssuePacketSend from a non-game thread crashes PacketSend.
+    if (GameThread::IsOnGameThread()) {
+        Log::Info("CtoS: SendPacketDirect hdr=0x%X size=%u (on game thread)", header, sizeBytes);
+        IssuePacketSend(data, sizeBytes);
+    } else if (GameThread::IsInitialized()) {
+        struct PktCopy { uint32_t d[12]; uint32_t sz; };
+        PktCopy copy{};
+        memcpy(copy.d, data, sizeBytes);
+        copy.sz = sizeBytes;
+        Log::Info("CtoS: SendPacketDirect hdr=0x%X size=%u (via post-dispatch)", header, sizeBytes);
+        GameThread::EnqueuePost([copy]() {
+            IssuePacketSend(copy.d, copy.sz);
+        });
+    } else {
+        Log::Warn("CtoS: SendPacketDirect dropped hdr=0x%X -- GameThread not ready", header);
+    }
 }
 
 // --- Type-safe wrappers ---
