@@ -342,6 +342,14 @@ void IssueNativeMove(float x, float y) {
         return;  // silently skip - caller will retry on next tick
     }
 
+    // Reject obviously invalid coordinates (corrupted agent reads, NaN, etc.)
+    // GW map coordinates are typically in [-30000, 30000] range.
+    if (x < -50000.0f || x > 50000.0f || y < -50000.0f || y > 50000.0f ||
+        x != x || y != y) { // NaN check
+        Log::Warn("AgentMgr: IssueNativeMove rejected invalid coords (%.0f, %.0f)", x, y);
+        return;
+    }
+
     MoveData moveData{};
     moveData.x = x;
     moveData.y = y;

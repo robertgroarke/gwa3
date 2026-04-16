@@ -1793,7 +1793,12 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
                 __try {
                     auto* foeAgent = AgentMgr::GetAgentByID(bestId);
                     if (allowHeroFlags && foeAgent) {
-                        FlagAllHeroes(foeAgent->x, foeAgent->y);
+                        // Validate coordinates before flagging — stale agent reads
+                        // can produce garbage floats that crash the game's native move.
+                        const float fx = foeAgent->x, fy = foeAgent->y;
+                        if (fx > -50000.0f && fx < 50000.0f && fy > -50000.0f && fy < 50000.0f) {
+                            FlagAllHeroes(fx, fy);
+                        }
                     }
                     FightEnemiesInAggro(fightRange, false, nullptr);
                 } __except (EXCEPTION_EXECUTE_HANDLER) {
