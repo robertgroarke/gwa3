@@ -2425,13 +2425,50 @@ static bool PrepareTekksDungeonEntry() {
         MoveToAndWait(tekks->x, tekks->y, 100.0f);
     }
 
-    // Step 1: InteractNPC x3 (matching blessing shrine + merchant patterns)
+    // Step 1: InteractNPC x3 with position tracking
+    {
+        auto* me = AgentMgr::GetMyAgent();
+        const float preX = me ? me->x : 0, preY = me ? me->y : 0;
+        const float tX = tekks ? tekks->x : 0, tY = tekks ? tekks->y : 0;
+        const float preDist = (me && tekks) ? AgentMgr::GetDistance(preX, preY, tX, tY) : -1.0f;
+        Log::Info("Froggy: Tekks PRE-interact pos=(%.0f, %.0f) tekks=(%.0f, %.0f) dist=%.0f target=%u",
+                  preX, preY, tX, tY, preDist, AgentMgr::GetTargetId());
+    }
+
     AgentMgr::ChangeTarget(tekksId);
     WaitMs(500);
-    for (int i = 0; i < 3; ++i) {
-        Log::Info("Froggy: Tekks InteractNPC x3 pass %d agent=%u", i + 1, tekksId);
+
+    // Try native InteractNPC x2 first (logs position to see if character moves)
+    for (int i = 0; i < 2; ++i) {
         AgentMgr::InteractNPC(tekksId);
-        WaitMs(1000);
+        WaitMs(1500);
+        auto* me = AgentMgr::GetMyAgent();
+        tekks = AgentMgr::GetAgentByID(tekksId);
+        const float dist = (me && tekks) ? AgentMgr::GetDistance(me->x, me->y, tekks->x, tekks->y) : -1.0f;
+        Log::Info("Froggy: Tekks InteractNPC pass %d: pos=(%.0f, %.0f) dist=%.0f dialogOpen=%d lastDialog=0x%X target=%u",
+                  i + 1,
+                  me ? me->x : 0, me ? me->y : 0, dist,
+                  DialogMgr::IsDialogOpen() ? 1 : 0,
+                  DialogMgr::GetLastDialogId(),
+                  AgentMgr::GetTargetId());
+    }
+
+    // Then try ActionInteract (spacebar) x3 — different code path, uses game's
+    // key-binding dispatch instead of CtoS packets. BotsHub uses this for doors.
+    for (int i = 0; i < 3; ++i) {
+        AgentMgr::ChangeTarget(tekksId);
+        WaitMs(200);
+        const bool queued = AgentMgr::ActionInteract();
+        WaitMs(1500);
+        auto* me = AgentMgr::GetMyAgent();
+        tekks = AgentMgr::GetAgentByID(tekksId);
+        const float dist = (me && tekks) ? AgentMgr::GetDistance(me->x, me->y, tekks->x, tekks->y) : -1.0f;
+        Log::Info("Froggy: Tekks ActionInteract pass %d: queued=%d pos=(%.0f, %.0f) dist=%.0f dialogOpen=%d lastDialog=0x%X target=%u",
+                  i + 1, queued ? 1 : 0,
+                  me ? me->x : 0, me ? me->y : 0, dist,
+                  DialogMgr::IsDialogOpen() ? 1 : 0,
+                  DialogMgr::GetLastDialogId(),
+                  AgentMgr::GetTargetId());
     }
 
     // Step 2: Dwell — AutoIt does Sleep(2000) after GoNPC
@@ -2439,9 +2476,10 @@ static bool PrepareTekksDungeonEntry() {
 
     {
         auto* me = AgentMgr::GetMyAgent();
+        tekks = AgentMgr::GetAgentByID(tekksId);
         const float dist = (me && tekks) ? AgentMgr::GetDistance(me->x, me->y, tekks->x, tekks->y) : -1.0f;
-        Log::Info("Froggy: Tekks post-interact state: dist=%.0f dialogOpen=%d buttons=%u sender=%u lastDialog=0x%X target=%u",
-                  dist,
+        Log::Info("Froggy: Tekks POST-interact pos=(%.0f, %.0f) dist=%.0f dialogOpen=%d buttons=%u sender=%u lastDialog=0x%X target=%u",
+                  me ? me->x : 0, me ? me->y : 0, dist,
                   DialogMgr::IsDialogOpen() ? 1 : 0,
                   DialogMgr::GetButtonCount(),
                   DialogMgr::GetDialogSenderAgentId(),
