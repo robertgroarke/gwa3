@@ -572,29 +572,8 @@ bool Initialize() {
     Log::Info("CtoS: Initialized (PacketSend=0x%08X, PacketLocation=0x%08X)",
               Offsets::PacketSend, s_packetLocation);
 
-    // Install packet tap hook on the real PacketSend function
-    {
-        MH_STATUS mh = MH_Initialize();
-        if (mh != MH_OK && mh != MH_ERROR_ALREADY_INITIALIZED) {
-            Log::Warn("CtoS: MH_Initialize failed for packet tap: %s", MH_StatusToString(mh));
-        }
-        mh = MH_CreateHook(
-            reinterpret_cast<LPVOID>(Offsets::PacketSend),
-            reinterpret_cast<LPVOID>(&PacketSendTap),
-            reinterpret_cast<LPVOID*>(&s_packetSendOriginal));
-        if (mh == MH_OK) {
-            mh = MH_EnableHook(reinterpret_cast<LPVOID>(Offsets::PacketSend));
-            if (mh == MH_OK) {
-                Log::Info("CtoS: Packet tap hook installed at PacketSend=0x%08X", Offsets::PacketSend);
-                // Start enabled so we capture trade offer packets
-                s_packetTapEnabled = true;
-            } else {
-                Log::Warn("CtoS: Packet tap MH_EnableHook failed: %s", MH_StatusToString(mh));
-            }
-        } else {
-            Log::Warn("CtoS: Packet tap MH_CreateHook failed: %s", MH_StatusToString(mh));
-        }
-    }
+    // Packet tap hook disabled — was used for opcode capture, now removed
+    // to eliminate it as a crash source.
 
     // Install Engine inline hook for packet dispatch
     if (!InstallEngineHook()) {
