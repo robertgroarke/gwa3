@@ -21,12 +21,14 @@
 namespace GWA3::MaintenanceMgr {
 
 // ===== Known Item Model IDs =====
-static constexpr uint32_t MODEL_SALVAGE_KIT       = 2992; // Expert Salvage Kit
-static constexpr uint32_t MODEL_BASIC_SALVAGE_KIT = 2989;
-static constexpr uint32_t MODEL_SUP_ID_KIT        = 5899; // Superior Identification Kit
+static constexpr uint32_t MODEL_CHEAP_SALVAGE_KIT = 2992;
+static constexpr uint32_t MODEL_SALVAGE_KIT       = 5900;
+static constexpr uint32_t MODEL_CHEAP_ID_KIT      = 2989;
+static constexpr uint32_t MODEL_SUP_ID_KIT        = 5899;
 static constexpr uint32_t MODEL_ALT_ID_KIT        = 235;
 static constexpr uint32_t MODEL_ALT_SALVAGE_KIT   = 243;
-static constexpr uint32_t MODEL_ID_KIT            = 2991; // Regular ID Kit
+static constexpr uint32_t MODEL_EXPERT_SALVAGE_KIT = 2991;
+static constexpr uint32_t MODEL_RARE_SALVAGE_KIT   = 2993;
 
 // ===== Rare Skin Detection (GWA3-176) =====
 // Ported from AutoIt RareSkins.au3 — ~200 model IDs that should never be sold or salvaged.
@@ -70,11 +72,13 @@ bool IsRareSkin(uint32_t modelId) {
 // Kit and special item model IDs to never sell
 static bool IsKit(uint32_t modelId) {
     return modelId == MODEL_SALVAGE_KIT ||
-           modelId == MODEL_BASIC_SALVAGE_KIT ||
+           modelId == MODEL_CHEAP_SALVAGE_KIT ||
+           modelId == MODEL_EXPERT_SALVAGE_KIT ||
+           modelId == MODEL_RARE_SALVAGE_KIT ||
            modelId == MODEL_SUP_ID_KIT ||
            modelId == MODEL_ALT_ID_KIT ||
            modelId == MODEL_ALT_SALVAGE_KIT ||
-           modelId == MODEL_ID_KIT;
+           modelId == MODEL_CHEAP_ID_KIT;
 }
 
 // Basic material model IDs — from AutoIt GWA2_ID.au3
@@ -154,14 +158,16 @@ uint32_t CountItemByModel(uint32_t modelId) {
 
 static uint32_t CountAllSalvageKits() {
     return CountItemByModel(MODEL_SALVAGE_KIT) +
-           CountItemByModel(MODEL_BASIC_SALVAGE_KIT) +
+           CountItemByModel(MODEL_CHEAP_SALVAGE_KIT) +
+           CountItemByModel(MODEL_EXPERT_SALVAGE_KIT) +
+           CountItemByModel(MODEL_RARE_SALVAGE_KIT) +
            CountItemByModel(MODEL_ALT_SALVAGE_KIT);
 }
 
 static uint32_t CountAllIdKits() {
     return CountItemByModel(MODEL_SUP_ID_KIT) +
            CountItemByModel(MODEL_ALT_ID_KIT) +
-           CountItemByModel(MODEL_ID_KIT);
+           CountItemByModel(MODEL_CHEAP_ID_KIT);
 }
 
 // ===== Diagnostics =====
@@ -413,10 +419,66 @@ static bool IsArmor(Item* item) {
 // Sells: identified weapons of white/blue/purple/gold rarity (not rare skins)
 //        + materials in the SELL list
 // Keeps: kits, unidentified items, green/red items, rare skins
-bool ShouldSellItem(uint32_t modelId, uint16_t value, uint8_t type) {
-    (void)value;
-    (void)type;
-    if (IsKit(modelId)) return false;
+bool ShouldSellItem(const Item* item) {
+    if (!item || item->item_id == 0 || item->model_id == 0) return false;
+    if (item->equipped || item->customized) return false;
+
+    const uint16_t rarity = GetRarity(const_cast<Item*>(item));
+    if (rarity == RARITY_GREEN) return false;
+
+    switch (item->type) {
+    case 8:  // runes and mods
+    case 9:  // usable
+    case 10: // dye
+    case 18: // keys
+    case 29: // kits
+        return false;
+    case 11: // materials
+        if (IsSellMaterial(item->model_id)) return true;
+        return false;
+    case 30: // trophies
+        return item->value > 0;
+    case 34: // salvage item type in older layouts
+        return true;
+    default:
+        break;
+    }
+
+    if (IsKit(item->model_id) || IsRareSkin(item->model_id)) return false;
+    if ((rarity == RARITY_GOLD || rarity == RARITY_PURPLE) && !IsIdentified(const_cast<Item*>(item))) {
+        return false;
+    }
+
+    // Preserve low-requirement or perfect-stat collector items that Froggy keeps.
+    const uint16_t req = item->h0026;
+    const uint16_t dmg = item->item_formula;
+    switch (item->type) {
+    case 24: // shield
+        if ((req == 9 && dmg == 16 && IsRareSkin(item->model_id)) ||
+            (req == 8 && dmg == 16) ||
+            (req == 7 && dmg == 15) ||
+            (req == 6 && dmg == 14) ||
+            (req == 5 && dmg == 13) ||
+            (req == 4 && dmg == 12)) {
+            return false;
+        }
+        break;
+    case 12: // offhand
+        if ((req == 9 && dmg == 12 && IsRareSkin(item->model_id)) ||
+            (req == 8 && dmg == 12)) {
+            return false;
+        }
+        break;
+    case 27: // sword
+        if ((req == 9 && dmg == 22 && IsRareSkin(item->model_id)) ||
+            (req == 8 && dmg == 22)) {
+            return false;
+        }
+        break;
+    default:
+        break;
+    }
+
     return true;
 }
 
@@ -438,40 +500,7 @@ uint32_t SellJunkItems() {
             Item* item = bag->items.buffer[i];
             if (!item || item->model_id == 0) continue;
             if (item->value == 0) continue;
-            if (IsKit(item->model_id)) continue;
-
-            bool shouldSell = false;
-
-            // 1. Sell materials in the SELL list (cloth, hide, wood, chitin)
-            if (IsSellMaterial(item->model_id)) {
-                shouldSell = true;
-            }
-
-            // 2. Sell non-keep basic materials
-            if (!shouldSell && IsBasicMaterial(item) && !IsKeepMaterial(item->model_id)) {
-                shouldSell = true;
-            }
-
-            // 3. Sell identified weapons/armor of white/blue/purple/gold rarity
-            // AutoIt: IsWeapon → GetRarity → check rare skin → check identified → sell
-            if (!shouldSell && (IsWeapon(item) || IsArmor(item))) {
-                if (!IsRareSkin(item->model_id)) {
-                    uint16_t rarity = GetRarity(item);
-                    if (rarity == RARITY_WHITE || rarity == RARITY_BLUE ||
-                        rarity == RARITY_PURPLE || rarity == RARITY_GOLD) {
-                        if (IsIdentified(item)) {
-                            shouldSell = true;
-                        }
-                    }
-                }
-            }
-
-            // 4. Sell trophies (type 30) — common dungeon drops
-            if (!shouldSell && item->type == 30 && item->value > 0) {
-                shouldSell = true;
-            }
-
-            if (!shouldSell) continue;
+            if (!ShouldSellItem(item)) continue;
 
             uint32_t qty = (item->quantity > 0) ? item->quantity : 1;
             Log::Info("MaintenanceMgr: Selling item=%u model=%u value=%u qty=%u type=%u rarity=%u",
@@ -498,7 +527,7 @@ static Item* FindIdKit() {
         for (uint32_t s = 0; s < bag->items.size; s++) {
             Item* item = bag->items.buffer[s];
             if (!item) continue;
-            if (item->model_id == MODEL_SUP_ID_KIT || item->model_id == MODEL_ID_KIT ||
+            if (item->model_id == MODEL_SUP_ID_KIT || item->model_id == MODEL_CHEAP_ID_KIT ||
                 item->model_id == MODEL_ALT_ID_KIT) return item;
         }
     }
@@ -514,7 +543,8 @@ static Item* FindSalvageKit() {
         for (uint32_t s = 0; s < bag->items.size; s++) {
             Item* item = bag->items.buffer[s];
             if (!item) continue;
-            if (item->model_id == MODEL_SALVAGE_KIT || item->model_id == MODEL_BASIC_SALVAGE_KIT ||
+            if (item->model_id == MODEL_SALVAGE_KIT || item->model_id == MODEL_CHEAP_SALVAGE_KIT ||
+                item->model_id == MODEL_EXPERT_SALVAGE_KIT || item->model_id == MODEL_RARE_SALVAGE_KIT ||
                 item->model_id == MODEL_ALT_SALVAGE_KIT) return item;
         }
     }
@@ -678,7 +708,7 @@ uint32_t SalvageJunkItems() {
     if (toSalvageCount > 10) toSalvageCount = 10;
     Log::Info("MaintenanceMgr: Salvaging %u items (capped at 10)", toSalvageCount);
 
-    // Phase 2: Salvage each item using native function call
+    // Phase 2: Salvage each item using the same packet flow Froggy uses successfully.
     uint32_t salvaged = 0;
     for (uint32_t i = 0; i < toSalvageCount; i++) {
         uint32_t itemId = toSalvage[i];
@@ -691,74 +721,16 @@ uint32_t SalvageJunkItems() {
         Item* item = ItemMgr::GetItemById(itemId);
         if (!item || item->model_id == 0) continue;
 
-        uint32_t sessionId = GetSalvageSessionId();
-        if (sessionId == 0) {
-            Log::Warn("MaintenanceMgr: Salvage session ID is 0, skipping");
-            continue;
-        }
-
         uint32_t kitId = kit->item_id;
-        // PRE-SALVAGE: trace the pointer chain
-        {
-            uintptr_t bp = Offsets::BasePointer;
-            uintptr_t ctx = bp ? *reinterpret_cast<uintptr_t*>(bp) : 0;
-            uintptr_t p1 = ctx ? *reinterpret_cast<uintptr_t*>(ctx + 0x18) : 0;
-            uintptr_t p2 = p1 ? *reinterpret_cast<uintptr_t*>(p1 + 0x40) : 0;
-            uintptr_t bags = p2 ? *reinterpret_cast<uintptr_t*>(p2 + 0xF8) : 0;
-            uint32_t gold = p2 ? *reinterpret_cast<uint32_t*>(p2 + 0x90) : 0;
-            Log::Info("MaintenanceMgr: PRE-SALVAGE chain: BP=0x%08X ctx=0x%08X p1=0x%08X p2=0x%08X bags=0x%08X gold=%u",
-                      bp, ctx, p1, p2, bags, gold);
-        }
-        Log::Info("MaintenanceMgr: Salvaging [%u/%u] item=%u model=%u kit=%u session=%u",
-                  i + 1, toSalvageCount, itemId, item->model_id, kitId, sessionId);
+        Log::Info("MaintenanceMgr: Salvaging [%u/%u] item=%u model=%u kit=%u",
+                  i + 1, toSalvageCount, itemId, item->model_id, kitId);
 
-        // Temporarily restore ALL original StoC handlers so the game's own
-        // inventory update handler can process the salvage response.
-        // Our StoC dispatcher replacement may be preventing the response
-        // from reaching the game's internal inventory rebuild code.
-        StoC::Shutdown();
-
-        // Save bags pointer before salvage — we'll restore it if the game NULLs it
-        uintptr_t savedBags = 0;
-        {
-            uintptr_t bp = Offsets::BasePointer;
-            uintptr_t ctx = bp ? *reinterpret_cast<uintptr_t*>(bp) : 0;
-            uintptr_t p1 = ctx ? *reinterpret_cast<uintptr_t*>(ctx + 0x18) : 0;
-            uintptr_t p2 = p1 ? *reinterpret_cast<uintptr_t*>(p1 + 0x40) : 0;
-            savedBags = p2 ? *reinterpret_cast<uintptr_t*>(p2 + 0xF8) : 0;
-            Log::Info("MaintenanceMgr: Saved bags pointer 0x%08X before salvage", savedBags);
-        }
-
-        // Open the salvage session on game thread
-        GameThread::EnqueuePost([itemId, kitId, sessionId]() {
-            ExecuteSalvageCommand(itemId, kitId, sessionId);
-        });
-        WaitMs(1500);
-
-        // Restore bags pointer if it was NULLed
-        {
-            uintptr_t bp = Offsets::BasePointer;
-            uintptr_t ctx = bp ? *reinterpret_cast<uintptr_t*>(bp) : 0;
-            uintptr_t p1 = ctx ? *reinterpret_cast<uintptr_t*>(ctx + 0x18) : 0;
-            uintptr_t p2 = p1 ? *reinterpret_cast<uintptr_t*>(p1 + 0x40) : 0;
-            if (p2) {
-                uintptr_t currentBags = *reinterpret_cast<uintptr_t*>(p2 + 0xF8);
-                if (currentBags == 0 && savedBags != 0) {
-                    *reinterpret_cast<uintptr_t*>(p2 + 0xF8) = savedBags;
-                    Log::Info("MaintenanceMgr: RESTORED bags pointer 0x%08X", savedBags);
-                }
-            }
-        }
-
-        // Send SalvageMaterials — triggers server to process salvage
-        CtoS::SendPacket(1, Packets::SALVAGE_MATERIALS);
-        WaitMs(2000);
-
-        // Wait for server response
-        WaitForBagsPointerRestore();
-
-        // Re-enable StoC hooks
-        StoC::Initialize();
+        ItemMgr::SalvageSessionOpen(kitId, itemId);
+        WaitMs(800);
+        ItemMgr::SalvageMaterials();
+        WaitMs(800);
+        ItemMgr::SalvageSessionDone();
+        WaitMs(300);
 
         salvaged++;
     }
@@ -770,7 +742,7 @@ uint32_t SalvageJunkItems() {
 // ===== Kit Management =====
 
 void BuyKitsToTarget(const Config& cfg) {
-    uint32_t currentIdKits = CountAllIdKits();
+    uint32_t currentIdKits = CountItemByModel(MODEL_SUP_ID_KIT);
     uint32_t currentSalvKits = CountAllSalvageKits();
 
     if (currentIdKits >= cfg.targetIdKits && currentSalvKits >= cfg.targetSalvageKits) {
@@ -789,23 +761,21 @@ void BuyKitsToTarget(const Config& cfg) {
     // Buy ID kits if needed
     if (currentIdKits < cfg.targetIdKits) {
         uint32_t need = cfg.targetIdKits - currentIdKits;
-        // Try Superior ID Kit first (model 5899), then regular (2991)
-        bool bought = TradeMgr::BuyMerchantItemByModelId(MODEL_SUP_ID_KIT, need);
-        if (!bought) bought = TradeMgr::BuyMerchantItemByModelId(MODEL_ID_KIT, need);
+        // Froggy uses merchant slot 6 for superior ID kits at 500g each.
+        bool bought = TradeMgr::BuyMerchantItemByPosition(6, need, 500);
         if (bought) {
-            Log::Info("MaintenanceMgr: Bought %u ID kits", need);
+            Log::Info("MaintenanceMgr: Bought %u superior ID kits", need);
             WaitMs(1000);
         } else {
-            Log::Warn("MaintenanceMgr: Could not buy ID kits");
+            Log::Warn("MaintenanceMgr: Could not buy superior ID kits");
         }
     }
 
     // Buy salvage kits if needed
     if (currentSalvKits < cfg.targetSalvageKits) {
         uint32_t need = cfg.targetSalvageKits - currentSalvKits;
-        // Try basic kit first (2989), then expert (2992)
-        bool bought = TradeMgr::BuyMerchantItemByModelId(MODEL_BASIC_SALVAGE_KIT, need);
-        if (!bought) bought = TradeMgr::BuyMerchantItemByModelId(MODEL_SALVAGE_KIT, need);
+        // Froggy uses merchant slot 4 for salvage kits at 2000g each.
+        bool bought = TradeMgr::BuyMerchantItemByPosition(4, need, 2000);
         if (bought) {
             Log::Info("MaintenanceMgr: Bought %u salvage kits", need);
             WaitMs(1000);

@@ -1057,7 +1057,7 @@ static bool ReadTradeStateForHelper(uint32_t& playerGold, uint32_t& partnerGold,
     partnerGold = 0;
     playerItemCount = 0;
     partnerItemCount = 0;
-    uintptr_t gc = ResolveGameContextForTradeHelper();
+    uintptr_t gc = Offsets::ResolveGameContext();
     if (!gc) return false;
     __try {
         uintptr_t trade = *reinterpret_cast<uintptr_t*>(gc + 0x58);
@@ -1075,7 +1075,7 @@ static bool ReadTradeStateForHelper(uint32_t& playerGold, uint32_t& partnerGold,
 
 static size_t ReadTradePartnerItemsForHelper(HelperPartnerItemInfo* out, size_t capacity) {
     if (!out || capacity == 0) return 0;
-    uintptr_t gc = ResolveGameContextForTradeHelper();
+    uintptr_t gc = Offsets::ResolveGameContext();
     if (!gc) return 0;
     __try {
         uintptr_t trade = *reinterpret_cast<uintptr_t*>(gc + 0x58);
@@ -2441,7 +2441,7 @@ bool TestMerchantQuote() {
                 IntReport("    step 1: raw legacy GoNPC packet 0x39 (%d attempt%s)", packetAttempts, packetAttempts == 1 ? "" : "s");
                 for (int packetAttempt = 1; packetAttempt <= packetAttempts; ++packetAttempt) {
                     IntReport("      raw interact attempt %d: SendPacket(3, 0x39, %u, 0)", packetAttempt, traderAgentId);
-                    CtoS::SendPacket(3, Packets::INTERACT_NPC, traderAgentId, 0u);
+        CtoS::SendPacket(3, Packets::INTERACT_NPC, traderAgentId, 0u);
                     Sleep(500);
                 }
 
@@ -2649,7 +2649,7 @@ static bool ConsetOpenNPCDialog(uint32_t npcId, const char* label) {
         AgentMgr::ChangeTarget(npcId);
         Sleep(250);
         // GoNPC packet (0x39) — initiates interaction and may open merchant directly
-        CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
+    CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
         Sleep(2000);
         if (TradeMgr::GetMerchantItemCount() > 0) {
             IntReport("  %s opened on attempt %d (GoNPC only): %u items",
@@ -3062,7 +3062,7 @@ bool TestConsetCraftCycle() {
             if (npc) {
                 AgentMgr::ChangeTarget(npc);
                 Sleep(250);
-                CtoS::SendPacket(3, Packets::INTERACT_NPC, npc, 0u);
+    CtoS::SendPacket(3, Packets::INTERACT_NPC, npc, 0u);
                 Sleep(2000);
                 uint32_t toWithdraw = kTargetGold - gold;
                 if (toWithdraw > storageGold) toWithdraw = storageGold;
@@ -3580,7 +3580,7 @@ bool TestConsumableCrafting() {
                 StartMerchantStoCTap(rawTap);
                 for (int packetAttempt = 1; packetAttempt <= 3; ++packetAttempt) {
                     IntReport("      Raw GoNPC attempt %d", packetAttempt);
-                    CtoS::SendPacket(3, Packets::INTERACT_NPC, crafterAgentId, 0u);
+    CtoS::SendPacket(3, Packets::INTERACT_NPC, crafterAgentId, 0u);
                     Sleep(500);
                 }
                 Sleep(2500);

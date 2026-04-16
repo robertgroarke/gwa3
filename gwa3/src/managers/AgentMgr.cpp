@@ -18,6 +18,7 @@
 namespace GWA3::AgentMgr {
 
 static constexpr uint32_t kSendCallTargetUiMessage = 0x30000013u;
+static constexpr uint32_t kSendWorldActionUiMessage = 0x30000020u;
 static constexpr uint32_t kActionInteractCode = 0x80u;
 
 enum class CallTargetType : uint32_t {
@@ -27,15 +28,31 @@ enum class CallTargetType : uint32_t {
     None = 0xFF
 };
 
+enum class WorldActionId : uint32_t {
+    InteractEnemy = 0,
+    InteractPlayerOrOther = 1,
+    InteractNPC = 2,
+    InteractItem = 3,
+    InteractTrade = 4,
+    InteractGadget = 5
+};
+
 struct CallTargetPacket {
     CallTargetType call_type;
     uint32_t agent_id;
+};
+
+struct WorldActionUIPacket {
+    uint32_t action_id;
+    uint32_t agent_id;
+    uint32_t suppress_call_target;
 };
 
 using MoveFn = void(__cdecl*)(const void*);
 using ChangeTargetFn = void(__cdecl*)(uint32_t, uint32_t);
 using InteractItemFn = void(__cdecl*)(uint32_t, uint32_t);
 using InteractNPCFn = void(__cdecl*)(uint32_t, uint32_t);
+using WorldActionFn = void(__cdecl*)(uint32_t, uint32_t, uint32_t);
 using CallTargetFn = void(__cdecl*)(CallTargetType, uint32_t);
 
 struct MoveData {
@@ -48,6 +65,7 @@ static MoveFn s_moveFn = nullptr;
 static ChangeTargetFn s_changeTargetFn = nullptr;
 static InteractItemFn s_interactItemFn = nullptr;
 static InteractNPCFn s_interactNpcFn = nullptr;
+static WorldActionFn s_worldActionFn = nullptr;
 static CallTargetFn s_callTargetFn = nullptr;
 static bool s_initialized = false;
 static bool s_loggedCurrentTargetRead = false;
@@ -56,6 +74,8 @@ static bool s_loggedTargetLogRead = false;
 static bool s_loggedTargetLogStats = false;
 static bool s_loggedInteractNpcNative = false;
 static bool s_loggedInteractNpcFallback = false;
+static bool s_loggedInteractNpcVariant = false;
+static bool s_loggedInteractNpcWorldAction = false;
 static bool s_loggedMoveQueuedOnce = false;
 static bool s_loggedSparkflyMoveLane = false;
 static bool s_loggedSparkflyMoveLaneUnavailable = false;
@@ -117,6 +137,10 @@ bool Initialize() {
         s_callTargetFn = reinterpret_cast<CallTargetFn>(Offsets::CallTargetFunc);
         Log::Info("AgentMgr: CallTarget resolved from Offsets::CallTargetFunc=0x%08X", Offsets::CallTargetFunc);
     }
+    if (!s_worldActionFn && Offsets::WorldActionFunc > 0x10000) {
+        s_worldActionFn = reinterpret_cast<WorldActionFn>(Offsets::WorldActionFunc);
+        Log::Info("AgentMgr: WorldAction resolved from Offsets::WorldActionFunc=0x%08X", Offsets::WorldActionFunc);
+    }
     if (!s_interactNpcFn && Offsets::InteractNPCFunc > 0x10000) {
         s_interactNpcFn = reinterpret_cast<InteractNPCFn>(Offsets::InteractNPCFunc);
         Log::Info("AgentMgr: InteractNPC resolved from Offsets::InteractNPCFunc=0x%08X", Offsets::InteractNPCFunc);
@@ -138,6 +162,51 @@ struct SendChangeTargetUIMsg {
 };
 
 namespace {
+
+const char* NpcInteractModeName(NpcInteractMode mode) {
+    switch (mode) {
+    case NpcInteractMode::WorldActionNoCallTarget: return "world-action-ct0";
+    case NpcInteractMode::WorldActionCallTarget: return "world-action-ct1";
+    case NpcInteractMode::NativePostCallTarget: return "native-post-ct1";
+    case NpcInteractMode::NativePostNoCallTarget: return "native-post-ct0";
+    case NpcInteractMode::NativePreCallTarget: return "native-pre-ct1";
+    case NpcInteractMode::NativePreNoCallTarget: return "native-pre-ct0";
+    case NpcInteractMode::PacketNpc8: return "packet-0x39-8";
+    case NpcInteractMode::PacketNpc12: return "packet-0x39-12";
+    default: return "unknown";
+    }
+}
+
+WorldActionId ResolveWorldActionId(uint32_t agentId) {
+    auto* agent = GetAgentByID(agentId);
+    if (!agent) {
+        return WorldActionId::InteractPlayerOrOther;
+    }
+    if (agent->type == 0x400u) {
+        return WorldActionId::InteractItem;
+    }
+    if (agent->type == 0x200u) {
+        return WorldActionId::InteractGadget;
+    }
+    if (agent->type != 0xDBu) {
+        return WorldActionId::InteractPlayerOrOther;
+    }
+
+    auto* living = static_cast<AgentLiving*>(agent);
+    if (living->allegiance == 3u) {
+        return WorldActionId::InteractEnemy;
+    }
+    if (living->allegiance == 6u) {
+        return WorldActionId::InteractNPC;
+    }
+    return WorldActionId::InteractPlayerOrOther;
+}
+
+void InvokeWorldActionRaw(uint32_t agentId, uint32_t callTarget) {
+    if (!s_worldActionFn) return;
+    const auto actionId = static_cast<uint32_t>(ResolveWorldActionId(agentId));
+    s_worldActionFn(actionId, agentId, callTarget);
+}
 
 bool EnsureRenderCommandPool() {
     if (s_renderCommandPool) return true;
@@ -468,16 +537,68 @@ void InteractItem(uint32_t agentId, bool callTarget) {
 }
 
 void InteractNPC(uint32_t agentId) {
-    if (s_interactNpcFn && GameThread::IsInitialized()) {
+    InteractNPCEx(agentId, NpcInteractMode::NativePostCallTarget);
+}
+
+void InteractNPCEx(uint32_t agentId, NpcInteractMode mode) {
+    const bool worldActionMode =
+        mode == NpcInteractMode::WorldActionNoCallTarget ||
+        mode == NpcInteractMode::WorldActionCallTarget;
+    if (worldActionMode && GameThread::IsInitialized() && Offsets::UIMessage > 0x10000) {
+        const uint32_t ct = mode == NpcInteractMode::WorldActionCallTarget ? 1u : 0u;
+        if (!s_loggedInteractNpcWorldAction) {
+            Log::Info("AgentMgr: InteractNPC using WorldAction UI message path msg=0x%08X",
+                      kSendWorldActionUiMessage);
+            s_loggedInteractNpcWorldAction = true;
+        }
+        if (!s_loggedInteractNpcVariant) {
+            Log::Info("AgentMgr: InteractNPC variant mode=%s msg=0x%08X",
+                      NpcInteractModeName(mode),
+                      kSendWorldActionUiMessage);
+            s_loggedInteractNpcVariant = true;
+        }
+        GameThread::Enqueue([agentId, ct]() {
+            WorldActionUIPacket packet{
+                static_cast<uint32_t>(ResolveWorldActionId(agentId)),
+                agentId,
+                ct
+            };
+            UIMgr::SendUIMessage(kSendWorldActionUiMessage, &packet, nullptr);
+        });
+        return;
+    }
+
+    const bool nativeMode =
+        mode == NpcInteractMode::NativePostCallTarget ||
+        mode == NpcInteractMode::NativePostNoCallTarget ||
+        mode == NpcInteractMode::NativePreCallTarget ||
+        mode == NpcInteractMode::NativePreNoCallTarget;
+    if (nativeMode && s_interactNpcFn && GameThread::IsInitialized()) {
+        const uint32_t ct =
+            (mode == NpcInteractMode::NativePostCallTarget ||
+             mode == NpcInteractMode::NativePreCallTarget) ? 1u : 0u;
         if (!s_loggedInteractNpcNative) {
-            Log::Info("AgentMgr: InteractNPC using native GameThread path fn=0x%08X",
+            Log::Info("AgentMgr: InteractNPC using native GameThread path fn=0x%08X callTarget=1",
                       static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_interactNpcFn)));
             s_loggedInteractNpcNative = true;
         }
+        if (!s_loggedInteractNpcVariant && mode != NpcInteractMode::NativePostCallTarget) {
+            Log::Info("AgentMgr: InteractNPC variant mode=%s fn=0x%08X",
+                      NpcInteractModeName(mode),
+                      static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_interactNpcFn)));
+            s_loggedInteractNpcVariant = true;
+        }
         auto fn = s_interactNpcFn;
-        GameThread::EnqueuePost([fn, agentId]() {
-            fn(agentId, 0u);
-        });
+        if (mode == NpcInteractMode::NativePreCallTarget ||
+            mode == NpcInteractMode::NativePreNoCallTarget) {
+            GameThread::Enqueue([fn, agentId, ct]() {
+                fn(agentId, ct);
+            });
+        } else {
+            GameThread::EnqueuePost([fn, agentId, ct]() {
+                fn(agentId, ct);
+            });
+        }
         return;
     }
 
@@ -485,7 +606,16 @@ void InteractNPC(uint32_t agentId) {
         Log::Warn("AgentMgr: InteractNPC falling back to raw packet path");
         s_loggedInteractNpcFallback = true;
     }
-    CtoS::SendPacket(3, Packets::INTERACT_LIVING, agentId, 0u);
+    if (!s_loggedInteractNpcVariant && mode != NpcInteractMode::NativePostCallTarget) {
+        Log::Info("AgentMgr: InteractNPC packet variant mode=%s", NpcInteractModeName(mode));
+        s_loggedInteractNpcVariant = true;
+    }
+
+    if (mode == NpcInteractMode::PacketNpc12) {
+        CtoS::SendPacket(3, Packets::INTERACT_NPC, agentId, 0u);
+        return;
+    }
+    CtoS::SendPacket(3, Packets::INTERACT_NPC, agentId, 0u);
 }
 
 void InteractPlayer(uint32_t agentId) {
