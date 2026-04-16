@@ -2409,91 +2409,56 @@ static bool PrepareTekksDungeonEntry() {
     Log::Info("Froggy: Tekks NPC found agent=%u", tekksId);
     logTekksQuestSnapshot("Tekks pre-interact snapshot");
 
-    // ---- NPC interaction to open dialog ----
-    // AutoIt TakeQuest0 flow:
-    //   GoNPC($NPC)       -> interacts with NPC (walk + dialog)
-    //   Sleep(2000)        -> wait for dialog window
-    //   QuestReward(...)   -> Dialog(0x833907) if quest needs completing
-    //   AcceptQuest(...)   -> Dialog(0x833901) to accept quest
-    //   Dialog(0x2AE6)     -> navigate dialog tree (completes "Talk to Tekks" objective)
-    //   Dialog(0x833905)   -> enter dungeon (opens quest door)
+    // ---- Blessing-shrine pattern: InteractNPC x3 + blind dialog sends ----
+    // The blessing shrine in Bogroot works reliably with this pattern:
+    //   CancelAction → ChangeTarget → InteractNPC x3 (1s sleeps) → Dialog blind
+    // The old Tekks code cycled through 36 interaction variants with constant
+    // CancelAction/ResetHookState, disrupting the dialog state. Keep it simple.
     //
-    // Raw 0x39 GoNPC packet crashes through CtoS engine hook.
-    // Use native InteractNPC function instead (bypasses CtoS).
-    // Previous code used InteractNPCEx from 332 units away — too far.
-    // Fix: move within interaction range first, then use native interact.
-    bool dialogOpened = false;
-    for (int retry = 0; retry < 5 && !dialogOpened; ++retry) {
-        // Refresh Tekks position and move close
-        auto* tekks = AgentMgr::GetAgentByID(tekksId);
-        if (tekks) {
-            MoveToAndWait(tekks->x, tekks->y, 100.0f);
-            WaitForLocalPositionSettle(1000, 15.0f);
-        }
-        AgentMgr::CancelAction();
-        WaitMs(300);
+    // AutoIt TakeQuest0 is:
+    //   GoNPC(NPC) → Sleep(2000) → QuestReward → AcceptQuest → Dialog(0x2AE6) → Dialog(0x833905)
+    // We match this but use native InteractNPC instead of raw GoNPC packet
+    // (raw 0x39 crashes through CtoS engine hook).
 
-        // Clear dialog state
-        DialogMgr::ClearDialog();
-        DialogMgr::ResetHookState();
-        DialogMgr::ResetRecentUITrace();
+    auto* tekks = AgentMgr::GetAgentByID(tekksId);
+    if (tekks) {
+        MoveToAndWait(tekks->x, tekks->y, 100.0f);
+    }
 
-        // Try native InteractNPC first, then 8-byte packet fallback on retries.
-        // (12-byte GoNPC packet crashes via CtoS hook — avoid it.)
-        if (retry < 3) {
-            Log::Info("Froggy: Tekks InteractNPC attempt %d agent=%u (native)", retry + 1, tekksId);
-            AgentMgr::ChangeTarget(tekksId);
-            WaitMs(200);
-            AgentMgr::InteractNPC(tekksId);
-        } else {
-            // Fallback: 8-byte 0x39 packet (used by merchant/integration tests)
-            Log::Info("Froggy: Tekks InteractNPC attempt %d agent=%u (packet-8byte)", retry + 1, tekksId);
-            AgentMgr::ChangeTarget(tekksId);
-            WaitMs(200);
-            AgentMgr::InteractNPCEx(tekksId, AgentMgr::NpcInteractMode::PacketNpc8);
-        }
+    // Step 1: InteractNPC x3 (matching blessing shrine + merchant patterns)
+    AgentMgr::ChangeTarget(tekksId);
+    WaitMs(500);
+    for (int i = 0; i < 3; ++i) {
+        Log::Info("Froggy: Tekks InteractNPC x3 pass %d agent=%u", i + 1, tekksId);
+        AgentMgr::InteractNPC(tekksId);
+        WaitMs(1000);
+    }
 
-        // Wait for dialog window to open — give 8 seconds for walk + interaction
-        dialogOpened = WaitForPredicate(8000, []() {
-            return DialogMgr::IsDialogOpen() ||
-                   DialogMgr::GetButtonCount() > 0 ||
-                   DialogMgr::GetDialogSenderAgentId() != 0;
-        }, 100);
+    // Step 2: Dwell — AutoIt does Sleep(2000) after GoNPC
+    WaitMs(2000);
 
+    {
         auto* me = AgentMgr::GetMyAgent();
-        const float distNow = (me && tekks) ? AgentMgr::GetDistance(me->x, me->y, tekks->x, tekks->y) : -1.0f;
-        Log::Info("Froggy: Tekks interact attempt %d result: dialogOpen=%d buttons=%u sender=%u lastDialog=0x%X dist=%.0f",
-                  retry + 1,
+        const float dist = (me && tekks) ? AgentMgr::GetDistance(me->x, me->y, tekks->x, tekks->y) : -1.0f;
+        Log::Info("Froggy: Tekks post-interact state: dist=%.0f dialogOpen=%d buttons=%u sender=%u lastDialog=0x%X target=%u",
+                  dist,
                   DialogMgr::IsDialogOpen() ? 1 : 0,
                   DialogMgr::GetButtonCount(),
                   DialogMgr::GetDialogSenderAgentId(),
                   DialogMgr::GetLastDialogId(),
-                  distNow);
-
-        if (!dialogOpened) {
-            Log::Info("Froggy: Tekks dialog did not open on attempt %d, retrying...", retry + 1);
-            WaitMs(500);
-        }
+                  AgentMgr::GetTargetId());
     }
 
-    if (!dialogOpened) {
-        // Even if dialog wasn't detected, try sending dialogs anyway and rely on
-        // the quest door checkpoint to detect if it actually worked.
-        Log::Info("Froggy: Tekks dialog never opened after 5 interact attempts — trying blind dialog sends");
-    }
-
-    // ---- Send dialog sequence (AutoIt: QuestReward -> AcceptQuest -> Dialog(0x2AE6) -> Dialog(0x833905)) ----
-    const uint32_t ping = ChatMgr::GetPing();
-
-    // QuestReward pass: if quest is already in log, try to reward/complete it first
+    // Step 3: Blind dialog sends — matching AutoIt TakeQuest0 exactly
+    // QuestReward (if quest already in log from previous run)
     if (QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr) {
-        SendPacketDialog(DIALOG_QUEST_REWARD);
-        WaitMs(500 + ping);
+        QuestMgr::Dialog(DIALOG_QUEST_REWARD);
+        WaitMs(500);
     }
-
-    // AcceptQuest: accept the quest
-    SendPacketDialog(DIALOG_QUEST_ACCEPT);
-    WaitMs(500 + ping);
+    // AcceptQuest
+    QuestMgr::Dialog(DIALOG_QUEST_ACCEPT);
+    WaitMs(500);
+    // Set active quest
     QuestMgr::RequestQuestInfo(QUEST_TEKKS_WAR);
     WaitMs(150);
     if (QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr) {
@@ -2502,31 +2467,23 @@ static bool PrepareTekksDungeonEntry() {
     }
     logTekksQuestSnapshot("Tekks accept snapshot");
 
-    // Dialog(0x2AE6): navigate dialog tree — this completes "Talk to Tekks" objective
-    SendPacketDialog(DIALOG_NPC_TALK);
-    WaitMs(500 + ping);
-    const bool talkLatched = DialogMgr::GetLastDialogId() == DIALOG_NPC_TALK;
-    Log::Info("Froggy: Tekks talk dialog 0x2AE6 latched=%d lastDialog=0x%X", talkLatched ? 1 : 0, DialogMgr::GetLastDialogId());
+    // Dialog(0x2AE6) — "Talk to Tekks" objective completion
+    QuestMgr::Dialog(DIALOG_NPC_TALK);
+    WaitMs(500);
+    Log::Info("Froggy: Tekks after Dialog(0x2AE6) lastDialog=0x%X", DialogMgr::GetLastDialogId());
 
-    // Dialog(0x833905): enter dungeon — this opens the quest door
-    SendPacketDialog(DIALOG_DUNGEON_ENTRY);
-    WaitMs(600 + ping);
+    // Dialog(0x833905) — dungeon entry (opens quest door)
+    QuestMgr::Dialog(DIALOG_DUNGEON_ENTRY);
+    WaitMs(1000);
     QuestMgr::RequestQuestInfo(QUEST_TEKKS_WAR);
     WaitMs(150);
-    const bool dungeonEntryLatched = DialogMgr::GetLastDialogId() == DIALOG_DUNGEON_ENTRY;
-    Log::Info("Froggy: Tekks dungeon-entry 0x833905 latched=%d lastDialog=0x%X", dungeonEntryLatched ? 1 : 0, DialogMgr::GetLastDialogId());
     logTekksQuestSnapshot("Tekks dungeon-entry complete snapshot");
 
     const bool questPresent = QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr;
-    Log::Info("Froggy: Tekks dungeon entry sequence complete dialogOpened=%d talkLatched=%d dungeonEntryLatched=%d activeQuest=0x%X questPresent=%d",
-              dialogOpened ? 1 : 0,
-              talkLatched ? 1 : 0,
-              dungeonEntryLatched ? 1 : 0,
+    Log::Info("Froggy: Tekks dungeon entry sequence complete questPresent=%d activeQuest=0x%X lastDialog=0x%X",
+              questPresent ? 1 : 0,
               QuestMgr::GetActiveQuestId(),
-              questPresent ? 1 : 0);
-
-    // Accept even if dialog wasn't visibly detected — the GoNPC packet may have
-    // triggered the server-side dialog even if our hooks didn't observe it.
+              DialogMgr::GetLastDialogId());
     return questPresent;
 }
 
