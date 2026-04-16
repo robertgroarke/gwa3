@@ -275,6 +275,10 @@ extern "C" void __declspec(naked) GWA3BotshubCommandReturnThunk() {
         inc eax
         mov dword ptr [s_botshubCmdTail], eax
     skip_tail_advance:
+        // Restore FPU state saved at EngineDetourNaked entry.
+        // Botshub commands bypass the normal exit path, so without this
+        // the fld below operates on a corrupted FPU stack.
+        frstor [s_fpuSaveArea]
         popfd
         popad
         // Hardcoded exit: replay original bytes inline, matching upstream

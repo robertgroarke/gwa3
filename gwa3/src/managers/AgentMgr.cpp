@@ -300,19 +300,13 @@ void InvokeSparkflyMoveRaw(const MoveData* move) {
 
 void InvokeChangeTargetRaw(uint32_t agentId) {
     if (!s_changeTargetFn) return;
-
-    uintptr_t fn = reinterpret_cast<uintptr_t>(s_changeTargetFn);
-    __asm {
-        push eax
-        push edx
-        xor edx, edx
-        push edx
-        mov eax, agentId
-        push eax
-        call dword ptr [fn]
-        add esp, 8
-        pop edx
-        pop eax
+    // Direct C function pointer call — the inline asm version was suspected
+    // of stack corruption (same pattern as the Move fix at InvokeSparkflyMoveRaw).
+    __try {
+        s_changeTargetFn(agentId, 0u);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Error("AgentMgr: InvokeChangeTargetRaw exception 0x%08X agentId=%u",
+                   GetExceptionCode(), agentId);
     }
 }
 
@@ -334,7 +328,17 @@ void InvokeChangeTarget(void* raw) {
 void IssueNativeMove(float x, float y) {
     // Safety: don't call native move during zone transitions or when agent is invalid.
     // The native fn crashes if called while the world state is being torn down/rebuilt.
-    if (!MapMgr::GetIsMapLoaded() || GetMyId() == 0) {
+    const bool mapLoaded = MapMgr::GetIsMapLoaded();
+    const uint32_t myId = GetMyId();
+    Log::Info("AgentMgr: IssueNativeMove begin target=(%.0f, %.0f) map=%u loaded=%d myId=%u moveFn=0x%p",
+              x,
+              y,
+              MapMgr::GetMapId(),
+              mapLoaded ? 1 : 0,
+              myId,
+              s_moveFn);
+    if (!mapLoaded || myId == 0) {
+        Log::Info("AgentMgr: IssueNativeMove skipped because world is not ready");
         return;  // silently skip - caller will retry on next tick
     }
 
@@ -343,6 +347,7 @@ void IssueNativeMove(float x, float y) {
     moveData.y = y;
     moveData.plane = 0;
     InvokeSparkflyMoveRaw(&moveData);
+    Log::Info("AgentMgr: IssueNativeMove returned target=(%.0f, %.0f)", x, y);
 }
 
 } // namespace
