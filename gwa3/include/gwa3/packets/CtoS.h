@@ -40,6 +40,12 @@ namespace GWA3::CtoS {
     // header is the packet opcode, followed by up to 10 dword params.
     void SendPacket(uint32_t size, uint32_t header, ...);
 
+    // Direct packet send: calls PacketSend immediately on the CURRENT thread,
+    // bypassing GameThread::Enqueue and the engine hook detour entirely.
+    // Use for packets that crash through the engine hook (e.g. INTERACT_NPC 0x39).
+    // The MinHook tap still fires for logging but no detour/trampoline is involved.
+    void SendPacketDirect(uint32_t size, uint32_t header, ...);
+
     // --- Type-safe wrappers ---
 
     void MoveToCoord(float x, float y);

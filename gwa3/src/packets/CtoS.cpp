@@ -5,6 +5,7 @@
 #include <gwa3/core/Log.h>
 
 #include <Windows.h>
+#include <MinHook.h>
 #include <cstdarg>
 #include <cstring>
 
@@ -15,8 +16,34 @@ namespace GWA3::CtoS {
 using PacketSendFn = void(__cdecl*)(void*, uint32_t, uint32_t*);
 
 static PacketSendFn s_packetSendFn = nullptr;
+static PacketSendFn s_packetSendOriginal = nullptr;  // trampoline for packet tap
+static bool s_packetTapEnabled = false;
 static uintptr_t s_packetLocation = 0;
 static bool s_initialized = false;
+
+// Packet tap: intercept ALL outgoing CtoS packets (including game UI actions)
+static void __cdecl PacketSendTap(void* loc, uint32_t sizeBytes, uint32_t* data) {
+    if (s_packetTapEnabled && data && sizeBytes >= 4) {
+        const uint32_t hdr = data[0];
+        const uint32_t numDwords = sizeBytes / 4;
+        // Log header + first 4 data dwords for identification
+        if (numDwords >= 4) {
+            Log::Info("[PACKET-TAP] hdr=0x%02X size=%u d1=0x%08X d2=0x%08X d3=0x%08X",
+                      hdr, sizeBytes, data[1], data[2], data[3]);
+        } else if (numDwords >= 3) {
+            Log::Info("[PACKET-TAP] hdr=0x%02X size=%u d1=0x%08X d2=0x%08X",
+                      hdr, sizeBytes, data[1], data[2]);
+        } else if (numDwords >= 2) {
+            Log::Info("[PACKET-TAP] hdr=0x%02X size=%u d1=0x%08X",
+                      hdr, sizeBytes, data[1]);
+        } else {
+            Log::Info("[PACKET-TAP] hdr=0x%02X size=%u", hdr, sizeBytes);
+        }
+    }
+    if (s_packetSendOriginal) {
+        s_packetSendOriginal(loc, sizeBytes, data);
+    }
+}
 
 static void IssuePacketSend(const uint32_t* data, uint32_t sizeBytes);
 
@@ -545,6 +572,30 @@ bool Initialize() {
     Log::Info("CtoS: Initialized (PacketSend=0x%08X, PacketLocation=0x%08X)",
               Offsets::PacketSend, s_packetLocation);
 
+    // Install packet tap hook on the real PacketSend function
+    {
+        MH_STATUS mh = MH_Initialize();
+        if (mh != MH_OK && mh != MH_ERROR_ALREADY_INITIALIZED) {
+            Log::Warn("CtoS: MH_Initialize failed for packet tap: %s", MH_StatusToString(mh));
+        }
+        mh = MH_CreateHook(
+            reinterpret_cast<LPVOID>(Offsets::PacketSend),
+            reinterpret_cast<LPVOID>(&PacketSendTap),
+            reinterpret_cast<LPVOID*>(&s_packetSendOriginal));
+        if (mh == MH_OK) {
+            mh = MH_EnableHook(reinterpret_cast<LPVOID>(Offsets::PacketSend));
+            if (mh == MH_OK) {
+                Log::Info("CtoS: Packet tap hook installed at PacketSend=0x%08X", Offsets::PacketSend);
+                // Start enabled so we capture trade offer packets
+                s_packetTapEnabled = true;
+            } else {
+                Log::Warn("CtoS: Packet tap MH_EnableHook failed: %s", MH_StatusToString(mh));
+            }
+        } else {
+            Log::Warn("CtoS: Packet tap MH_CreateHook failed: %s", MH_StatusToString(mh));
+        }
+    }
+
     // Install Engine inline hook for packet dispatch
     if (!InstallEngineHook()) {
         Log::Warn("CtoS: Engine hook failed -- packets will be dropped");
@@ -618,6 +669,27 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
     Log::Warn("CtoS: SendPacket dropped header=0x%X -- GameThread not ready", header);
 }
 
+void SendPacketDirect(uint32_t size, uint32_t header, ...) {
+    if (!s_initialized && !Initialize()) {
+        Log::Warn("CtoS: SendPacketDirect dropped (header=0x%X) -- not initialized", header);
+        return;
+    }
+
+    uint32_t data[12];
+    data[0] = header;
+
+    va_list args;
+    va_start(args, header);
+    for (uint32_t i = 1; i < size && i < 12; i++) {
+        data[i] = va_arg(args, uint32_t);
+    }
+    va_end(args);
+
+    const uint32_t sizeBytes = size * 4;
+    Log::Info("CtoS: SendPacketDirect hdr=0x%X size=%u (bypassing engine hook)", header, sizeBytes);
+    IssuePacketSend(data, sizeBytes);
+}
+
 // --- Type-safe wrappers ---
 
 
@@ -629,8 +701,9 @@ void MoveToCoord(float x, float y) {
 }
 
 void Dialog(uint32_t dialogId) {
-    // Current AutoIt GWA2 logic uses 0x3A for dialog sends.
-    SendPacket(2, Packets::DIALOG_SEND_LIVING, dialogId);
+    // Upstream Botshub/AutoIt uses HEADER_DIALOG_SEND (0x3B) for quest/NPC
+    // dialog actions such as AcceptQuest and QuestReward.
+    SendPacket(2, Packets::DIALOG_SEND, dialogId);
 }
 
 void ChangeTarget(uint32_t agentId) {
