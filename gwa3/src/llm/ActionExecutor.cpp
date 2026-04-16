@@ -1,5 +1,6 @@
 #include <gwa3/llm/ActionExecutor.h>
 #include <gwa3/llm/IpcServer.h>
+#include <gwa3/llm/LlmBridge.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/managers/AgentMgr.h>
@@ -18,6 +19,7 @@
 #include <unordered_map>
 #include <functional>
 #include <string>
+#include <thread>
 #include <chrono>
 #include <cstring>
 
@@ -66,7 +68,22 @@ namespace GWA3::LLM::ActionExecutor {
         j["success"] = success;
         j["error"] = (error && error[0]) ? error : nullptr;
         std::string s = j.dump();
+        GWA3::Log::Info("[LLM-Action] SendResult begin: request_id=%s success=%d bytes=%u",
+                        requestId ? requestId : "",
+                        success ? 1 : 0,
+                        static_cast<uint32_t>(s.size()));
         IpcServer::Send(s.c_str(), static_cast<uint32_t>(s.size()));
+        GWA3::Log::Info("[LLM-Action] SendResult end: request_id=%s", requestId ? requestId : "");
+    }
+
+    static void SendResultAfter(const char* requestId, bool success, const char* error, uint32_t delayMs) {
+        const std::string req = requestId ? requestId : "";
+        const std::string err = (error && error[0]) ? error : "";
+        std::thread([req, success, err, delayMs]() {
+            Sleep(delayMs);
+            SendResult(req.c_str(), success, err.c_str());
+            GWA3::Log::Info("[LLM-Action] Delayed SendResult done: initiate_trade after %u ms", delayMs);
+        }).detach();
     }
 
     // --- Action handlers ---
@@ -383,6 +400,101 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
+    static ActionResult HandleInitiateTrade(const json& p) {
+        if (!p.contains("agent_id")) return MakeError("missing agent_id");
+        uint32_t agentId = p["agent_id"].get<uint32_t>();
+        if (!AgentMgr::GetAgentExists(agentId)) return MakeError("agent_not_found");
+        uint32_t playerNumber = p.value("player_number", 0u);
+        GWA3::LLM::PauseSnapshotsFor(2000);
+        std::thread([agentId, playerNumber]() {
+            constexpr uint32_t kInitiateTradeDispatchDelayMs = 500;
+            Sleep(kInitiateTradeDispatchDelayMs);
+            GWA3::GameThread::Enqueue([agentId, playerNumber]() {
+                TradeMgr::InitiateTrade(agentId, playerNumber);
+            });
+        }).detach();
+        return MakeOk();
+    }
+
+    static ActionResult HandleOfferTradeItem(const json& p) {
+        if (!p.contains("item_id")) return MakeError("missing item_id");
+        uint32_t itemId = p["item_id"].get<uint32_t>();
+        uint32_t quantity = p.value("quantity", 1u);
+        // Arm the deferred offer — executes inside OnUpdateTradeCart callback
+        TradeMgr::OfferItem(itemId, quantity);
+    }
+
+    static ActionResult HandleOfferTradeItemPromptMax(const json& p) {
+        if (!p.contains("item_id")) return MakeError("missing item_id");
+        uint32_t itemId = p["item_id"].get<uint32_t>();
+        auto* item = ItemMgr::GetItemById(itemId);
+        if (!item) return MakeError("item_not_found");
+        if (item->quantity <= 1) return MakeError("item_not_stackable");
+        GWA3::GameThread::EnqueuePost([itemId]() {
+            TradeMgr::OfferItemPromptMax(itemId);
+        });
+        return MakeOk();
+    }
+
+    static ActionResult HandleOfferTradeItemPromptDefault(const json& p) {
+        if (!p.contains("item_id")) return MakeError("missing item_id");
+        uint32_t itemId = p["item_id"].get<uint32_t>();
+        auto* item = ItemMgr::GetItemById(itemId);
+        if (!item) return MakeError("item_not_found");
+        if (item->quantity <= 1) return MakeError("item_not_stackable");
+        GWA3::GameThread::Enqueue([itemId]() {
+            TradeMgr::OfferItemPromptDefault(itemId);
+        });
+        return MakeOk();
+    }
+
+    static ActionResult HandleOfferTradeItemPromptQuantity(const json& p) {
+        if (!p.contains("item_id") || !p.contains("quantity"))
+            return MakeError("missing item_id or quantity");
+        uint32_t itemId = p["item_id"].get<uint32_t>();
+        uint32_t quantity = p["quantity"].get<uint32_t>();
+        auto* item = ItemMgr::GetItemById(itemId);
+        if (!item) return MakeError("item_not_found");
+        if (item->quantity <= 1) return MakeError("item_not_stackable");
+        if (quantity == 0) return MakeError("invalid_quantity");
+        if (quantity > item->quantity) return MakeError("quantity_exceeds_stack");
+        GWA3::GameThread::Enqueue([itemId, quantity]() {
+            TradeMgr::OfferItemPromptValue(itemId, quantity);
+        });
+        return MakeOk();
+    }
+
+    static ActionResult HandleSubmitTradeOffer(const json& p) {
+        uint32_t gold = p.value("gold", 0u);
+        GWA3::GameThread::Enqueue([gold]() { TradeMgr::SubmitOffer(gold); });
+        return MakeOk();
+    }
+
+    static ActionResult HandleAcceptTrade(const json&) {
+        GWA3::GameThread::Enqueue([]() { TradeMgr::AcceptTrade(); });
+        return MakeOk();
+    }
+
+    static ActionResult HandleCancelTrade(const json& p) {
+        const uint32_t row = p.value("row", 10u);
+        const int32_t child = p.value("child", -1);
+        const uint32_t transport = p.value("transport", 9u);
+        GWA3::GameThread::Enqueue([row, child, transport]() { TradeMgr::CancelTrade(row, child, transport); });
+        return MakeOk();
+    }
+
+    static ActionResult HandleChangeTradeOffer(const json&) {
+        GWA3::GameThread::Enqueue([]() { TradeMgr::ChangeOffer(); });
+        return MakeOk();
+    }
+
+    static ActionResult HandleRemoveTradeItem(const json& p) {
+        if (!p.contains("slot_or_item_id")) return MakeError("missing slot_or_item_id");
+        uint32_t slotOrItemId = p["slot_or_item_id"].get<uint32_t>();
+        GWA3::GameThread::Enqueue([slotOrItemId]() { TradeMgr::RemoveItem(slotOrItemId); });
+        return MakeOk();
+    }
+
     static ActionResult HandleIdentifyItem(const json& p) {
         if (!p.contains("item_id") || !p.contains("kit_id"))
             return MakeError("missing item_id or kit_id");
@@ -539,6 +651,16 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["salvage_done"] = HandleSalvageDone;
 
         // Trade & Crafting
+        g_dispatch["initiate_trade"] = HandleInitiateTrade;
+        g_dispatch["offer_trade_item"] = HandleOfferTradeItem;
+        g_dispatch["offer_trade_item_prompt_max"] = HandleOfferTradeItemPromptMax;
+        g_dispatch["offer_trade_item_prompt_default"] = HandleOfferTradeItemPromptDefault;
+        g_dispatch["offer_trade_item_prompt_quantity"] = HandleOfferTradeItemPromptQuantity;
+        g_dispatch["submit_trade_offer"] = HandleSubmitTradeOffer;
+        g_dispatch["accept_trade"] = HandleAcceptTrade;
+        g_dispatch["cancel_trade"] = HandleCancelTrade;
+        g_dispatch["change_trade_offer"] = HandleChangeTradeOffer;
+        g_dispatch["remove_trade_item"] = HandleRemoveTradeItem;
         g_dispatch["buy_materials"] = HandleBuyMaterials;
         g_dispatch["request_quote"] = HandleRequestQuote;
         g_dispatch["transact_items"] = HandleTransactItems;
@@ -599,7 +721,15 @@ namespace GWA3::LLM::ActionExecutor {
 
         GWA3::Log::Info("[LLM-Action] Executing: %s", actionName);
         ActionResult result = it->second(params);
-        SendResult(requestId, result.success, result.error);
+        GWA3::Log::Info("[LLM-Action] Handler returned: %s success=%d error=%s",
+                        actionName, result.success ? 1 : 0, result.error[0] ? result.error : "(none)");
+        const bool fireAndForget = !requestId || !requestId[0];
+        if (fireAndForget) {
+            GWA3::Log::Info("[LLM-Action] Fire-and-forget: skipping action_result for %s", actionName);
+        } else {
+            SendResult(requestId, result.success, result.error);
+            GWA3::Log::Info("[LLM-Action] SendResult done: %s", actionName);
+        }
         return result;
     }
 

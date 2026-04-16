@@ -21,6 +21,8 @@
 
 namespace GWA3::TradeMgr {
 
+static uintptr_t GetTradeWindowFromGameContext();
+
 namespace {
 
 void QueueDelayedOfferRetry(uint32_t itemId, uint32_t quantity, uint32_t attemptsRemaining) {
@@ -60,8 +62,20 @@ static uintptr_t s_tradeCartTrampoline = 0;
 static uint8_t s_tradeCartSavedBytes[kTradeHookPatchSize] = {};
 static bool s_tradeCartHookEnabled = false;
 static volatile LONG s_tradeWindowContext = 0;
+static volatile LONG s_lastTradeCartEax = 0;
 static volatile LONG s_tradeWindowFrame = 0;
 static volatile LONG s_tradeWindowCaptureCount = 0;
+
+// Deferred offer: set by OfferItem/OfferItemPromptQuantity, executed
+// inside the next OnUpdateTradeCart callback where the game's UI context
+// is valid.  The native OfferTradeItem crashes when called from our
+// GameThread hooks but works from the UpdateTradeCart callback.
+struct PendingOffer {
+    volatile LONG armed;      // 1 = pending, 0 = idle
+    volatile LONG itemId;
+    volatile LONG quantity;   // 0 = prompt (popup), >0 = direct
+};
+static PendingOffer s_pendingOffer = {0, 0, 0};
 static uint8_t s_tradeHackOriginalByte = 0;
 static bool s_tradeHackOriginalByteKnown = false;
 static bool s_tradeHackPatched = false;
@@ -704,26 +718,74 @@ static bool ToggleTradePatch(bool enable) {
 
 static void CaptureTradeWindowContext(uintptr_t eaxValue) {
     if (eaxValue <= 0x10000) return;
+    InterlockedExchange(&s_lastTradeCartEax, static_cast<LONG>(eaxValue));
     __try {
-        auto** address = reinterpret_cast<uintptr_t**>(eaxValue);
-        address += 2;
-        if (!address || !*address) return;
-        address = reinterpret_cast<uintptr_t**>(*address);
-        if (!address || !*address) return;
-        auto* window = reinterpret_cast<TradeWindowView*>(*address);
-        if (!window) return;
-        s_tradeWindowContext = static_cast<LONG>(reinterpret_cast<uintptr_t>(window));
-        s_tradeWindowFrame = static_cast<LONG>(window->frame_id);
+        // Dump the raw pointer chain at each level for diagnosis:
+        // Level 0: eax (the raw callback parameter)
+        // Level 1: *(eax + 8) — GWCA stops here (one deref)
+        // Level 2: **(eax + 8) — our current code does this extra deref
+        uintptr_t* base = reinterpret_cast<uintptr_t*>(eaxValue);
+        const uintptr_t val_at_0 = base[0];
+        const uintptr_t val_at_1 = base[1];
+        const uintptr_t val_at_2 = base[2];  // = *(eax+8)
+
+        // GWCA-style: treat val_at_2 as the TradeWindow* directly
+        auto* gwca_window = reinterpret_cast<TradeWindowView*>(val_at_2);
+
+        // Our 3-deref: deref val_at_2 once more, then deref again
+        uintptr_t deref1 = 0;
+        uintptr_t deref2 = 0;
+        TradeWindowView* deep_window = nullptr;
+        if (val_at_2 > 0x10000) {
+            deref1 = *reinterpret_cast<uintptr_t*>(val_at_2);
+            if (deref1 > 0x10000) {
+                deref2 = *reinterpret_cast<uintptr_t*>(deref1);
+                if (deref2 > 0x10000) {
+                    deep_window = reinterpret_cast<TradeWindowView*>(deref2);
+                }
+            }
+        }
+
         const LONG captureCount = InterlockedIncrement(&s_tradeWindowCaptureCount);
-        if (captureCount <= 10) {
-            Log::Info("TradeMgr: CaptureTradeWindowContext[%ld] eax=0x%08X ctx=0x%08X frame=0x%08X state=0x%X items_count=%u items_max=%u",
+        if (captureCount <= 20) {
+            Log::Info("TradeMgr: CaptureContext[%ld] eax=0x%08X eax[0]=0x%08X eax[1]=0x%08X eax[2]=0x%08X",
                       captureCount,
                       static_cast<unsigned>(eaxValue),
-                      static_cast<unsigned>(reinterpret_cast<uintptr_t>(window)),
-                      static_cast<unsigned>(window->frame_id),
-                      window->state,
-                      window->items_count,
-                      window->items_max);
+                      static_cast<unsigned>(val_at_0),
+                      static_cast<unsigned>(val_at_1),
+                      static_cast<unsigned>(val_at_2));
+            // GWCA actual path: *(*(eax+8)) — TWO dereferences, not "eax[2] as TradeWindow"
+            if (deref1 > 0x10000) {
+                auto* gwca_actual = reinterpret_cast<TradeWindowView*>(deref1);
+                Log::Info("TradeMgr: CaptureContext[%ld] GWCA-actual (*(*(eax+8))=0x%08X): state=0x%X items_count=%u items_max=%u frame=0x%08X",
+                          captureCount,
+                          static_cast<unsigned>(deref1),
+                          gwca_actual->state, gwca_actual->items_count, gwca_actual->items_max,
+                          static_cast<unsigned>(gwca_actual->frame_id));
+            }
+            if (deep_window) {
+                Log::Info("TradeMgr: CaptureContext[%ld] 3-deref (eax[2]→*→*): ptr=0x%08X state=0x%X items_count=%u items_max=%u frame=0x%08X",
+                          captureCount,
+                          static_cast<unsigned>(deref2),
+                          deep_window->state, deep_window->items_count, deep_window->items_max,
+                          static_cast<unsigned>(deep_window->frame_id));
+            }
+            Log::Info("TradeMgr: CaptureContext[%ld] deref chain: eax[2]=0x%08X → *=0x%08X → *=0x%08X",
+                      captureCount,
+                      static_cast<unsigned>(val_at_2),
+                      static_cast<unsigned>(deref1),
+                      static_cast<unsigned>(deref2));
+        }
+
+        // Use GWCA-correct 2-deref: *(*(eax+8)) = deref1.
+        // Only store when state == 0 (settled) — during state=0x1000 (init),
+        // the pointer may shift as the trade window struct relocates.
+        if (deref1 > 0x10000) {
+            auto* w = reinterpret_cast<TradeWindowView*>(deref1);
+            if (w->items_max > 0 && w->items_max <= 64 && w->state == 0) {
+                s_tradeWindowContext = static_cast<LONG>(deref1);
+                s_tradeWindowFrame = static_cast<LONG>(w->frame_id);
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         s_tradeWindowContext = 0;
@@ -733,8 +795,55 @@ static void CaptureTradeWindowContext(uintptr_t eaxValue) {
 
 static void __cdecl OnUpdateTradeCart(void* eaxValue, void* a1, void* a2) {
     CaptureTradeWindowContext(reinterpret_cast<uintptr_t>(eaxValue));
+
+    // Call original FIRST so the game processes the trade cart update
     if (s_updateTradeCartOriginal) {
         s_updateTradeCartOriginal(eaxValue, a1, a2);
+    }
+
+    // Execute deferred offer if one is pending.
+    // We're inside the game's UI dispatch context here, so
+    // OfferTradeItem should work without crashing.
+    if (InterlockedCompareExchange(&s_pendingOffer.armed, 0, 1) == 1) {
+        const uint32_t itemId = static_cast<uint32_t>(s_pendingOffer.itemId);
+        const uint32_t quantity = static_cast<uint32_t>(s_pendingOffer.quantity);
+
+        // Derive context from the GWCA 2-deref path (live eax on stack)
+        uintptr_t ctx = 0;
+        __try {
+            uintptr_t* base = reinterpret_cast<uintptr_t*>(eaxValue);
+            uintptr_t val2 = base[2];
+            if (val2 > 0x10000) {
+                uintptr_t deref1 = *reinterpret_cast<uintptr_t*>(val2);
+                if (deref1 > 0x10000) {
+                    auto* w = reinterpret_cast<TradeWindowView*>(deref1);
+                    if (w->items_max > 0 && w->items_max <= 64 && w->state == 0) {
+                        ctx = deref1;
+                    }
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+
+        if (ctx > 0x10000 && Offsets::OfferTradeItem > 0x10000) {
+            auto* window = reinterpret_cast<TradeWindowView*>(ctx);
+            Log::Info("TradeMgr: DeferredOffer executing item=%u qty=%u ctx=0x%08X state=0x%X",
+                      itemId, quantity, static_cast<unsigned>(ctx), window->state);
+            __try {
+                OfferTradeItemNative fn = reinterpret_cast<OfferTradeItemNative>(Offsets::OfferTradeItem);
+                fn(window, nullptr, itemId, quantity, 1);
+                Log::Info("TradeMgr: DeferredOffer succeeded item=%u qty=%u", itemId, quantity);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                Log::Error("TradeMgr: DeferredOffer faulted item=%u qty=%u ctx=0x%08X",
+                           itemId, quantity, static_cast<unsigned>(ctx));
+            }
+        } else {
+            Log::Warn("TradeMgr: DeferredOffer skipped — ctx=0x%08X fn=0x%08X (context not ready, will retry)",
+                      static_cast<unsigned>(ctx), static_cast<unsigned>(Offsets::OfferTradeItem));
+            // Re-arm so next callback retries
+            InterlockedExchange(&s_pendingOffer.itemId, static_cast<LONG>(itemId));
+            InterlockedExchange(&s_pendingOffer.quantity, static_cast<LONG>(quantity));
+            InterlockedExchange(&s_pendingOffer.armed, 1);
+        }
     }
 }
 
@@ -1475,14 +1584,10 @@ bool HasNativeRemoveItem() {
 }
 
 bool EnableTradeWindowCaptureForPlayerTrade() {
-    if (s_tradeCartTrampoline) return true;
-    const bool installed = InstallTradeCartHook();
-    if (installed) {
-        Log::Info("TradeMgr: Enabled UpdateTradeCart hook on demand for player trade");
-    } else {
-        Log::Warn("TradeMgr: Failed to enable UpdateTradeCart hook on demand for player trade");
-    }
-    return installed;
+    // UpdateTradeCart MinHook trampoline crashes GW after ~2-3 seconds.
+    // The deferred offer needs an alternative mechanism.
+    Log::Info("TradeMgr: UpdateTradeCart hook SKIPPED (trampoline crashes GW)");
+    return true;
 }
 
 void InitiateTradeUiOnly(uint32_t agentId, uint32_t requestedPlayerNumber) {
@@ -1575,9 +1680,10 @@ void InitiateTrade(uint32_t agentId, uint32_t requestedPlayerNumber) {
     InterlockedExchange(&s_tradeWindowFrame, 0);
     InterlockedExchange(&s_tradeWindowCaptureCount, 0);
     EnableTradeWindowCaptureForPlayerTrade();
-    if (!s_tradeHackPatched) {
-        ToggleTradePatch(true);
-    }
+    // Trade hack patch disabled — it prevents trade from opening.
+    // if (!s_tradeHackPatched) {
+    //     ToggleTradePatch(true);
+    // }
     const uint32_t currentTargetBefore = AgentMgr::GetTargetId();
     Log::Info("TradeMgr: InitiateTrade stage1 agent=%u requestedPlayerNumber=%u currentTargetBefore=%u",
               agentId, requestedPlayerNumber, currentTargetBefore);
@@ -1610,20 +1716,8 @@ void CancelTrade(uint32_t actionRowIndex, int32_t preferredChildIndex, uint32_t 
               actionRowIndex,
               preferredChildIndex,
               transportMode);
-    if (uiFrame > 0x10000) {
-        UIMgr::DebugDumpChildFrames(uiFrame, "trade_window_root", 24);
-        for (uint32_t i = 7; i <= 10; ++i) {
-            const uintptr_t child = UIMgr::GetChildFrameByIndex(uiFrame, i);
-            if (child > 0x10000) {
-                char label[64];
-                sprintf_s(label, "trade_window_root[%u]", i);
-                UIMgr::DebugDumpChildFrames(child, label, 16);
-            }
-        }
-    }
-    if (uiCtx > 0x10000) {
-        UIMgr::DebugDumpFramesForContext(uiCtx, "trade_window_context", 64);
-    }
+    // Frame dumps removed — iterating stale frame pointers during trade
+    // caused crashes after the trade window was open for >2 seconds.
     if (transportMode != 9u && uiFrame > 0x10000) {
         const uintptr_t actionRow = UIMgr::GetChildFrameByIndex(uiFrame, actionRowIndex);
         if (actionRow > 0x10000) {
@@ -1733,53 +1827,39 @@ void AcceptTrade() {
     CtoS::TradeAccept();
 }
 
+static uintptr_t GetTradeWindowFromGameContext();
+
 void OfferItem(uint32_t itemId, uint32_t quantity, uint32_t attemptsRemaining) {
-    uintptr_t ctx = static_cast<uintptr_t>(s_tradeWindowContext);
-    const uintptr_t capturedFrame = static_cast<uintptr_t>(s_tradeWindowFrame);
-    const uintptr_t uiFrame = static_cast<uintptr_t>(GetTradeWindowUiFrame());
-    const uintptr_t uiCtx = static_cast<uintptr_t>(GetTradeWindowUiContext());
-    Log::Info("TradeMgr: OfferItem request item=%u qty=%u ctx=0x%08X frame=0x%08X uiCtx=0x%08X uiFrame=0x%08X fn=0x%08X captures=%ld usingUiFallback=%u",
-              itemId,
-              quantity,
-              static_cast<unsigned>(ctx),
-              static_cast<unsigned>(capturedFrame),
-              static_cast<unsigned>(uiCtx),
-              static_cast<unsigned>(uiFrame),
-              static_cast<unsigned>(Offsets::OfferTradeItem),
-              s_tradeWindowCaptureCount,
-              attemptsRemaining);
-    if (s_tradeHackPatched) {
-        Log::Info("TradeMgr: OfferItem keeping trade patch enabled for native offer call");
-    }
-    if (Offsets::OfferTradeItem > 0x10000 && ctx > 0x10000) {
-        auto* window = reinterpret_cast<TradeWindowView*>(ctx);
-        __try {
-            Log::Info("TradeMgr: OfferItem native precheck state=0x%X items_count=%u items_max=%u frame=0x%08X",
-                      window->state,
-                      window->items_count,
-                      window->items_max,
-                      static_cast<unsigned>(window->frame_id));
-            if (window->state == 0) {
-                DisableTradeCartHookForOffer();
-                OfferTradeItemNative fn = reinterpret_cast<OfferTradeItemNative>(Offsets::OfferTradeItem);
-                fn(window, nullptr, itemId, quantity, 1);
-                Log::Info("TradeMgr: OfferItem native call returned");
-                return;
-            }
-            Log::Warn("TradeMgr: OfferItem native path blocked; trade window state=0x%X frame=0x%X attemptsRemaining=%u",
-                      window->state,
-                      static_cast<unsigned>(window->frame_id),
-                      attemptsRemaining);
-            QueueDelayedOfferRetry(itemId, quantity, attemptsRemaining);
-            return;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            Log::Warn("TradeMgr: OfferItem native path faulted");
+    if (quantity == 0) quantity = 1;
+    // Use GameContext+0x58 for trade window context and call from
+    // GameThread post-dispatch (after original game callback runs).
+    Log::Info("TradeMgr: OfferItem enqueuing post-dispatch offer item=%u qty=%u", itemId, quantity);
+    GameThread::EnqueuePost([itemId, quantity]() {
+        const uintptr_t ctx = GetTradeWindowFromGameContext();
+        if (ctx <= 0x10000 || Offsets::OfferTradeItem <= 0x10000) {
+            Log::Warn("TradeMgr: OfferItem post-dispatch — context unavailable ctx=0x%08X",
+                      static_cast<unsigned>(ctx));
             return;
         }
-    }
+        auto* window = reinterpret_cast<TradeWindowView*>(ctx);
+        __try {
+            if (window->state != 0) {
+                Log::Info("TradeMgr: OfferItem post-dispatch — state=0x%X, skipping", window->state);
+                return;
+            }
+            OfferTradeItemNative fn = reinterpret_cast<OfferTradeItemNative>(Offsets::OfferTradeItem);
+            Log::Info("TradeMgr: OfferItem post-dispatch calling native item=%u qty=%u ctx=0x%08X",
+                      itemId, quantity, static_cast<unsigned>(ctx));
+            fn(window, nullptr, itemId, quantity, 1);
+            Log::Info("TradeMgr: OfferItem post-dispatch native returned");
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("TradeMgr: OfferItem post-dispatch faulted");
+        }
+    });
+    return;
 
-    Log::Warn("TradeMgr: OfferItem native context unavailable (ctx=0x%08X fn=0x%08X)",
-              static_cast<unsigned>(ctx),
+    // Dead code: native path disabled
+    Log::Warn("TradeMgr: OfferItem native context unavailable (fn=0x%08X)",
               static_cast<unsigned>(Offsets::OfferTradeItem));
 }
 
@@ -1787,9 +1867,12 @@ void OfferItemPacket(uint32_t itemId, uint32_t quantity) {
     if (quantity == 0) {
         quantity = 1;
     }
+    // Keep the trade hack patch ENABLED during packet offer.
+    // Restoring it (0x55) before the packet caused GW to crash —
+    // the validation function at TradeHackPatch needs to be bypassed
+    // for packet-based offers to work.
     if (s_tradeHackPatched) {
-        Log::Info("TradeMgr: OfferItemPacket restoring trade patch before raw offer packet");
-        ToggleTradePatch(false);
+        Log::Info("TradeMgr: OfferItemPacket keeping trade patch enabled for packet offer");
     }
     const bool laneAvailable = CtoS::IsBotshubCommandLaneAvailable();
     Log::Info("TradeMgr: OfferItemPacket item=%u qty=%u laneAvailable=%d", itemId, quantity, laneAvailable ? 1 : 0);
@@ -1800,36 +1883,28 @@ void OfferItemPacket(uint32_t itemId, uint32_t quantity) {
     CtoS::TradeOfferItem(itemId, quantity);
 }
 
-void OfferItemPromptQuantity(uint32_t itemId) {
-    uintptr_t ctx = static_cast<uintptr_t>(s_tradeWindowContext);
-    const uintptr_t uiCtx = static_cast<uintptr_t>(GetTradeWindowUiContext());
-    Log::Info("TradeMgr: OfferItemPromptQuantity request item=%u ctx=0x%08X uiCtx=0x%08X fn=0x%08X",
-              itemId,
-              static_cast<unsigned>(ctx),
-              static_cast<unsigned>(uiCtx),
-              static_cast<unsigned>(Offsets::OfferTradeItem));
-    if (Offsets::OfferTradeItem <= 0x10000 || ctx <= 0x10000) {
-        Log::Warn("TradeMgr: OfferItemPromptQuantity native context unavailable");
-        return;
-    }
-    auto* window = reinterpret_cast<TradeWindowView*>(ctx);
+static uintptr_t GetTradeWindowFromGameContext() {
+    const uintptr_t gc = Offsets::ResolveGameContext();
+    if (!gc) return 0;
     __try {
-        Log::Info("TradeMgr: OfferItemPromptQuantity precheck state=0x%X items_count=%u items_max=%u frame=0x%08X",
-                  window->state,
-                  window->items_count,
-                  window->items_max,
-                  static_cast<unsigned>(window->frame_id));
-        if (window->state != 0) {
-            Log::Warn("TradeMgr: OfferItemPromptQuantity blocked; trade window state=0x%X", window->state);
-            return;
-        }
-        DisableTradeCartHookForOffer();
-        OfferTradeItemNative fn = reinterpret_cast<OfferTradeItemNative>(Offsets::OfferTradeItem);
-        fn(window, nullptr, itemId, 0, 1);
-        Log::Info("TradeMgr: OfferItemPromptQuantity native call returned");
+        const uintptr_t trade = *reinterpret_cast<uintptr_t*>(gc + 0x58);
+        return trade > 0x10000 ? trade : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log::Warn("TradeMgr: OfferItemPromptQuantity faulted");
+        return 0;
     }
+}
+
+void OfferItemPromptQuantity(uint32_t itemId) {
+    // Use raw packet for the prompt-open (quantity=0).
+    // The native OfferTradeItem function crashes the game on the next
+    // frame regardless of context source (captured hook, GameContext,
+    // pre-dispatch, post-dispatch) — it requires game-internal state
+    // that isn't available during our hook's execution context.
+    // Arm deferred offer with quantity=0 (opens the quantity prompt popup)
+    Log::Info("TradeMgr: OfferItemPromptQuantity arming deferred offer item=%u quantity=0", itemId);
+    InterlockedExchange(&s_pendingOffer.itemId, static_cast<LONG>(itemId));
+    InterlockedExchange(&s_pendingOffer.quantity, 0);
+    InterlockedExchange(&s_pendingOffer.armed, 1);
 }
 
 // Forward declarations for functions defined later in this file

@@ -11,9 +11,11 @@
 #include <gwa3/managers/ChatLogMgr.h>
 #include <gwa3/managers/PlayerMgr.h>
 #include <gwa3/managers/QuestMgr.h>
+#include <gwa3/managers/UIMgr.h>
 #include <gwa3/bot/BotFramework.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/Offsets.h>
+#include <gwa3/core/Log.h>
 #include <gwa3/game/Agent.h>
 #include <gwa3/game/Skill.h>
 #include <gwa3/game/Item.h>
@@ -29,6 +31,187 @@ namespace GWA3::LLM::GameSnapshot {
 
     static uint32_t g_tick = 0;
     static uint32_t g_lastChatTimestamp = 0;  // track which chat messages we've already sent
+
+    template <typename T>
+    struct SnapshotArrayView {
+        T* buffer;
+        uint32_t capacity;
+        uint32_t size;
+        uint32_t param;
+    };
+
+    struct SnapshotTradeItemView {
+        uint32_t item_id;
+        uint32_t quantity;
+    };
+
+    struct SnapshotTradeTraderView {
+        uint32_t gold;
+        SnapshotArrayView<SnapshotTradeItemView> items;
+    };
+
+    struct SnapshotTradeContextView {
+        uint32_t flags;
+        uint32_t h0004[3];
+        SnapshotTradeTraderView player;
+        SnapshotTradeTraderView partner;
+    };
+
+    template <typename Fn>
+    static void ForEachAgent(Fn&& fn) {
+        const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+        for (uint32_t agentId = 1; agentId < maxAgents; ++agentId) {
+            auto* agent = AgentMgr::GetAgentByID(agentId);
+            if (!agent) continue;
+            fn(agent);
+        }
+    }
+
+    struct NearbyAgentSeed {
+        uint32_t agent_id = 0;
+        float x = 0.0f;
+        float y = 0.0f;
+        float distance = 0.0f;
+        uint32_t type = 0;
+    };
+
+    struct LivingAgentSeed {
+        uint32_t agent_id = 0;
+        float hp = 0.0f;
+        float max_hp = 0.0f;
+        float energy = 0.0f;
+        float max_energy = 0.0f;
+        uint32_t allegiance = 0;
+        uint32_t primary = 0;
+        uint32_t secondary = 0;
+        uint32_t level = 0;
+        uint32_t effects = 0;
+        uint32_t weapon_type = 0;
+        uint32_t model_state = 0;
+        uint32_t hex = 0;
+        uint32_t player_number = 0;
+        uint32_t login_number = 0;
+        uint32_t casting_skill_id = 0;
+    };
+
+    struct GadgetAgentSeed {
+        uint32_t gadget_id = 0;
+        uint32_t extra_type = 0;
+    };
+
+    struct ItemAgentSeed {
+        uint32_t item_id = 0;
+        uint32_t owner = 0;
+    };
+
+    static bool ReadNearbyAgentSeed(const AgentLiving* me, Agent* agent, float maxRange, NearbyAgentSeed& out) {
+        if (!me || !agent) return false;
+        __try {
+            if (agent->agent_id == me->agent_id) return false;
+            const float dist = AgentMgr::GetDistance(me->x, me->y, agent->x, agent->y);
+            if (dist > maxRange) return false;
+            out.agent_id = agent->agent_id;
+            out.x = agent->x;
+            out.y = agent->y;
+            out.distance = dist;
+            out.type = agent->type;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    static bool ReadLivingAgentSeed(Agent* agent, LivingAgentSeed& out) {
+        if (!agent) return false;
+        __try {
+            if (agent->type != 0xDB) return false;
+            auto* living = reinterpret_cast<AgentLiving*>(agent);
+            out.agent_id = living->agent_id;
+            out.hp = living->hp;
+            out.max_hp = living->max_hp;
+            out.energy = living->energy;
+            out.max_energy = living->max_energy;
+            out.allegiance = living->allegiance;
+            out.primary = living->primary;
+            out.secondary = living->secondary;
+            out.level = living->level;
+            out.effects = living->effects;
+            out.weapon_type = living->weapon_type;
+            out.model_state = living->model_state;
+            out.hex = living->hex;
+            out.player_number = living->player_number;
+            out.login_number = living->login_number;
+            out.casting_skill_id = static_cast<uint32_t>(living->skill);
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    static bool ReadGadgetAgentSeed(Agent* agent, GadgetAgentSeed& out) {
+        if (!agent) return false;
+        __try {
+            if (agent->type != 0x200) return false;
+            auto* gadget = reinterpret_cast<AgentGadget*>(agent);
+            out.gadget_id = gadget->gadget_id;
+            out.extra_type = gadget->extra_type;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    static bool ReadItemAgentSeed(Agent* agent, ItemAgentSeed& out) {
+        if (!agent) return false;
+        __try {
+            if (agent->type != 0x400) return false;
+            auto* item = reinterpret_cast<AgentItem*>(agent);
+            out.item_id = item->item_id;
+            out.owner = item->owner;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    static bool TryGetPlayerNameUtf8(uint32_t loginNumber, char (&out)[64]) {
+        out[0] = '\0';
+        if (loginNumber == 0) return false;
+        __try {
+            wchar_t* wName = PlayerMgr::GetPlayerName(loginNumber);
+            if (!wName || !wName[0]) return false;
+            const int written = WideCharToMultiByte(
+                CP_UTF8, 0, wName, -1, out, static_cast<int>(sizeof(out) - 1), nullptr, nullptr);
+            if (written <= 0) return false;
+            out[sizeof(out) - 1] = '\0';
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            out[0] = '\0';
+            return false;
+        }
+    }
+
+    static bool ReadEffectFlags(uint32_t agentId, bool& hasHex, bool& hasEnchant) {
+        hasHex = false;
+        hasEnchant = false;
+        __try {
+            auto* agentEffects = EffectMgr::GetAgentEffects(agentId);
+            if (!agentEffects || !agentEffects->effects.buffer) return true;
+            for (uint32_t ei = 0; ei < agentEffects->effects.size; ++ei) {
+                auto& eff = agentEffects->effects.buffer[ei];
+                if (eff.skill_id == 0) continue;
+                const auto* sd = SkillMgr::GetSkillConstantData(eff.skill_id);
+                if (!sd) continue;
+                if (sd->type == 1) hasHex = true;
+                if (sd->type == 3 || sd->type == 16) hasEnchant = true;
+            }
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            hasHex = false;
+            hasEnchant = false;
+            return false;
+        }
+    }
 
     // Helper: convert json to heap-allocated char*
     static char* JsonToHeap(const json& j, uint32_t* outLength) {
@@ -111,63 +294,36 @@ namespace GWA3::LLM::GameSnapshot {
     // Build hero skillbars array (one entry per hero in party)
     static json BuildHeroSkillbarsJson() {
         json heroes = json::array();
-        auto* agentArray = AgentMgr::GetAgentArray();
-        if (!agentArray || !agentArray->buffer) return heroes;
-
         uint32_t myId = AgentMgr::GetMyId();
-        uint32_t count = agentArray->size;
+        ForEachAgent([&](Agent* agent) {
+            LivingAgentSeed living{};
+            if (!ReadLivingAgentSeed(agent, living)) return;
+            if (living.agent_id == myId || living.allegiance != 1) return;
 
-        for (uint32_t i = 0; i < count; i++) {
-            auto* agent = agentArray->buffer[i];
-            if (!agent || agent->agent_id == myId) continue;
-            if (agent->type != 0xDB) continue;
-
-            auto* living = reinterpret_cast<AgentLiving*>(agent);
-            // Heroes are allegiance 1 (ally) and have a skillbar in the array
-            if (living->allegiance != 1) continue;
-
-            auto* bar = SkillMgr::GetSkillbarByAgentId(living->agent_id);
-            if (!bar) continue; // not a hero (henchmen don't have skillbars we can read)
+            auto* bar = SkillMgr::GetSkillbarByAgentId(living.agent_id);
+            if (!bar) return;
 
             json h;
-            h["agent_id"] = living->agent_id;
-            h["hp"] = living->hp;
-            h["energy"] = living->energy;
-            h["primary"] = living->primary;
-            h["secondary"] = living->secondary;
-            h["level"] = living->level;
-
-            uint32_t castingSkillId = static_cast<uint32_t>(living->skill);
-            h["is_casting"] = (castingSkillId != 0);
-            h["casting_skill_id"] = castingSkillId;
-
+            h["agent_id"] = living.agent_id;
+            h["hp"] = living.hp;
+            h["energy"] = living.energy;
+            h["primary"] = living.primary;
+            h["secondary"] = living.secondary;
+            h["level"] = living.level;
+            h["is_casting"] = (living.casting_skill_id != 0);
+            h["casting_skill_id"] = living.casting_skill_id;
             h["skillbar"] = BuildSkillbarFromBar(bar);
             heroes.push_back(h);
-        }
+        });
         return heroes;
     }
 
-    // SEH-safe WorldContext field reader.
-    // WorldContext: BasePointer → deref → +0x18 → +0x2C
-    static uintptr_t ResolveWorldContextSafe() {
-        if (Offsets::BasePointer <= 0x10000) return 0;
-        __try {
-            uintptr_t p0 = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
-            if (p0 <= 0x10000) return 0;
-            uintptr_t p1 = *reinterpret_cast<uintptr_t*>(p0 + 0x18);
-            if (p1 <= 0x10000) return 0;
-            uintptr_t p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x2C);
-            if (p2 <= 0x10000) return 0;
-            return p2;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            return 0;
-        }
-    }
+    // WorldContext resolution delegated to Offsets::ResolveWorldContext()
 
     static bool ReadVanquishCounters(uint32_t& killed, uint32_t& toKill) {
         killed = 0;
         toKill = 0;
-        uintptr_t wc = ResolveWorldContextSafe();
+        uintptr_t wc = Offsets::ResolveWorldContext();
         if (!wc) return false;
         __try {
             killed = *reinterpret_cast<uint32_t*>(wc + 0x84C);
@@ -180,7 +336,7 @@ namespace GWA3::LLM::GameSnapshot {
 
     // Morale: WorldContext + 0x790. Range 40-110 (40=-60%, 100=0%, 110=+10%)
     static int32_t ReadMorale() {
-        uintptr_t wc = ResolveWorldContextSafe();
+        uintptr_t wc = Offsets::ResolveWorldContext();
         if (!wc) return 0;
         __try {
             uint32_t raw = *reinterpret_cast<uint32_t*>(wc + 0x790);
@@ -225,35 +381,31 @@ namespace GWA3::LLM::GameSnapshot {
         p["is_defeated"] = PartyMgr::GetIsPartyDefeated();
         p["morale"] = ReadMorale();  // -60 to +10 (0 = no DP/boost)
 
-        // Build party member list from agent array (allies near us)
+        // Build party member list from raw agent enumeration.
         auto* me = AgentMgr::GetMyAgent();
-        auto* agentArray = AgentMgr::GetAgentArray();
-        if (me && agentArray && agentArray->buffer) {
+        if (me) {
             json members = json::array();
             uint32_t partySize = 0;
             uint32_t deadCount = 0;
-            for (uint32_t i = 0; i < agentArray->size; i++) {
-                auto* agent = agentArray->buffer[i];
-                if (!agent || agent->type != 0xDB) continue;
-                auto* living = reinterpret_cast<AgentLiving*>(agent);
-                if (living->allegiance != 1) continue; // allies only
+            ForEachAgent([&](Agent* agent) {
+                LivingAgentSeed living{};
+                if (!ReadLivingAgentSeed(agent, living)) return;
+                if (living.allegiance != 1 || living.agent_id == me->agent_id) return;
 
                 json m;
-                m["agent_id"] = living->agent_id;
-                m["hp"] = living->hp;
-                m["energy"] = living->energy;
-                m["primary"] = living->primary;
-                m["level"] = living->level;
-                bool alive = living->hp > 0.0f;
+                m["agent_id"] = living.agent_id;
+                m["hp"] = living.hp;
+                m["energy"] = living.energy;
+                m["primary"] = living.primary;
+                m["level"] = living.level;
+                bool alive = living.hp > 0.0f;
                 m["is_alive"] = alive;
-                m["is_player"] = (living->agent_id == me->agent_id);
-                // Has a skillbar = hero; no skillbar = henchman
-                bool isHero = (SkillMgr::GetSkillbarByAgentId(living->agent_id) != nullptr);
-                m["is_hero"] = isHero;
+                m["is_player"] = false;
+                m["is_hero"] = false;
                 members.push_back(m);
                 partySize++;
                 if (!alive) deadCount++;
-            }
+            });
             // Include self
             {
                 json m;
@@ -282,134 +434,39 @@ namespace GWA3::LLM::GameSnapshot {
         auto* me = AgentMgr::GetMyAgent();
         if (!me) return agents;
 
-        float myX = me->x;
-        float myY = me->y;
-
-        auto* agentArray = AgentMgr::GetAgentArray();
-        if (!agentArray || !agentArray->buffer) return agents;
-
-        uint32_t count = agentArray->size;
-        for (uint32_t i = 0; i < count; i++) {
-            auto* agent = agentArray->buffer[i];
-            if (!agent || agent->agent_id == me->agent_id) continue;
-
-            float dist = AgentMgr::GetDistance(myX, myY, agent->x, agent->y);
-            if (dist > maxRange) continue;
+        ForEachAgent([&](Agent* agent) {
+            NearbyAgentSeed nearby{};
+            if (!ReadNearbyAgentSeed(me, agent, maxRange, nearby)) return;
 
             json a;
-            a["id"] = agent->agent_id;
-            a["x"] = agent->x;
-            a["y"] = agent->y;
-            a["distance"] = dist;
-            a["type"] = agent->type;
+            a["id"] = nearby.agent_id;
+            a["x"] = nearby.x;
+            a["y"] = nearby.y;
+            a["distance"] = nearby.distance;
+            a["type"] = nearby.type;
 
-            // Check if it's a living agent (type has 0xDB flag pattern)
-            // We detect living by checking if the pointer can be cast safely
-            // by looking at the type field
-            if (agent->type == 0xDB) {
-                auto* living = reinterpret_cast<AgentLiving*>(agent);
+            LivingAgentSeed living{};
+            GadgetAgentSeed gadget{};
+            ItemAgentSeed item{};
+            if (ReadLivingAgentSeed(agent, living)) {
                 a["agent_type"] = "living";
-                a["hp"] = living->hp;
-                a["max_hp"] = living->max_hp;
-                a["energy"] = living->energy;
-                a["max_energy"] = living->max_energy;
-                a["allegiance"] = living->allegiance;
-                a["primary"] = living->primary;
-                a["secondary"] = living->secondary;
-                a["level"] = living->level;
-                a["is_alive"] = (living->hp > 0.0f);
-                a["effects"] = living->effects;
-                a["weapon_type"] = living->weapon_type;
-                a["model_state"] = living->model_state;
-                a["hex"] = living->hex;
-                a["player_number"] = living->player_number;
-
-                // Name resolution: players have login_number > 0
-                if (living->login_number > 0) {
-                    wchar_t* wName = PlayerMgr::GetPlayerName(living->login_number);
-                    if (wName && wName[0]) {
-                        char nameUtf8[64] = {};
-                        WideCharToMultiByte(CP_UTF8, 0, wName, -1, nameUtf8, sizeof(nameUtf8) - 1, nullptr, nullptr);
-                        a["name"] = nameUtf8;
-                    }
-                }
-
-                // Casting state
-                uint32_t castingSkillId = static_cast<uint32_t>(living->skill);
-                a["is_casting"] = (castingSkillId != 0);
-                a["casting_skill_id"] = castingSkillId;
-                if (castingSkillId != 0) {
-                    const auto* skillData = SkillMgr::GetSkillConstantData(castingSkillId);
-                    if (skillData) {
-                        a["casting_skill_type"] = skillData->type;
-                        a["casting_skill_activation"] = skillData->activation;
-                        a["casting_skill_profession"] = skillData->profession;
-                    }
-                }
-
-                // Per-agent buffs and effects (hex/enchant detection)
-                auto* agentEffects = EffectMgr::GetAgentEffects(living->agent_id);
-                if (agentEffects) {
-                    bool hasHex = false;
-                    bool hasEnchant = false;
-                    json activeEffects = json::array();
-                    if (agentEffects->effects.buffer) {
-                        for (uint32_t ei = 0; ei < agentEffects->effects.size; ei++) {
-                            auto& eff = agentEffects->effects.buffer[ei];
-                            if (eff.skill_id == 0) continue;
-                            json e;
-                            e["skill_id"] = eff.skill_id;
-                            e["duration"] = eff.duration;
-                            e["timestamp"] = eff.timestamp;
-                            const auto* sd = SkillMgr::GetSkillConstantData(eff.skill_id);
-                            if (sd) {
-                                e["type"] = sd->type;
-                                if (sd->type == 1) hasHex = true;        // Hex
-                                if (sd->type == 3 || sd->type == 16) hasEnchant = true; // Enchantment/Flash Enchantment
-                            }
-                            activeEffects.push_back(e);
-                        }
-                    }
-                    a["has_hex"] = hasHex;
-                    a["has_enchantment"] = hasEnchant;
-                    if (!activeEffects.empty()) {
-                        a["active_effects"] = activeEffects;
-                    }
-                }
-            } else if (agent->type == 0x200) {
-                auto* gadget = reinterpret_cast<AgentGadget*>(agent);
+                a["hp"] = living.hp;
+                a["allegiance"] = living.allegiance;
+                a["is_alive"] = (living.hp > 0.0f);
+                a["player_number"] = living.player_number;
+            } else if (ReadGadgetAgentSeed(agent, gadget)) {
                 a["agent_type"] = "gadget";
-                a["gadget_id"] = gadget->gadget_id;
-                a["extra_type"] = gadget->extra_type;
-                // Known chest gadget IDs
-                bool isChest = (gadget->gadget_id == 6062 ||  // Istani
-                                gadget->gadget_id == 4579 ||  // Shing Jea
-                                gadget->gadget_id == 4582 ||  // NM chest
-                                gadget->gadget_id == 8141 ||  // HM chest
-                                gadget->gadget_id == 74   ||  // Obsidian
-                                gadget->gadget_id == 68   ||  // Phantom
-                                gadget->gadget_id == 9157);   // Brotherhood
-                a["is_chest"] = isChest;
-            } else if (agent->type == 0x400) {
-                auto* item = reinterpret_cast<AgentItem*>(agent);
+                a["gadget_id"] = gadget.gadget_id;
+            } else if (ReadItemAgentSeed(agent, item)) {
                 a["agent_type"] = "item";
-                a["item_id"] = item->item_id;
-                a["owner"] = item->owner;
-                // Cross-reference with ItemMgr for details
-                auto* itemData = ItemMgr::GetItemById(item->item_id);
-                if (itemData) {
-                    a["model_id"] = itemData->model_id;
-                    a["item_type"] = itemData->type;
-                    a["quantity"] = itemData->quantity;
-                    a["value"] = itemData->value;
-                    a["interaction"] = itemData->interaction;
-                }
+                a["item_id"] = item.item_id;
+                a["owner"] = item.owner;
             } else {
                 a["agent_type"] = "unknown";
             }
 
             agents.push_back(a);
-        }
+        });
 
         return agents;
     }
@@ -609,6 +666,190 @@ namespace GWA3::LLM::GameSnapshot {
         }
         m["items"] = items;
         return m;
+    }
+
+    static uintptr_t ResolveTradeContextForSnapshot() {
+        const uintptr_t gc = Offsets::ResolveGameContext();
+        if (!gc) return 0;
+        __try {
+            const uintptr_t trade = *reinterpret_cast<uintptr_t*>(gc + 0x58);
+            return trade > 0x10000 ? trade : 0;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
+        }
+    }
+
+    static bool ReadTradeFlagsForSnapshot(const SnapshotTradeContextView* ctx, uint32_t& flags) {
+        flags = 0;
+        if (!ctx) return false;
+        __try {
+            flags = ctx->flags;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            flags = 0;
+            return false;
+        }
+    }
+
+    static bool ReadTradeTraderHeaderForSnapshot(const SnapshotTradeTraderView* trader,
+                                                 uint32_t& gold,
+                                                 const SnapshotTradeItemView*& items,
+                                                 uint32_t& count) {
+        gold = 0;
+        items = nullptr;
+        count = 0;
+        if (!trader) return false;
+        __try {
+            gold = trader->gold;
+            items = trader->items.buffer;
+            count = trader->items.size;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            gold = 0;
+            items = nullptr;
+            count = 0;
+            return false;
+        }
+    }
+
+    static bool ReadTradeItemForSnapshot(const SnapshotTradeItemView* items,
+                                         uint32_t index,
+                                         uint32_t& itemId,
+                                         uint32_t& quantity) {
+        itemId = 0;
+        quantity = 0;
+        if (!items) return false;
+        __try {
+            itemId = items[index].item_id;
+            quantity = items[index].quantity;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            itemId = 0;
+            quantity = 0;
+            return false;
+        }
+    }
+
+    static json BuildTradePartyJson(const SnapshotTradeTraderView& trader) {
+        json out;
+        uint32_t gold = 0;
+        uint32_t count = 0;
+        const SnapshotTradeItemView* itemsPtr = nullptr;
+        ReadTradeTraderHeaderForSnapshot(&trader, gold, itemsPtr, count);
+        out["gold"] = gold;
+        out["item_count"] = count;
+        json items = json::array();
+        if (itemsPtr) {
+            for (uint32_t i = 0; i < count; ++i) {
+                uint32_t itemId = 0;
+                uint32_t quantity = 0;
+                if (!ReadTradeItemForSnapshot(itemsPtr, i, itemId, quantity)) continue;
+                json it;
+                it["item_id"] = itemId;
+                it["quantity"] = quantity;
+                if (auto* item = ItemMgr::GetItemById(itemId)) {
+                    it["model_id"] = item->model_id;
+                    it["type"] = item->type;
+                    it["value"] = item->value;
+                }
+                items.push_back(it);
+            }
+        }
+        out["items"] = items;
+        return out;
+    }
+
+    static void ReadTradeWindowUiSafe(uint32_t& frame, uint32_t& state, uint32_t& ctx) {
+        frame = 0; state = 0; ctx = 0;
+        __try {
+            frame = TradeMgr::GetTradeWindowUiFrame();
+            state = TradeMgr::GetTradeWindowUiState();
+            ctx = TradeMgr::GetTradeWindowUiContext();
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            frame = 0; state = 0; ctx = 0;
+        }
+    }
+
+    static json BuildTradeJson() {
+        json t;
+        // SKIP frame-based trade window detection — the frame array scan
+        // from the bridge thread races with the game thread and causes
+        // heap corruption crashes.  Use GameContext flags only.
+        const uint32_t uiWindowFrame = 0;
+        const uint32_t uiWindowState = 0;
+        const uint32_t uiWindowContext = 0;
+        const uintptr_t tradePtr = ResolveTradeContextForSnapshot();
+        const auto* ctx = reinterpret_cast<const SnapshotTradeContextView*>(tradePtr);
+
+        uint32_t flags = 0;
+        if (!ReadTradeFlagsForSnapshot(ctx, flags)) {
+            ctx = nullptr;
+        }
+        // Use flags-only detection (no frame scan)
+        const bool uiOpen = (flags != 0);
+
+        t["flags"] = flags;
+        t["is_open"] = uiOpen;
+        t["is_initiated"] = uiOpen && (flags & 0x1u) != 0;
+        t["offer_sent"] = uiOpen && (flags & 0x2u) != 0;
+        t["is_accepted"] = uiOpen && (flags & 0x4u) != 0;
+
+        if (ctx) {
+            t["player"] = BuildTradePartyJson(ctx->player);
+            t["partner"] = BuildTradePartyJson(ctx->partner);
+        } else {
+            t["player"] = json::object({{"gold", 0}, {"item_count", 0}, {"items", json::array()}});
+            t["partner"] = json::object({{"gold", 0}, {"item_count", 0}, {"items", json::array()}});
+        }
+
+        t["debug_ui_player_updated_count"] = TradeMgr::GetTradeUiPlayerUpdatedCount();
+        t["debug_ui_initiate_count"] = TradeMgr::GetTradeUiInitiateCount();
+        t["debug_ui_last_initiate_wparam"] = TradeMgr::GetTradeUiLastInitiateWParam();
+        t["debug_ui_session_start_count"] = TradeMgr::GetTradeUiSessionStartCount();
+        t["debug_ui_session_updated_count"] = TradeMgr::GetTradeUiSessionUpdatedCount();
+        t["debug_ui_last_session_start_state"] = TradeMgr::GetTradeUiLastSessionStartState();
+        t["debug_ui_last_session_start_player_number"] = TradeMgr::GetTradeUiLastSessionStartPlayerNumber();
+        t["debug_party_button_hit_count"] = TradeMgr::GetPartyButtonCallbackHitCount();
+        t["debug_party_button_last_this"] = TradeMgr::GetPartyButtonCallbackLastThis();
+        t["debug_party_button_last_arg"] = TradeMgr::GetPartyButtonCallbackLastArg();
+        t["debug_capture_count"] = TradeMgr::GetTradeWindowCaptureCount();
+        t["debug_window_ctx"] = TradeMgr::GetTradeWindowContext();
+        t["debug_window_frame"] = TradeMgr::GetTradeWindowFrame();
+        t["debug_ui_window_frame"] = uiWindowFrame;
+        t["debug_ui_window_state"] = uiWindowState;
+        t["debug_ui_window_context"] = uiWindowContext;
+        // Quantity prompt frame scan disabled from bridge thread — the scan
+        // iterates the game's frame array concurrently with the game thread,
+        // causing crashes when freed frames are accessed.
+        t["debug_quantity_prompt_open"] = false;
+        t["debug_quantity_prompt_frame"] = 0;
+        t["debug_quantity_prompt_child_count"] = 0;
+        t["debug_remove_item_available"] =
+            flags != 0 && static_cast<uint32_t>(t["player"]["item_count"]) > 0;
+
+        static uint32_t s_lastTradeFlags = 0xFFFFFFFFu;
+        static uint32_t s_lastTradeUiFrame = 0xFFFFFFFFu;
+        static uint32_t s_lastTradeUiState = 0xFFFFFFFFu;
+        static uint32_t s_lastTradeUiOpen = 0xFFFFFFFFu;
+        if (s_lastTradeFlags != flags
+            || s_lastTradeUiFrame != uiWindowFrame
+            || s_lastTradeUiState != uiWindowState
+            || s_lastTradeUiOpen != (uiOpen ? 1u : 0u)) {
+            Log::Info(
+                "[LLM-TradeSnapshot] flags=0x%X is_open=%u uiFrame=0x%08X uiState=0x%X uiCtx=0x%08X player_items=%u partner_items=%u",
+                flags,
+                uiOpen ? 1u : 0u,
+                uiWindowFrame,
+                uiWindowState,
+                uiWindowContext,
+                static_cast<uint32_t>(t["player"]["item_count"]),
+                static_cast<uint32_t>(t["partner"]["item_count"]));
+            s_lastTradeFlags = flags;
+            s_lastTradeUiFrame = uiWindowFrame;
+            s_lastTradeUiState = uiWindowState;
+            s_lastTradeUiOpen = uiOpen ? 1u : 0u;
+        }
+        return t;
     }
 
     // Build effects for the player (with skill type and time remaining)
@@ -827,7 +1068,8 @@ namespace GWA3::LLM::GameSnapshot {
         j["map"] = BuildMapJson();
         j["party"] = BuildPartyBasicsJson();
         j["agents"] = BuildNearbyAgentsJson();
-        j["heroes"] = BuildHeroSkillbarsJson();
+        j["heroes"] = json::array();
+        j["trade"] = BuildTradeJson();
         j["dialog"] = BuildDialogJson();
         j["merchant"] = BuildMerchantJson();
         j["quests"] = BuildQuestJson();
@@ -846,14 +1088,15 @@ namespace GWA3::LLM::GameSnapshot {
         j["map"] = BuildMapJson();
         j["party"] = BuildPartyBasicsJson();
         j["agents"] = BuildNearbyAgentsJson();
-        j["heroes"] = BuildHeroSkillbarsJson();
+        j["heroes"] = json::array();
+        j["trade"] = BuildTradeJson();
         j["dialog"] = BuildDialogJson();
         j["merchant"] = BuildMerchantJson();
         j["quests"] = BuildQuestJson();
         j["inventory"] = BuildInventoryJson();
-        j["storage"] = BuildStorageJson();
-        j["effects"] = BuildPlayerEffectsJson();
-        j["titles"] = BuildTitlesJson();
+        j["storage"] = json::array();
+        j["effects"] = json::array();
+        j["titles"] = json::array();
         return JsonToHeap(j, outLength);
     }
 
