@@ -290,6 +290,13 @@ static __declspec(naked) void EngineDetourNaked() {
         pushad
         pushfd
 
+        // Save x87 FPU state BEFORE dispatching any commands.
+        // Commands (Move, ChangeTarget, UseSkill) use floating point and
+        // corrupt the FPU stack. The exit replays `fld dword ptr [ebp+8]`
+        // which pushes onto the FPU stack — corruption here crashes GW
+        // after ~10 minutes of active command dispatch.
+        fsave [s_fpuSaveArea]
+
         inc dword ptr [s_heartbeat]
 
         // === Botshub command dispatch ===
@@ -316,6 +323,9 @@ static __declspec(naked) void EngineDetourNaked() {
         je no_command
         call dword ptr [s_engineDispatchCmdPtr]
     no_command:
+
+        // Restore x87 FPU state to what it was before command dispatch.
+        frstor [s_fpuSaveArea]
 
         popfd
         popad
