@@ -2438,14 +2438,22 @@ static bool PrepareTekksDungeonEntry() {
     AgentMgr::ChangeTarget(tekksId);
     WaitMs(500);
 
-    // Try native InteractNPC x2 first (logs position to see if character moves)
-    for (int i = 0; i < 2; ++i) {
-        AgentMgr::InteractNPC(tekksId);
-        WaitMs(1500);
+    // Suspend CtoS engine hook before NPC interaction — the hook crashes on
+    // 0x39 (INTERACT_NPC) packets. Native InteractNPC internally sends 0x39
+    // which goes through the hook and crashes on the 2nd call.
+    // With the hook suspended, the raw GoNPC packet should work safely.
+    Log::Info("Froggy: Suspending CtoS engine hook for Tekks interaction");
+    CtoS::SuspendEngineHook();
+    WaitMs(100);
+
+    // Send GoNPC packet with hook suspended (AutoIt-faithful: raw 0x39, 8 bytes)
+    for (int i = 0; i < 3; ++i) {
+        CtoS::SendPacket(2, Packets::INTERACT_NPC, tekksId);
+        WaitMs(2000);
         auto* me = AgentMgr::GetMyAgent();
         tekks = AgentMgr::GetAgentByID(tekksId);
         const float dist = (me && tekks) ? AgentMgr::GetDistance(me->x, me->y, tekks->x, tekks->y) : -1.0f;
-        Log::Info("Froggy: Tekks InteractNPC pass %d: pos=(%.0f, %.0f) dist=%.0f dialogOpen=%d lastDialog=0x%X target=%u",
+        Log::Info("Froggy: Tekks GoNPC(hook-suspended) pass %d: pos=(%.0f, %.0f) dist=%.0f dialogOpen=%d lastDialog=0x%X target=%u",
                   i + 1,
                   me ? me->x : 0, me ? me->y : 0, dist,
                   DialogMgr::IsDialogOpen() ? 1 : 0,
@@ -2453,23 +2461,9 @@ static bool PrepareTekksDungeonEntry() {
                   AgentMgr::GetTargetId());
     }
 
-    // Then try ActionInteract (spacebar) x3 — different code path, uses game's
-    // key-binding dispatch instead of CtoS packets. BotsHub uses this for doors.
-    for (int i = 0; i < 3; ++i) {
-        AgentMgr::ChangeTarget(tekksId);
-        WaitMs(200);
-        const bool queued = AgentMgr::ActionInteract();
-        WaitMs(1500);
-        auto* me = AgentMgr::GetMyAgent();
-        tekks = AgentMgr::GetAgentByID(tekksId);
-        const float dist = (me && tekks) ? AgentMgr::GetDistance(me->x, me->y, tekks->x, tekks->y) : -1.0f;
-        Log::Info("Froggy: Tekks ActionInteract pass %d: queued=%d pos=(%.0f, %.0f) dist=%.0f dialogOpen=%d lastDialog=0x%X target=%u",
-                  i + 1, queued ? 1 : 0,
-                  me ? me->x : 0, me ? me->y : 0, dist,
-                  DialogMgr::IsDialogOpen() ? 1 : 0,
-                  DialogMgr::GetLastDialogId(),
-                  AgentMgr::GetTargetId());
-    }
+    Log::Info("Froggy: Resuming CtoS engine hook after Tekks interaction");
+    CtoS::ResumeEngineHook();
+    WaitMs(100);
 
     // Step 2: Dwell — AutoIt does Sleep(2000) after GoNPC
     WaitMs(2000);
