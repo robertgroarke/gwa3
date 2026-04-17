@@ -816,16 +816,29 @@ GET_MATERIAL_INFO = _tool(
 
 GET_DUNGEON_INFO = _tool(
     "get_dungeon_info",
-    "Look up the entry outpost and level map IDs for a dungeon by name. "
-    "Returns {entry_outpost_map_id, entry_outpost_name, level_map_ids[]} "
-    "so you know where to travel before entering. Known dungeons: "
-    "'Bogroot Growths', 'Arachni\\'s Haunt', 'Raven\\'s Point', "
-    "'Catacombs of Kathandrax', 'Rragar\\'s Menagerie', 'Frostmaw\\'s Burrows'.",
+    "Return the full procedure to complete a dungeon end-to-end. Response "
+    "fields (when available):\n"
+    "  entry_outpost: {map_id, name} — town where prep happens\n"
+    "  quest: {name, giver_npc, giver_map_id, giver_x, giver_y, "
+    "dialog_accept, dialog_complete, must_accept_before_entry, note} — "
+    "required quest, if any\n"
+    "  prep: {hard_mode, recommended_consumables[], hero_team[], "
+    "blessings_before_entry[], blessing_coords_hint{}}\n"
+    "  levels[]: each {name, map_id, spawn:{x,y}, key_points[], hazards[]}\n"
+    "  key_points[]: each {kind, x, y, note, to_level?, blessing_type?}\n"
+    "    kind values: blessing, quest_accept, checkpoint, key, door, "
+    "portal, boss_engagement, end_chest, interact_gadget\n"
+    "  reward_turnin: {npc_name, map_id, x, y, dialog, note} — where to "
+    "return for quest reward\n"
+    "Known dungeons: 'Bogroot Growths', 'Arachni\\'s Haunt', "
+    "'Raven\\'s Point', 'Catacombs of Kathandrax', 'Rragar\\'s Menagerie', "
+    "'Frostmaw\\'s Burrows'. Name lookup is case- and apostrophe-"
+    "insensitive.",
     {
         "properties": {
             "name": {
                 "type": "string",
-                "description": "Dungeon display name",
+                "description": "Dungeon display name (e.g. 'Bogroot Growths')",
             },
         },
         "required": ["name"],

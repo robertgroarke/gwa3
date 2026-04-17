@@ -472,12 +472,32 @@ def get_material_info(model_id: int) -> dict:
 
 
 def get_dungeon_info(name: str) -> dict:
-    """Return entry outpost + level map IDs for a dungeon by name."""
+    """Return the full dungeon run procedure by name.
+
+    Merges the detailed per-dungeon run data from `dungeon_runs.py` (entry
+    outpost, quest, prep, level waypoints, chest, reward turn-in) with the
+    short summary from DUNGEONS (map IDs) so callers always get the richest
+    available info for the given name.
+    """
+    # Import locally to avoid a circular-import if dungeon_runs ever grows
+    # and starts importing from farming_knowledge.
+    from . import dungeon_runs
+
+    rich = dungeon_runs.get_dungeon_run(name)
+    if rich.get("success"):
+        # Pull in the terse summary too (level_map_ids, etc.) if present.
+        summary = DUNGEONS.get(name) or DUNGEONS.get(rich["name"])
+        if summary:
+            rich["level_map_ids"] = summary.get("level_map_ids", [])
+        return rich
+
+    # Fall back to the legacy terse summary if rich data isn't available.
     entry = DUNGEONS.get(name)
     if entry is None:
         return {
             "error": "unknown_dungeon",
-            "known_dungeons": sorted(DUNGEONS.keys()),
+            "known_dungeons": sorted(
+                set(DUNGEONS.keys()) | set(dungeon_runs.DUNGEON_RUNS.keys())),
         }
     out = {"success": True, "name": name, **entry}
     if "entry_outpost_map_id" in entry:
