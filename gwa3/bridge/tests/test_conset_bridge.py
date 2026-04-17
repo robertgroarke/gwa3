@@ -222,30 +222,15 @@ class ConsetBridgeTest:
         return npcs[0] if npcs else None
 
     async def move_to_and_wait(self, x: float, y: float, label: str, timeout: float = 45.0):
-        """Move to coordinates with stuck detection + backtrack/angle retry.
-
-        Stuck detection: if player position hasn't changed by >30 units over
-        STUCK_WINDOW seconds, assume collision with geometry. Backtrack a few
-        units away from target, then re-issue move from a lateral offset angle.
-        """
-        import math
-        STUCK_WINDOW = 3.0         # seconds with no progress = stuck
-        STUCK_DIST = 30.0          # units of movement needed to count as progress
-        BACKTRACK_UNITS = 250.0    # how far to back off
-        LATERAL_UNITS = 350.0      # how far lateral to retry
-
+        """Move to coordinates and wait until close enough. Re-issues move every 2s."""
         print(f"[MOVE] Moving to {label} ({x}, {y})...")
         await self.action("move_to", {"x": x, "y": y}, wait_ms=100)
         last_move = time.time()
 
-        # Track position progress for stuck detection
-        last_progress_pos = self.get_pos()
-        last_progress_time = time.time()
-        stuck_retries = 0
-        MAX_STUCK_RETRIES = 4
-
         deadline = time.time() + timeout
         while time.time() < deadline:
+            # Read any available message with small sleep-based polling
+            # (avoiding asyncio.wait_for which cancels pipe reads)
             try:
                 msg = await self.ipc.read_message()
             except Exception as e:
@@ -261,46 +246,7 @@ class ConsetBridgeTest:
                     print(f"[MOVE] Arrived at {label} (dist={dist:.0f})")
                     return True
 
-                # Stuck detection: compare to last recorded progress position
-                lpx, lpy = last_progress_pos
-                progress_dist = ((px - lpx) ** 2 + (py - lpy) ** 2) ** 0.5
-                if progress_dist > STUCK_DIST:
-                    last_progress_pos = (px, py)
-                    last_progress_time = time.time()
-                elif time.time() - last_progress_time >= STUCK_WINDOW:
-                    # STUCK — backtrack + lateral angle retry
-                    stuck_retries += 1
-                    if stuck_retries > MAX_STUCK_RETRIES:
-                        print(f"[MOVE] STUCK at ({px:.0f},{py:.0f}) — exhausted retries")
-                        return False
-                    # Unit vector from player -> target
-                    dx, dy = (x - px), (y - py)
-                    norm = max(1.0, math.hypot(dx, dy))
-                    ux, uy = dx / norm, dy / norm
-                    # Backtrack point: back away from target
-                    bx = px - ux * BACKTRACK_UNITS
-                    by = py - uy * BACKTRACK_UNITS
-                    # Lateral offset (perp vector), alternating sides each retry
-                    side = 1 if (stuck_retries % 2) == 1 else -1
-                    # Add jitter so repeated retries don't hit the same corner
-                    jitter = 1.0 + 0.3 * stuck_retries
-                    px_lat = -uy * side
-                    py_lat = ux * side
-                    bx += px_lat * LATERAL_UNITS * jitter
-                    by += py_lat * LATERAL_UNITS * jitter
-                    print(f"[MOVE] STUCK at ({px:.0f},{py:.0f}) (attempt {stuck_retries}) — "
-                          f"backtrack to ({bx:.0f},{by:.0f}) side={side}")
-                    await self.ipc.send_action("move_to", {"x": bx, "y": by}, self._next_req_id())
-                    # Give the backtrack time to execute before re-targeting
-                    await asyncio.sleep(2.0)
-                    # Now re-issue move to original target
-                    await self.ipc.send_action("move_to", {"x": x, "y": y}, self._next_req_id())
-                    last_move = time.time()
-                    last_progress_time = time.time()
-                    last_progress_pos = (px, py)
-                    continue
-
-            # Re-issue move every 2 seconds (keeps path fresh)
+            # Re-issue move every 2 seconds
             if time.time() - last_move >= 2.0:
                 await self.ipc.send_action("move_to", {"x": x, "y": y}, self._next_req_id())
                 last_move = time.time()
