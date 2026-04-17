@@ -21,7 +21,6 @@ already logged in (char select handled by DLL bootstrap).
 import asyncio
 import sys
 import time
-import uuid
 
 sys.path.insert(0, ".")
 from bridge.ipc_client import IpcClient
@@ -66,8 +65,8 @@ CRAFT_COST = 250  # gold per craft
 
 
 class ConsetBridgeTest:
-    def __init__(self):
-        self.ipc = IpcClient()
+    def __init__(self, pipe_name: str = r"\\.\pipe\gwa3_llm_biscuit"):
+        self.ipc = IpcClient(pipe_name=pipe_name)
         self.snapshot = {}
         self._req_counter = 0
 
@@ -84,16 +83,18 @@ class ConsetBridgeTest:
         print("[BRIDGE] Connected!")
         return True
 
-    async def read_until_snapshot(self, timeout: float = 15.0) -> dict | None:
-        """Read messages until we get a snapshot, return it."""
+    async def read_until_snapshot(self, timeout: float = 15.0, min_tier: int = 2) -> dict | None:
+        """Read messages until we get a snapshot of at least the given tier."""
         deadline = time.time() + timeout
         while time.time() < deadline:
             msg = await self.ipc.read_message()
             if msg is None:
                 return None
             if msg.get("type") == "snapshot":
+                tier = msg.get("tier", 1)
                 self.snapshot = msg
-                return msg
+                if tier >= min_tier:
+                    return msg
             # action_result, event, heartbeat — skip
         return None
 
@@ -145,38 +146,45 @@ class ConsetBridgeTest:
         """Count consumable items by model ID."""
         return self.count_material(model_id)  # same logic
 
-    def find_nearest_npc(self, x: float, y: float) -> int | None:
-        """Find nearest NPC agent to coordinates."""
-        agents = self.snapshot.get("agents", {})
-        # NPCs appear in the agents list with allegiance info
-        # For now, look at all non-foe agents near the target coords
+    def find_nearest_npc(self) -> int | None:
+        """Find nearest NPC agent (allegiance=6) from snapshot."""
+        agents = self.snapshot.get("agents", [])
         best_id = None
         best_dist = 9999
-        for agent_list in [agents.get("npcs", []), agents.get("allies", [])]:
-            for a in agent_list:
-                dist = a.get("distance", 9999)
-                if dist < best_dist:
-                    best_dist = dist
-                    best_id = a.get("agent_id") or a.get("id")
+        for a in agents:
+            if a.get("agent_type") != "living":
+                continue
+            if a.get("allegiance") != 6:  # NPC allegiance
+                continue
+            dist = a.get("distance", 9999)
+            if dist < best_dist:
+                best_dist = dist
+                best_id = a.get("id")
         return best_id
 
     async def move_to_and_wait(self, x: float, y: float, label: str, timeout: float = 45.0):
-        """Move to coordinates and wait until close enough."""
+        """Move to coordinates and wait until close enough. Re-issues move every 2s."""
         print(f"[MOVE] Moving to {label} ({x}, {y})...")
-        await self.action("move_to", {"x": x, "y": y}, wait_ms=500)
+        await self.action("move_to", {"x": x, "y": y}, wait_ms=100)
+        last_move = time.time()
 
         deadline = time.time() + timeout
         while time.time() < deadline:
-            snap = await self.read_until_snapshot(timeout=5.0)
-            if snap is None:
-                break
-            px, py = self.get_pos()
-            dist = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
-            if dist < 250:
-                print(f"[MOVE] Arrived at {label} (dist={dist:.0f})")
-                return True
-            # Re-issue move periodically
-            await self.action("move_to", {"x": x, "y": y}, wait_ms=500)
+            # Read any available message (snapshot, action_result, etc.)
+            msg = await asyncio.wait_for(self.ipc.read_message(), timeout=2.0) if self.ipc.connected else None
+            if msg and msg.get("type") == "snapshot":
+                self.snapshot = msg
+                px, py = self.get_pos()
+                dist = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
+                if dist < 250:
+                    print(f"[MOVE] Arrived at {label} (dist={dist:.0f})")
+                    return True
+
+            # Re-issue move every 2 seconds
+            if time.time() - last_move >= 2.0:
+                await self.ipc.send_action("move_to", {"x": x, "y": y}, self._next_req_id())
+                last_move = time.time()
+
         print(f"[MOVE] TIMEOUT reaching {label}")
         return False
 
@@ -210,6 +218,12 @@ class ConsetBridgeTest:
             print("[ERROR] No initial snapshot")
             return False
 
+        # Wait for game to settle after bootstrap, then get tier-3 snapshot
+        print("[START] Waiting for game to settle...")
+        await asyncio.sleep(3)
+        snap = await self.read_until_snapshot(min_tier=3, timeout=30.0)
+        if snap:
+            print(f"[START] Got tier-{snap.get('tier')} snapshot")
         print(f"[START] Map={self.get_map_id()} Gold={self.get_gold()} Storage={self.get_storage_gold()}")
         print(f"[START] Pos={self.get_pos()}")
 
@@ -237,7 +251,7 @@ class ConsetBridgeTest:
             snap = await self.read_until_snapshot()
             # Use open_merchant to interact with chest
             # The Xunlai doesn't need merchant — just interact + ChangeGold
-            npc_id = self.find_nearest_npc(XUNLAI_X, XUNLAI_Y)
+            npc_id = self.find_nearest_npc()
             if npc_id:
                 await self.action("interact_npc", {"agent_id": npc_id}, wait_ms=2000)
             withdraw = min(TARGET_GOLD - gold, storage_gold)
@@ -250,7 +264,7 @@ class ConsetBridgeTest:
         await self.move_to_and_wait(MATERIAL_TRADER_X, MATERIAL_TRADER_Y, "Material Trader")
         snap = await self.read_until_snapshot()
         # Find material trader NPC
-        npc_id = self.find_nearest_npc(MATERIAL_TRADER_X, MATERIAL_TRADER_Y)
+        npc_id = self.find_nearest_npc()
         if not npc_id:
             print("[ERROR] No NPC found near material trader")
             return False
@@ -260,7 +274,6 @@ class ConsetBridgeTest:
         # 4. Buy materials
         # Calculate how many consets to craft based on budget
         gold = self.get_gold()
-        budget = int(gold * 0.9)  # use 90% of gold
         materials_needed = {MAT_IRON: 0, MAT_DUST: 0, MAT_BONE: 0, MAT_FEATHER: 0}
 
         # For simplicity, buy 7 consets worth
@@ -318,7 +331,7 @@ class ConsetBridgeTest:
             snap = await self.read_until_snapshot()
 
             # Find crafter NPC
-            npc_id = self.find_nearest_npc(cx, cy)
+            npc_id = self.find_nearest_npc()
             if not npc_id:
                 print(f"[CRAFT] No NPC near {crafter_name}")
                 results[recipe_name] = 0

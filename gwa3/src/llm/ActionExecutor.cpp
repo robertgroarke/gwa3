@@ -101,7 +101,9 @@ namespace GWA3::LLM::ActionExecutor {
         float y = p["y"].get<float>();
         if (std::abs(x) > 100000 || std::abs(y) > 100000) return MakeError("coordinates_out_of_range");
         if (!MapMgr::GetIsMapLoaded()) return MakeError("map_not_loaded");
-        GWA3::GameThread::Enqueue([x, y]() { AgentMgr::Move(x, y); });
+        // Call AgentMgr::Move directly — it handles its own GameThread dispatch
+        // (queues via EnqueuePost internally when called from off-thread).
+        AgentMgr::Move(x, y);
         return MakeOk();
     }
 
