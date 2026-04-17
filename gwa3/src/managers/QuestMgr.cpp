@@ -15,12 +15,22 @@
 namespace GWA3::QuestMgr {
 
 static bool s_initialized = false;
-using SetActiveQuestFn = void(__cdecl*)(uint32_t);
+using QuestActionFn = void(__cdecl*)(uint32_t);
+using SetActiveQuestFn = QuestActionFn;
+using AbandonQuestFn = QuestActionFn;
+using RequestQuestInfoFn = QuestActionFn;
 using SendDialogFn = void(__cdecl*)(uint32_t);
 static SetActiveQuestFn s_setActiveQuestFn = nullptr;
+static AbandonQuestFn s_abandonQuestFn = nullptr;
+static RequestQuestInfoFn s_requestQuestInfoFn = nullptr;
 static SendDialogFn s_sendDialogFn = nullptr;
 static SendDialogFn s_sendSignpostDialogFn = nullptr;
+// UIMessage IDs for the quest subsystem. These are GWCA-documented constants
+// for the SetActiveQuest / AbandonQuest hooks that GW itself raises when the
+// player clicks the in-game quest log. We piggyback on them when the native
+// function pointer is unavailable.
 static constexpr uint32_t kSendSetActiveQuestUiMessage = 0x30000009u;
+static constexpr uint32_t kSendAbandonQuestUiMessage   = 0x3000000Au;
 static bool s_loggedNativeDialog = false;
 static bool s_loggedFallbackDialog = false;
 
@@ -29,14 +39,32 @@ static bool s_loggedFallbackDialog = false;
 bool Initialize() {
     if (s_initialized) return true;
 
+    // GWCA QuestMgr::Init() — the UI callback that sits behind the in-game
+    // quest log window contains near-calls into SetActiveQuest (+0x96) and
+    // AbandonQuest (+0x100). See GWA Censured/GWCA-master/Source/QuestMgr.cpp.
     uintptr_t questLogUi = Scanner::FindAssertion(
         "P:\\Code\\Gw\\Ui\\Game\\Quest\\QuestLog.cpp",
         "MISSION_MAP_OUTPOST == MissionCliGetMap()",
         -0x128);
     if (questLogUi > 0x10000) {
-        uintptr_t fn = Scanner::FunctionFromNearCall(questLogUi + 0x96);
+        uintptr_t setFn = Scanner::FunctionFromNearCall(questLogUi + 0x96);
+        if (setFn > 0x10000) {
+            s_setActiveQuestFn = reinterpret_cast<SetActiveQuestFn>(setFn);
+        }
+        uintptr_t abandonFn = Scanner::FunctionFromNearCall(questLogUi + 0x100);
+        if (abandonFn > 0x10000) {
+            s_abandonQuestFn = reinterpret_cast<AbandonQuestFn>(abandonFn);
+        }
+    }
+
+    // RequestQuestInfo lives elsewhere — GWCA locates it via a distinctive
+    // byte pattern (PUSH 0x1000014A / PUSH [EDI+4]) then a +0x7A near-call.
+    uintptr_t requestInfoAnchor = Scanner::Find(
+        "\x68\x4a\x01\x00\x10\xff\x77\x04", "xxxxxxxx", 0x7a);
+    if (requestInfoAnchor > 0x10000) {
+        uintptr_t fn = Scanner::FunctionFromNearCall(requestInfoAnchor);
         if (fn > 0x10000) {
-            s_setActiveQuestFn = reinterpret_cast<SetActiveQuestFn>(fn);
+            s_requestQuestInfoFn = reinterpret_cast<RequestQuestInfoFn>(fn);
         }
     }
 
@@ -56,8 +84,10 @@ bool Initialize() {
     }
 
     s_initialized = true;
-    Log::Info("QuestMgr: Initialized (SetActiveQuest=0x%08X, SendDialog=0x%08X, SendSignpostDialog=0x%08X)",
+    Log::Info("QuestMgr: Initialized (SetActiveQuest=0x%08X, AbandonQuest=0x%08X, RequestQuestInfo=0x%08X, SendDialog=0x%08X, SendSignpostDialog=0x%08X)",
               static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_setActiveQuestFn)),
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_abandonQuestFn)),
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_requestQuestInfoFn)),
               static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_sendDialogFn)),
               static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_sendSignpostDialogFn)));
     return true;
@@ -66,12 +96,28 @@ bool Initialize() {
 void Dialog(uint32_t dialogId) {
     auto* target = AgentMgr::GetAgentByID(AgentMgr::GetTargetId());
     const bool useSignpost = target && target->type == 0x200 && s_sendSignpostDialogFn;
-    auto fn = useSignpost ? s_sendSignpostDialogFn : s_sendDialogFn;
+    const bool useNpcDialog = target && target->type != 0x200 && s_sendDialogFn;
+    DialogHook::RecordDialogSend(dialogId);
 
-    if (fn && GameThread::IsInitialized()) {
+    if (useNpcDialog && GameThread::IsInitialized()) {
+        auto fn = s_sendDialogFn;
         if (!s_loggedNativeDialog) {
             Log::Info("QuestMgr: Dialog using native %s path fn=0x%08X",
-                      useSignpost ? "signpost" : "dialog",
+                      "npc",
+                      static_cast<unsigned>(reinterpret_cast<uintptr_t>(fn)));
+            s_loggedNativeDialog = true;
+        }
+        GameThread::EnqueuePost([fn, dialogId]() {
+            fn(dialogId);
+        });
+        return;
+    }
+
+    if (useSignpost && GameThread::IsInitialized()) {
+        auto fn = s_sendSignpostDialogFn;
+        if (!s_loggedNativeDialog) {
+            Log::Info("QuestMgr: Dialog using native %s path fn=0x%08X",
+                      "signpost",
                       static_cast<unsigned>(reinterpret_cast<uintptr_t>(fn)));
             s_loggedNativeDialog = true;
         }
@@ -82,7 +128,7 @@ void Dialog(uint32_t dialogId) {
     }
 
     if (!s_loggedFallbackDialog) {
-        Log::Warn("QuestMgr: Dialog falling back to raw packet path");
+        Log::Info("QuestMgr: Dialog using AutoIt packet path hdr=0x%X", Packets::DIALOG_SEND);
         s_loggedFallbackDialog = true;
     }
     CtoS::Dialog(dialogId);
@@ -118,7 +164,46 @@ void SetActiveQuest(uint32_t questId) {
     CtoS::QuestSetActive(questId);
 }
 
+void AbandonQuest(uint32_t questId) {
+    if (questId == 0) return;
+    if (s_abandonQuestFn && GameThread::IsInitialized()) {
+        auto fn = s_abandonQuestFn;
+        GameThread::EnqueuePost([fn, questId]() {
+            fn(questId);
+        });
+        return;
+    }
+
+    if (GameThread::IsInitialized()) {
+        GameThread::EnqueuePost([questId]() {
+            UIMgr::SendUIMessage(
+                kSendAbandonQuestUiMessage,
+                reinterpret_cast<void*>(static_cast<uintptr_t>(questId)),
+                nullptr);
+        });
+        return;
+    }
+
+    if (Offsets::UIMessage > 0x10000) {
+        UIMgr::SendUIMessage(
+            kSendAbandonQuestUiMessage,
+            reinterpret_cast<void*>(static_cast<uintptr_t>(questId)),
+            nullptr);
+        return;
+    }
+
+    CtoS::QuestAbandon(questId);
+}
+
 void RequestQuestInfo(uint32_t questId) {
+    if (questId == 0) return;
+    if (s_requestQuestInfoFn && GameThread::IsInitialized()) {
+        auto fn = s_requestQuestInfoFn;
+        GameThread::EnqueuePost([fn, questId]() {
+            fn(questId);
+        });
+        return;
+    }
     CtoS::SendPacket(2, Packets::QUEST_REQUEST_INFOS, questId);
 }
 

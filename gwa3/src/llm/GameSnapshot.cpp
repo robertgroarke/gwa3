@@ -16,6 +16,8 @@
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/packets/CtoS.h>
+#include <gwa3/packets/Headers.h>
 #include <gwa3/game/Agent.h>
 #include <gwa3/game/Skill.h>
 #include <gwa3/game/Item.h>
@@ -850,6 +852,30 @@ namespace GWA3::LLM::GameSnapshot {
         t["debug_remove_item_available"] =
             flags != 0 && static_cast<uint32_t>(t["player"]["item_count"]) > 0;
 
+        const auto ctosTap = CtoS::GetPacketTapSnapshot();
+        const auto findPacketCount = [&ctosTap](uint32_t header) -> uint32_t {
+            for (uint32_t i = 0; i < _countof(ctosTap.headers); ++i) {
+                if (ctosTap.headers[i] == header) {
+                    return ctosTap.counts[i];
+                }
+            }
+            return 0u;
+        };
+        t["debug_ctos_packet_total"] = ctosTap.total_packets;
+        t["debug_ctos_trade_submit_offer_count"] = findPacketCount(Packets::TRADE_SUBMIT_OFFER);
+        t["debug_ctos_trade_accept_count"] = findPacketCount(Packets::TRADE_ACCEPT);
+        t["debug_ctos_trade_cancel_count"] = findPacketCount(Packets::TRADE_CANCEL);
+        t["debug_ctos_trade_add_item_count"] = findPacketCount(Packets::TRADE_ADD_ITEM);
+        json ctosHeaders = json::array();
+        for (uint32_t i = 0; i < _countof(ctosTap.headers); ++i) {
+            if (ctosTap.counts[i] == 0) continue;
+            ctosHeaders.push_back({
+                {"header", ctosTap.headers[i]},
+                {"count", ctosTap.counts[i]},
+            });
+        }
+        t["debug_ctos_packets"] = ctosHeaders;
+
         static uint32_t s_lastTradeFlags = 0xFFFFFFFFu;
         static uint32_t s_lastTradeUiFrame = 0xFFFFFFFFu;
         static uint32_t s_lastTradeUiState = 0xFFFFFFFFu;
@@ -1019,7 +1045,7 @@ namespace GWA3::LLM::GameSnapshot {
             }
         }
 
-        // Quest log summary (IDs + completion state)
+        // Quest log summary (IDs + completion state + marker + location/npc)
         json log = json::array();
         for (uint32_t i = 0; i < logSize && i < 32; i++) {
             Quest* quest = QuestMgr::GetQuestByIndex(i);
@@ -1028,12 +1054,27 @@ namespace GWA3::LLM::GameSnapshot {
             entry["quest_id"] = quest->quest_id;
             entry["log_state"] = quest->log_state;
             entry["is_completed"] = (quest->log_state & 0x02) != 0;
+            entry["is_primary"] = (quest->log_state & 0x20) != 0;
+            entry["is_area_primary"] = (quest->log_state & 0x40) != 0;
+            entry["is_active"] = (quest->quest_id == activeId);
             entry["map_from"] = quest->map_from;
             entry["map_to"] = quest->map_to;
+            entry["marker_x"] = quest->marker_x;
+            entry["marker_y"] = quest->marker_y;
             if (quest->name && quest->name[0]) {
                 char buf[128] = {};
                 WideCharToMultiByte(CP_UTF8, 0, quest->name, -1, buf, sizeof(buf) - 1, nullptr, nullptr);
                 entry["name"] = buf;
+            }
+            if (quest->location && quest->location[0]) {
+                char buf[128] = {};
+                WideCharToMultiByte(CP_UTF8, 0, quest->location, -1, buf, sizeof(buf) - 1, nullptr, nullptr);
+                entry["location"] = buf;
+            }
+            if (quest->npc && quest->npc[0]) {
+                char buf[128] = {};
+                WideCharToMultiByte(CP_UTF8, 0, quest->npc, -1, buf, sizeof(buf) - 1, nullptr, nullptr);
+                entry["npc"] = buf;
             }
             log.push_back(entry);
         }

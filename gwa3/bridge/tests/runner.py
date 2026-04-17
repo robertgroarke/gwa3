@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import inspect
+import os
 import time
 from fnmatch import fnmatch
 from typing import Any, Callable
@@ -22,6 +23,7 @@ DEFAULT_MODULE_NAMES = [
     "test_e_orchestrated",
     "test_f_player_trade",
     "test_g_kamadan",
+    "test_m_quest_log",
 ]
 
 
@@ -50,12 +52,14 @@ async def run_single_test(name: str, func: Callable[..., Any], timeout: float = 
     if timeout is None:
         timeout = 240.0 if "player_trade" in name else (180.0 if "orchestrated" in name else DEFAULT_TIMEOUT)
 
-    tc = BridgeTestCase()
     start = time.monotonic()
     try:
         if "player_trade" in name:
-            from .trade_harness import ensure_trade_main_running
-            await asyncio.wait_for(ensure_trade_main_running(), timeout=90.0)
+            from .trade_harness import ensure_trade_main_running, ensure_trade_helper_running, _pipe_name
+            os.environ["GWA3_PIPE_NAME"] = _pipe_name()
+            await asyncio.wait_for(ensure_trade_helper_running(), timeout=90.0)
+            await asyncio.wait_for(ensure_trade_main_running(preserve_helper=True), timeout=90.0)
+        tc = BridgeTestCase()
         await asyncio.wait_for(tc.setUp(), timeout=timeout)
         try:
             await asyncio.wait_for(func(tc), timeout=timeout)

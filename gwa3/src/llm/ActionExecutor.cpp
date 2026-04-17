@@ -213,6 +213,36 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
+    // --- Quest log manipulation ---
+    // The quest must be present in the local quest log for the server to
+    // honour any of these. GetQuestById guards against absurd IDs — we still
+    // let the call through if the quest is not in the log yet (the log may
+    // update between snapshot and action).
+    static ActionResult HandleSetActiveQuest(const json& p) {
+        if (!p.contains("quest_id")) return MakeError("missing quest_id");
+        uint32_t id = p["quest_id"].get<uint32_t>();
+        if (id == 0) return MakeError("quest_id_zero");
+        GWA3::GameThread::Enqueue([id]() { QuestMgr::SetActiveQuest(id); });
+        return MakeOk();
+    }
+
+    static ActionResult HandleAbandonQuest(const json& p) {
+        if (!p.contains("quest_id")) return MakeError("missing quest_id");
+        uint32_t id = p["quest_id"].get<uint32_t>();
+        if (id == 0) return MakeError("quest_id_zero");
+        if (!QuestMgr::GetQuestById(id)) return MakeError("quest_not_in_log");
+        GWA3::GameThread::Enqueue([id]() { QuestMgr::AbandonQuest(id); });
+        return MakeOk();
+    }
+
+    static ActionResult HandleRequestQuestInfo(const json& p) {
+        if (!p.contains("quest_id")) return MakeError("missing quest_id");
+        uint32_t id = p["quest_id"].get<uint32_t>();
+        if (id == 0) return MakeError("quest_id_zero");
+        GWA3::GameThread::Enqueue([id]() { QuestMgr::RequestQuestInfo(id); });
+        return MakeOk();
+    }
+
     static ActionResult HandleAddHero(const json& p) {
         if (!p.contains("hero_id")) return MakeError("missing hero_id");
         uint32_t id = p["hero_id"].get<uint32_t>();
@@ -401,6 +431,25 @@ namespace GWA3::LLM::ActionExecutor {
 
         GWA3::GameThread::Enqueue([wMsg, ch]() {
             ChatMgr::SendChat(wMsg, ch);
+        });
+        return MakeOk();
+    }
+
+    static ActionResult HandleSendWhisper(const json& p) {
+        if (!p.contains("recipient") || !p.contains("message"))
+            return MakeError("missing recipient or message");
+        std::string recipient = p["recipient"].get<std::string>();
+        std::string message = p["message"].get<std::string>();
+        if (recipient.empty()) return MakeError("empty_recipient");
+        if (message.empty()) return MakeError("empty_message");
+
+        wchar_t wRecipient[128] = {};
+        wchar_t wMsg[256] = {};
+        MultiByteToWideChar(CP_UTF8, 0, recipient.c_str(), -1, wRecipient, 127);
+        MultiByteToWideChar(CP_UTF8, 0, message.c_str(), -1, wMsg, 255);
+
+        GWA3::GameThread::Enqueue([wRecipient, wMsg]() {
+            ChatMgr::SendWhisper(wRecipient, wMsg);
         });
         return MakeOk();
     }
@@ -884,6 +933,11 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["interact_signpost"] = HandleInteractSignpost;
         g_dispatch["dialog"] = HandleDialog;
 
+        // Quest log
+        g_dispatch["set_active_quest"] = HandleSetActiveQuest;
+        g_dispatch["abandon_quest"] = HandleAbandonQuest;
+        g_dispatch["request_quest_info"] = HandleRequestQuestInfo;
+
         // Party/Hero
         g_dispatch["add_hero"] = HandleAddHero;
         g_dispatch["kick_hero"] = HandleKickHero;
@@ -944,6 +998,7 @@ namespace GWA3::LLM::ActionExecutor {
 
         // Utility
         g_dispatch["send_chat"] = HandleSendChat;
+        g_dispatch["send_whisper"] = HandleSendWhisper;
         g_dispatch["drop_gold"] = HandleDropGold;
         g_dispatch["resign"] = HandleResign;
         g_dispatch["wait"] = HandleWait;

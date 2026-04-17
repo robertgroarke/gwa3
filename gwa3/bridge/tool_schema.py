@@ -160,6 +160,58 @@ DIALOG = _tool(
     },
 )
 
+# --- Quest log ---
+
+SET_ACTIVE_QUEST = _tool(
+    "set_active_quest",
+    "Mark a quest in the quest log as the active quest. The active quest is the "
+    "one whose marker is drawn on the compass and whose objective text is shown "
+    "in the tracker. Pass a quest_id visible in the latest quests.quest_log. "
+    "Quest must already be in the log — this does not accept or pick up a quest.",
+    {
+        "properties": {
+            "quest_id": {
+                "type": "integer",
+                "description": "Quest ID from quests.quest_log",
+            },
+        },
+        "required": ["quest_id"],
+    },
+)
+
+ABANDON_QUEST = _tool(
+    "abandon_quest",
+    "Abandon (remove) a quest from the quest log. Irreversible — the quest "
+    "must be re-accepted from its giver NPC if you change your mind. "
+    "quest_id must be present in the current quests.quest_log (snapshot).",
+    {
+        "properties": {
+            "quest_id": {
+                "type": "integer",
+                "description": "Quest ID from quests.quest_log to abandon",
+            },
+        },
+        "required": ["quest_id"],
+    },
+)
+
+REQUEST_QUEST_INFO = _tool(
+    "request_quest_info",
+    "Ask the server to populate full quest text (description + objectives) "
+    "for a quest that is in the log but has not been inspected yet. After "
+    "this fires, a subsequent snapshot usually carries the populated text "
+    "on quests.active_quest (for the active one).",
+    {
+        "properties": {
+            "quest_id": {
+                "type": "integer",
+                "description": "Quest ID from quests.quest_log to fetch info for",
+            },
+        },
+        "required": ["quest_id"],
+    },
+)
+
 # --- Party/Hero ---
 
 ADD_HERO = _tool(
@@ -918,6 +970,10 @@ ALL_TOOLS = [
     INTERACT_PLAYER,
     INTERACT_SIGNPOST,
     DIALOG,
+    # Quest log
+    SET_ACTIVE_QUEST,
+    ABANDON_QUEST,
+    REQUEST_QUEST_INFO,
     # Party/Hero
     ADD_HERO,
     KICK_HERO,

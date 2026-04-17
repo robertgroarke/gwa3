@@ -120,6 +120,24 @@ JSON you can feed directly into action calls:
 If a lookup returns error:"unknown_*", the response includes a known_* list so you
 can see what IS supported and either pick a valid option or report back that a
 table needs updating.
+
+## Quest Log Manipulation
+Each snapshot carries quests.quest_log (array of {quest_id, name, log_state,
+is_completed, is_primary, is_active, map_from, map_to, marker_x, marker_y,
+location, npc}) and quests.active_quest for the quest currently tracked on
+the compass. To drive the quest log:
+
+- set_active_quest(quest_id) — switches which quest's marker shows on the
+  compass. quest_id must already be present in quests.quest_log.
+- abandon_quest(quest_id) — irreversibly drops a quest from the log. Only
+  use when the quest is blocking the log or is known to be safely
+  re-accept-able from its giver.
+- request_quest_info(quest_id) — asks the server to populate the full
+  description + objectives text on a quest entry. After firing, wait for
+  the next snapshot and re-read quests.active_quest.objectives.
+
+Typical flow: read quests.quest_log, pick a quest_id, call set_active_quest
+to focus it, then move toward quests.active_quest.marker_x / marker_y.
 """
 
 
