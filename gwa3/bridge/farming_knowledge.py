@@ -56,7 +56,7 @@ CONSUMABLE_RECIPES: dict[int, dict] = {
     24860: {  # Armor of Salvation
         "name": "Armor of Salvation",
         "effect_id": 2520,
-        "crafter_name": "Alcus",
+        "crafter_name": "Alcus Nailbiter",
         "crafter_outpost_map_id": 857,
         "crafter_outpost_name": "Embark Beach",
         "crafter_x": 3704.0,

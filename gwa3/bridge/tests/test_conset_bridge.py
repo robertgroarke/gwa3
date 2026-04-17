@@ -26,42 +26,62 @@ sys.path.insert(0, ".")
 from bridge.ipc_client import IpcClient
 
 
+from bridge import farming_knowledge as fk
+
 # --- Constants ---
 MAP_EMBARK_BEACH = 857
 
-# NPC coordinates in Embark Beach
-XUNLAI_X, XUNLAI_Y = 2283, -2134
-MATERIAL_TRADER_X, MATERIAL_TRADER_Y = 2933, -2236
-EYJA_X, EYJA_Y = 3336, 627       # Grail of Might crafter
-KWAT_X, KWAT_Y = 3596, 107       # Essence of Celerity crafter
-ALCUS_X, ALCUS_Y = 3704, -163    # Armor of Salvation crafter
-
-# Material model IDs
-MAT_IRON = 948
-MAT_DUST = 929
-MAT_BONE = 921
-MAT_FEATHER = 933
-
-# Consumable model IDs
+# Consumable model IDs — these are the seeds; everything else (recipe,
+# crafter, materials, coords, gold cost) is resolved via get_recipe so the
+# test doubles as a validation of the farming_knowledge tables that Gemma
+# will be using at runtime.
 MODEL_GRAIL = 24861
 MODEL_ESSENCE = 24859
 MODEL_ARMOR = 24860
 
-# Recipes: (model_id, material_model_ids, material_quantities)
-RECIPES = {
-    "Grail of Might": (MODEL_GRAIL, [MAT_IRON, MAT_DUST], [50, 50]),
-    "Essence of Celerity": (MODEL_ESSENCE, [MAT_FEATHER, MAT_DUST], [50, 50]),
-    "Armor of Salvation": (MODEL_ARMOR, [MAT_IRON, MAT_BONE], [50, 50]),
-}
+# Build RECIPES + CRAFTERS from farming_knowledge.get_recipe so any drift
+# between the test's expectations and what Gemma will see via the tool
+# surfaces as an immediate failure rather than a silent divergence.
+def _load_recipes_from_knowledge():
+    recipes: dict[str, tuple[int, list[int], list[int]]] = {}
+    crafters: dict[str, tuple[str, float, float]] = {}
+    for model_id in (MODEL_GRAIL, MODEL_ESSENCE, MODEL_ARMOR):
+        res = fk.get_recipe(model_id)
+        assert res.get("success"), f"get_recipe({model_id}) failed: {res}"
+        r = res["recipe"]
+        name = r["name"]
+        mat_ids = [m["model_id"] for m in r["materials"]]
+        mat_qtys = [m["quantity"] for m in r["materials"]]
+        recipes[name] = (model_id, mat_ids, mat_qtys)
+        crafters[name] = (r["crafter_name"], r["crafter_x"], r["crafter_y"])
+    return recipes, crafters
 
-CRAFTERS = {
-    "Grail of Might": ("Eyja", EYJA_X, EYJA_Y),
-    "Essence of Celerity": ("Kwat", KWAT_X, KWAT_Y),
-    "Armor of Salvation": ("Alcus", ALCUS_X, ALCUS_Y),
-}
+RECIPES, CRAFTERS = _load_recipes_from_knowledge()
+
+# Xunlai + material trader coords come from get_outpost_info(857) — same
+# reasoning: lookup failure means Gemma wouldn't be able to farm here.
+def _load_embark_coords():
+    res = fk.get_outpost_info(MAP_EMBARK_BEACH)
+    assert res.get("success"), f"get_outpost_info(857) failed: {res}"
+    info = res["info"]
+    xunlai = info["xunlai_chest"]
+    trader = info["material_trader"]
+    return (int(xunlai["x"]), int(xunlai["y"]),
+            int(trader["x"]), int(trader["y"]))
+
+XUNLAI_X, XUNLAI_Y, MATERIAL_TRADER_X, MATERIAL_TRADER_Y = _load_embark_coords()
+
+# Material model IDs — kept as aliases for readability in buy-plan output.
+# Sourced from the recipe materials so any rename in farming_knowledge
+# propagates without a second edit.
+MAT_IRON = RECIPES["Grail of Might"][1][0]      # first mat of Grail
+MAT_DUST = RECIPES["Grail of Might"][1][1]      # second mat of Grail
+MAT_BONE = RECIPES["Armor of Salvation"][1][1]  # second mat of Armor
+MAT_FEATHER = RECIPES["Essence of Celerity"][1][0]  # first mat of Essence
 
 TARGET_GOLD = 100000
-CRAFT_COST = 250  # gold per craft
+# Gold cost per craft — pull from the first recipe (all three share 250g)
+CRAFT_COST = fk.get_recipe(MODEL_GRAIL)["recipe"]["gold_cost"]
 
 
 class ConsetBridgeTest:
@@ -325,6 +345,23 @@ class ConsetBridgeTest:
             print(f"[START] Got tier-{snap.get('tier')} snapshot")
         print(f"[START] Map={self.get_map_id()} Gold={self.get_gold()} Storage={self.get_storage_gold()}")
         print(f"[START] Pos={self.get_pos()}")
+
+        # Surface what Gemma would see if she queried the knowledge tools.
+        # This doubles as an assertion that the lookups cover the farming
+        # path: if a recipe or crafter disappears from the knowledge tables,
+        # the test run makes it immediately visible rather than surfacing as
+        # a craft failure 90 seconds in.
+        print(f"[KNOWLEDGE] Xunlai=({XUNLAI_X},{XUNLAI_Y}) "
+              f"Material Trader=({MATERIAL_TRADER_X},{MATERIAL_TRADER_Y}) "
+              f"(via get_outpost_info({MAP_EMBARK_BEACH}))")
+        for recipe_name, (model_id, mat_ids, mat_qtys) in RECIPES.items():
+            crafter_name, cx, cy = CRAFTERS[recipe_name]
+            mat_summary = ", ".join(
+                f"{q}x {fk.get_material_info(mid).get('name', mid)}"
+                for mid, q in zip(mat_ids, mat_qtys))
+            print(f"[KNOWLEDGE] {recipe_name} model={model_id} "
+                  f"crafter={crafter_name}@({cx:.0f},{cy:.0f}) "
+                  f"mats=[{mat_summary}] cost={CRAFT_COST}g/craft")
 
         # 1. Travel to Embark Beach if not there
         if self.get_map_id() != MAP_EMBARK_BEACH:
