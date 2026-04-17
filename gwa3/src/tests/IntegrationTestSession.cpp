@@ -2990,34 +2990,64 @@ static uint32_t ConsetCraftAllAtNPC(const char* traderLabel, float traderX, floa
     if (!ConsetOpenNPCDialog(npc, traderLabel)) return 0;
     IntReport("  %s merchant open: %u items", traderLabel, TradeMgr::GetMerchantItemCount());
 
+    // Batch crafting: call Transaction with qty>1 per call.
+    // Each material stack caps at 250, and each recipe needs 50 per craft,
+    // so max batch = 250/50 = 5 per call (limited by single-stack lookup).
+    // We loop in batches of up to 5, which is much faster than one-at-a-time.
+    constexpr uint32_t kMaxBatchPerCall = 5u; // 5 * 50 = 250 = max stack size
+
     uint32_t crafted = 0;
-    for (uint32_t i = 0; i < maxCrafts; ++i) {
-        const uint32_t beforeCount = CountInventoryModelQuantity(targetModelId);
-        const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
-        if (goldBefore < 250) {
-            IntReport("  Out of gold (%u) — stopping craft at %s", goldBefore, traderLabel);
-            break;
+
+    while (crafted < maxCrafts) {
+        uint32_t remaining = maxCrafts - crafted;
+        uint32_t batchSize = (remaining > kMaxBatchPerCall) ? kMaxBatchPerCall : remaining;
+        const uint32_t batchGold = 250u * batchSize;
+        const uint32_t loopBefore = CountInventoryModelQuantity(targetModelId);
+        const uint32_t loopGoldBefore = ItemMgr::GetGoldCharacter();
+
+        if (loopGoldBefore < batchGold) {
+            // Try fewer if we can't afford the full batch
+            batchSize = loopGoldBefore / 250u;
+            if (batchSize == 0) {
+                IntReport("  Out of gold (%u) — stopping craft at %s", loopGoldBefore, traderLabel);
+                break;
+            }
         }
 
-        // Use native Transaction function to craft — bypasses UI frame issues
+        const uint32_t actualGold = 250u * batchSize;
         const bool dispatched = TradeMgr::CraftMerchantItemByModelId(
-            targetModelId, 1, 250, matModels, matQtys, matCount);
+            targetModelId, batchSize, actualGold, matModels, matQtys, matCount);
         if (!dispatched) {
-            IntReport("  CraftMerchantItemByModelId rejected (missing materials?) at %s", traderLabel);
-            break;
+            // If batch rejected, try qty=1 as last resort
+            if (batchSize > 1) {
+                IntReport("  Batch=%u rejected, trying qty=1 at %s", batchSize, traderLabel);
+                batchSize = 1;
+                const bool single = TradeMgr::CraftMerchantItemByModelId(
+                    targetModelId, 1, 250, matModels, matQtys, matCount);
+                if (!single) {
+                    IntReport("  CraftMerchantItemByModelId rejected (missing materials?) at %s", traderLabel);
+                    break;
+                }
+            } else {
+                IntReport("  CraftMerchantItemByModelId rejected (missing materials?) at %s", traderLabel);
+                break;
+            }
         }
 
-        const bool ok = WaitFor("craft completion", 5000, [targetModelId, beforeCount, goldBefore]() {
-            return CountInventoryModelQuantity(targetModelId) > beforeCount || ItemMgr::GetGoldCharacter() < goldBefore;
+        const bool ok = WaitFor("craft completion", 8000, [targetModelId, loopBefore, loopGoldBefore]() {
+            return CountInventoryModelQuantity(targetModelId) > loopBefore || ItemMgr::GetGoldCharacter() < loopGoldBefore;
         });
-        const uint32_t afterCount = CountInventoryModelQuantity(targetModelId);
-        if (afterCount > beforeCount) {
-            ++crafted;
-            IntReport("  Crafted %u/%u at %s (gold=%u->%u)", crafted, maxCrafts, traderLabel,
-                      goldBefore, ItemMgr::GetGoldCharacter());
+        Sleep(300); // let server settle
+        const uint32_t loopAfter = CountInventoryModelQuantity(targetModelId);
+        const uint32_t batchCrafted = (loopAfter > loopBefore) ? (loopAfter - loopBefore) : 0;
+        if (batchCrafted > 0) {
+            crafted += batchCrafted;
+            IntReport("  Crafted %u (batch=%u) total=%u/%u at %s (gold=%u->%u)",
+                      batchCrafted, batchSize, crafted, maxCrafts, traderLabel,
+                      loopGoldBefore, ItemMgr::GetGoldCharacter());
         } else {
             IntReport("  Craft failed at %s (count unchanged %u, gold=%u->%u) — likely out of materials",
-                      traderLabel, afterCount, goldBefore, ItemMgr::GetGoldCharacter());
+                      traderLabel, loopAfter, loopGoldBefore, ItemMgr::GetGoldCharacter());
             break;
         }
         Sleep(ChatMgr::GetPing() + 300);
