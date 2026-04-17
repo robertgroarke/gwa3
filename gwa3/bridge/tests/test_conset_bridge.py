@@ -98,6 +98,50 @@ class ConsetBridgeTest:
             # action_result, event, heartbeat — skip
         return None
 
+    async def drain_pipe(self, count: int = 50):
+        """Drain up to `count` buffered messages from the pipe.
+        Uses peek-style reads via `has_pending` would be ideal but not available.
+        Instead, read N messages expecting them to be already queued."""
+        drained = 0
+        # Read a limited number of messages with short wait
+        for _ in range(count):
+            try:
+                # Use asyncio.wait_for but wrap each call carefully
+                msg = await asyncio.wait_for(
+                    asyncio.shield(self.ipc.read_message()), timeout=0.05
+                )
+                if msg is None:
+                    break
+                if msg.get("type") == "snapshot":
+                    self.snapshot = msg
+                drained += 1
+            except asyncio.TimeoutError:
+                break
+            except Exception:
+                break
+        return drained
+
+    async def query_fresh_state(self, timeout: float = 5.0, settle_ms: int = 300) -> dict | None:
+        """Request fresh tier-3 snapshot (with settle delay), return it.
+        Reads messages until we find a tier-3 snapshot after sending query_state."""
+        # Request a fresh snapshot from the DLL, with server-side settle delay
+        # to allow pending game operations (buys, crafts) to complete.
+        await self.action("query_state", {"wait_ms": settle_ms}, wait_ms=settle_ms + 200)
+        deadline = time.time() + timeout
+        # Read messages sequentially (no wait_for to avoid pipe cancellation)
+        while time.time() < deadline:
+            try:
+                msg = await self.ipc.read_message()
+            except Exception:
+                return None
+            if msg is None:
+                return None
+            if msg.get("type") == "snapshot":
+                self.snapshot = msg
+                if msg.get("tier", 0) == 3:
+                    return msg
+        return None
+
     async def action(self, name: str, params: dict | None = None, wait_ms: int = 500) -> bool:
         """Send an action and wait briefly."""
         req_id = self._next_req_id()
@@ -172,9 +216,16 @@ class ConsetBridgeTest:
 
         deadline = time.time() + timeout
         while time.time() < deadline:
-            # Read any available message (snapshot, action_result, etc.)
-            msg = await asyncio.wait_for(self.ipc.read_message(), timeout=2.0) if self.ipc.connected else None
-            if msg and msg.get("type") == "snapshot":
+            # Read any available message with small sleep-based polling
+            # (avoiding asyncio.wait_for which cancels pipe reads)
+            try:
+                msg = await self.ipc.read_message()
+            except Exception as e:
+                print(f"[MOVE] read error: {e}")
+                break
+            if msg is None:
+                break
+            if msg.get("type") == "snapshot":
                 self.snapshot = msg
                 px, py = self.get_pos()
                 dist = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
@@ -242,10 +293,10 @@ class ConsetBridgeTest:
             print("[ERROR] No initial snapshot")
             return False
 
-        # Wait for game to settle after bootstrap, then get tier-3 snapshot
+        # Wait for game to settle after bootstrap, then get fresh state
         print("[START] Waiting for game to settle...")
         await asyncio.sleep(3)
-        snap = await self.read_until_snapshot(min_tier=3, timeout=30.0)
+        snap = await self.query_fresh_state(timeout=10.0)
         if snap:
             print(f"[START] Got tier-{snap.get('tier')} snapshot")
         print(f"[START] Map={self.get_map_id()} Gold={self.get_gold()} Storage={self.get_storage_gold()}")
@@ -281,8 +332,8 @@ class ConsetBridgeTest:
             withdraw = min(TARGET_GOLD - gold, storage_gold)
             print(f"[GOLD] Withdrawing {withdraw}...")
             await self.action("withdraw_gold", {"amount": withdraw}, wait_ms=1000)
-            # Need tier-3 snapshot for updated gold values
-            snap = await self.read_until_snapshot(min_tier=3, timeout=10.0)
+            # Query fresh state to get updated gold
+            await self.query_fresh_state(timeout=5.0)
             print(f"[GOLD] After withdraw: Character={self.get_gold()} Storage={self.get_storage_gold()}")
 
         # 3. Open material trader and buy materials
@@ -316,8 +367,8 @@ class ConsetBridgeTest:
         for it in merchant_items:
             print(f"  item_id={it.get('item_id')} model={it.get('model_id')} type={it.get('type')} qty={it.get('quantity')} val={it.get('value')}")
 
-        # Read tier-3 for inventory counts
-        snap = await self.read_until_snapshot(min_tier=3, timeout=10.0)
+        # Query fresh state for inventory counts
+        await self.query_fresh_state(timeout=5.0)
 
         for mat_model, needed in materials_needed.items():
             have = self.count_material(mat_model)
@@ -330,18 +381,21 @@ class ConsetBridgeTest:
 
             # Use trader_buy with model_id — the C++ side resolves the virtual
             # item ID automatically via FindVirtualItemByModel.
+            # trader_buy is synchronous on the DLL side (quote+transact completes
+            # before returning), so wait just enough for the game to process.
             for p in range(packs):
-                await self.action("trader_buy", {"model_id": mat_model}, wait_ms=1500)
+                await self.action("trader_buy", {"model_id": mat_model}, wait_ms=200)
                 if (p + 1) % 20 == 0:
                     print(f"[BUY] Pausing after {p+1} packs...")
                     await asyncio.sleep(2)
 
-            snap = await self.read_until_snapshot(min_tier=3, timeout=5.0)
+            # Use query_state with long settle to let all pending buys complete
+            snap = await self.query_fresh_state(timeout=8.0, settle_ms=1000)
             final = self.count_material(mat_model)
             print(f"[BUY] Material {mat_model}: final count={final}")
 
         # 5. Craft consumables
-        snap = await self.read_until_snapshot()
+        snap = await self.query_fresh_state(timeout=5.0)
         print(f"[CRAFT] Starting crafting phase. Gold={self.get_gold()}")
 
         results = {}
@@ -369,7 +423,10 @@ class ConsetBridgeTest:
             craft_item_id = 0  # will be resolved by model_id in the craft command
 
             # Craft in batches of up to 5
+            # Use query_state to get fresh inventory count before crafting
+            await self.query_fresh_state(timeout=3.0)
             before = self.count_consumable(model_id)
+            print(f"[CRAFT] {recipe_name} starting count: {before}")
             remaining = num_consets
             crafted = 0
             while remaining > 0:
@@ -384,7 +441,8 @@ class ConsetBridgeTest:
                     "material_model_ids": mat_ids,
                     "material_quantities": mat_qtys,
                 }, wait_ms=2000)
-                snap = await self.read_until_snapshot()
+                # Query fresh state to see if craft succeeded
+                await self.query_fresh_state(timeout=3.0)
                 after = self.count_consumable(model_id)
                 batch_crafted = after - before - crafted
                 if batch_crafted > 0:

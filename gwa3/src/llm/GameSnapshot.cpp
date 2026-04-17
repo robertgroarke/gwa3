@@ -514,11 +514,16 @@ namespace GWA3::LLM::GameSnapshot {
     // Build inventory snapshot (backpack bags 1-4) with free slot count
     static json BuildInventoryJson() {
         json inv;
-        auto* inventory = ItemMgr::GetInventory();
-        if (!inventory) return inv;
+        // Always populate gold from safe getters — they handle null inventory pointer
+        inv["gold_character"] = ItemMgr::GetGoldCharacter();
+        inv["gold_storage"] = ItemMgr::GetGoldStorage();
 
-        inv["gold_character"] = inventory->gold_character;
-        inv["gold_storage"] = inventory->gold_storage;
+        auto* inventory = ItemMgr::GetInventory();
+        if (!inventory) {
+            inv["bags"] = json::array();
+            inv["free_slots_total"] = 0;
+            return inv;
+        }
 
         json bags = json::array();
         uint32_t totalFreeSlots = 0;

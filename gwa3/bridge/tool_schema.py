@@ -521,6 +521,17 @@ DEPOSIT_GOLD = _tool(
     },
 )
 
+QUERY_STATE = _tool(
+    "query_state",
+    "Request an immediate fresh tier-3 snapshot (inventory, gold, merchant, agents). "
+    "Use after state-changing actions (buy, craft, withdraw) to get up-to-date data "
+    "without waiting for the normal 2-second snapshot cadence.",
+    {
+        "properties": {},
+        "required": [],
+    },
+)
+
 TRADER_BUY = _tool(
     "trader_buy",
     "Buy one pack (10 units) of a material from the material trader. "
@@ -794,6 +805,7 @@ ALL_TOOLS = [
     TRADER_BUY,
     WITHDRAW_GOLD,
     DEPOSIT_GOLD,
+    QUERY_STATE,
     INITIATE_TRADE,
     OFFER_TRADE_ITEM,
     OFFER_TRADE_ITEM_PROMPT_MAX,

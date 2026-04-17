@@ -1,6 +1,7 @@
 #include <gwa3/llm/ActionExecutor.h>
 #include <gwa3/llm/IpcServer.h>
 #include <gwa3/llm/LlmBridge.h>
+#include <gwa3/llm/GameSnapshot.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/managers/AgentMgr.h>
@@ -34,8 +35,10 @@ using json = nlohmann::json;
 
 namespace GWA3::LLM::ActionExecutor {
 
-    // Rate limiter: max 10 actions per second
-    static constexpr int MAX_ACTIONS_PER_SECOND = 10;
+    // Rate limiter: max 50 actions per second (raised from 10 to support
+    // bulk operations like material trader buys, which fire 100+ actions
+    // in rapid succession during the conset cycle).
+    static constexpr int MAX_ACTIONS_PER_SECOND = 50;
     static std::chrono::steady_clock::time_point g_rateWindow;
     static int g_rateCount = 0;
 
@@ -481,6 +484,25 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
+    // Immediately serialize and send a fresh tier-3 snapshot.
+    // Useful after state-changing operations (buy, craft, withdraw) to
+    // bypass the 2s bridge-thread snapshot cadence.
+    // Optional wait_ms: sleep this long before serializing, to allow
+    // recent pending game operations to settle (e.g. after trader_buy).
+    static ActionResult HandleQueryState(const json& p) {
+        uint32_t waitMs = p.value("wait_ms", 0u);
+        if (waitMs > 0 && waitMs < 10000) {
+            Sleep(waitMs);
+        }
+        uint32_t len = 0;
+        char* snap = GameSnapshot::SerializeTier3(&len);
+        if (snap) {
+            IpcServer::Send(snap, len);
+            delete[] snap;
+        }
+        return MakeOk();
+    }
+
     // Material trader: request quote + buy in one command.
     // Uses the proven native RequestQuote + TransactItem via Engine hook command queue.
     struct TraderBuyQuoteTask { uint32_t itemId; };
@@ -579,30 +601,29 @@ namespace GWA3::LLM::ActionExecutor {
         if (itemId == 0) return MakeError("missing item_id or model_id");
         TraderHook::Reset();
 
-        // Run quote+transact on a background thread to avoid blocking the IPC
-        std::thread([itemId]() {
-            // Request quote via Engine hook command queue
-            TraderBuyQuoteTask quoteTask{itemId};
-            CtoS::EnqueueGameCommand(&TraderBuyQuoteInvoker, &quoteTask, sizeof(quoteTask));
+        // Run synchronously on the init thread (where actions dispatch).
+        // Synchronous execution prevents concurrent trader_buy calls from
+        // clobbering each other's TraderHook state.
+        TraderBuyQuoteTask quoteTask{itemId};
+        CtoS::EnqueueGameCommand(&TraderBuyQuoteInvoker, &quoteTask, sizeof(quoteTask));
 
-            // Wait for kVendorQuote response (up to 3 seconds)
-            for (int i = 0; i < 30; ++i) {
-                Sleep(100);
-                uint32_t v = TraderHook::GetCostValue();
-                if (v > 0 && v < 100000) break;
-            }
-            uint32_t price = TraderHook::GetCostValue();
-            uint32_t costItemId = TraderHook::GetCostItemId();
-            if (price == 0 || price >= 100000) {
-                Log::Warn("[LLM-Action] trader_buy: quote failed item=%u price=%u", itemId, price);
-                return;
-            }
-            Log::Info("[LLM-Action] trader_buy: quote item=%u price=%u — transacting", costItemId, price);
+        // Wait for kVendorQuote response (up to 2 seconds)
+        for (int i = 0; i < 20; ++i) {
+            Sleep(100);
+            uint32_t v = TraderHook::GetCostValue();
+            if (v > 0 && v < 100000) break;
+        }
+        uint32_t price = TraderHook::GetCostValue();
+        uint32_t costItemId = TraderHook::GetCostItemId();
+        if (price == 0 || price >= 100000) {
+            Log::Warn("[LLM-Action] trader_buy: quote failed item=%u price=%u", itemId, price);
+            return MakeError("quote_failed");
+        }
+        Log::Info("[LLM-Action] trader_buy: quote item=%u price=%u — transacting", costItemId, price);
 
-            // Transact with the quoted price
-            TraderBuyTransactTask txTask{costItemId, price};
-            CtoS::EnqueueGameCommand(&TraderBuyTransactInvoker, &txTask, sizeof(txTask));
-        }).detach();
+        // Transact with the quoted price
+        TraderBuyTransactTask txTask{costItemId, price};
+        CtoS::EnqueueGameCommand(&TraderBuyTransactInvoker, &txTask, sizeof(txTask));
         return MakeOk();
     }
 
@@ -876,6 +897,7 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["withdraw_gold"] = HandleWithdrawGold;
         g_dispatch["deposit_gold"] = HandleDepositGold;
         g_dispatch["trader_buy"] = HandleTraderBuy;
+        g_dispatch["query_state"] = HandleQueryState;
 
         // Skillbar
         g_dispatch["load_skillbar"] = HandleLoadSkillbar;
