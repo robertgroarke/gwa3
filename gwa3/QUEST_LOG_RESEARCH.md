@@ -119,20 +119,55 @@ quests = {
     quest_log_size: int,
     active_quest: { quest_id, log_state, is_completed, is_primary,
                     map_from, map_to, marker_x, marker_y,
-                    name?, objectives?, description? },
+                    name_enc?, objectives_enc?, description_enc?,
+                    location_enc?, npc_enc? },
     quest_log: [
         { quest_id, log_state, is_completed, is_primary, is_area_primary,
           is_active, map_from, map_to, marker_x, marker_y,
-          name?, location?, npc? },
+          name_enc?, location_enc?, npc_enc? },
         ...
     ]
 }
 ```
 
-This surface is a subset of Py4GW's — we do not yet expose the per-field
-`IsQuestNameReady` / `GetQuestName` async pattern. For our use case
-(Gemma driving a farming bot), the synchronous batch read on every tier-2
-snapshot is enough.
+### Encoded strings and decoding
+
+All `*_enc` fields ship the game's encoded wide-char format (the first
+wchar is a PUA sentinel, typically `0x8101`/`0x8102`, followed by a
+message id). The in-game Quest Log UI runs those through
+`ValidateAsyncDecodeStr` to produce "Heart or Mind: Garden in Danger"
+/ "Talk to Tekks about helping the yellow Ophil tribe."
+
+**gwa3 intentionally does not decode on the snapshot thread.**
+
+Attempted approach — blocking `StringEncoding::DecodeStr` per quest in
+`BuildQuestJson` with a pointer cache — crashed the client once the
+quest log exceeded a few entries. Observations:
+
+- `ValidateAsyncDecodeStr` is fire-and-forget. Its callback arrives on
+  the game thread at an unknown later time (tens to hundreds of ms for
+  an uncached name).
+- Enqueueing one decode per quest per field (13 × 3 ≈ 39 calls per
+  tier-2 snapshot) fills the GameThread pre-dispatch queue faster than
+  it drains. Once the queue tail lagged ~25 entries behind head, GW
+  raised a fatal assertion.
+- Tight per-call budgets (25–60 ms) always time out because the
+  callback fires later than that window.
+
+**Future work** — an async fill path: the snapshot thread enqueues a
+decode request to a dedicated worker thread that listens for the
+callback and writes into a `pointer -> utf8` cache. Subsequent
+snapshots read straight from that cache. LLM clients and tests that
+want human-readable names today can fall back to:
+
+1. Looking up known `quest_id`s against the `get_quest_info`
+   farming-knowledge table.
+2. Matching `map_from` / `map_to` against `MAP_NAMES`.
+3. Tracking the quest by `quest_id` alone (it is stable across
+   snapshots).
+
+This surface is otherwise a subset of Py4GW's — we do not yet expose
+the per-field `IsQuestNameReady` / `GetQuestName` async pattern.
 
 ## Tests
 

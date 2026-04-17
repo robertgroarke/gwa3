@@ -152,13 +152,18 @@ async def test_active_quest_is_flagged_in_log(tc: BridgeTestCase):
 
 
 async def test_quest_strings_are_utf8(tc: BridgeTestCase):
-    """M12: any name/location/npc strings are valid Python strings."""
+    """M12: any *_enc string on a log entry is a valid Python str.
+
+    Quest strings ship as GW's encoded wide-char format (PUA markers + msg
+    id). The raw form lands in `name_enc`, `location_enc`, `npc_enc` on
+    each log entry. Decoded forms are future work (see QUEST_LOG_RESEARCH).
+    """
     snap = await tc.wait_for_snapshot(tier=2)
     log = snap.get("quests", {}).get("quest_log", [])
     if not log:
         tc.skip("Quest log is empty")
     for entry in log[:5]:
-        for k in ("name", "location", "npc"):
+        for k in ("name_enc", "location_enc", "npc_enc"):
             if k in entry:
                 assert_type(entry[k], str, f"quest.{k}")
 
