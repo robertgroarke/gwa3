@@ -32,6 +32,8 @@
 #include <gwa3/core/SmokeTest.h>
 #include <gwa3/utils/StringEncoding.h>
 #include <gwa3/llm/LlmBridge.h>
+#include <gwa3/llm/IpcServer.h>
+#include <gwa3/llm/GameSnapshot.h>
 #include "tests/IntegrationTestInternal.h"
 
 static HMODULE g_hModule = nullptr;
@@ -528,8 +530,16 @@ DWORD WINAPI InitThread(LPVOID hModule) {
             return 1;
         }
         GWA3::Log::Info("gwa3.dll initialization complete - LLM bridge active");
+
+        // Run everything on the init thread: snapshot serialization + action dispatch.
+        // The bridge thread was causing game crashes when any game action was dispatched
+        // while a pipe client was connected — even with EventPush disabled and snapshots
+        // paused. Running all work on the init thread (proven safe) avoids the issue.
+        // Run actions from init thread. Bridge thread handles snapshots normally.
+        GWA3::Log::Info("[LLM] Init thread polling for actions");
         while (GWA3::LLM::IsRunning()) {
-            Sleep(1000);
+            GWA3::LLM::DrainInboundActions();
+            Sleep(50);
         }
         GWA3::SmokeTest::StopWatchdog(false);
         return 0;

@@ -173,8 +173,9 @@ namespace GWA3::LLM {
                     lastHeartbeat = now;
                 }
 
-                // Process inbound actions
-                ProcessInboundMessages();
+                // Inbound actions are drained by the init thread via
+                // DrainInboundActions() for safe game thread dispatch.
+                // The bridge thread no longer processes actions directly.
             }
 
             Sleep(ACTION_POLL_MS);
@@ -201,11 +202,9 @@ namespace GWA3::LLM {
         }
 
         // EventPush is optional — don't fail bridge init if it can't hook
-        // TEMPORARILY DISABLED: EventPush StoC hooks crash investigation
-        // if (!EventPush::Initialize()) {
-        //     GWA3::Log::Warn("[LLM-Bridge] EventPush initialization failed — events won't stream");
-        // }
-        GWA3::Log::Info("[LLM-Bridge] EventPush DISABLED for move_to crash investigation");
+        if (!EventPush::Initialize()) {
+            GWA3::Log::Warn("[LLM-Bridge] EventPush initialization failed — events won't stream");
+        }
 
         g_running.store(true);
         g_bridgeThread = CreateThread(nullptr, 0, BridgeThread, nullptr, 0, nullptr);
@@ -248,6 +247,10 @@ namespace GWA3::LLM {
         const DWORD until = now + milliseconds;
         g_snapshotPauseUntil.store(until);
         GWA3::Log::Info("[LLM-Bridge] Snapshots paused for %lu ms (until=%lu)", milliseconds, until);
+    }
+
+    void DrainInboundActions() {
+        ProcessInboundMessages();
     }
 
 } // namespace GWA3::LLM

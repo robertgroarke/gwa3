@@ -17,4 +17,11 @@ namespace GWA3::LLM {
     // Returns true if the LLM bridge is running.
     bool IsRunning();
 
+    // Temporarily suppress snapshot emission while keeping the bridge thread alive.
+    void PauseSnapshotsFor(unsigned long milliseconds);
+
+    // Drain inbound action messages from the IPC queue.
+    // Call from the init thread to dispatch actions from a safe thread context.
+    void DrainInboundActions();
+
 } // namespace GWA3::LLM

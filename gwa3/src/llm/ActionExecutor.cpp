@@ -16,6 +16,9 @@
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/Offsets.h>
+
+// Forward declaration — defined in IntegrationTest.cpp
+namespace GWA3::SmokeTest { bool MovePlayerNear(float x, float y, float threshold, int timeoutMs); }
 #include <gwa3/game/Agent.h>
 #include <gwa3/bot/BotFramework.h>
 
@@ -101,16 +104,13 @@ namespace GWA3::LLM::ActionExecutor {
         float y = p["y"].get<float>();
         if (std::abs(x) > 100000 || std::abs(y) > 100000) return MakeError("coordinates_out_of_range");
         if (!MapMgr::GetIsMapLoaded()) return MakeError("map_not_loaded");
-        // Dispatch move on GameThread post-dispatch to avoid crashing.
-        // Both native Move and CtoS::MoveToCoord crash in LLM mode when
-        // dispatched via GameThread::Enqueue (pre-dispatch). Using EnqueuePost
-        // (post-dispatch) matches the proven MovePlayerNear pattern.
-        if (GameThread::IsInitialized()) {
-            GameThread::EnqueuePost([x, y]() {
-                if (!MapMgr::GetIsMapLoaded() || AgentMgr::GetMyId() == 0) return;
-                CtoS::MoveToCoord(x, y);
-            });
-        }
+        // Use MovePlayerNear (the proven movement function from the test harness)
+        // on a background thread. AgentMgr::Move crashes in LLM mode, but
+        // MovePlayerNear works in the consumable test — it has stuck detection
+        // and re-issues moves every 500ms via GameThread::EnqueuePost.
+        std::thread([x, y]() {
+            GWA3::SmokeTest::MovePlayerNear(x, y, 250.0f, 30000);
+        }).detach();
         return MakeOk();
     }
 

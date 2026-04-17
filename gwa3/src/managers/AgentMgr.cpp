@@ -302,19 +302,8 @@ __declspec(naked) void RenderChangeTargetCommandStub() {
 
 void InvokeSparkflyMoveRaw(const MoveData* move) {
     if (!s_moveFn || !move) return;
-    // Use inline asm to call the native Move function.
-    // The direct C function pointer call (s_moveFn(move)) was crashing
-    // in LLM mode — likely due to MSVC generating a call that clobbers
-    // registers the game expects preserved across the call.
-    uintptr_t moveAddr = reinterpret_cast<uintptr_t>(move);
-    uintptr_t fn = reinterpret_cast<uintptr_t>(s_moveFn);
-    __asm {
-        mov eax, moveAddr
-        push eax
-        mov eax, fn
-        call eax
-        add esp, 4
-    }
+    // Direct C function pointer call — matches GWCA's Move_Func(&pos).
+    s_moveFn(move);
 }
 
 void InvokeChangeTargetRaw(uint32_t agentId) {
