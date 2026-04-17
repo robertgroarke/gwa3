@@ -233,35 +233,42 @@ class ConsetBridgeTest:
     async def move_to_and_wait(self, x: float, y: float, label: str, timeout: float = 45.0):
         """Move to coordinates and wait until close enough.
 
-        The bridge thread emits tier-1/2/3 snapshots every 200ms/500ms/2s, so
-        the pipe fills faster than we can read sequentially. If we just do
-        `read_message` in a loop we read stale snapshots from seconds ago and
-        never see the current position even though the player has reached the
-        target. Fix: drain the pipe each tick and use only the LATEST snapshot.
+        Uses query_fresh_state for position checks — that path drains the pipe
+        and requests a fresh server-built tier-3 snapshot, which is the only
+        reliable way to get current position after the pipe has accumulated
+        many seconds of stale messages during buys/crafts.
         """
         print(f"[MOVE] Moving to {label} ({x}, {y})...")
+
+        # Check if already at target before issuing a move
+        snap = await self.query_fresh_state(timeout=3.0, settle_ms=100)
+        if snap:
+            px, py = self.get_pos()
+            dist = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
+            if dist < 250:
+                print(f"[MOVE] Already at {label} (dist={dist:.0f})")
+                return True
+
         await self.action("move_to", {"x": x, "y": y}, wait_ms=100)
         last_move = time.time()
 
         deadline = time.time() + timeout
         while time.time() < deadline:
-            # Drain the pipe — consume every queued message so self.snapshot
-            # reflects the freshest position the DLL has sent.
-            await self.drain_pipe(count=200)
-            px, py = self.get_pos()
-            dist = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
-            if dist < 250:
-                print(f"[MOVE] Arrived at {label} (dist={dist:.0f})")
-                return True
+            # Fresh-state poll: forces a new server-side snapshot so position
+            # reflects the current game state, not stale pipe buffer.
+            snap = await self.query_fresh_state(timeout=2.0, settle_ms=200)
+            if snap:
+                px, py = self.get_pos()
+                dist = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
+                if dist < 250:
+                    print(f"[MOVE] Arrived at {label} (dist={dist:.0f})")
+                    return True
 
             # Re-issue move every 2 seconds (keeps path fresh, re-trigger
             # MovePlayerNear in case prior thread exited)
             if time.time() - last_move >= 2.0:
                 await self.ipc.send_action("move_to", {"x": x, "y": y}, self._next_req_id())
                 last_move = time.time()
-
-            # Small sleep so we don't spin; new tier-1 snapshot arrives every 200ms
-            await asyncio.sleep(0.25)
 
         print(f"[MOVE] TIMEOUT reaching {label}")
         return False
