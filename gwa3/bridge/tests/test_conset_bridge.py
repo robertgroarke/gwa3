@@ -122,13 +122,22 @@ class ConsetBridgeTest:
         return drained
 
     async def query_fresh_state(self, timeout: float = 5.0, settle_ms: int = 300) -> dict | None:
-        """Request fresh tier-3 snapshot (with settle delay), return it.
-        Reads messages until we find a tier-3 snapshot after sending query_state."""
-        # Request a fresh snapshot from the DLL, with server-side settle delay
-        # to allow pending game operations (buys, crafts) to complete.
+        """Request fresh tier-3 snapshot, return it. Drains any queued messages
+        BEFORE requesting so we don't return a stale snapshot that was already
+        in flight when prior actions ran.
+
+        Flow:
+          1. Drain the pipe of any buffered snapshots (stale data from before).
+          2. Send query_state with server-side settle delay (lets pending game
+             ops like buys/crafts complete before the snapshot is built).
+          3. Read until we get a tier-3 snapshot — this one was produced AFTER
+             the settle delay, so it reflects post-action state.
+        """
+        drained = await self.drain_pipe(count=100)
+        if drained > 0:
+            print(f"[QUERY] Drained {drained} stale messages before query")
         await self.action("query_state", {"wait_ms": settle_ms}, wait_ms=settle_ms + 200)
         deadline = time.time() + timeout
-        # Read messages sequentially (no wait_for to avoid pipe cancellation)
         while time.time() < deadline:
             try:
                 msg = await self.ipc.read_message()
