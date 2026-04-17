@@ -537,7 +537,12 @@ TRADER_BUY = _tool(
     "Buy one pack (10 units) of a material from the material trader. "
     "Handles quote + transact automatically via the native RequestQuote/Transaction functions. "
     "Must have the material trader window open (merchant.is_open). "
-    "Provide either model_id (material model, e.g. 948 for Iron Ingot) or item_id (virtual item ID).",
+    "Provide either model_id (material model, e.g. 948 for Iron Ingot) or item_id (virtual item ID). "
+    "Errors to check: 'out_of_stock' means the trader has no supply of this material "
+    "(server returned price=0) — DO NOT retry the same model_id in this district; skip any "
+    "recipes that depend on it and consider changing district. 'quote_failed' is a transient "
+    "protocol/hook issue that may succeed on retry. 'virtual_item_not_found' means the "
+    "merchant isn't actually open or the item isn't on this trader's list.",
     {
         "properties": {
             "item_id": {"type": "integer", "description": "Virtual item ID (if known)"},

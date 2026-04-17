@@ -643,8 +643,16 @@ namespace GWA3::LLM::ActionExecutor {
         }
         uint32_t price = TraderHook::GetCostValue();
         uint32_t costItemId = TraderHook::GetCostItemId();
-        if (price == 0 || price >= 100000) {
-            Log::Warn("[LLM-Action] trader_buy: quote failed item=%u price=%u", itemId, price);
+        if (price == 0) {
+            // Server returned a zero-price quote — this means the material
+            // trader is out of stock for this item. The LLM should treat it
+            // as a permanent failure for this material in this district and
+            // skip further buys / craft attempts that depend on it.
+            Log::Warn("[LLM-Action] trader_buy: trader out of stock item=%u (price=0)", itemId);
+            return MakeError("out_of_stock");
+        }
+        if (price >= 100000) {
+            Log::Warn("[LLM-Action] trader_buy: quote failed item=%u price=%u (implausible)", itemId, price);
             return MakeError("quote_failed");
         }
         Log::Info("[LLM-Action] trader_buy: quote item=%u price=%u — transacting", costItemId, price);
