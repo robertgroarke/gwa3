@@ -190,8 +190,12 @@ class ConsetBridgeTest:
         """Count consumable items by model ID."""
         return self.count_material(model_id)  # same logic
 
-    def find_nearby_npcs(self, max_count: int = 5) -> list[int]:
-        """Find nearest NPC agents (allegiance=6) from snapshot, sorted by distance."""
+    def find_nearby_npcs(self, max_count: int = 5,
+                         target_x: float | None = None,
+                         target_y: float | None = None) -> list[int]:
+        """Find nearby NPC agents (allegiance=6), sorted by distance.
+        If target_x/target_y are given, sort by distance to that point instead
+        of distance to player (matches the C++ test's ConsetFindNearestNPC)."""
         agents = self.snapshot.get("agents", [])
         npcs = []
         for a in agents:
@@ -199,25 +203,49 @@ class ConsetBridgeTest:
                 continue
             if a.get("allegiance") != 6:
                 continue
-            npcs.append((a.get("distance", 9999), a.get("id")))
+            if target_x is not None and target_y is not None:
+                ax, ay = a.get("x", 0), a.get("y", 0)
+                dist_sq = (ax - target_x) ** 2 + (ay - target_y) ** 2
+                # Cap at 500 units^2 like ConsetFindNearestNPC
+                if dist_sq > 500 * 500:
+                    continue
+                npcs.append((dist_sq, a.get("id")))
+            else:
+                npcs.append((a.get("distance", 9999), a.get("id")))
         npcs.sort()
         return [npc_id for _, npc_id in npcs[:max_count]]
 
-    def find_nearest_npc(self) -> int | None:
-        """Find nearest NPC agent (allegiance=6) from snapshot."""
-        npcs = self.find_nearby_npcs(1)
+    def find_nearest_npc(self, target_x: float | None = None,
+                         target_y: float | None = None) -> int | None:
+        """Find nearest NPC (allegiance=6). Matches target coords if given."""
+        npcs = self.find_nearby_npcs(1, target_x, target_y)
         return npcs[0] if npcs else None
 
     async def move_to_and_wait(self, x: float, y: float, label: str, timeout: float = 45.0):
-        """Move to coordinates and wait until close enough. Re-issues move every 2s."""
+        """Move to coordinates with stuck detection + backtrack/angle retry.
+
+        Stuck detection: if player position hasn't changed by >30 units over
+        STUCK_WINDOW seconds, assume collision with geometry. Backtrack a few
+        units away from target, then re-issue move from a lateral offset angle.
+        """
+        import math
+        STUCK_WINDOW = 3.0         # seconds with no progress = stuck
+        STUCK_DIST = 30.0          # units of movement needed to count as progress
+        BACKTRACK_UNITS = 250.0    # how far to back off
+        LATERAL_UNITS = 350.0      # how far lateral to retry
+
         print(f"[MOVE] Moving to {label} ({x}, {y})...")
         await self.action("move_to", {"x": x, "y": y}, wait_ms=100)
         last_move = time.time()
 
+        # Track position progress for stuck detection
+        last_progress_pos = self.get_pos()
+        last_progress_time = time.time()
+        stuck_retries = 0
+        MAX_STUCK_RETRIES = 4
+
         deadline = time.time() + timeout
         while time.time() < deadline:
-            # Read any available message with small sleep-based polling
-            # (avoiding asyncio.wait_for which cancels pipe reads)
             try:
                 msg = await self.ipc.read_message()
             except Exception as e:
@@ -233,7 +261,46 @@ class ConsetBridgeTest:
                     print(f"[MOVE] Arrived at {label} (dist={dist:.0f})")
                     return True
 
-            # Re-issue move every 2 seconds
+                # Stuck detection: compare to last recorded progress position
+                lpx, lpy = last_progress_pos
+                progress_dist = ((px - lpx) ** 2 + (py - lpy) ** 2) ** 0.5
+                if progress_dist > STUCK_DIST:
+                    last_progress_pos = (px, py)
+                    last_progress_time = time.time()
+                elif time.time() - last_progress_time >= STUCK_WINDOW:
+                    # STUCK — backtrack + lateral angle retry
+                    stuck_retries += 1
+                    if stuck_retries > MAX_STUCK_RETRIES:
+                        print(f"[MOVE] STUCK at ({px:.0f},{py:.0f}) — exhausted retries")
+                        return False
+                    # Unit vector from player -> target
+                    dx, dy = (x - px), (y - py)
+                    norm = max(1.0, math.hypot(dx, dy))
+                    ux, uy = dx / norm, dy / norm
+                    # Backtrack point: back away from target
+                    bx = px - ux * BACKTRACK_UNITS
+                    by = py - uy * BACKTRACK_UNITS
+                    # Lateral offset (perp vector), alternating sides each retry
+                    side = 1 if (stuck_retries % 2) == 1 else -1
+                    # Add jitter so repeated retries don't hit the same corner
+                    jitter = 1.0 + 0.3 * stuck_retries
+                    px_lat = -uy * side
+                    py_lat = ux * side
+                    bx += px_lat * LATERAL_UNITS * jitter
+                    by += py_lat * LATERAL_UNITS * jitter
+                    print(f"[MOVE] STUCK at ({px:.0f},{py:.0f}) (attempt {stuck_retries}) — "
+                          f"backtrack to ({bx:.0f},{by:.0f}) side={side}")
+                    await self.ipc.send_action("move_to", {"x": bx, "y": by}, self._next_req_id())
+                    # Give the backtrack time to execute before re-targeting
+                    await asyncio.sleep(2.0)
+                    # Now re-issue move to original target
+                    await self.ipc.send_action("move_to", {"x": x, "y": y}, self._next_req_id())
+                    last_move = time.time()
+                    last_progress_time = time.time()
+                    last_progress_pos = (px, py)
+                    continue
+
+            # Re-issue move every 2 seconds (keeps path fresh)
             if time.time() - last_move >= 2.0:
                 await self.ipc.send_action("move_to", {"x": x, "y": y}, self._next_req_id())
                 last_move = time.time()
@@ -246,40 +313,32 @@ class ConsetBridgeTest:
         for attempt in range(3):
             # First target the NPC, wait for movement to settle
             await self.action("change_target", {"agent_id": agent_id}, wait_ms=500)
-            # Use interact_npc (AgentMgr::InteractNPC handles targeting internally)
             print(f"[NPC] Opening {label} (agent={agent_id}, attempt {attempt+1})...")
-            await self.action("interact_npc", {"agent_id": agent_id}, wait_ms=2000)
-            # Read tier-2+ snapshots for merchant data — may take a moment
-            for _ in range(8):
-                snap = await self.read_until_snapshot(min_tier=2, timeout=2.0)
+            # Try open_merchant (GoNPC packet) first — this is the proven approach
+            # from the C++ test (ConsetOpenNPCDialog).
+            await self.action("open_merchant", {"agent_id": agent_id}, wait_ms=2000)
+            # Query fresh state to check if merchant actually opened
+            snap = await self.query_fresh_state(timeout=3.0, settle_ms=500)
+            if snap:
+                merchant = snap.get("merchant", {})
+                items = merchant.get("items", [])
+                item_count = merchant.get("item_count", 0)
+                if merchant.get("is_open") and items:
+                    print(f"[NPC] {label} open: {len(items)} items")
+                    return True
+                elif merchant.get("is_open") and item_count > 0:
+                    print(f"[NPC] {label} has item_count={item_count} but items list empty, accepting")
+                    return True
+            # Fallback to interact_npc on next attempt
+            if attempt < 2:
+                await self.action("interact_npc", {"agent_id": agent_id}, wait_ms=2000)
+                snap = await self.query_fresh_state(timeout=3.0, settle_ms=500)
                 if snap:
                     merchant = snap.get("merchant", {})
-                    if merchant.get("is_open"):
-                        items = merchant.get("items", [])
-                        item_count = merchant.get("item_count", 0)
-                        print(f"[NPC] {label} open: {len(items)} items (item_count={item_count})")
-                        if items:
-                            return True
-                        elif item_count > 0:
-                            print(f"[NPC] {label} has item_count={item_count} but items list empty — waiting...")
-                            await asyncio.sleep(1)
-                            continue
-            # Try open_merchant (GoNPC packet) as fallback
-            if attempt == 1:
-                await self.action("open_merchant", {"agent_id": agent_id}, wait_ms=3000)
-                for _ in range(5):
-                    snap = await self.read_until_snapshot(min_tier=2, timeout=2.0)
-                    if snap:
-                        merchant = snap.get("merchant", {})
-                        if merchant.get("is_open") and merchant.get("items"):
-                            print(f"[NPC] {label} open via GoNPC: {len(merchant['items'])} items")
-                            return True
-        # Accept merchant open even without items (item list may be empty
-        # from snapshot thread but the merchant dialog IS actually open)
-        if self.is_merchant_open():
-            count = self.snapshot.get("merchant", {}).get("item_count", 0)
-            print(f"[NPC] {label} is_open=true item_count={count} (items may load later)")
-            return True
+                    items = merchant.get("items", [])
+                    if merchant.get("is_open") and items:
+                        print(f"[NPC] {label} open via interact_npc: {len(items)} items")
+                        return True
         print(f"[NPC] FAILED to open {label} after 3 attempts")
         return False
 
@@ -322,11 +381,9 @@ class ConsetBridgeTest:
         print(f"[GOLD] Character={gold} Storage={storage_gold} Target={TARGET_GOLD}")
         if gold < TARGET_GOLD and storage_gold > 0:
             await self.move_to_and_wait(XUNLAI_X, XUNLAI_Y, "Xunlai Chest")
-            # Find and interact with Xunlai NPC
+            # Find and interact with Xunlai NPC (closest to target coords)
             snap = await self.read_until_snapshot()
-            # Use open_merchant to interact with chest
-            # The Xunlai doesn't need merchant — just interact + ChangeGold
-            npc_id = self.find_nearest_npc()
+            npc_id = self.find_nearest_npc(XUNLAI_X, XUNLAI_Y)
             if npc_id:
                 await self.action("interact_npc", {"agent_id": npc_id}, wait_ms=2000)
             withdraw = min(TARGET_GOLD - gold, storage_gold)
@@ -340,8 +397,8 @@ class ConsetBridgeTest:
         num_consets = 5
         await self.move_to_and_wait(MATERIAL_TRADER_X, MATERIAL_TRADER_Y, "Material Trader")
         snap = await self.read_until_snapshot(min_tier=2, timeout=5.0)
-        # Try multiple nearby NPCs — the material trader might not be the closest
-        npc_ids = self.find_nearby_npcs(5)
+        # Try multiple nearby NPCs near target coords, not player
+        npc_ids = self.find_nearby_npcs(5, MATERIAL_TRADER_X, MATERIAL_TRADER_Y)
         if not npc_ids:
             print("[ERROR] No NPCs found near material trader")
             return False
@@ -406,14 +463,20 @@ class ConsetBridgeTest:
             await self.move_to_and_wait(cx, cy, crafter_name)
             snap = await self.read_until_snapshot()
 
-            # Find crafter NPC
-            npc_id = self.find_nearest_npc()
-            if not npc_id:
-                print(f"[CRAFT] No NPC near {crafter_name}")
+            # Find crafter NPCs near target coords, try each until merchant opens
+            npc_ids = self.find_nearby_npcs(3, cx, cy)
+            if not npc_ids:
+                print(f"[CRAFT] No NPCs near {crafter_name}")
                 results[recipe_name] = 0
                 continue
 
-            if not await self.open_merchant_npc(npc_id, crafter_name):
+            merchant_opened = False
+            for npc_id in npc_ids:
+                if await self.open_merchant_npc(npc_id, crafter_name):
+                    merchant_opened = True
+                    break
+            if not merchant_opened:
+                print(f"[CRAFT] Failed to open {crafter_name}")
                 results[recipe_name] = 0
                 continue
 
