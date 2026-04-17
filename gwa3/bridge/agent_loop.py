@@ -16,6 +16,7 @@ from .kamadan_client import KamadanClient
 from .llm_client import LLMClient, LLMResponse
 from .tool_schema import ALL_TOOLS
 from .observation import ObservationWindow
+from . import farming_knowledge
 
 
 SYSTEM_PROMPT = """\
@@ -200,6 +201,37 @@ class AgentLoop:
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": content,
+                })
+                continue
+
+            # Static farming knowledge lookups — no game-thread round trip
+            if tc.name == "get_recipe":
+                data = farming_knowledge.get_recipe(
+                    params.get("consumable_model_id", 0))
+                self.history.append({
+                    "role": "tool", "tool_call_id": tc.id,
+                    "content": json.dumps(data),
+                })
+                continue
+            if tc.name == "get_outpost_info":
+                data = farming_knowledge.get_outpost_info(params.get("map_id", 0))
+                self.history.append({
+                    "role": "tool", "tool_call_id": tc.id,
+                    "content": json.dumps(data),
+                })
+                continue
+            if tc.name == "get_material_info":
+                data = farming_knowledge.get_material_info(params.get("model_id", 0))
+                self.history.append({
+                    "role": "tool", "tool_call_id": tc.id,
+                    "content": json.dumps(data),
+                })
+                continue
+            if tc.name == "get_dungeon_info":
+                data = farming_knowledge.get_dungeon_info(params.get("name", ""))
+                self.history.append({
+                    "role": "tool", "tool_call_id": tc.id,
+                    "content": json.dumps(data),
                 })
                 continue
 

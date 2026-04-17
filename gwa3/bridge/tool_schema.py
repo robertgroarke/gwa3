@@ -758,6 +758,81 @@ SEARCH_TRADE_PRICES = _tool(
 )
 
 
+# --- Farming Knowledge (static lookups, no game-thread round trip) ---
+
+GET_RECIPE = _tool(
+    "get_recipe",
+    "Look up the crafting recipe for a consumable by model_id. Returns the "
+    "required materials (model_id + quantity PER CRAFT), the crafter NPC name, "
+    "the outpost map_id where the crafter lives, the crafter's (x, y) "
+    "coordinates, and the gold cost per craft. Use this before attempting to "
+    "craft a consumable so you know what materials to buy first. "
+    "Known consumable model_ids: 24861 (Grail of Might), 24859 (Essence of "
+    "Celerity), 24860 (Armor of Salvation).",
+    {
+        "properties": {
+            "consumable_model_id": {
+                "type": "integer",
+                "description": "Model ID of the consumable to craft",
+            },
+        },
+        "required": ["consumable_model_id"],
+    },
+)
+
+GET_OUTPOST_INFO = _tool(
+    "get_outpost_info",
+    "Look up the key NPC locations in an outpost by map_id. Returns material "
+    "trader coords, Xunlai storage chest coords, merchant coords, and any "
+    "known crafters with their (x, y) positions. If the outpost has no "
+    "hardcoded coords but has a known material trader NPC model_id, the "
+    "response includes that model_id so you can scan the agent list for it.",
+    {
+        "properties": {
+            "map_id": {
+                "type": "integer",
+                "description": "Outpost map ID (e.g. 857=Embark Beach, 638=Gadd's Encampment)",
+            },
+        },
+        "required": ["map_id"],
+    },
+)
+
+GET_MATERIAL_INFO = _tool(
+    "get_material_info",
+    "Look up the human-readable name of a material by model_id. Returns "
+    "{name} for known materials. Useful when you see a material in inventory "
+    "or at a trader and want to match it to a recipe ingredient.",
+    {
+        "properties": {
+            "model_id": {
+                "type": "integer",
+                "description": "Material model ID",
+            },
+        },
+        "required": ["model_id"],
+    },
+)
+
+GET_DUNGEON_INFO = _tool(
+    "get_dungeon_info",
+    "Look up the entry outpost and level map IDs for a dungeon by name. "
+    "Returns {entry_outpost_map_id, entry_outpost_name, level_map_ids[]} "
+    "so you know where to travel before entering. Known dungeons: "
+    "'Bogroot Growths', 'Arachni\\'s Haunt', 'Raven\\'s Point', "
+    "'Catacombs of Kathandrax', 'Rragar\\'s Menagerie', 'Frostmaw\\'s Burrows'.",
+    {
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Dungeon display name",
+            },
+        },
+        "required": ["name"],
+    },
+)
+
+
 # All tools in a single list for passing to the LLM
 ALL_TOOLS = [
     # Movement
@@ -832,4 +907,9 @@ ALL_TOOLS = [
     WAIT,
     # Price Discovery
     SEARCH_TRADE_PRICES,
+    # Farming Knowledge (local static lookups, no game-thread round trip)
+    GET_RECIPE,
+    GET_OUTPOST_INFO,
+    GET_MATERIAL_INFO,
+    GET_DUNGEON_INFO,
 ]
