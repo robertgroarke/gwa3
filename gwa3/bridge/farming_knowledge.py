@@ -123,8 +123,10 @@ OUTPOST_NPCS: dict[int, dict] = {
           "material_trader": {"npc_model_id": 6050}},
     641: {"name": "Sunspear Great Hall",
           "material_trader": {"npc_model_id": 6065}},
-    643: {"name": "Sifhalla"},
-    648: {"name": "Doomlore Shrine"},
+    # Sifhalla + Doomlore Shrine don't have hardcoded NPC data in the AutoIt
+    # scripts — they're used as entry outposts only. Name-resolution lives in
+    # MAP_NAMES; they're omitted from OUTPOST_NPCS to keep that table focused
+    # on outposts with actionable NPC data.
 }
 
 # =============================================================================
@@ -188,7 +190,10 @@ MAP_NAMES: dict[int, str] = {
     569: "Magus Stones",
     570: "Catacombs of Kathandrax L1",
     571: "Catacombs of Kathandrax L2",
+    572: "Catacombs of Kathandrax L3",
     573: "Rragar's Menagerie L1",
+    574: "Rragar's Menagerie L2",
+    575: "Rragar's Menagerie L3",
     584: "Arachni's Haunt L1",
     585: "Arachni's Haunt L2",
     615: "Bogroot Growths L1",
@@ -196,11 +201,20 @@ MAP_NAMES: dict[int, str] = {
     617: "Raven's Point L1",
     618: "Raven's Point L2",
     619: "Raven's Point L3",
+    621: "Jaga Moraine",
     630: "Frostmaw's Burrows L1",
+    631: "Frostmaw's Burrows L2",
+    632: "Frostmaw's Burrows L3",
+    633: "Frostmaw's Burrows L4",
+    634: "Frostmaw's Burrows L5",
     638: "Gadd's Encampment",
     640: "Rata Sum",
     641: "Sunspear Great Hall",
+    642: "Eye of the North",
+    643: "Sifhalla",
+    644: "Sacnoth Valley",
     645: "Olafstead",
+    648: "Doomlore Shrine",
     676: "Catacombs of Kathandrax (outpost)",
     857: "Embark Beach",
 }
