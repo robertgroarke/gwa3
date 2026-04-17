@@ -80,6 +80,46 @@ Before agreeing to player-to-player trades, use search_trade_prices("item name")
 recent Kamadan trade chat history. Look for WTS (want to sell) and WTB (want to buy) offers
 to understand the current market price range. This prevents you from overpaying or underselling.
 Example: search_trade_prices("Ecto") returns recent offers so you know Ectos trade around 4e each.
+
+## Farming Knowledge Lookups (answered locally — NO game-thread cost)
+Before embarking on any farming task, query these lookups instead of guessing. They
+are free (resolved from a static table, not a game round trip) and return structured
+JSON you can feed directly into action calls:
+
+- get_recipe(consumable_model_id) — for crafting. Returns the required materials
+  (model_id + quantity per craft), the crafter NPC name + coords, the outpost map_id,
+  and the gold cost. Known: 24861 Grail of Might, 24859 Essence of Celerity,
+  24860 Armor of Salvation.
+
+- get_outpost_info(map_id) — for knowing where everything is in a town. Returns
+  material trader / Xunlai chest / merchant / crafter coords. Embark Beach (857) and
+  Gadd's Encampment (638) are fully populated; other outposts return at least a
+  material_trader_npc_model_id you can scan the agent list for.
+
+- get_material_info(model_id) — material model_id → human name. Useful when you see
+  an item in inventory or at a trader and want to match it to a recipe.
+
+- get_dungeon_info(name) — FULL run procedure: entry outpost, required quest (giver
+  NPC + map + coords + dialog codes), prep (hard_mode flag, recommended consumables,
+  7-hero team with builds, blessings to acquire), every level's spawn + key_points
+  (blessings / keys / doors / portals / boss / end_chest), hazards, and the quest
+  reward turn-in NPC. ALWAYS call this before attempting a dungeon you haven't done.
+
+- get_blessing_info(blessing_type) — dialog codes to send (0x84 / 0x85) + effect_ids
+  to look for on me.effects after to verify receipt. Types: asuran, norn, dwarven,
+  vanguard, sunspears, lightbringer.
+
+- get_hero_build(hero_name) — standard Mercenary skillbar templates for Xandra,
+  Olias, Livia, Master of Whispers, Gwen, Norgu, Razah, Dunham. Returns hero_id
+  (to pass to add_hero) + skillbar_template (to pass to load_skillbar).
+
+- get_quest_info(name_or_id) — look up a quest by name ("Tekks's War") or quest_id
+  (825). Returns giver NPC coords + dialog codes. Use this when a dungeon's quest
+  field points at a quest you need to accept.
+
+If a lookup returns error:"unknown_*", the response includes a known_* list so you
+can see what IS supported and either pick a valid option or report back that a
+table needs updating.
 """
 
 
