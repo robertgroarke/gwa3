@@ -80,6 +80,13 @@ static bool s_loggedMoveQueuedOnce = false;
 static bool s_loggedSparkflyMoveLane = false;
 static bool s_loggedSparkflyMoveLaneUnavailable = false;
 static bool s_loggedChangeTargetEngineLane = false;
+static SRWLOCK s_moveQueueLock = SRWLOCK_INIT;
+static MoveData s_pendingQueuedMove{};
+static bool s_pendingQueuedMoveValid = false;
+static volatile LONG s_moveDrainQueued = 0;
+static MoveData s_lastIssuedMove{};
+static DWORD s_lastIssuedMoveAt = 0;
+static bool s_haveLastIssuedMove = false;
 static constexpr LONG kRenderCommandSlots = 32;
 static constexpr size_t kRenderCommandSlotSize = 32;
 static uintptr_t s_renderCommandPool = 0;
@@ -162,6 +169,8 @@ struct SendChangeTargetUIMsg {
 };
 
 namespace {
+
+void IssueNativeMove(float x, float y);
 
 const char* NpcInteractModeName(NpcInteractMode mode) {
     switch (mode) {
@@ -293,9 +302,19 @@ __declspec(naked) void RenderChangeTargetCommandStub() {
 
 void InvokeSparkflyMoveRaw(const MoveData* move) {
     if (!s_moveFn || !move) return;
-    // Direct C function pointer call — matches GWCA's Move_Func(&pos).
-    // The inline asm version was suspected of stack/register corruption.
-    s_moveFn(move);
+    // Use inline asm to call the native Move function.
+    // The direct C function pointer call (s_moveFn(move)) was crashing
+    // in LLM mode — likely due to MSVC generating a call that clobbers
+    // registers the game expects preserved across the call.
+    uintptr_t moveAddr = reinterpret_cast<uintptr_t>(move);
+    uintptr_t fn = reinterpret_cast<uintptr_t>(s_moveFn);
+    __asm {
+        mov eax, moveAddr
+        push eax
+        mov eax, fn
+        call eax
+        add esp, 4
+    }
 }
 
 void InvokeChangeTargetRaw(uint32_t agentId) {
@@ -325,6 +344,48 @@ void InvokeChangeTarget(void* raw) {
     InvokeChangeTargetRaw(cmd->agent_id);
 }
 
+bool ShouldSuppressMove(float x, float y) {
+    if (!s_haveLastIssuedMove) {
+        return false;
+    }
+
+    const float delta = std::hypot(x - s_lastIssuedMove.x, y - s_lastIssuedMove.y);
+    return delta < 150.0f && (GetTickCount() - s_lastIssuedMoveAt) < 1500;
+}
+
+void DrainQueuedMove() {
+    for (;;) {
+        MoveData nextMove{};
+        bool haveMove = false;
+
+        AcquireSRWLockExclusive(&s_moveQueueLock);
+        if (s_pendingQueuedMoveValid) {
+            nextMove = s_pendingQueuedMove;
+            s_pendingQueuedMoveValid = false;
+            haveMove = true;
+        }
+        ReleaseSRWLockExclusive(&s_moveQueueLock);
+
+        if (!haveMove) {
+            break;
+        }
+
+        IssueNativeMove(nextMove.x, nextMove.y);
+    }
+
+    InterlockedExchange(&s_moveDrainQueued, 0);
+
+    AcquireSRWLockShared(&s_moveQueueLock);
+    const bool needsAnotherDrain = s_pendingQueuedMoveValid;
+    ReleaseSRWLockShared(&s_moveQueueLock);
+
+    if (needsAnotherDrain && InterlockedCompareExchange(&s_moveDrainQueued, 1, 0) == 0) {
+        GameThread::EnqueuePost([]() {
+            DrainQueuedMove();
+        });
+    }
+}
+
 void IssueNativeMove(float x, float y) {
     // Safety: don't call native move during zone transitions or when agent is invalid.
     // The native fn crashes if called while the world state is being torn down/rebuilt.
@@ -350,11 +411,18 @@ void IssueNativeMove(float x, float y) {
         return;
     }
 
+    if (ShouldSuppressMove(x, y)) {
+        return;
+    }
+
     MoveData moveData{};
     moveData.x = x;
     moveData.y = y;
     moveData.plane = 0;
     InvokeSparkflyMoveRaw(&moveData);
+    s_lastIssuedMove = moveData;
+    s_lastIssuedMoveAt = GetTickCount();
+    s_haveLastIssuedMove = true;
     Log::Info("AgentMgr: IssueNativeMove returned target=(%.0f, %.0f)", x, y);
 }
 
@@ -385,9 +453,18 @@ void Move(float x, float y) {
                 Log::Info("AgentMgr: Move queuing native move on GameThread post-dispatch");
                 s_loggedMoveQueuedOnce = true;
             }
-            GameThread::EnqueuePost([x, y]() {
-                IssueNativeMove(x, y);
-            });
+            AcquireSRWLockExclusive(&s_moveQueueLock);
+            s_pendingQueuedMove.x = x;
+            s_pendingQueuedMove.y = y;
+            s_pendingQueuedMove.plane = 0;
+            s_pendingQueuedMoveValid = true;
+            ReleaseSRWLockExclusive(&s_moveQueueLock);
+
+            if (InterlockedCompareExchange(&s_moveDrainQueued, 1, 0) == 0) {
+                GameThread::EnqueuePost([]() {
+                    DrainQueuedMove();
+                });
+            }
             return;
         }
 

@@ -101,9 +101,16 @@ namespace GWA3::LLM::ActionExecutor {
         float y = p["y"].get<float>();
         if (std::abs(x) > 100000 || std::abs(y) > 100000) return MakeError("coordinates_out_of_range");
         if (!MapMgr::GetIsMapLoaded()) return MakeError("map_not_loaded");
-        // Call AgentMgr::Move directly — it handles its own GameThread dispatch
-        // (queues via EnqueuePost internally when called from off-thread).
-        AgentMgr::Move(x, y);
+        // Dispatch move on GameThread post-dispatch to avoid crashing.
+        // Both native Move and CtoS::MoveToCoord crash in LLM mode when
+        // dispatched via GameThread::Enqueue (pre-dispatch). Using EnqueuePost
+        // (post-dispatch) matches the proven MovePlayerNear pattern.
+        if (GameThread::IsInitialized()) {
+            GameThread::EnqueuePost([x, y]() {
+                if (!MapMgr::GetIsMapLoaded() || AgentMgr::GetMyId() == 0) return;
+                CtoS::MoveToCoord(x, y);
+            });
+        }
         return MakeOk();
     }
 

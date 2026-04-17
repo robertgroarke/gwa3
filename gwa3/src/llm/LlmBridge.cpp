@@ -16,6 +16,7 @@ namespace GWA3::LLM {
 
     static HANDLE g_bridgeThread = nullptr;
     static std::atomic<bool> g_running{false};
+    static std::atomic<DWORD> g_snapshotPauseUntil{0};
 
     // Snapshot intervals (milliseconds)
     static constexpr DWORD TIER1_INTERVAL_MS = 200;
@@ -79,14 +80,18 @@ namespace GWA3::LLM {
         DWORD lastTier3 = 0;
         DWORD lastHeartbeat = 0;
         bool firstTier1Trace = false;
+        uint32_t tier2TraceCount = 0;
+        uint32_t tier3TraceCount = 0;
 
         while (g_running.load()) {
             DWORD now = GetTickCount();
+            const DWORD pauseUntil = g_snapshotPauseUntil.load();
+            const bool snapshotsPaused = pauseUntil != 0 && static_cast<int32_t>(pauseUntil - now) > 0;
 
             // Only send snapshots when a client is connected
             if (IpcServer::IsClientConnected()) {
                 // Tier 1: core state (every 200ms)
-                if (now - lastTier1 >= TIER1_INTERVAL_MS) {
+                if (!snapshotsPaused && now - lastTier1 >= TIER1_INTERVAL_MS) {
                     if (!firstTier1Trace) {
                         GWA3::Log::Info("[LLM-Bridge] Tier1 begin");
                     }
@@ -113,24 +118,52 @@ namespace GWA3::LLM {
                 }
 
                 // Tier 2: nearby agents (every 500ms)
-                if (now - lastTier2 >= TIER2_INTERVAL_MS) {
+                if (!snapshotsPaused && now - lastTier2 >= TIER2_INTERVAL_MS) {
                     uint32_t len = 0;
+                    if (tier2TraceCount < 5) {
+                        GWA3::Log::Info("[LLM-Bridge] Tier2 begin");
+                    }
                     char* snap = GameSnapshot::SerializeTier2(&len);
                     if (snap) {
-                        IpcServer::Send(snap, len);
+                        if (tier2TraceCount < 5) {
+                            GWA3::Log::Info("[LLM-Bridge] Tier2 serialized len=%u ptr=0x%08X", len, static_cast<unsigned>(reinterpret_cast<uintptr_t>(snap)));
+                            GWA3::Log::Info("[LLM-Bridge] Tier2 send begin");
+                        }
+                        bool sent = IpcServer::Send(snap, len);
+                        if (tier2TraceCount < 5) {
+                            GWA3::Log::Info("[LLM-Bridge] Tier2 send end sent=%u", sent ? 1u : 0u);
+                        }
                         delete[] snap;
                     }
+                    if (tier2TraceCount < 5) {
+                        GWA3::Log::Info("[LLM-Bridge] Tier2 end");
+                    }
+                    tier2TraceCount++;
                     lastTier2 = now;
                 }
 
                 // Tier 3: full state (every 2s)
-                if (now - lastTier3 >= TIER3_INTERVAL_MS) {
+                if (!snapshotsPaused && now - lastTier3 >= TIER3_INTERVAL_MS) {
                     uint32_t len = 0;
+                    if (tier3TraceCount < 3) {
+                        GWA3::Log::Info("[LLM-Bridge] Tier3 begin");
+                    }
                     char* snap = GameSnapshot::SerializeTier3(&len);
                     if (snap) {
-                        IpcServer::Send(snap, len);
+                        if (tier3TraceCount < 3) {
+                            GWA3::Log::Info("[LLM-Bridge] Tier3 serialized len=%u ptr=0x%08X", len, static_cast<unsigned>(reinterpret_cast<uintptr_t>(snap)));
+                            GWA3::Log::Info("[LLM-Bridge] Tier3 send begin");
+                        }
+                        bool sent = IpcServer::Send(snap, len);
+                        if (tier3TraceCount < 3) {
+                            GWA3::Log::Info("[LLM-Bridge] Tier3 send end sent=%u", sent ? 1u : 0u);
+                        }
                         delete[] snap;
                     }
+                    if (tier3TraceCount < 3) {
+                        GWA3::Log::Info("[LLM-Bridge] Tier3 end");
+                    }
+                    tier3TraceCount++;
                     lastTier3 = now;
                 }
 
@@ -168,9 +201,11 @@ namespace GWA3::LLM {
         }
 
         // EventPush is optional — don't fail bridge init if it can't hook
-        if (!EventPush::Initialize()) {
-            GWA3::Log::Warn("[LLM-Bridge] EventPush initialization failed — events won't stream");
-        }
+        // TEMPORARILY DISABLED: EventPush StoC hooks crash investigation
+        // if (!EventPush::Initialize()) {
+        //     GWA3::Log::Warn("[LLM-Bridge] EventPush initialization failed — events won't stream");
+        // }
+        GWA3::Log::Info("[LLM-Bridge] EventPush DISABLED for move_to crash investigation");
 
         g_running.store(true);
         g_bridgeThread = CreateThread(nullptr, 0, BridgeThread, nullptr, 0, nullptr);
@@ -206,6 +241,13 @@ namespace GWA3::LLM {
 
     bool IsRunning() {
         return g_running.load();
+    }
+
+    void PauseSnapshotsFor(unsigned long milliseconds) {
+        const DWORD now = GetTickCount();
+        const DWORD until = now + milliseconds;
+        g_snapshotPauseUntil.store(until);
+        GWA3::Log::Info("[LLM-Bridge] Snapshots paused for %lu ms (until=%lu)", milliseconds, until);
     }
 
 } // namespace GWA3::LLM
