@@ -526,13 +526,13 @@ TRADER_BUY = _tool(
     "Buy one pack (10 units) of a material from the material trader. "
     "Handles quote + transact automatically via the native RequestQuote/Transaction functions. "
     "Must have the material trader window open (merchant.is_open). "
-    "The item_id is a virtual trader item ID from the global item array, NOT a model ID. "
-    "Use the merchant.items list from the snapshot to find item IDs.",
+    "Provide either model_id (material model, e.g. 948 for Iron Ingot) or item_id (virtual item ID).",
     {
         "properties": {
-            "item_id": {"type": "integer", "description": "Virtual item ID from the trader's item list"},
+            "item_id": {"type": "integer", "description": "Virtual item ID (if known)"},
+            "model_id": {"type": "integer", "description": "Material model ID (e.g. 948=Iron, 929=Dust, 921=Bone, 933=Feather)"},
         },
-        "required": ["item_id"],
+        "required": [],
     },
 )
 

@@ -73,7 +73,7 @@ namespace GWA3::LLM::ActionExecutor {
         j["type"] = "action_result";
         j["request_id"] = requestId ? requestId : "";
         j["success"] = success;
-        j["error"] = (error && error[0]) ? error : nullptr;
+        j["error"] = (error && error[0]) ? json(error) : json(nullptr);
         std::string s = j.dump();
         GWA3::Log::Info("[LLM-Action] SendResult begin: request_id=%s success=%d bytes=%u",
                         requestId ? requestId : "",
@@ -539,9 +539,44 @@ namespace GWA3::LLM::ActionExecutor {
         }
     }
 
+    // Scan global item array for a virtual merchant item matching model_id
+    // (bag==nullptr, agent_id==0). Same logic as FindTraderVirtualItemId
+    // in IntegrationTestSession.cpp.
+    static uint32_t FindVirtualItemByModel(uint32_t modelId) {
+        if (!GWA3::Offsets::BasePointer) return 0;
+        __try {
+            uintptr_t p0 = *reinterpret_cast<uintptr_t*>(GWA3::Offsets::BasePointer);
+            if (p0 < 0x10000) return 0;
+            uintptr_t p1 = *reinterpret_cast<uintptr_t*>(p0 + 0x18);
+            if (p1 < 0x10000) return 0;
+            uintptr_t p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x40);
+            if (p2 < 0x10000) return 0;
+            uint32_t arraySize = *reinterpret_cast<uint32_t*>(p2 + 0xC0);
+            if (arraySize == 0 || arraySize > 8192) return 0;
+            uintptr_t p3 = *reinterpret_cast<uintptr_t*>(p2 + 0xB8);
+            if (p3 < 0x10000) return 0;
+            for (uint32_t id = 1; id < arraySize; ++id) {
+                uintptr_t itemPtr = *reinterpret_cast<uintptr_t*>(p3 + id * 4);
+                if (itemPtr < 0x10000) continue;
+                auto* item = reinterpret_cast<Item*>(itemPtr);
+                if (item->bag == nullptr && item->agent_id == 0 && item->model_id == modelId) {
+                    return item->item_id;
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        return 0;
+    }
+
     static ActionResult HandleTraderBuy(const json& p) {
-        if (!p.contains("item_id")) return MakeError("missing item_id");
-        uint32_t itemId = p["item_id"].get<uint32_t>();
+        // Accept either item_id directly or model_id (resolved via virtual item scan)
+        uint32_t itemId = p.value("item_id", 0u);
+        if (itemId == 0 && p.contains("model_id")) {
+            uint32_t modelId = p["model_id"].get<uint32_t>();
+            itemId = FindVirtualItemByModel(modelId);
+            if (itemId == 0) return MakeError("virtual_item_not_found");
+            Log::Info("[LLM-Action] trader_buy: resolved model=%u to item=%u", modelId, itemId);
+        }
+        if (itemId == 0) return MakeError("missing item_id or model_id");
         TraderHook::Reset();
 
         // Run quote+transact on a background thread to avoid blocking the IPC
@@ -593,6 +628,7 @@ namespace GWA3::LLM::ActionExecutor {
         uint32_t quantity = p.value("quantity", 1u);
         // Arm the deferred offer — executes inside OnUpdateTradeCart callback
         TradeMgr::OfferItem(itemId, quantity);
+        return MakeOk();
     }
 
     static ActionResult HandleOfferTradeItemPromptMax(const json& p) {

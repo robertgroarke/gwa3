@@ -146,21 +146,23 @@ class ConsetBridgeTest:
         """Count consumable items by model ID."""
         return self.count_material(model_id)  # same logic
 
-    def find_nearest_npc(self) -> int | None:
-        """Find nearest NPC agent (allegiance=6) from snapshot."""
+    def find_nearby_npcs(self, max_count: int = 5) -> list[int]:
+        """Find nearest NPC agents (allegiance=6) from snapshot, sorted by distance."""
         agents = self.snapshot.get("agents", [])
-        best_id = None
-        best_dist = 9999
+        npcs = []
         for a in agents:
             if a.get("agent_type") != "living":
                 continue
-            if a.get("allegiance") != 6:  # NPC allegiance
+            if a.get("allegiance") != 6:
                 continue
-            dist = a.get("distance", 9999)
-            if dist < best_dist:
-                best_dist = dist
-                best_id = a.get("id")
-        return best_id
+            npcs.append((a.get("distance", 9999), a.get("id")))
+        npcs.sort()
+        return [npc_id for _, npc_id in npcs[:max_count]]
+
+    def find_nearest_npc(self) -> int | None:
+        """Find nearest NPC agent (allegiance=6) from snapshot."""
+        npcs = self.find_nearby_npcs(1)
+        return npcs[0] if npcs else None
 
     async def move_to_and_wait(self, x: float, y: float, label: str, timeout: float = 45.0):
         """Move to coordinates and wait until close enough. Re-issues move every 2s."""
@@ -221,10 +223,11 @@ class ConsetBridgeTest:
                         if merchant.get("is_open") and merchant.get("items"):
                             print(f"[NPC] {label} open via GoNPC: {len(merchant['items'])} items")
                             return True
-        # Final fallback: if merchant is_open but no items, accept it anyway
-        # (items may be populated in the merchant struct but not readable via snapshot)
+        # Accept merchant open even without items (item list may be empty
+        # from snapshot thread but the merchant dialog IS actually open)
         if self.is_merchant_open():
-            print(f"[NPC] {label} is_open=true but items list empty — proceeding anyway")
+            count = self.snapshot.get("merchant", {}).get("item_count", 0)
+            print(f"[NPC] {label} is_open=true item_count={count} (items may load later)")
             return True
         print(f"[NPC] FAILED to open {label} after 3 attempts")
         return False
@@ -282,13 +285,60 @@ class ConsetBridgeTest:
             snap = await self.read_until_snapshot(min_tier=3, timeout=10.0)
             print(f"[GOLD] After withdraw: Character={self.get_gold()} Storage={self.get_storage_gold()}")
 
-        # 3-4. Material buying is skipped for now — merchant item enumeration
-        # via the snapshot has a thread-safety issue (item_count=16 but items=[]).
-        # We have leftover materials from previous C++ test runs.
-        # TODO: fix ReadMerchantItemIds thread safety, then re-enable buying.
-        num_consets = 3  # craft what we can with leftovers
-        print(f"[BUY] Skipping material trader (snapshot item enumeration bug)")
-        print(f"[BUY] Using leftover materials for {num_consets} consets")
+        # 3. Open material trader and buy materials
+        num_consets = 5
+        await self.move_to_and_wait(MATERIAL_TRADER_X, MATERIAL_TRADER_Y, "Material Trader")
+        snap = await self.read_until_snapshot(min_tier=2, timeout=5.0)
+        # Try multiple nearby NPCs — the material trader might not be the closest
+        npc_ids = self.find_nearby_npcs(5)
+        if not npc_ids:
+            print("[ERROR] No NPCs found near material trader")
+            return False
+        merchant_opened = False
+        for npc_id in npc_ids:
+            print(f"[NPC] Trying NPC {npc_id} for material trader...")
+            if await self.open_merchant_npc(npc_id, "Material Trader"):
+                merchant_opened = True
+                break
+        if not merchant_opened:
+            print("[ERROR] Failed to open material trader after trying all nearby NPCs")
+            return False
+
+        # 4. Buy materials via trader_buy
+        materials_needed = {
+            MAT_IRON: num_consets * 100,
+            MAT_DUST: num_consets * 100,
+            MAT_BONE: num_consets * 50,
+            MAT_FEATHER: num_consets * 50,
+        }
+        merchant_items = self.get_merchant_items()
+        print(f"[BUY] Merchant has {len(merchant_items)} items. Planning {num_consets} consets.")
+        for it in merchant_items:
+            print(f"  item_id={it.get('item_id')} model={it.get('model_id')} type={it.get('type')} qty={it.get('quantity')} val={it.get('value')}")
+
+        # Read tier-3 for inventory counts
+        snap = await self.read_until_snapshot(min_tier=3, timeout=10.0)
+
+        for mat_model, needed in materials_needed.items():
+            have = self.count_material(mat_model)
+            if have >= needed:
+                print(f"[BUY] Material {mat_model}: have={have} need={needed} — skip")
+                continue
+            missing = needed - have
+            packs = (missing + 9) // 10
+            print(f"[BUY] Material {mat_model}: have={have} need={needed} missing={missing} packs={packs}")
+
+            # Use trader_buy with model_id — the C++ side resolves the virtual
+            # item ID automatically via FindVirtualItemByModel.
+            for p in range(packs):
+                await self.action("trader_buy", {"model_id": mat_model}, wait_ms=1500)
+                if (p + 1) % 20 == 0:
+                    print(f"[BUY] Pausing after {p+1} packs...")
+                    await asyncio.sleep(2)
+
+            snap = await self.read_until_snapshot(min_tier=3, timeout=5.0)
+            final = self.count_material(mat_model)
+            print(f"[BUY] Material {mat_model}: final count={final}")
 
         # 5. Craft consumables
         snap = await self.read_until_snapshot()
