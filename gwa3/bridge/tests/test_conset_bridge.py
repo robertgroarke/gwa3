@@ -425,6 +425,26 @@ class ConsetBridgeTest:
             crafter_name, cx, cy = CRAFTERS[recipe_name]
             print(f"\n[CRAFT] === {recipe_name} at {crafter_name} ===")
 
+            # Precheck materials: if the trader was out-of-stock we never bought
+            # some models. Crafting without enough would fail on the server side
+            # after we spent the travel time — detect and skip upfront.
+            max_craftable = 999
+            for mat_id, per_craft in zip(mat_ids, mat_qtys):
+                have = self.count_material(mat_id)
+                affordable = have // per_craft
+                if affordable < max_craftable:
+                    max_craftable = affordable
+            if max_craftable <= 0:
+                missing_mats = [mid for mid, per in zip(mat_ids, mat_qtys)
+                                if self.count_material(mid) < per]
+                print(f"[CRAFT] Skipping {recipe_name} — insufficient materials "
+                      f"(missing models: {missing_mats})")
+                results[recipe_name] = 0
+                continue
+            if max_craftable < num_consets:
+                print(f"[CRAFT] Only enough materials for {max_craftable}x "
+                      f"{recipe_name} (wanted {num_consets})")
+
             await self.move_to_and_wait(cx, cy, crafter_name)
             snap = await self.read_until_snapshot()
 
@@ -455,7 +475,7 @@ class ConsetBridgeTest:
             await self.query_fresh_state(timeout=3.0)
             before = self.count_consumable(model_id)
             print(f"[CRAFT] {recipe_name} starting count: {before}")
-            remaining = num_consets
+            remaining = min(num_consets, max_craftable)
             crafted = 0
             while remaining > 0:
                 batch = min(remaining, 5)
