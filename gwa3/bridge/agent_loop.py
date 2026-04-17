@@ -234,6 +234,29 @@ class AgentLoop:
                     "content": json.dumps(data),
                 })
                 continue
+            if tc.name == "get_blessing_info":
+                data = farming_knowledge.get_blessing_info(
+                    params.get("blessing_type", ""))
+                self.history.append({
+                    "role": "tool", "tool_call_id": tc.id,
+                    "content": json.dumps(data),
+                })
+                continue
+            if tc.name == "get_hero_build":
+                data = farming_knowledge.get_hero_build(
+                    params.get("hero_name", ""))
+                self.history.append({
+                    "role": "tool", "tool_call_id": tc.id,
+                    "content": json.dumps(data),
+                })
+                continue
+            if tc.name == "get_quest_info":
+                data = farming_knowledge.get_quest_info(params.get("key", ""))
+                self.history.append({
+                    "role": "tool", "tool_call_id": tc.id,
+                    "content": json.dumps(data),
+                })
+                continue
 
             await self.ipc.send_action(tc.name, params, req_id)
             self._last_action_time = time.monotonic()

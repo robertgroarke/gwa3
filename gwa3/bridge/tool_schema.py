@@ -832,6 +832,61 @@ GET_DUNGEON_INFO = _tool(
     },
 )
 
+GET_BLESSING_INFO = _tool(
+    "get_blessing_info",
+    "Look up how to acquire a reputation blessing: dialog codes to send, "
+    "effect_ids to verify on your effects list after, and known NPC "
+    "locations when hardcoded. Known blessing types: 'asuran', 'norn', "
+    "'dwarven', 'vanguard', 'sunspears', 'lightbringer'. The protocol is: "
+    "walk to blessing NPC, interact_npc, send_dialog(code) — after the "
+    "server processes it, one of the effect_ids should appear on 'me.effects'.",
+    {
+        "properties": {
+            "blessing_type": {
+                "type": "string",
+                "description": "Blessing name: asuran, norn, dwarven, vanguard, sunspears, lightbringer",
+            },
+        },
+        "required": ["blessing_type"],
+    },
+)
+
+GET_HERO_BUILD = _tool(
+    "get_hero_build",
+    "Look up the standard Mercenary skillbar template for a hero by name. "
+    "Returns {hero_id, profession, role, skillbar_template, variants}. "
+    "The skillbar_template is a base64 string that can be passed to "
+    "load_skillbar. hero_id is the numeric ID to pass to add_hero / "
+    "kick_hero. Known heroes: Xandra, Olias, Livia, Master of Whispers, "
+    "Gwen, Norgu, Razah, Dunham.",
+    {
+        "properties": {
+            "hero_name": {
+                "type": "string",
+                "description": "Hero display name (e.g. 'Xandra', 'Gwen')",
+            },
+        },
+        "required": ["hero_name"],
+    },
+)
+
+GET_QUEST_INFO = _tool(
+    "get_quest_info",
+    "Look up quest giver NPC + coords + dialog codes for a quest by name or "
+    "quest_id. Currently covers 'Tekks's War' (825) — required to unlock "
+    "Bogroot Growths. Returns {giver_npc_name, giver_map_id, giver_x, "
+    "giver_y, dialog_accept, dialog_complete, description}.",
+    {
+        "properties": {
+            "key": {
+                "type": ["string", "integer"],
+                "description": "Quest name (e.g. 'Tekks\\'s War') or numeric quest_id (e.g. 825)",
+            },
+        },
+        "required": ["key"],
+    },
+)
+
 
 # All tools in a single list for passing to the LLM
 ALL_TOOLS = [
@@ -912,4 +967,7 @@ ALL_TOOLS = [
     GET_OUTPOST_INFO,
     GET_MATERIAL_INFO,
     GET_DUNGEON_INFO,
+    GET_BLESSING_INFO,
+    GET_HERO_BUILD,
+    GET_QUEST_INFO,
 ]

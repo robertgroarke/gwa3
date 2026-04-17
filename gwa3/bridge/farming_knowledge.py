@@ -87,20 +87,44 @@ OUTPOST_NPCS: dict[int, dict] = {
         },
         "rare_material_trader": {
             "name": "Argus [Rare Material Trader]",
-            "x": 2933.0,
-            "y": -2236.0,
+            "x": 2865.0,
+            "y": -2406.0,
         },
         "xunlai_chest": {"x": 2283.0, "y": -2134.0},
-        "merchant": {"name": "Ozem", "x": 2650.0, "y": -2100.0},
+        "merchant": {"name": "Ozem", "x": 2233.0, "y": -2009.0},
         "crafters": [
             {"name": "Eyja", "x": 3336.0, "y": 627.0,
              "crafts": ["Grail of Might"]},
             {"name": "Kwat", "x": 3596.0, "y": 107.0,
              "crafts": ["Essence of Celerity"]},
-            {"name": "Alcus", "x": 3704.0, "y": -163.0,
+            {"name": "Alcus Nailbiter", "x": 3704.0, "y": -163.0,
              "crafts": ["Armor of Salvation"]},
+            {"name": "Edwin", "x": 3515.0, "y": 369.0,
+             "crafts": ["Powerstone of Courage", "Scroll of Resurrection"]},
         ],
     },
+    638: {  # Gadd's Encampment — Bogroot Growths entry + material stop
+        "name": "Gadd's Encampment",
+        "material_trader": {
+            "x": -9097.0, "y": -23353.0,
+            "npc_model_id": 6763,
+        },
+        "rare_material_trader": {"x": -9136.0, "y": -23153.0},
+        "xunlai_chest": {"x": -10481.0, "y": -22787.0},
+        "merchant": {"x": -8374.0, "y": -22491.0},
+    },
+    642: {  # Eye of the North
+        "name": "Eye of the North",
+        "merchant": {"x": -2700.0, "y": 1075.0},
+    },
+    640: {"name": "Rata Sum",
+          "material_trader": {"npc_model_id": 6764}},
+    645: {"name": "Olafstead",
+          "material_trader": {"npc_model_id": 6050}},
+    641: {"name": "Sunspear Great Hall",
+          "material_trader": {"npc_model_id": 6065}},
+    643: {"name": "Sifhalla"},
+    648: {"name": "Doomlore Shrine"},
 }
 
 # =============================================================================
@@ -205,14 +229,193 @@ DUNGEONS: dict[str, dict] = {
     },
     "Catacombs of Kathandrax": {
         "entry_outpost_map_id": 676,
+        "entry_outpost_name": "Central Transfer Chamber",
         "entry_explorable_map_id": 569,
         "level_map_ids": [570, 571],
     },
     "Rragar's Menagerie": {
+        "entry_outpost_map_id": 648,
+        "entry_outpost_name": "Doomlore Shrine",
         "level_map_ids": [573],
     },
     "Frostmaw's Burrows": {
+        "entry_outpost_map_id": 643,
+        "entry_outpost_name": "Sifhalla",
         "level_map_ids": [630, 631, 632, 633, 634],
+    },
+}
+
+
+# =============================================================================
+# Blessing NPC interaction patterns
+# =============================================================================
+# All blessings use the native "talk to priest" dialog pattern — walk to the
+# blessing NPC, interact, then send dialog 0x84 (or 0x85 for Lightbringer /
+# second-stage Sunspear). After sending dialog, verify receipt by checking
+# the player's effects for one of the effect_ids listed below.
+#
+# Coords for most blessing NPCs are NOT hardcoded in the AutoIt scripts —
+# they pass coords as arguments so the bot resolves them dynamically each
+# run. Known explicit-coord blessings are listed under `known_locations`.
+
+BLESSINGS: dict[str, dict] = {
+    "asuran": {
+        "name": "Asuran Blessing",
+        "dialog_codes": [0x84],
+        "effect_ids": [2434, 2435, 2436, 2481, 2548],
+        "description": "Asura-rep blessing granted by Asura priests in "
+                       "EotN outposts like Rata Sum and Central Transfer "
+                       "Chamber.",
+        "known_locations": [],
+    },
+    "norn": {
+        "name": "Norn Blessing",
+        "dialog_codes": [0x84],
+        "effect_ids": [2469, 2470, 2471, 2472],
+        "description": "Norn-rep blessing granted by Norn priests in "
+                       "EotN outposts like Olafstead, Sifhalla.",
+        "known_locations": [],
+    },
+    "dwarven": {
+        "name": "Dwarven Blessing",
+        "dialog_codes": [0x84],
+        "effect_ids": [2445, 2446, 2447, 2448, 2549,
+                       2565, 2566, 2567, 2568],
+        "description": "Deldrimor-rep blessing granted by Dwarven priests in "
+                       "EotN outposts like Doomlore Shrine, Central Transfer "
+                       "Chamber, Longeye's Ledge.",
+        "known_locations": [
+            {"map_id": 631, "map_name": "Frostmaw's Burrows L2",
+             "x": -11132.0, "y": -5546.0,
+             "note": "Called via GetDwarvenBlessing in the Frostmaws script"},
+        ],
+    },
+    "vanguard": {
+        "name": "Ebon Vanguard Blessing",
+        "dialog_codes": [0x84],
+        "effect_ids": [2457, 2458, 2459, 2460],
+        "description": "Vanguard-rep blessing granted by Ebon Vanguard "
+                       "priests in EotN outposts like Eye of the North, "
+                       "Longeye's Ledge.",
+        "known_locations": [],
+    },
+    "sunspears": {
+        "name": "Sunspear Blessing",
+        "dialog_codes": [0x84, 0x85],
+        "effect_ids": [1790, 1791, 1792, 1793, 1794, 1795, 1796],
+        "description": "Sunspear-rep blessing from Sunspear priests in "
+                       "Nightfall outposts. Send 0x84 first, then 0x85 to "
+                       "confirm the blessing choice.",
+        "known_locations": [],
+    },
+    "lightbringer": {
+        "name": "Lightbringer Blessing",
+        "dialog_codes": [0x85],
+        "effect_ids": [1898, 1831, 1844, 1845, 1846,
+                       1847, 1848, 1849, 1850, 1851],
+        "description": "Lightbringer-rep blessing from priests in Realm of "
+                       "Torment / Throne of Secrets outposts.",
+        "known_locations": [],
+    },
+}
+
+
+# =============================================================================
+# Mercenary hero skillbar templates
+# =============================================================================
+# Base64-encoded skillbar templates captured from the Froggy HM dungeon script
+# hero-loadout section. Gemma can pass these directly to the `load_skillbar`
+# action if she wants to set up a standard merc team. `hero_id` is the value
+# to pass to `add_hero` / `kick_hero`.
+
+HERO_BUILDS: dict[str, dict] = {
+    "Xandra": {
+        "hero_id": 25,
+        "profession": "Ritualist",
+        "role": "Remove Hex / Communing",
+        "skillbar_template": "OAOiAyk8gNtePuwJ00ZaNbJA",
+        "variants": {
+            "shields_up": "OAGjUhgMpOYTr3jLcCNdmWz3CA",
+            "rragars": "OAOiAyk8gNtehzHH0E56MbJA",
+        },
+    },
+    "Olias": {
+        "hero_id": 14,
+        "profession": "Necromancer",
+        "role": "Blood is Power (BiP) battery",
+        "skillbar_template": "OAhjQkGZIT3BVVCPSTTODTjTciA",
+    },
+    "Livia": {
+        "hero_id": 21,
+        "profession": "Ritualist",
+        "role": "Xinrae resto healer",
+        "skillbar_template": "OAhjYoHYIPWb7wnoqKNncDzqH",
+        "variants": {
+            "resto": "OAhjYoHYIPWb7wnoqKNncDzqHA",
+        },
+    },
+    "Master of Whispers": {
+        "hero_id": 4,
+        "profession": "Necromancer",
+        "role": "Minion Master",
+        "skillbar_template": "OAljUwGpZSUBKgfBVVbh8Y7Y1YA",
+        "variants": {
+            "mm_charge_shields_up": "OAFTUYTWTiKQB8LoqaLktgr4tAA",
+        },
+    },
+    "Gwen": {
+        "hero_id": 24,
+        "profession": "Mesmer",
+        "role": "E-Surge",
+        "skillbar_template": "OQhkAsC8gFKzJY6lDMd40hQG4iB",
+        "variants": {
+            "rragars_catacombs": "OQhkAsC8gFKyJM95ggb6DRGcxA",
+        },
+    },
+    "Norgu": {
+        "hero_id": 15,
+        "profession": "Mesmer",
+        "role": "Ineptitude",
+        "skillbar_template": "OQhkAsC8gFKDNY6lDMd40hQG4iB",
+    },
+    "Razah": {
+        "hero_id": 1,
+        "profession": "Ritualist",
+        "role": "Panic (Mesmer secondary)",
+        "skillbar_template": "OQljAkBsZSvAIg5ZkAcQsA7Y1YA",
+    },
+    "Dunham": {
+        "hero_id": None,  # mercenary hero — slot varies per account
+        "profession": "Mesmer",
+        "role": "Ineptitude with Shields Up",
+        "skillbar_template": "OQFUAyAPmaSvAIg5ZkAcQsAcFvFA",
+        "note": "Merc hero — specific hero_id depends on the player's "
+                "Dunham template slot. Check AgentMgr for a hero named Dunham.",
+    },
+}
+
+# All heroes default to aggression mode 1 (Guard) in the reference scripts.
+HERO_DEFAULT_AGGRESSION = 1
+
+
+# =============================================================================
+# Quest givers and quest metadata (partial — only what's hardcoded)
+# =============================================================================
+# Each entry maps either a quest name or quest_id to giver NPC + coords.
+
+QUESTS: dict[str, dict] = {
+    "Tekks's War": {
+        "quest_id": 825,
+        "giver_npc_name": "Tekks",
+        "giver_map_id": 558,
+        "giver_map_name": "Sparkfly Swamp",
+        "giver_x": 12396.0,
+        "giver_y": 22407.0,
+        "dialog_accept": 0x833901,
+        "dialog_complete": 0x833907,
+        "quest_handle": 0x339,
+        "description": "Unlocks Bogroot Growths dungeon entry. Accept in "
+                       "Sparkfly Swamp (map 558), then enter the dungeon.",
     },
 }
 
@@ -281,3 +484,50 @@ def get_dungeon_info(name: str) -> dict:
         out["entry_outpost_name"] = MAP_NAMES.get(
             entry["entry_outpost_map_id"], entry.get("entry_outpost_name", "?"))
     return out
+
+
+def get_blessing_info(blessing_type: str) -> dict:
+    """Return how to get a blessing: dialog codes, effect IDs, known NPC locations."""
+    key = blessing_type.lower().strip()
+    info = BLESSINGS.get(key)
+    if info is None:
+        return {
+            "error": "unknown_blessing",
+            "blessing_type": blessing_type,
+            "known_blessings": sorted(BLESSINGS.keys()),
+        }
+    return {"success": True, "blessing_type": key, "info": info}
+
+
+def get_hero_build(hero_name: str) -> dict:
+    """Return the standard Mercenary skillbar template for a hero by name."""
+    # case-insensitive lookup
+    for name, build in HERO_BUILDS.items():
+        if name.lower() == hero_name.lower():
+            return {"success": True, "hero_name": name, "build": build,
+                    "default_aggression": HERO_DEFAULT_AGGRESSION}
+    return {
+        "error": "unknown_hero",
+        "hero_name": hero_name,
+        "known_heroes": sorted(HERO_BUILDS.keys()),
+    }
+
+
+def get_quest_info(key) -> dict:
+    """Look up a quest by name (str) or quest_id (int)."""
+    # Try by name first
+    if isinstance(key, str):
+        info = QUESTS.get(key)
+        if info:
+            return {"success": True, "quest_name": key, "info": info}
+    # Fall back to quest_id search
+    if isinstance(key, int) or (isinstance(key, str) and key.isdigit()):
+        qid = int(key)
+        for name, info in QUESTS.items():
+            if info.get("quest_id") == qid:
+                return {"success": True, "quest_name": name, "info": info}
+    return {
+        "error": "unknown_quest",
+        "key": key,
+        "known_quests": list(QUESTS.keys()),
+    }
