@@ -473,14 +473,64 @@ TRANSACT_ITEMS = _tool(
 
 CRAFT_ITEM = _tool(
     "craft_item",
-    "Craft an item at a crafter NPC. Shorthand for transact_items with type=3. "
-    "Must have the crafter window open (merchant.is_open). "
+    "Craft an item at a crafter NPC. Must have the crafter window open (merchant.is_open). "
     "The item_id comes from merchant.items in the snapshot. "
+    "For the proven UIMessage path, provide model_id + material_model_ids + material_quantities. "
+    "Without those, falls back to raw TransactItems(type=3). "
     "Requires sufficient gold and materials in inventory.",
     {
         "properties": {
             "item_id": {"type": "integer", "description": "Item ID from crafter's item list"},
-            "quantity": {"type": "integer", "description": "Number to craft (default 1)"},
+            "quantity": {"type": "integer", "description": "Number to craft (default 1, max 5 per call)"},
+            "gold": {"type": "integer", "description": "Total gold cost (default 250 * quantity)"},
+            "model_id": {"type": "integer", "description": "Model ID of item to craft (enables proven UIMessage path)"},
+            "material_model_ids": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "Model IDs of required materials (e.g. [948, 929] for Iron+Dust)",
+            },
+            "material_quantities": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "Quantity of each material per craft (e.g. [50, 50])",
+            },
+        },
+        "required": ["item_id"],
+    },
+)
+
+WITHDRAW_GOLD = _tool(
+    "withdraw_gold",
+    "Withdraw gold from Xunlai storage to character. Must be near the Xunlai chest (interact first).",
+    {
+        "properties": {
+            "amount": {"type": "integer", "description": "Gold amount to withdraw"},
+        },
+        "required": ["amount"],
+    },
+)
+
+DEPOSIT_GOLD = _tool(
+    "deposit_gold",
+    "Deposit gold from character to Xunlai storage. Must be near the Xunlai chest (interact first).",
+    {
+        "properties": {
+            "amount": {"type": "integer", "description": "Gold amount to deposit"},
+        },
+        "required": ["amount"],
+    },
+)
+
+TRADER_BUY = _tool(
+    "trader_buy",
+    "Buy one pack (10 units) of a material from the material trader. "
+    "Handles quote + transact automatically via the native RequestQuote/Transaction functions. "
+    "Must have the material trader window open (merchant.is_open). "
+    "The item_id is a virtual trader item ID from the global item array, NOT a model ID. "
+    "Use the merchant.items list from the snapshot to find item IDs.",
+    {
+        "properties": {
+            "item_id": {"type": "integer", "description": "Virtual item ID from the trader's item list"},
         },
         "required": ["item_id"],
     },
@@ -507,6 +557,40 @@ OFFER_TRADE_ITEM = _tool(
             "quantity": {"type": "integer", "description": "Quantity to offer (default 1)"},
         },
         "required": ["item_id"],
+    },
+)
+
+OFFER_TRADE_ITEM_PROMPT_MAX = _tool(
+    "offer_trade_item_prompt_max",
+    "Offer a full stackable inventory stack via the native trade quantity prompt Max path.",
+    {
+        "properties": {
+            "item_id": {"type": "integer", "description": "Stackable inventory item ID to offer"},
+        },
+        "required": ["item_id"],
+    },
+)
+
+OFFER_TRADE_ITEM_PROMPT_DEFAULT = _tool(
+    "offer_trade_item_prompt_default",
+    "Offer the default quantity (1) for a stackable inventory item via the native trade quantity prompt.",
+    {
+        "properties": {
+            "item_id": {"type": "integer", "description": "Stackable inventory item ID to offer"},
+        },
+        "required": ["item_id"],
+    },
+)
+
+OFFER_TRADE_ITEM_PROMPT_QUANTITY = _tool(
+    "offer_trade_item_prompt_quantity",
+    "Offer an exact quantity for a stackable inventory item via the native trade quantity prompt.",
+    {
+        "properties": {
+            "item_id": {"type": "integer", "description": "Stackable inventory item ID to offer"},
+            "quantity": {"type": "integer", "description": "Exact stack quantity to offer"},
+        },
+        "required": ["item_id", "quantity"],
     },
 )
 
@@ -707,8 +791,14 @@ ALL_TOOLS = [
     REQUEST_QUOTE,
     TRANSACT_ITEMS,
     CRAFT_ITEM,
+    TRADER_BUY,
+    WITHDRAW_GOLD,
+    DEPOSIT_GOLD,
     INITIATE_TRADE,
     OFFER_TRADE_ITEM,
+    OFFER_TRADE_ITEM_PROMPT_MAX,
+    OFFER_TRADE_ITEM_PROMPT_DEFAULT,
+    OFFER_TRADE_ITEM_PROMPT_QUANTITY,
     SUBMIT_TRADE_OFFER,
     ACCEPT_TRADE,
     CANCEL_TRADE,

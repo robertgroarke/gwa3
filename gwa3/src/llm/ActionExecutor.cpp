@@ -12,6 +12,10 @@
 #include <gwa3/managers/ChatMgr.h>
 #include <gwa3/managers/TradeMgr.h>
 #include <gwa3/managers/CameraMgr.h>
+#include <gwa3/packets/CtoS.h>
+#include <gwa3/packets/Headers.h>
+#include <gwa3/core/TraderHook.h>
+#include <gwa3/core/Offsets.h>
 #include <gwa3/game/Agent.h>
 #include <gwa3/bot/BotFramework.h>
 
@@ -393,10 +397,168 @@ namespace GWA3::LLM::ActionExecutor {
         if (!p.contains("item_id")) return MakeError("missing item_id");
         uint32_t itemId = p["item_id"].get<uint32_t>();
         uint32_t qty = p.value("quantity", 1u);
-        // CrafterBuy = transaction type 3
-        GWA3::GameThread::Enqueue([itemId, qty]() {
-            TradeMgr::TransactItems(3, qty, itemId);
+        uint32_t gold = p.value("gold", 250u * qty);
+
+        // Use model_id + materials if provided (proven UIMessage path via
+        // CraftMerchantItemByModelId), otherwise fall back to TransactItems.
+        if (p.contains("model_id") && p.contains("material_model_ids") && p.contains("material_quantities")) {
+            uint32_t modelId = p["model_id"].get<uint32_t>();
+            auto matIds = p["material_model_ids"].get<std::vector<uint32_t>>();
+            auto matQtys = p["material_quantities"].get<std::vector<uint32_t>>();
+            uint32_t matCount = static_cast<uint32_t>(matIds.size());
+            if (matCount == 0 || matCount != matQtys.size()) return MakeError("material arrays mismatch");
+            if (matCount > 4) return MakeError("too many materials (max 4)");
+
+            // Copy to fixed arrays for lambda capture
+            uint32_t mIds[4] = {}, mQtys[4] = {};
+            for (uint32_t i = 0; i < matCount; ++i) { mIds[i] = matIds[i]; mQtys[i] = matQtys[i]; }
+
+            GWA3::GameThread::Enqueue([modelId, qty, gold, mIds, mQtys, matCount]() {
+                TradeMgr::CraftMerchantItemByModelId(modelId, qty, gold, mIds, mQtys, matCount);
+            });
+        } else {
+            // Fallback: raw TransactItems (type=3 = crafter)
+            GWA3::GameThread::Enqueue([itemId, qty]() {
+                TradeMgr::TransactItems(3, qty, itemId);
+            });
+        }
+        return MakeOk();
+    }
+
+    // Open merchant dialog via GoNPC packet (proven working cadence).
+    // Uses ChangeTarget + GoNPC(0x39) — matches the conset cycle approach.
+    static ActionResult HandleOpenMerchant(const json& p) {
+        if (!p.contains("agent_id")) return MakeError("missing agent_id");
+        uint32_t id = p["agent_id"].get<uint32_t>();
+        if (!AgentMgr::GetAgentExists(id)) return MakeError("agent_not_found");
+        // Dispatch ChangeTarget + GoNPC on game thread with a small delay between
+        std::thread([id]() {
+            GWA3::GameThread::Enqueue([id]() { AgentMgr::ChangeTarget(id); });
+            Sleep(250);
+            GWA3::GameThread::Enqueue([id]() {
+                CtoS::SendPacket(3, Packets::INTERACT_NPC, id, 0u);
+            });
+        }).detach();
+        return MakeOk();
+    }
+
+    // Withdraw/deposit gold between character and Xunlai storage
+    static ActionResult HandleWithdrawGold(const json& p) {
+        if (!p.contains("amount")) return MakeError("missing amount");
+        uint32_t amount = p["amount"].get<uint32_t>();
+        uint32_t charGold = ItemMgr::GetGoldCharacter();
+        uint32_t storageGold = ItemMgr::GetGoldStorage();
+        if (amount > storageGold) return MakeError("insufficient_storage_gold");
+        uint32_t newChar = charGold + amount;
+        uint32_t newStorage = storageGold - amount;
+        if (newChar > 100000) return MakeError("would_exceed_character_gold_cap");
+        GWA3::GameThread::Enqueue([newChar, newStorage]() {
+            ItemMgr::ChangeGold(newChar, newStorage);
         });
+        return MakeOk();
+    }
+
+    static ActionResult HandleDepositGold(const json& p) {
+        if (!p.contains("amount")) return MakeError("missing amount");
+        uint32_t amount = p["amount"].get<uint32_t>();
+        uint32_t charGold = ItemMgr::GetGoldCharacter();
+        uint32_t storageGold = ItemMgr::GetGoldStorage();
+        if (amount > charGold) return MakeError("insufficient_character_gold");
+        uint32_t newChar = charGold - amount;
+        uint32_t newStorage = storageGold + amount;
+        GWA3::GameThread::Enqueue([newChar, newStorage]() {
+            ItemMgr::ChangeGold(newChar, newStorage);
+        });
+        return MakeOk();
+    }
+
+    // Material trader: request quote + buy in one command.
+    // Uses the proven native RequestQuote + TransactItem via Engine hook command queue.
+    struct TraderBuyQuoteTask { uint32_t itemId; };
+    static uint32_t s_traderBuyItemId = 0;
+
+    static void __cdecl TraderBuyQuoteInvoker(void* storage) {
+        auto* t = reinterpret_cast<TraderBuyQuoteTask*>(storage);
+        if (!t || !t->itemId || !GWA3::Offsets::RequestQuote) return;
+        s_traderBuyItemId = t->itemId;
+        uint32_t* itemIdPtr = &s_traderBuyItemId;
+        const uintptr_t fn = GWA3::Offsets::RequestQuote;
+        __asm {
+            mov eax, itemIdPtr
+            push eax        // recv.item_ids
+            push 1          // recv.item_count
+            push 0          // recv.unknown
+            push 0          // give.item_ids
+            push 0          // give.item_count
+            push 0          // give.unknown
+            push 0          // unknown
+            push 0xC        // type = TraderBuy
+            xor ecx, ecx
+            mov edx, 2
+            mov eax, fn
+            call eax
+            add esp, 0x20
+        }
+    }
+
+    struct TraderBuyTransactTask { uint32_t itemId; uint32_t cost; };
+    static uint32_t s_traderBuyRecvId = 0;
+    static uint32_t s_traderBuyRecvQty = 1;
+
+    static void __cdecl TraderBuyTransactInvoker(void* storage) {
+        auto* t = reinterpret_cast<TraderBuyTransactTask*>(storage);
+        if (!t || !t->itemId || !GWA3::Offsets::Transaction) return;
+        s_traderBuyRecvId = t->itemId;
+        s_traderBuyRecvQty = 1;
+        uint32_t* recvIds = &s_traderBuyRecvId;
+        uint32_t* recvQtys = &s_traderBuyRecvQty;
+        uint32_t goldGive = t->cost;
+        const uintptr_t fn = GWA3::Offsets::Transaction;
+        __asm {
+            push recvQtys
+            push recvIds
+            push 1          // recv count
+            push 0          // gold_recv
+            push 0          // give qtys
+            push 0          // give ids
+            push 0          // give count
+            push goldGive
+            push 0xC        // type = TraderBuy
+            mov eax, fn
+            call eax
+            add esp, 0x24
+        }
+    }
+
+    static ActionResult HandleTraderBuy(const json& p) {
+        if (!p.contains("item_id")) return MakeError("missing item_id");
+        uint32_t itemId = p["item_id"].get<uint32_t>();
+        TraderHook::Reset();
+
+        // Run quote+transact on a background thread to avoid blocking the IPC
+        std::thread([itemId]() {
+            // Request quote via Engine hook command queue
+            TraderBuyQuoteTask quoteTask{itemId};
+            CtoS::EnqueueGameCommand(&TraderBuyQuoteInvoker, &quoteTask, sizeof(quoteTask));
+
+            // Wait for kVendorQuote response (up to 3 seconds)
+            for (int i = 0; i < 30; ++i) {
+                Sleep(100);
+                uint32_t v = TraderHook::GetCostValue();
+                if (v > 0 && v < 100000) break;
+            }
+            uint32_t price = TraderHook::GetCostValue();
+            uint32_t costItemId = TraderHook::GetCostItemId();
+            if (price == 0 || price >= 100000) {
+                Log::Warn("[LLM-Action] trader_buy: quote failed item=%u price=%u", itemId, price);
+                return;
+            }
+            Log::Info("[LLM-Action] trader_buy: quote item=%u price=%u — transacting", costItemId, price);
+
+            // Transact with the quoted price
+            TraderBuyTransactTask txTask{costItemId, price};
+            CtoS::EnqueueGameCommand(&TraderBuyTransactInvoker, &txTask, sizeof(txTask));
+        }).detach();
         return MakeOk();
     }
 
@@ -665,6 +827,10 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["request_quote"] = HandleRequestQuote;
         g_dispatch["transact_items"] = HandleTransactItems;
         g_dispatch["craft_item"] = HandleCraftItem;
+        g_dispatch["open_merchant"] = HandleOpenMerchant;
+        g_dispatch["withdraw_gold"] = HandleWithdrawGold;
+        g_dispatch["deposit_gold"] = HandleDepositGold;
+        g_dispatch["trader_buy"] = HandleTraderBuy;
 
         // Skillbar
         g_dispatch["load_skillbar"] = HandleLoadSkillbar;
