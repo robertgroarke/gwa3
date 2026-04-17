@@ -437,19 +437,47 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
-    // Open merchant dialog via GoNPC packet (proven working cadence).
-    // Uses ChangeTarget + GoNPC(0x39) — matches the conset cycle approach.
+    // Open merchant dialog, matching the proven ConsetOpenNPCDialog sequence
+    // from IntegrationTestSession. GoNPC alone is not always enough to put
+    // the client into the "active trader" state needed for quote responses —
+    // the server accepts the interaction packet but the client's trader
+    // context pointer remains stale, so subsequent type=0xC quote requests
+    // never receive kVendorQuote callbacks. We retry and fall back to the
+    // native InteractNPC path, and verify via merchant item count that the
+    // dialog is actually open before returning.
     static ActionResult HandleOpenMerchant(const json& p) {
         if (!p.contains("agent_id")) return MakeError("missing agent_id");
         uint32_t id = p["agent_id"].get<uint32_t>();
         if (!AgentMgr::GetAgentExists(id)) return MakeError("agent_not_found");
-        // Dispatch ChangeTarget + GoNPC on game thread with a small delay between
+
         std::thread([id]() {
-            GWA3::GameThread::Enqueue([id]() { AgentMgr::ChangeTarget(id); });
-            Sleep(250);
-            GWA3::GameThread::Enqueue([id]() {
-                CtoS::SendPacket(3, Packets::INTERACT_NPC, id, 0u);
-            });
+            for (int attempt = 0; attempt < 3; ++attempt) {
+                GWA3::GameThread::Enqueue([id]() { AgentMgr::ChangeTarget(id); });
+                Sleep(250);
+                GWA3::GameThread::Enqueue([id]() {
+                    CtoS::SendPacket(3, Packets::INTERACT_NPC, id, 0u);
+                });
+                Sleep(2000);
+                if (TradeMgr::GetMerchantItemCount() > 0) {
+                    Log::Info("[LLM-Action] open_merchant: dialog open after attempt %d (GoNPC): %u items",
+                              attempt + 1, TradeMgr::GetMerchantItemCount());
+                    return;
+                }
+                // GoNPC alone didn't work — try native InteractNPC. This sets
+                // up the client trader context that raw packet sends miss.
+                if (attempt == 1) {
+                    Log::Info("[LLM-Action] open_merchant: GoNPC alone failed, falling back to InteractNPC");
+                    GWA3::GameThread::Enqueue([id]() { AgentMgr::InteractNPC(id); });
+                    Sleep(2000);
+                    if (TradeMgr::GetMerchantItemCount() > 0) {
+                        Log::Info("[LLM-Action] open_merchant: dialog open via InteractNPC: %u items",
+                                  TradeMgr::GetMerchantItemCount());
+                        return;
+                    }
+                }
+                Sleep(500);
+            }
+            Log::Warn("[LLM-Action] open_merchant: failed to open dialog for agent %u after 3 attempts", id);
         }).detach();
         return MakeOk();
     }
