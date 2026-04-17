@@ -607,19 +607,24 @@ namespace GWA3::LLM::GameSnapshot {
         if (Offsets::BasePointer <= 0x10000) return 0;
         __try {
             uintptr_t p0 = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
-            if (p0 <= 0x10000) return 0;
+            if (p0 <= 0x10000) { Log::Warn("[Snapshot] ReadMerchantItemIds: p0=null"); return 0; }
             uintptr_t p1 = *reinterpret_cast<uintptr_t*>(p0 + 0x18);
-            if (p1 <= 0x10000) return 0;
+            if (p1 <= 0x10000) { Log::Warn("[Snapshot] ReadMerchantItemIds: p1=null"); return 0; }
             uintptr_t p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x2C);
-            if (p2 <= 0x10000) return 0;
+            if (p2 <= 0x10000) { Log::Warn("[Snapshot] ReadMerchantItemIds: p2=null"); return 0; }
             uintptr_t base = *reinterpret_cast<uintptr_t*>(p2 + 0x24);
             uint32_t size = *reinterpret_cast<uint32_t*>(p2 + 0x28);
-            if (base <= 0x10000 || size == 0 || size > maxIds) return 0;
+            if (base <= 0x10000 || size == 0 || size > maxIds) {
+                Log::Warn("[Snapshot] ReadMerchantItemIds: base=0x%08X size=%u (invalid)",
+                          static_cast<unsigned>(base), size);
+                return 0;
+            }
             for (uint32_t i = 0; i < size; i++) {
                 outIds[i] = *reinterpret_cast<uint32_t*>(base + i * 4);
             }
             return size;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] ReadMerchantItemIds: SEH exception");
             return 0;
         }
     }
@@ -645,23 +650,36 @@ namespace GWA3::LLM::GameSnapshot {
             m["last_quote"] = quote;
         }
 
-        // Read merchant item IDs via SEH-safe helper
-        uint32_t ids[256] = {};
-        uint32_t count = ReadMerchantItemIds(ids, 256);
+        // Read merchant items using TradeMgr::GetMerchantItemByPosition,
+        // which is proven working from the C++ test harness. The previous
+        // ReadMerchantItemIds approach returned 0 items from the snapshot
+        // thread despite item_count being correct.
+        // First gather item data into a plain struct array (SEH-safe),
+        // then build JSON from the results.
+        struct MerchantItemData { uint32_t item_id, model_id, type, value, quantity, interaction; };
+        MerchantItemData itemData[256] = {};
+        uint32_t readCount = 0;
+        for (uint32_t pos = 1; pos <= itemCount && pos <= 256; ++pos) {
+            auto* item = TradeMgr::GetMerchantItemByPosition(pos);
+            if (!item) continue;
+            auto& d = itemData[readCount++];
+            d.item_id = item->item_id;
+            d.model_id = item->model_id;
+            d.type = item->type;
+            d.value = item->value;
+            d.quantity = item->quantity;
+            d.interaction = item->interaction;
+        }
 
         json items = json::array();
-        for (uint32_t i = 0; i < count; i++) {
-            if (!ids[i]) continue;
-            auto* item = ItemMgr::GetItemById(ids[i]);
-            if (!item) continue;
-
+        for (uint32_t i = 0; i < readCount; ++i) {
             json it;
-            it["item_id"] = item->item_id;
-            it["model_id"] = item->model_id;
-            it["type"] = item->type;
-            it["value"] = item->value;
-            it["quantity"] = item->quantity;
-            it["interaction"] = item->interaction;
+            it["item_id"] = itemData[i].item_id;
+            it["model_id"] = itemData[i].model_id;
+            it["type"] = itemData[i].type;
+            it["value"] = itemData[i].value;
+            it["quantity"] = itemData[i].quantity;
+            it["interaction"] = itemData[i].interaction;
             items.push_back(it);
         }
         m["items"] = items;
