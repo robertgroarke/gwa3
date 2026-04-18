@@ -1,6 +1,6 @@
 #include <gwa3/utils/EncStringCache.h>
-#include <gwa3/utils/StringEncoding.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/core/Offsets.h>
 
 #include <atomic>
 #include <condition_variable>
@@ -15,20 +15,24 @@
 
 namespace GWA3::EncStringCache {
 
-// How long we wait on each ValidateAsyncDecodeStr callback. Fresh
-// quest names can take several seconds because GW has to resolve them
-// via its message database — possibly a server round-trip. We're
-// running on our own worker thread and the total decode count per
-// session is small (5 strings per request_quest_info call), so a
-// generous timeout is safe.
-static constexpr uint32_t kDecodeTimeoutMs = 8000;
+// GWCA pattern: fire ValidateAsyncDecodeStr directly (NOT via GameThread),
+// pass a heap-allocated context that the callback writes into and then
+// frees. No caller-side wait. Lots of prior GWCA use (AgentMgr, ItemMgr,
+// tooltip rendering) validates this as a safe, thread-flexible pattern;
+// our earlier attempt to go via GameThread::Enqueue + blocking wait is
+// what was destabilising GW. See QUEST_LOG_RESEARCH.md.
 
-// Minimum gap between successive decode submissions. Kept small since
-// the timeout dominates the pacing.
-static constexpr uint32_t kInterDecodeSleepMs = 50;
+typedef void(__cdecl* DecodeCallback)(void*, wchar_t*);
+typedef void(__cdecl* ValidateAsyncDecodeStrFn)(const wchar_t*, DecodeCallback, void*);
 
-// Safety cap on the pending queue. A full quest log has ~40 enc
-// strings; we allow 10x headroom.
+static ValidateAsyncDecodeStrFn s_decodeFn = nullptr;
+
+// Pace submissions so we don't spam the decoder faster than GWCA clients
+// normally would. Tooltip-scale usage is ~1-2 decodes per second.
+static constexpr uint32_t kInterDecodeSleepMs = 400;
+
+// Safety cap on the pending queue. A full quest log has ~40 enc strings;
+// 512 allows plenty of headroom for other callers.
 static constexpr size_t kMaxQueueSize = 512;
 
 static std::mutex s_mu;
@@ -40,12 +44,49 @@ static std::atomic<bool> s_running{false};
 static std::atomic<bool> s_stopping{false};
 static std::thread s_worker;
 
+// Context passed to the game's decoder. The callback owns the memory —
+// GW never surfaces an error path, so if the callback never fires the
+// ctx leaks. That's bounded: worst case is one leaked ~64-byte ctx per
+// Prime that times out forever, and Prime itself is LLM-driven.
+struct DecodeCtx {
+    std::wstring key;            // cache key (= the encoded wide-string)
+    std::atomic<bool> claimed{false};
+};
+
 static std::string Utf8FromWide(const wchar_t* w) {
     if (!w || !w[0]) return {};
     char buf[1024] = {};
     int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, buf, sizeof(buf) - 1,
                                 nullptr, nullptr);
     return (n > 0) ? std::string(buf) : std::string{};
+}
+
+static void __cdecl CacheCallback(void* param, wchar_t* decoded) {
+    auto* ctx = static_cast<DecodeCtx*>(param);
+    if (!ctx) return;
+
+    // Guard against a game that somehow fires the callback twice.
+    bool expected = false;
+    if (!ctx->claimed.compare_exchange_strong(expected, true)) {
+        delete ctx;
+        return;
+    }
+
+    if (decoded) {
+        std::string utf8 = Utf8FromWide(decoded);
+        if (!utf8.empty()) {
+            std::lock_guard<std::mutex> lock(s_mu);
+            s_cache.emplace(ctx->key, std::move(utf8));
+            s_pending.erase(ctx->key);
+        } else {
+            std::lock_guard<std::mutex> lock(s_mu);
+            s_pending.erase(ctx->key);
+        }
+    } else {
+        std::lock_guard<std::mutex> lock(s_mu);
+        s_pending.erase(ctx->key);
+    }
+    delete ctx;
 }
 
 static void WorkerLoop() {
@@ -61,28 +102,31 @@ static void WorkerLoop() {
             s_queue.pop_front();
         }
 
-        wchar_t decoded[512] = {};
-        uint32_t n = StringEncoding::DecodeStr(key.c_str(), decoded, 512,
-                                               kDecodeTimeoutMs);
-        std::string utf8 = (n > 0) ? Utf8FromWide(decoded) : std::string{};
-
-        {
+        if (!s_decodeFn) {
             std::lock_guard<std::mutex> lock(s_mu);
-            if (!utf8.empty()) {
-                s_cache.emplace(key, std::move(utf8));
-            }
-            // Always clear pending — failures can be retried on the
-            // next Lookup. (Cache only holds successes.)
             s_pending.erase(key);
+            continue;
         }
 
-        // Pace submissions so we don't saturate the GameThread queue.
+        // Fire-and-forget. The ctx is owned by the callback (which runs
+        // on whatever thread GW decides, whenever GW decides) — it
+        // populates the cache and frees the ctx.
+        auto* ctx = new DecodeCtx{};
+        ctx->key = key;
+        s_decodeFn(ctx->key.c_str(), CacheCallback, ctx);
+
         Sleep(kInterDecodeSleepMs);
     }
 }
 
 bool Initialize() {
     if (s_running.load()) return true;
+
+    if (Offsets::ValidateAsyncDecodeStr > 0x10000) {
+        s_decodeFn = reinterpret_cast<ValidateAsyncDecodeStrFn>(
+            Offsets::ValidateAsyncDecodeStr);
+    }
+
     s_stopping.store(false);
     s_running.store(true);
     try {
@@ -92,8 +136,9 @@ bool Initialize() {
         Log::Warn("EncStringCache: failed to start worker thread");
         return false;
     }
-    Log::Info("EncStringCache: worker started (timeout=%ums, gap=%ums)",
-              kDecodeTimeoutMs, kInterDecodeSleepMs);
+    Log::Info("EncStringCache: worker started (decode=%s gap=%ums)",
+              s_decodeFn ? "resolved" : "MISSING",
+              kInterDecodeSleepMs);
     return true;
 }
 
@@ -121,8 +166,6 @@ std::string Lookup(const wchar_t* enc) {
     if (it != s_cache.end()) {
         return it->second;
     }
-    // Read-only: never enqueue. Callers that want to trigger a decode
-    // must call Prime() explicitly.
     return {};
 }
 

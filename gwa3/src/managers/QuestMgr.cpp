@@ -199,15 +199,20 @@ void AbandonQuest(uint32_t questId) {
 void RequestQuestInfo(uint32_t questId) {
     if (questId == 0) return;
 
-    // Priming the EncStringCache here was tempting — it would drive the
-    // decoder at LLM-action pace rather than snapshot pace — but BISCUIT
-    // live testing showed GW still crashes ~45 s after even a single
-    // request_quest_info call triggers 5 ValidateAsyncDecodeStr decodes.
-    // Something about the decoder's thread context or state is
-    // fundamentally incompatible from our side, not a rate problem.
-    // The Prime() API is kept intact for future use; the call is
-    // commented out until we find a safer decode path (likely a direct
-    // memory read from GW's own message table). See QUEST_LOG_RESEARCH.md.
+    // The EncStringCache::Prime path (commented below) is deliberately
+    // dormant. Three progressively-safer attempts at calling
+    // ValidateAsyncDecodeStr at our scanned offset all produced the
+    // same ~46-second delayed crash on BISCUIT — GameThread-enqueue +
+    // wait, fire-and-forget via GameThread, and GWCA-style direct
+    // fire-and-forget from a worker thread all hit the same wall. The
+    // function at address `Offsets::ValidateAsyncDecodeStr` is either
+    // the wrong function entirely for this GW client, or calling it
+    // from an injected DLL imposes requirements we don't yet satisfy.
+    //
+    // The Prime() API and the fire-and-forget cache machinery stay
+    // checked in so the next attempt (different scan pattern, direct
+    // message-table memory read, or opportunistic packet-tap fills)
+    // can plug in without rewiring callers. See QUEST_LOG_RESEARCH.md.
     //
     // if (Quest* q = GetQuestById(questId)) {
     //     EncStringCache::Prime(q->name);

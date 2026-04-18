@@ -172,19 +172,37 @@ volume down from hundreds to single digits — but GW still crashed
 ~45 s after a single `request_quest_info` call triggered those five
 decodes on BISCUIT.
 
-That rules out a rate problem: the issue is that
-`ValidateAsyncDecodeStr` at the resolved offset is fundamentally
-incompatible with being driven from our GameThread-enqueue context.
-Possibilities (untested):
+That rules out a rate problem. We then tried the GWCA pattern:
+fire-and-forget direct call from a worker thread, no
+`GameThread::Enqueue`, no caller-side wait, heap ctx owned by the
+callback. That is exactly how GWCA drives the decoder for agent name
+/ item name / tooltip rendering, at the same or higher rate than
+ours. The crash reproduced **identically** — BISCUIT terminated
+~46 seconds after the worker thread fired its first decode call.
 
-- Wrong function — the scanner pattern may be locking onto a decoder
-  that expects different preconditions than the one GWCA/GWToolbox
-  use.
-- Wrong thread — the decoder may require the render thread or a
-  specific TLS state that our engine-tick GameThread lacks.
-- The enqueue itself may execute on a different thread than the one
-  the decoder schedules its callback on, so internal synchronisation
-  inside the game drifts.
+That narrows the problem to the scanned address itself:
+`Offsets::ValidateAsyncDecodeStr` at `0x005F4C44` is either not
+`ValidateAsyncDecodeStr` in this particular GW client build, or
+calling the real decoder from an injected DLL requires preconditions
+our injection sequence does not yet satisfy (for example, hooking
+specific UI callbacks or filling a thread-local parser context that
+GWCA installs as part of its own init).
+
+Possibilities to test next:
+
+- **Wrong function.** Our scan uses an assertion search
+  (`TextApi.cpp` / `codedString`); GWCA uses a byte pattern
+  (`\x83\xC4\x10\x3B\xC6\x5E\x74\x14` at offset `-0x70`). Swapping
+  in the byte pattern is cheap — compare the resolved addresses. If
+  they differ, try the byte-pattern result directly.
+- **Missing text-parser context.** GWCA's `AsyncDecodeStr`
+  overloads read `GetGameContext()->text_parser` and temporarily
+  swap its `language_id`. Our injection may not initialise that
+  parser context the way vanilla game startup does.
+- **Missing callback hook.** GWCA hooks `AsyncDecodeStringPtr` (the
+  underlying `__fastcall` method) at start-of-day even for clients
+  that just want to call it. Maybe that hook is load-bearing for
+  internal ref-counting.
 
 We stopped calling `Prime` from `QuestMgr::RequestQuestInfo`. The
 `EncStringCache` API (`Lookup` + `Prime`) stays checked in so a
