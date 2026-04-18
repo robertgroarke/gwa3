@@ -1004,28 +1004,23 @@ namespace GWA3::LLM::GameSnapshot {
         return titles;
     }
 
-    // Emit the raw encoded wide-char string as `<key>_enc`.
+    // Emit the raw encoded wide-char string as `<key>_enc`, and the
+    // decoded UTF-8 form as `<key>` when the cache already has it.
     //
-    // EncStringCache provides a decoded form, but actively driving
-    // `ValidateAsyncDecodeStr` from the snapshot path crashes GW after
-    // ~170 cumulative decode calls — the game's own string-decoder
-    // state appears to accumulate unbounded work when we fire requests
-    // faster than the UI normally would. See QUEST_LOG_RESEARCH.md.
-    //
-    // The Lookup() call is wired up (commented out below) so this spot
-    // is ready once we find a safer trigger — e.g. opportunistic
-    // population from packet taps, or calling only on explicit LLM
-    // action (`request_quest_info`) rather than every snapshot.
+    // The Lookup here is strictly read-only — it never enqueues a
+    // decode. Priming happens only in response to an explicit
+    // `request_quest_info` LLM action, which bounds decode volume to
+    // the LLM's pace (well below the rate that destabilises GW's own
+    // string decoder). See QUEST_LOG_RESEARCH.md.
     static void EmitEnc(json& dst, const wchar_t* p,
                         const char* rawKey, const char* decodedKey) {
-        (void)decodedKey;
         if (!p || !p[0]) return;
         char raw[1024] = {};
         WideCharToMultiByte(CP_UTF8, 0, p, -1, raw, sizeof(raw) - 1,
                             nullptr, nullptr);
         dst[rawKey] = raw;
-        // std::string dec = EncStringCache::Lookup(p);
-        // if (!dec.empty()) dst[decodedKey] = dec;
+        std::string dec = EncStringCache::Lookup(p);
+        if (!dec.empty()) dst[decodedKey] = dec;
     }
 
     // Build quest state: active quest + quest log summary

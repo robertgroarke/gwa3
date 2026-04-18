@@ -23,19 +23,25 @@ namespace GWA3::EncStringCache {
     // Stop the worker, join the thread, and clear all state. Idempotent.
     void Shutdown();
 
-    // Lookup decoded UTF-8 text for an encoded wide-char string.
+    // Read-only cache lookup. Returns decoded UTF-8 text when cached,
+    // or an empty string when not. Never enqueues a decode.
     //
-    // If cached: returns the decoded text immediately.
-    // If not cached: enqueues a decode request and returns an empty
-    // string. Subsequent Lookup calls for the same content will return
-    // the decoded text once the worker completes (usually within a few
-    // hundred ms).
+    // Safe to call on every snapshot — the snapshot path uses this so
+    // decoded text appears automatically once the cache is primed, but
+    // without ever triggering new decode work itself.
     //
     // The encoded string's bytes are copied into the key — `enc` need
-    // not remain valid after the call returns.
-    //
-    // Thread-safe.
+    // not remain valid after the call returns. Thread-safe.
     std::string Lookup(const wchar_t* enc);
+
+    // Request that `enc` be decoded in the background if it is not
+    // already cached or pending. Returns immediately.
+    //
+    // Decode volume is deliberately bounded here: callers should only
+    // Prime strings in response to an explicit signal (e.g. an LLM
+    // `request_quest_info` action), not on every snapshot — driving
+    // ValidateAsyncDecodeStr at snapshot rate destabilises GW.
+    void Prime(const wchar_t* enc);
 
     // Drop all cached entries and pending requests. Call on map change
     // if the cache is keyed by pointer, not by content. (Current

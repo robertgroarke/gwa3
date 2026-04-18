@@ -164,22 +164,43 @@ touches a closed event handle or freed stack memory).
 
 That fixed the memory-corruption crash, but GW still terminates
 after ~170 cumulative `ValidateAsyncDecodeStr` calls even when every
-call is paced and uses a safe context. The game's own string-decoder
-state appears to accumulate unbounded pending work when we fire
-lookup requests faster than the normal UI would. So the snapshot
-path currently does **not** call `EncStringCache::Lookup` — the hook
-is in place but commented out until we find a safer trigger, e.g.:
+call is paced and uses a safe context. We then split the API so the
+snapshot path only reads the cache (`Lookup`, read-only, safe on
+every tick) and `request_quest_info(quest_id)` would prime just five
+strings per LLM action (`Prime`). That brought per-session decode
+volume down from hundreds to single digits — but GW still crashed
+~45 s after a single `request_quest_info` call triggered those five
+decodes on BISCUIT.
 
-- Call `Lookup` only in response to an explicit LLM action
-  (`request_quest_info(quest_id)`), so decodes happen at LLM pace
-  rather than snapshot pace.
-- Populate the cache opportunistically from `SMSG_QUEST_GENERAL_INFO`
-  / `SMSG_QUEST_DESCRIPTION` packet taps, so decoded text lands only
-  for quests the game itself has already fetched.
-- Find a read-only path into the game's local string table (read
-  memory directly, no `ValidateAsyncDecodeStr` call at all) so we
-  can emit decoded text for strings GW has already cached without
-  triggering any new fetches.
+That rules out a rate problem: the issue is that
+`ValidateAsyncDecodeStr` at the resolved offset is fundamentally
+incompatible with being driven from our GameThread-enqueue context.
+Possibilities (untested):
+
+- Wrong function — the scanner pattern may be locking onto a decoder
+  that expects different preconditions than the one GWCA/GWToolbox
+  use.
+- Wrong thread — the decoder may require the render thread or a
+  specific TLS state that our engine-tick GameThread lacks.
+- The enqueue itself may execute on a different thread than the one
+  the decoder schedules its callback on, so internal synchronisation
+  inside the game drifts.
+
+We stopped calling `Prime` from `QuestMgr::RequestQuestInfo`. The
+`EncStringCache` API (`Lookup` + `Prime`) stays checked in so a
+future decode mechanism can drop into it without rewiring callers.
+
+Safer directions to explore next:
+
+- Read-only decode via memory walk: parse the enc string to extract
+  its message id, look that id up in GW's already-populated message
+  table directly. No game function calls. Only returns text for
+  strings the client has already fetched through normal UI, but that
+  covers every name the player has ever opened.
+- Opportunistic cache population from `SMSG_QUEST_GENERAL_INFO` /
+  `SMSG_QUEST_DESCRIPTION` / `SMSG_QUEST_UPDATE_NAME` packet taps.
+- Have the LLM invoke the decode only when the player is physically
+  standing in a quest-giver dialog, so GW's decoder is "warm".
 
 **Today**, LLM clients and tests that want human-readable names fall
 back to:

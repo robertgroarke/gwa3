@@ -9,6 +9,7 @@
 #include <gwa3/core/Scanner.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/game/GameTypes.h>
+#include <gwa3/utils/EncStringCache.h>
 
 #include <Windows.h>
 
@@ -197,6 +198,25 @@ void AbandonQuest(uint32_t questId) {
 
 void RequestQuestInfo(uint32_t questId) {
     if (questId == 0) return;
+
+    // Priming the EncStringCache here was tempting — it would drive the
+    // decoder at LLM-action pace rather than snapshot pace — but BISCUIT
+    // live testing showed GW still crashes ~45 s after even a single
+    // request_quest_info call triggers 5 ValidateAsyncDecodeStr decodes.
+    // Something about the decoder's thread context or state is
+    // fundamentally incompatible from our side, not a rate problem.
+    // The Prime() API is kept intact for future use; the call is
+    // commented out until we find a safer decode path (likely a direct
+    // memory read from GW's own message table). See QUEST_LOG_RESEARCH.md.
+    //
+    // if (Quest* q = GetQuestById(questId)) {
+    //     EncStringCache::Prime(q->name);
+    //     EncStringCache::Prime(q->location);
+    //     EncStringCache::Prime(q->npc);
+    //     EncStringCache::Prime(q->description);
+    //     EncStringCache::Prime(q->objectives);
+    // }
+
     if (s_requestQuestInfoFn && GameThread::IsInitialized()) {
         auto fn = s_requestQuestInfoFn;
         GameThread::EnqueuePost([fn, questId]() {
