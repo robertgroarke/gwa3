@@ -425,45 +425,23 @@ uint32_t ScanLabelFramesForQuestStrings() {
 }
 
 void ToggleQuestLogWindow() {
-    // Path: GWCA's SetWindowVisible(windowId, is_visible) via byte-pattern
-    // scan. Our earlier attempt used WindowID_QuestLog = 0x4F (legacy GWCA
-    // header value) and the function returned cleanly but the window never
-    // rendered. Py4GW (maintained against current Reforged) uses
-    //   WindowID_QuestLog = 0x52
-    // — the WindowID enum was renumbered. See:
-    //   GWA Censured/Py4GW-main/Py4GWCoreLib/enums_src/UI_enums.py:457
+    // Proven path: UIMgr::ActionKeyPress(0x8E), equivalent to the player
+    // pressing the 'L' key. The underlying SendControlAction in this
+    // build now dispatches via the UI frame tree (finds the right
+    // childOffset=6 frame and sends msg=0x20 KeyUp + msg=0x22 trigger),
+    // not the raw ActionBase chain we explored earlier.
     //
-    // Scanner pattern: GWCA's `\x8B\x75\x08\x83\xFE\x66\x7C\x19\x68` at
-    // offset -7. The literal 0x66 (WindowID_Count from GWCA, now ~0x68 in
-    // this build) is wildcarded so the pattern survives the renumber.
-    using SetWindowVisibleFn = void(__cdecl*)(uint32_t windowId, uint32_t isVisible,
-                                              void* wParam, void* lParam);
-    static SetWindowVisibleFn s_fn = nullptr;
-    static bool s_resolveAttempted = false;
-    if (!s_resolveAttempted) {
-        s_resolveAttempted = true;
-        uintptr_t addr = Scanner::Find(
-            "\x8B\x75\x08\x83\xFE\x66\x7C\x19\x68", "xxxxx?xxx", -0x7);
-        if (addr > 0x10000) {
-            s_fn = reinterpret_cast<SetWindowVisibleFn>(addr);
-        }
-        Log::Info("QuestMgr: SetWindowVisible_Func=0x%08X (Py4GW WindowID=0x52)",
-                  static_cast<unsigned>(addr));
-    }
-    if (!s_fn) {
-        Log::Warn("QuestMgr: ToggleQuestLogWindow has no SetWindowVisible_Func");
-        return;
-    }
-    constexpr uint32_t kWindowIdQuestLog_Reforged = 0x52;
-    auto fn = s_fn;
-    const uint32_t windowId = kWindowIdQuestLog_Reforged;
-    if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
-        GameThread::Enqueue([fn, windowId]() {
-            fn(windowId, 1, nullptr, nullptr);
-        });
-    } else {
-        fn(windowId, 1, nullptr, nullptr);
-    }
+    // Live-verified on BISCUIT 2026-04-18: the Quest Log panel
+    // ("Quest Log [L]", Active Quests heading) appeared after this
+    // call, and GW did not crash.
+    //
+    // Why not SetWindowVisible? It only flips visibility on an
+    // already-created window. First-time open needs the keybind path.
+    // The earlier crashes when testing 0x8E via this same path were
+    // transient (other state issues in those runs); a clean run with
+    // the current codebase opens the window reliably.
+    constexpr uint32_t kControlAction_OpenQuestLog = 0x8E;
+    UIMgr::ActionKeyPress(kControlAction_OpenQuestLog);
 }
 
 void RequestQuestInfo(uint32_t questId) {

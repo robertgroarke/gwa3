@@ -254,6 +254,21 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
+    static ActionResult HandleActionKeyPressRaw(const json& p) {
+        // Diagnostic: invoke UIMgr::ActionKeyPress(action) — the SAME
+        // proven path that drives skill slots 0xA4..0xAB. Used to retest
+        // UI actions like 0x8E (OpenQuestLog) after our SetWindowVisible
+        // work revealed that first-time window opens need the keybind
+        // path, not the visibility flag.
+        if (!p.contains("action")) return MakeError("missing action");
+        uint32_t action = p["action"].get<uint32_t>();
+        GWA3::GameThread::Enqueue([action]() {
+            GWA3::Log::Info("ActionKeyPress probe: action=0x%X", action);
+            UIMgr::ActionKeyPress(action);
+        });
+        return MakeOk();
+    }
+
     static ActionResult HandleSetWindowVisibleRaw(const json& p) {
         // Diagnostic: call the scanned SetWindowVisible directly with any
         // window id, so we can confirm the function identity and hunt the
@@ -1005,6 +1020,7 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["scan_ui_labels"] = HandleScanUiLabels;
         g_dispatch["perform_ui_action_slot"] = HandlePerformUiActionSlot;
         g_dispatch["set_window_visible_raw"] = HandleSetWindowVisibleRaw;
+        g_dispatch["action_key_press_raw"] = HandleActionKeyPressRaw;
 
         // Party/Hero
         g_dispatch["add_hero"] = HandleAddHero;
