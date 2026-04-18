@@ -49,16 +49,28 @@ async def main():
     print(f"\n=== Nearby agents (map_id={map_id}) ===")
     agents = tier2.get("agents", [])
     living = [a for a in agents if a.get("agent_type") == "living"]
-    named = [a for a in living if "name" in a and a["name"]]
-    print(f"living={len(living)}, with decoded name={len(named)} "
-          f"({(len(named)/len(living)*100) if living else 0:.0f}%)")
+    gadgets = [a for a in agents if a.get("agent_type") == "gadget"]
+    named_living = [a for a in living if "name" in a and a["name"]]
+    named_gadgets = [a for a in gadgets if "name" in a and a["name"]]
+    print(f"living={len(living)}, with decoded name={len(named_living)} "
+          f"({(len(named_living)/len(living)*100) if living else 0:.0f}%)")
+    print(f"gadget={len(gadgets)}, with decoded name={len(named_gadgets)} "
+          f"({(len(named_gadgets)/len(gadgets)*100) if gadgets else 0:.0f}%)")
 
+    print("\n[living]")
     for a in sorted(living, key=lambda x: x.get("distance", 99999))[:20]:
         alleg = ALLEGIANCE_NAME.get(a.get("allegiance", 0), str(a.get("allegiance")))
         name = a.get("name", "<no-name>")
         print(f"  id={a['id']} dist={a.get('distance', 0):.0f} "
               f"alleg={alleg} hp={a.get('hp', 0):.0%} "
               f"pn={a.get('player_number')} "
+              f"name={name!r}")
+
+    print("\n[gadgets]")
+    for a in sorted(gadgets, key=lambda x: x.get("distance", 99999))[:20]:
+        name = a.get("name", "<no-name>")
+        print(f"  id={a['id']} dist={a.get('distance', 0):.0f} "
+              f"gadget_id={a.get('gadget_id')} "
               f"name={name!r}")
 
     return 0

@@ -249,20 +249,27 @@ namespace GWA3::LLM::GameSnapshot {
     // meaningful or just Private-Use-Area noise.
     //
     // GW's encoded format starts with one of:
-    //   0x8101 / 0x8102         — database reference (e.g. quest name,
-    //                             NPC name, item name)
+    //   0x8101 / 0x8102         — database reference (quest/NPC/item)
     //   0x2000..0x2FFF          — formatted-string header
     //   0x1000..0x1FFF          — literal reference
     //   0xE000..0xF8FF          — other PUA codepoints the decoder expands
+    //   0x4E00..0x9FFF          — CJK Unified Ideographs, which GW
+    //                             Reforged started using as NPC nametag
+    //                             sentinels (observed 0x6DBD..0x6E01
+    //                             in Embark Beach). The English client
+    //                             never uses CJK legitimately in agent
+    //                             names, so any CJK prefix is a ref.
     //
     // Plain strings (player account names, item "customized by" tags,
-    // chat sender handles) sit in the normal BMP range and pass this
-    // check, so they still round-trip through the raw fallback.
+    // chat sender handles) sit in the basic-Latin + Latin-1 range and
+    // pass this check, so they still round-trip through the raw
+    // fallback.
     static bool LooksEncoded(const wchar_t* p) {
         if (!p) return false;
         const wchar_t c0 = p[0];
         if (c0 == 0x8101 || c0 == 0x8102) return true;
         if (c0 >= 0x1000 && c0 < 0x3000) return true;
+        if (c0 >= 0x4E00 && c0 <= 0x9FFF) return true;
         if (c0 >= 0xE000 && c0 <= 0xF8FF) return true;
         return false;
     }
@@ -553,6 +560,13 @@ namespace GWA3::LLM::GameSnapshot {
             } else if (ReadGadgetAgentSeed(agent, gadget)) {
                 a["agent_type"] = "gadget";
                 a["gadget_id"] = gadget.gadget_id;
+                // Decoded gadget name (chest, signpost, portal, shrine).
+                // Resolved via AgentContext.agent_summary_info with
+                // GadgetContext.GadgetInfo fallback. Same lazy-cache
+                // pattern as living agents and items.
+                if (wchar_t* encName = AgentMgr::GetAgentEncName(agent)) {
+                    EmitBestText(a, encName, "name");
+                }
             } else if (ReadItemAgentSeed(agent, item)) {
                 a["agent_type"] = "item";
                 a["item_id"] = item.item_id;
