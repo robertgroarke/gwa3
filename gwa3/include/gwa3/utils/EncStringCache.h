@@ -43,6 +43,12 @@ namespace GWA3::EncStringCache {
     // ValidateAsyncDecodeStr at snapshot rate destabilises GW.
     void Prime(const wchar_t* enc);
 
+    // Direct-insert a decoded UTF-8 value for `enc`. Used by the UI
+    // label-frame walker (QuestMgr::ScanLabelFramesForQuestStrings)
+    // which obtains decoded text from memory reads, not from the
+    // async decoder. Safe to call from any thread.
+    void InsertDecoded(const wchar_t* enc, std::string decoded);
+
     // Drop all cached entries and pending requests. Call on map change
     // if the cache is keyed by pointer, not by content. (Current
     // implementation keys by content, so Clear is optional — exposed

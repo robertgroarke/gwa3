@@ -196,6 +196,234 @@ void AbandonQuest(uint32_t questId) {
     CtoS::QuestAbandon(questId);
 }
 
+// --- Label-frame walker ---------------------------------------------------
+//
+// Reads GWCA_UIMessage_Research.md 3644-3656's "encoded | '\0' | decoded |
+// '\0'" layout out of TextLabelFrame / MultiLineTextLabelFrame contexts.
+// The key insight is that the decoded form lives in the SAME heap buffer
+// as the encoded form, immediately past its null terminator — no game-
+// function call required to read it.
+//
+// We don't know the exact frame type at runtime, so we probe a small set
+// of candidate context offsets that GWCA's frame decompilations show as
+// likely "string_base" slots (0x04 for ButtonFrame, varies for the label
+// frames). For each candidate wchar_t*, we gate on:
+//
+//   - pointer value looks like heap (> 0x10000)
+//   - first wchar is a GW encoded-string sentinel (0x2... / 0x8101 / 0x8102)
+//   - after the null terminator, there is at least one more wchar
+//   - that follow-on run is mostly printable (ASCII 0x20..0x7E, or common
+//     latin/accented ranges) — i.e. it's a plausible decoded sibling, not
+//     another encoded string or heap metadata
+//
+// When the encoded content matches one of the current quest log's five
+// encoded pointers (by content, not pointer identity — the label's copy
+// lives in a different allocation), we populate EncStringCache keyed on
+// the quest-struct wide string so Lookup() via the snapshot path surfaces
+// the decoded text.
+
+namespace {
+
+constexpr uintptr_t kCandidateOffsets[] = {
+    0x00, 0x04, 0x08, 0x0C, 0x10, 0x14, 0x18, 0x1C, 0x20
+};
+
+struct EncStringView {
+    const wchar_t* ptr;   // start of the encoded wchars (valid until null)
+    size_t length;        // length excluding null terminator
+};
+
+static bool IsEncodedSentinel(wchar_t w) {
+    // GW encoded strings start either with a 0x8101/0x8102 database
+    // reference (our observed quest-name pattern) or a 0x2xxx formatted
+    // string header (our observed quest-objectives pattern). Some also
+    // start in the 0x1xxx range when the enc is a literal. Other wchars
+    // are very unlikely as the first char of a real enc string.
+    return w == 0x8101 || w == 0x8102 || (w >= 0x2000 && w < 0x3000)
+        || (w >= 0x1000 && w < 0x2000);
+}
+
+__declspec(noinline) static bool LooksLikeReadableSibling(const wchar_t* s, size_t maxLen, size_t* outLen) {
+    if (!s) return false;
+    size_t i = 0;
+    int readable = 0;
+    for (; i < maxLen; ++i) {
+        wchar_t c = 0;
+        __try { c = s[i]; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        if (c == 0) break;
+        // ASCII printable, latin-1 supplement + extended-A (for non-English
+        // clients), and whitespace. Explicitly reject CJK and high PUA —
+        // those ranges are where encoded-string body bytes and heap
+        // metadata show up.
+        bool ok = (c >= 0x20 && c < 0x7F)
+               || (c >= 0xA0 && c <= 0x017F)
+               || c == L'\n' || c == L'\t';
+        if (!ok) return false;
+        if (c != L'\n' && c != L'\t') ++readable;
+    }
+    if (outLen) *outLen = i;
+    return i >= 3 && readable >= 3 && readable * 10 >= static_cast<int>(i) * 8;
+}
+
+struct WalkerCtx {
+    uint32_t          pairsSeen = 0;
+    uint32_t          pairsMatched = 0;
+    uint32_t          logSampleBudget = 6;  // cap log noise
+    // Quest strings we care about, keyed by encoded content. We keep a
+    // vector of {wchar_t* from quest struct, its length} for O(logCount)
+    // comparison per candidate.
+    struct Target {
+        const wchar_t* encPtr;
+        size_t         encLen;
+    };
+    Target            targets[64];
+    uint32_t          targetCount = 0;
+};
+
+__declspec(noinline) static bool WcsEqualsBounded(const wchar_t* a, size_t aLen, const wchar_t* b, size_t bLen) {
+    if (aLen != bLen) return false;
+    __try {
+        for (size_t i = 0; i < aLen; ++i) {
+            if (a[i] != b[i]) return false;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return true;
+}
+
+__declspec(noinline) static bool TryReadEncodedView(const wchar_t* p, EncStringView* out) {
+    if (reinterpret_cast<uintptr_t>(p) <= 0x10000) return false;
+    __try {
+        wchar_t first = p[0];
+        if (!IsEncodedSentinel(first)) return false;
+        size_t i = 1;
+        // Bound the scan — real enc strings are well under 64 wchars.
+        for (; i < 64 && p[i] != 0; ++i) {}
+        if (i == 64) return false;
+        out->ptr = p;
+        out->length = i;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+__declspec(noinline) static void CacheDecodedQuestString(const wchar_t* encPtr, const char* utf8) {
+    if (!encPtr || !utf8 || !utf8[0]) {
+        return;
+    }
+    EncStringCache::InsertDecoded(encPtr, std::string(utf8));
+}
+
+// SEH-only helpers. These must not hold any C++ object that requires
+// destruction; the caller owns all RAII.
+
+__declspec(noinline) static bool SafeReadPtr(uintptr_t addr, const wchar_t** out) {
+    *out = nullptr;
+    __try {
+        *out = *reinterpret_cast<wchar_t**>(addr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+__declspec(noinline) static bool SafeCopyWchars(const wchar_t* src, size_t n, wchar_t* dst) {
+    __try {
+        for (size_t j = 0; j < n; ++j) dst[j] = src[j];
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static void ProbeFrameContext(uintptr_t frame, void* userdata) {
+    auto* wc = static_cast<WalkerCtx*>(userdata);
+    const uintptr_t ctx = UIMgr::GetFrameContext(frame);
+    if (ctx <= 0x10000) return;
+
+    for (uintptr_t off : kCandidateOffsets) {
+        const wchar_t* encPtr = nullptr;
+        if (!SafeReadPtr(ctx + off, &encPtr)) continue;
+
+        EncStringView enc{};
+        if (!TryReadEncodedView(encPtr, &enc)) continue;
+
+        const wchar_t* after = encPtr + enc.length + 1;
+        size_t decLen = 0;
+        if (!LooksLikeReadableSibling(after, 256, &decLen)) continue;
+
+        ++wc->pairsSeen;
+        if (wc->logSampleBudget > 0) {
+            --wc->logSampleBudget;
+            char decUtf8[512] = {};
+            WideCharToMultiByte(CP_UTF8, 0, after, static_cast<int>(decLen),
+                                decUtf8, sizeof(decUtf8) - 1, nullptr, nullptr);
+            Log::Info("QuestMgr::ScanLabelFrames: frame=0x%08X ctx=0x%08X +0x%X enc[%zu] decoded=\"%s\"",
+                      static_cast<unsigned>(frame),
+                      static_cast<unsigned>(ctx),
+                      static_cast<unsigned>(off),
+                      enc.length, decUtf8);
+        }
+
+        // Content-match against quest struct encoded strings. The label
+        // frame allocates its own copy, so pointer identity won't work.
+        for (uint32_t i = 0; i < wc->targetCount; ++i) {
+            const auto& t = wc->targets[i];
+            if (!WcsEqualsBounded(enc.ptr, enc.length, t.encPtr, t.encLen)) continue;
+
+            wchar_t decBuf[256] = {};
+            size_t copyLen = decLen < 255 ? decLen : 255;
+            if (!SafeCopyWchars(after, copyLen, decBuf)) break;
+            decBuf[copyLen] = 0;
+
+            char utf8[1024] = {};
+            int n = WideCharToMultiByte(CP_UTF8, 0, decBuf, -1, utf8,
+                                        sizeof(utf8) - 1, nullptr, nullptr);
+            if (n > 0) {
+                CacheDecodedQuestString(t.encPtr, utf8);
+                ++wc->pairsMatched;
+            }
+            break;
+        }
+    }
+}
+
+} // namespace
+
+uint32_t ScanLabelFramesForQuestStrings() {
+    WalkerCtx wc{};
+
+    // Build the target set from the current quest log.
+    const uint32_t logSize = GetQuestLogSize();
+    uint32_t pushed = 0;
+    for (uint32_t i = 0; i < logSize && pushed < 64; ++i) {
+        Quest* q = GetQuestByIndex(i);
+        if (!q) continue;
+        const wchar_t* const fields[] = {
+            q->name, q->location, q->npc, q->description, q->objectives
+        };
+        for (const wchar_t* f : fields) {
+            if (pushed >= 64) break;
+            if (!f || !f[0]) continue;
+            EncStringView v{};
+            if (!TryReadEncodedView(f, &v)) continue;
+            wc.targets[pushed].encPtr = v.ptr;
+            wc.targets[pushed].encLen = v.length;
+            ++pushed;
+        }
+    }
+    wc.targetCount = pushed;
+    Log::Info("QuestMgr::ScanLabelFrames: scanning %u quest-string targets", pushed);
+
+    UIMgr::ForEachFrame(ProbeFrameContext, &wc);
+
+    Log::Info("QuestMgr::ScanLabelFrames: seen=%u matched=%u",
+              wc.pairsSeen, wc.pairsMatched);
+    return wc.pairsMatched;
+}
+
 void ToggleQuestLogWindow() {
     // Path chosen: call GWCA's `SetWindowVisible(WindowID_QuestLog=0x4F, 1)`.
     // This is a cleaner dedicated UI function (not a key-action), and is

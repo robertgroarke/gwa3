@@ -62,6 +62,12 @@ namespace GWA3::UIMgr {
     // Frame context (parent frame for SendFrameUIMsg)
     uintptr_t GetFrameContext(uintptr_t frame);
 
+    // Iterate all live frames. Callback fires once per frame pointer that
+    // passes the basic > 0x10000 sanity check, inside an SEH guard. Used
+    // by QuestMgr's label-frame walker to find TextLabelFrame contexts
+    // that carry decoded quest strings.
+    void ForEachFrame(void (*cb)(uintptr_t frame, void* userdata), void* userdata);
+
     // Send UI message (must be on game thread)
     void SendUIMessage(uint32_t msgId, void* wParam, void* lParam);
 

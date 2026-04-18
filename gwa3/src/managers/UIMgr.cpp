@@ -522,6 +522,23 @@ uintptr_t GetFrameContext(uintptr_t frame) {
     }
 }
 
+void ForEachFrame(void (*cb)(uintptr_t, void*), void* userdata) {
+    if (!cb) return;
+    auto* arr = GetFrameArray();
+    if (!arr) return;
+    __try {
+        if (!arr->buffer || arr->size == 0 || arr->size > 5000) return;
+        const uint32_t n = arr->size;
+        for (uint32_t i = 0; i < n; ++i) {
+            const uintptr_t frame = arr->buffer[i];
+            if (frame < 0x10000) continue;
+            cb(frame, userdata);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+}
+
 void SendUIMessage(uint32_t msgId, void* wParam, void* lParam) {
     if (!s_sendUIMessageFn) return;
     s_sendUIMessageFn(msgId, wParam, lParam);

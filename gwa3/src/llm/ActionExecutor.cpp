@@ -244,11 +244,23 @@ namespace GWA3::LLM::ActionExecutor {
     }
 
     static ActionResult HandleOpenQuestLog(const json&) {
-        // ControlAction 0x8E toggles the quest log window. Opening it is
-        // also how we prime GW to render TextLabelFrames with the
-        // "encoded | '\0' | decoded | '\0'" sibling layout we need for
-        // read-only quest-name decoding (see QUEST_LOG_RESEARCH.md).
+        // SetWindowVisible(WindowID_QuestLog, 1) on the game thread.
+        // Opening the window primes GW to render TextLabelFrames with
+        // the "encoded | '\0' | decoded | '\0'" sibling layout we need
+        // for read-only quest-name decoding.
         GWA3::GameThread::Enqueue([]() { QuestMgr::ToggleQuestLogWindow(); });
+        return MakeOk();
+    }
+
+    static ActionResult HandleScanUiLabels(const json&) {
+        // Walk the UI frame tree looking for label-frame contexts with
+        // an encoded|decoded sibling buffer that matches a quest-log
+        // string (GWCA_UIMessage_Research.md 3644-3656). Must be
+        // invoked AFTER open_quest_log has had a few frames to render,
+        // otherwise labels are empty and nothing matches.
+        GWA3::GameThread::Enqueue([]() {
+            (void)QuestMgr::ScanLabelFramesForQuestStrings();
+        });
         return MakeOk();
     }
 
@@ -947,6 +959,7 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["abandon_quest"] = HandleAbandonQuest;
         g_dispatch["request_quest_info"] = HandleRequestQuestInfo;
         g_dispatch["open_quest_log"] = HandleOpenQuestLog;
+        g_dispatch["scan_ui_labels"] = HandleScanUiLabels;
 
         // Party/Hero
         g_dispatch["add_hero"] = HandleAddHero;

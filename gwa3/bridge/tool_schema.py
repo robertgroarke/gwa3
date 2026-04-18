@@ -222,6 +222,18 @@ OPEN_QUEST_LOG = _tool(
     {"properties": {}, "required": []},
 )
 
+SCAN_UI_LABELS = _tool(
+    "scan_ui_labels",
+    "Walk the in-game UI frame tree looking for label frames that carry "
+    "decoded quest-name text back-to-back with their encoded sibling in "
+    "memory. Populates the snapshot cache so quests.quest_log[i].name / "
+    "location / npc / description / objectives show up decoded on the "
+    "NEXT snapshot. Call AFTER open_quest_log (and after a short wait "
+    "for the UI to draw) for the labels to actually be populated. "
+    "Safe to call repeatedly. No parameters.",
+    {"properties": {}, "required": []},
+)
+
 # --- Party/Hero ---
 
 ADD_HERO = _tool(
@@ -985,6 +997,7 @@ ALL_TOOLS = [
     ABANDON_QUEST,
     REQUEST_QUEST_INFO,
     OPEN_QUEST_LOG,
+    SCAN_UI_LABELS,
     # Party/Hero
     ADD_HERO,
     KICK_HERO,

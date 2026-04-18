@@ -227,6 +227,19 @@ void Prime(const wchar_t* enc) {
     s_cv.notify_one();
 }
 
+void InsertDecoded(const wchar_t* enc, std::string decoded) {
+    if (!enc || !enc[0] || decoded.empty()) return;
+    std::wstring key(enc);
+    std::lock_guard<std::mutex> lock(s_mu);
+    // If a decoder callback beat us to it, keep whichever is already
+    // stored (don't thrash the cache). Otherwise insert.
+    if (s_cache.count(key)) return;
+    s_cache.emplace(std::move(key), std::move(decoded));
+    // Clear any pending Prime entry for the same content so the
+    // worker doesn't waste a decode slot on a key that's now cached.
+    s_pending.erase(std::wstring(enc));
+}
+
 void Clear() {
     std::lock_guard<std::mutex> lock(s_mu);
     s_cache.clear();
