@@ -96,6 +96,15 @@ async def main():
     print(f"  items WITHOUT name (not yet cached by decoder): {without_name}")
     for mid, nm, qty in with_name[:8]:
         print(f"    model={mid} qty={qty} name={nm!r}")
+    with_full = []
+    for bag in bags:
+        for item in bag.get("items", []):
+            if "full_name" in item and item["full_name"]:
+                with_full.append((item.get("model_id"), item["full_name"],
+                                  item.get("quantity", 1)))
+    print(f"  items with full_name (modifier-decorated): {len(with_full)}")
+    for mid, fn, qty in with_full[:8]:
+        print(f"    model={mid} qty={qty} full_name={fn!r}")
 
     # Merchant items
     merch = tier2.get("merchant", {}) or {}

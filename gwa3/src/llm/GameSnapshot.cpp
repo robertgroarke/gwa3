@@ -243,34 +243,37 @@ namespace GWA3::LLM::GameSnapshot {
         return (n > 0) ? std::string(buf) : std::string{};
     }
 
-    // Does the wide-char string look like GW's encoded-reference format
-    // (as opposed to plain human-readable text)? Used by EmitBestText
-    // to decide whether the raw WideCharToMultiByte fallback is
-    // meaningful or just Private-Use-Area noise.
+    // Does the wide-char string look like plain human-readable text
+    // (as opposed to GW's encoded-reference format)? Used by
+    // EmitBestText to decide whether the raw WideCharToMultiByte
+    // fallback is meaningful.
     //
-    // GW's encoded format starts with one of:
-    //   0x8101 / 0x8102         — database reference (quest/NPC/item)
-    //   0x2000..0x2FFF          — formatted-string header
-    //   0x1000..0x1FFF          — literal reference
-    //   0xE000..0xF8FF          — other PUA codepoints the decoder expands
-    //   0x4E00..0x9FFF          — CJK Unified Ideographs, which GW
-    //                             Reforged started using as NPC nametag
-    //                             sentinels (observed 0x6DBD..0x6E01
-    //                             in Embark Beach). The English client
-    //                             never uses CJK legitimately in agent
-    //                             names, so any CJK prefix is a ref.
+    // Positive-filter approach: only accept strings whose first wchar
+    // is in a normal Latin-range codepoint block. GW's encoded format
+    // uses a sprawling and hard-to-enumerate set of sentinels — on
+    // live inventories we've seen 0x8101/0x8102 (database refs),
+    // 0x2xxx / 0x1xxx (format strings), 0x4E00..0x9FFF (CJK in
+    // Reforged NPCs), 0xE000..0xF8FF (PUA), AND 0x0A40 (Gurmukhi) /
+    // 0x010A (Latin Ext-A) used as item modifier sentinels on
+    // `single_item_name`. Enumerating all of these plays whack-a-mole;
+    // inverting the test to "starts with basic Latin or Latin-1" is a
+    // tighter gate.
     //
-    // Plain strings (player account names, item "customized by" tags,
-    // chat sender handles) sit in the basic-Latin + Latin-1 range and
-    // pass this check, so they still round-trip through the raw
-    // fallback.
-    static bool LooksEncoded(const wchar_t* p) {
-        if (!p) return false;
+    // Accepted first-wchar ranges:
+    //   0x0020..0x007E  Basic Latin (printable ASCII)
+    //   0x00A0..0x024F  Latin-1 Supplement + Latin Extended-A/B
+    //                   (catches accented European characters in
+    //                   player account handles or NPC names)
+    //
+    // Side effect: non-Latin account handles (Korean/Chinese/etc.
+    // players on Asian shards) get filtered too, but the DLL log
+    // confirms our BISCUIT client runs with languageId=0 (English),
+    // so those handles decode through the cached-name path anyway.
+    static bool LooksPlainText(const wchar_t* p) {
+        if (!p || !p[0]) return false;
         const wchar_t c0 = p[0];
-        if (c0 == 0x8101 || c0 == 0x8102) return true;
-        if (c0 >= 0x1000 && c0 < 0x3000) return true;
-        if (c0 >= 0x4E00 && c0 <= 0x9FFF) return true;
-        if (c0 >= 0xE000 && c0 <= 0xF8FF) return true;
+        if (c0 >= 0x0020 && c0 <= 0x007E) return true;
+        if (c0 >= 0x00A0 && c0 <= 0x024F) return true;
         return false;
     }
 
@@ -304,17 +307,32 @@ namespace GWA3::LLM::GameSnapshot {
     // gibberish that clutters the snapshot and confuses the LLM.
     // In that case we omit the field entirely and let the caller
     // retry on the next snapshot after the passive decode hook has
-    // had a chance to fill the cache. Plain-text wchars (player
-    // names, customized-by tags) still pass through.
-    static void EmitBestText(json& dst, const wchar_t* p, const char* key) {
-        if (!p || !p[0]) return;
-        std::string dec = EncStringCache::Lookup(p);
-        if (!dec.empty()) {
-            dst[key] = std::move(dec);
-            return;
+    // had a chance to fill the cache.
+    //
+    // The optional `fallback` pointer is tried if the primary source
+    // is encoded + not yet cached + has no readable raw UTF-8. Used
+    // for players where `name_enc` (title-decorated, cache-only) can
+    // be backed by `name` (plain account handle) — emits something
+    // immediately rather than waiting for GW to render a nametag.
+    static void EmitBestText(json& dst, const wchar_t* p, const char* key,
+                             const wchar_t* fallback = nullptr) {
+        if (p && p[0]) {
+            std::string dec = EncStringCache::Lookup(p);
+            if (!dec.empty()) {
+                dst[key] = std::move(dec);
+                return;
+            }
+            if (LooksPlainText(p)) {
+                std::string raw = SafeWideToUtf8(p);
+                if (!raw.empty()) {
+                    dst[key] = std::move(raw);
+                    return;
+                }
+            }
         }
-        if (LooksEncoded(p)) return;
-        std::string raw = SafeWideToUtf8(p);
+        if (!fallback || !fallback[0]) return;
+        if (!LooksPlainText(fallback)) return;
+        std::string raw = SafeWideToUtf8(fallback);
         if (!raw.empty()) dst[key] = std::move(raw);
     }
 
@@ -553,9 +571,13 @@ namespace GWA3::LLM::GameSnapshot {
                 // NPCs from WorldContext.agent_infos (with NPCArray fallback).
                 // EmitBestText prefers cached decoded text from the passive
                 // ValidateAsyncDecodeStr hook; if the tag hasn't rendered
-                // yet the field is simply omitted.
+                // yet the field is simply omitted. For players we also
+                // pass the plain `Player.name` handle as a fallback so
+                // the LLM sees at least the bare account name even when
+                // the title-decorated `name_enc` hasn't decoded yet.
                 if (wchar_t* encName = AgentMgr::GetAgentEncName(agent)) {
-                    EmitBestText(a, encName, "name");
+                    wchar_t* plainName = AgentMgr::GetAgentPlainName(agent);
+                    EmitBestText(a, encName, "name", plainName);
                 }
             } else if (ReadGadgetAgentSeed(agent, gadget)) {
                 a["agent_type"] = "gadget";
@@ -573,11 +595,18 @@ namespace GWA3::LLM::GameSnapshot {
                 a["owner"] = item.owner;
                 // Resolve to the backing Item* so we can surface the
                 // decoded item name — the passive decode hook caches
-                // whatever tooltip GW renders when hovering.
+                // whatever tooltip GW renders when hovering. Emit
+                // both the base `name` (e.g. "Longsword") and the
+                // richer `full_name` (e.g. "Fiery Longsword of
+                // Fortitude"), with `single_item_name` as a plain
+                // fallback for the base name when the encoded form
+                // hasn't decoded yet.
                 Item* inv = ItemMgr::GetItemById(item.item_id);
                 if (inv) {
                     a["model_id"] = inv->model_id;
-                    EmitBestText(a, inv->name_enc, "name");
+                    EmitBestText(a, inv->name_enc, "name",
+                                 inv->single_item_name);
+                    EmitBestText(a, inv->complete_name_enc, "full_name");
                 }
             } else {
                 a["agent_type"] = "unknown";
@@ -614,9 +643,13 @@ namespace GWA3::LLM::GameSnapshot {
                 it["equipped"] = item->equipped;
                 it["interaction"] = item->interaction;
                 // Decoded item name (when GW has rendered the tooltip at
-                // least once, the passive hook has cached it). Falls back
-                // to the raw encoded bytes via EmitBestText.
-                EmitBestText(it, item->name_enc, "name");
+                // least once, the passive hook has cached it). `name`
+                // is the base model name, `full_name` includes prefix/
+                // suffix modifiers, `single_item_name` backs `name`
+                // with a plain form when the encoded ref isn't cached.
+                EmitBestText(it, item->name_enc, "name",
+                             item->single_item_name);
+                EmitBestText(it, item->complete_name_enc, "full_name");
                 // Rarity from interaction flags
                 uint32_t inter = item->interaction;
                 const char* rarity = "white";
@@ -786,6 +819,8 @@ namespace GWA3::LLM::GameSnapshot {
         struct MerchantItemData {
             uint32_t item_id, model_id, type, value, quantity, interaction;
             wchar_t* name_enc;
+            wchar_t* complete_name_enc;
+            wchar_t* single_item_name;
         };
         MerchantItemData itemData[256] = {};
         uint32_t readCount = 0;
@@ -800,6 +835,8 @@ namespace GWA3::LLM::GameSnapshot {
             d.quantity = item->quantity;
             d.interaction = item->interaction;
             d.name_enc = item->name_enc;
+            d.complete_name_enc = item->complete_name_enc;
+            d.single_item_name = item->single_item_name;
         }
 
         json items = json::array();
@@ -811,7 +848,9 @@ namespace GWA3::LLM::GameSnapshot {
             it["value"] = itemData[i].value;
             it["quantity"] = itemData[i].quantity;
             it["interaction"] = itemData[i].interaction;
-            EmitBestText(it, itemData[i].name_enc, "name");
+            EmitBestText(it, itemData[i].name_enc, "name",
+                         itemData[i].single_item_name);
+            EmitBestText(it, itemData[i].complete_name_enc, "full_name");
             items.push_back(it);
         }
         m["items"] = items;

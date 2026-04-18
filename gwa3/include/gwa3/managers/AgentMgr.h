@@ -64,6 +64,15 @@ namespace GWA3::AgentMgr {
     wchar_t* GetAgentEncName(uint32_t agentId);
     wchar_t* GetAgentEncName(const Agent* agent);
 
+    // Plain (non-encoded) name pointer, intended as a fallback when
+    // the encoded-reference form has not yet been decoded by GW's UI.
+    // Currently only resolves for PLAYER agents (reads
+    // WorldContext.players[login_number].name at +0x28, which is the
+    // bare account name without title decoration). Returns nullptr for
+    // NPCs, gadgets, items — those sources don't carry a separately-
+    // stored plain form in the structs we map today.
+    wchar_t* GetAgentPlainName(const Agent* agent);
+
     // Utility
     float GetDistance(float x1, float y1, float x2, float y2);
     float GetSquaredDistance(float x1, float y1, float x2, float y2);
