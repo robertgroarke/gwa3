@@ -108,6 +108,18 @@ namespace GWA3::UIMgr {
     bool ActionKeyDown(uint32_t action);
     bool ActionKeyUp(uint32_t action);
     bool ActionKeyPress(uint32_t action);
+
+    // BotsHub-style "PerformAction" — single toggle call with the
+    // BotsHub-compatible packet layout (ACTION_STRUCT = { action,
+    // flag, type }). Used by UI toggle actions (quest log, map, etc.)
+    // which need:
+    //   - context = *(ActionBase + 0xC) + 0xA8   (type == 0 path)
+    //   - arg shape: flag, &action_dword, 0     (not the 3-dword
+    //     ControlActionPacket used by ControlActionKey*)
+    //   - flag = 0x20 (CONTROL_TYPE_ACTIVATE) for a single press
+    // See BotsHub-latest/lib/GWA2_Assembly.au3 1320 + 1643 for the
+    // reference implementation.
+    bool PerformUiAction(uint32_t action);
     // Mouse action testing
     bool TestMouseClickAction(uintptr_t frame, uint32_t currentState, uint32_t wparam, uint32_t lparam);
     bool TestMouseAction(uintptr_t frame, uint32_t currentState, uint32_t wparam, uint32_t lparam);

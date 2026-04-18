@@ -425,51 +425,24 @@ uint32_t ScanLabelFramesForQuestStrings() {
 }
 
 void ToggleQuestLogWindow() {
-    // Path chosen: call GWCA's `SetWindowVisible(WindowID_QuestLog=0x4F, 1)`.
-    // This is a cleaner dedicated UI function (not a key-action), and is
-    // what GWCA/GWToolbox use for window toggling. We scan it from a
-    // distinctive prologue pattern (same pattern GWCA uses upstream).
+    // BotsHub-proven path: PerformAction(0x8E, CONTROL_TYPE_ACTIVATE).
+    // Uses UIMgr::PerformUiAction, which drives the Action() function
+    // with the exact BotsHub struct shape (action + flag dwords, single
+    // &action pointer, UI-action context = *(ActionBase+0xC)+0xA8).
+    // See BotsHub-latest/lib/GWA2_Assembly.au3:1320,1643 and
+    // BotsHub-latest/lib/GWA2.au3:2251.
     //
-    // An earlier attempt via `UIMgr::ActionKeyPress(0x8E)` — which maps
-    // to the "press 'L'" key-action binding — crashed GW the first time
-    // it fired on BISCUIT (the action-context packet layout is wrong
-    // for UI actions vs. the skill-slot actions that codepath was built
-    // for). The SetWindowVisible path avoids that codepath entirely.
-    using SetWindowVisibleFn = void(__cdecl*)(uint32_t windowId, uint32_t isVisible,
-                                              void* wParam, void* lParam);
-    static SetWindowVisibleFn s_fn = nullptr;
-    static bool s_resolveAttempted = false;
-    if (!s_resolveAttempted) {
-        s_resolveAttempted = true;
-        // GWCA pattern uses literal 0x66 (window-array size) in the cmp.
-        // That number may shift across GW builds, so we also try the
-        // pattern with that byte wildcarded.
-        uintptr_t addr = Scanner::Find(
-            "\x8B\x75\x08\x83\xFE\x66\x7C\x19\x68", "xxxxxxxxx", -0x7);
-        if (addr <= 0x10000) {
-            addr = Scanner::Find(
-                "\x8B\x75\x08\x83\xFE\x66\x7C\x19\x68", "xxxxx?xxx", -0x7);
-        }
-        if (addr > 0x10000) {
-            s_fn = reinterpret_cast<SetWindowVisibleFn>(addr);
-        }
-        Log::Info("QuestMgr: SetWindowVisible_Func=0x%08X",
-                  static_cast<unsigned>(addr));
-    }
-    if (!s_fn) {
-        Log::Warn("QuestMgr: ToggleQuestLogWindow has no SetWindowVisible_Func");
-        return;
-    }
-    constexpr uint32_t kWindowIdQuestLog = 0x4F;
-    auto fn = s_fn;
-    const uint32_t windowId = kWindowIdQuestLog;
-    if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
-        GameThread::Enqueue([fn, windowId]() {
-            fn(windowId, 1, nullptr, nullptr);
-        });
-    } else {
-        fn(windowId, 1, nullptr, nullptr);
-    }
+    // Previously we tried two other paths:
+    //   - UIMgr::ActionKeyPress(0x8E) — crashed GW the first time it
+    //     fired. Wrong packet shape (3-dword ControlActionPacket with
+    //     0x4000 filler in the middle slot, where UI actions expect a
+    //     single dword + flag).
+    //   - SetWindowVisible(WindowID_QuestLog=0x4F, 1) via a wildcarded
+    //     GWCA byte pattern. Call returned cleanly but the Quest Log
+    //     window never appeared on-screen — either wrong WindowID or
+    //     the scanned address wasn't really that function.
+    constexpr uint32_t kActionOpenQuestLog = 0x8E;
+    UIMgr::PerformUiAction(kActionOpenQuestLog);
 }
 
 void RequestQuestInfo(uint32_t questId) {

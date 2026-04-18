@@ -522,6 +522,118 @@ uintptr_t GetFrameContext(uintptr_t frame) {
     }
 }
 
+// BotsHub-compatible context resolution for UI toggle actions:
+//   ctx = *(ActionBase + 0xC) + 0xA8
+// (type == 0 branch in BotsHub's CommandAction assembly). The type != 0
+// branch uses +0x4 instead; we don't drive that path yet.
+// Dump the first 0x40 bytes of ActionBase (as uintptr_t slots) so we can
+// find which slot in THIS GW build holds the pointer BotsHub's ASM expects
+// at +0xC. The fields themselves appear to have shifted between GW builds,
+// so we look for the first slot whose value is a plausible heap pointer.
+struct ActionBaseDump {
+    uintptr_t slots[16];
+};
+
+static bool ReadActionBaseDump(ActionBaseDump* out) {
+    if (Offsets::ActionBase < 0x10000) return false;
+    __try {
+        for (uint32_t i = 0; i < 16; ++i) {
+            out->slots[i] = *reinterpret_cast<uintptr_t*>(Offsets::ActionBase + i * 4);
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static uintptr_t GetUiActionContextRaw(uintptr_t* outTyped, uintptr_t* outTyped2) {
+    *outTyped = 0;
+    *outTyped2 = 0;
+    if (Offsets::ActionBase < 0x10000) return 0;
+    __try {
+        *outTyped  = *reinterpret_cast<uintptr_t*>(Offsets::ActionBase + 0xC);
+        *outTyped2 = *reinterpret_cast<uintptr_t*>(Offsets::ActionBase + 0x4);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+    if (*outTyped < 0x10000) return 0;
+    return *outTyped + 0xA8;
+}
+
+static uintptr_t GetUiActionContext() {
+    uintptr_t t0 = 0, t1 = 0;
+    return GetUiActionContextRaw(&t0, &t1);
+}
+
+bool PerformUiAction(uint32_t action) {
+    if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
+        GameThread::Enqueue([action]() { PerformUiAction(action); });
+        return true;
+    }
+    if (!s_doActionFn) {
+        Log::Warn("UIMgr: PerformUiAction no DoActionFn action=0x%X", action);
+        return false;
+    }
+    // BotsHub's ASM reads `*(ActionBase+0xC)` (type=0) or `*(ActionBase+0x4)`
+    // (type!=0) then adds 0xA8. On this GW build neither of those slots
+    // holds a pointer, so we dump the full ActionBase struct and try the
+    // first slot whose value looks like a heap address. Log every slot so
+    // we can confirm which one the real "type=0 context" pointer lives in.
+    ActionBaseDump dump{};
+    if (!ReadActionBaseDump(&dump)) {
+        Log::Warn("UIMgr: PerformUiAction ReadActionBaseDump failed action=0x%X", action);
+        return false;
+    }
+    {
+        char line[512] = {};
+        int off = 0;
+        for (uint32_t i = 0; i < 16 && off < (int)sizeof(line) - 16; ++i) {
+            off += sprintf_s(line + off, sizeof(line) - off, "+%02X=%08X ",
+                             i * 4, static_cast<unsigned>(dump.slots[i]));
+        }
+        Log::Info("UIMgr: PerformUiAction ActionBase=0x%08X  %s",
+                  static_cast<unsigned>(Offsets::ActionBase), line);
+    }
+
+    uintptr_t ctx = 0;
+    // Prefer the BotsHub offsets when they point to plausible heap memory.
+    // Otherwise fall through to the first pointer-looking slot as a guess.
+    for (uint32_t idx : {3u /*+0xC*/, 1u /*+0x4*/, 2u, 4u, 5u, 6u, 7u, 8u, 9u}) {
+        if (idx >= 16) break;
+        uintptr_t p = dump.slots[idx];
+        if (p >= 0x10000 && p < 0x80000000) {
+            ctx = p + 0xA8;
+            Log::Info("UIMgr: PerformUiAction trying slot +0x%X -> ptr=0x%08X ctx=0x%08X",
+                      idx * 4, static_cast<unsigned>(p), static_cast<unsigned>(ctx));
+            break;
+        }
+    }
+    if (ctx < 0x10000) {
+        Log::Warn("UIMgr: PerformUiAction no ActionBase context action=0x%X", action);
+        return false;
+    }
+    // BotsHub's ACTION_STRUCT places `action` at +4 and passes &action
+    // as the wParam, followed by [&action+4] as the flag (msgid) and
+    // 0 as lParam. We mirror that exactly — a local pair of dwords
+    // replicates the { action, flag } layout immediately after our
+    // commandActionPtr would live.
+    constexpr uint32_t kControlTypeActivate = 0x20;
+    uint32_t payload[2] = { action, kControlTypeActivate };
+    // Arg order matches DoActionFn(__fastcall ecx, edx, msgid, arg1, arg2).
+    // BotsHub's ASM pushes in reverse:
+    //   push 0           (arg2)
+    //   push &action     (arg1 = pointer to action dword)
+    //   push [&action+4] (msgid  = flag value from ACTION_STRUCT.flag)
+    // i.e. msgid = flag = 0x20, arg1 = &action_dword, arg2 = 0.
+    s_doActionFn(reinterpret_cast<void*>(ctx), nullptr,
+                 payload[1] /* flag */,
+                 &payload[0] /* &action */,
+                 nullptr);
+    Log::Info("UIMgr: PerformUiAction ctx=0x%08X flag=0x%X action=0x%X",
+              static_cast<unsigned>(ctx), kControlTypeActivate, action);
+    return true;
+}
+
 void ForEachFrame(void (*cb)(uintptr_t, void*), void* userdata) {
     if (!cb) return;
     auto* arr = GetFrameArray();
