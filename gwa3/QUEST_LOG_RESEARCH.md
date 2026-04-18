@@ -306,34 +306,59 @@ whole `ValidateAsyncDecodeStr` hazard. The `EncStringCache`
 module stays checked in so if a working decode path is ever
 found, it plugs in without reworking callers.
 
-## Status as of 2026-04-18 (late)
+## Status as of 2026-04-18 (late) — SOLVED
 
-- ✅ **Programmatic open works.** `QuestMgr::ToggleQuestLogWindow()`
-  → `UIMgr::ActionKeyPress(0x8E)` → `SendControlAction` via the
-  frame-dispatch path opens the Quest Log panel reliably. Live
-  screenshot on BISCUIT confirms "Quest Log [L]" with decoded
-  quest names like "Heart or Mind: Garden in Danger" rendered.
-- ❌ **Sibling-decode walker finds zero matches.** After the
-  window is open and the decoded text is visibly rendered, the
-  walker's sweep of frame contexts at offsets 0x00..0x20 still
-  reports `seen=0 matched=0`. The `encoded | '\0' | decoded | '\0'`
-  back-to-back layout described in
-  `GWCA_UIMessage_Research.md:3644–3656` appears not to hold at
-  the offsets we probe in this build — the decoded wide-string
-  must live in a separate allocation, or at a ctx offset we
-  haven't tried, or the span-bound check in GWCA's getter rules
-  out the second slot for our candidates.
+All three layers work:
 
-Next investigation directions for the walker:
+- ✅ **Programmatic open.** `QuestMgr::ToggleQuestLogWindow()`
+  → `UIMgr::ActionKeyPress(0x8E)` → `SendControlAction`
+  frame-dispatch path opens the Quest Log panel.
+- ✅ **Passive decode capture.** `EncStringCache::Initialize`
+  now MinHook-installs `HookedValidateAsyncDecodeStr` on
+  `Offsets::ValidateAsyncDecodeStrGwca` (0x005F5050 in this
+  build). Every decode GW does for its own UI — quest names,
+  quest text, NPC names, everything — flows through our detour
+  which wraps the callback, captures (encoded→decoded), and
+  forwards to the real decoder so GW's UI keeps rendering
+  normally.
+- ✅ **Snapshot surfaces decoded text.** `GameSnapshot`'s
+  `EmitEnc` helper reads `EncStringCache::Lookup(enc)` and
+  emits both `*_enc` and the decoded sibling field for every
+  `Quest` struct string. Live run on BISCUIT shows all 13
+  quests with their real names, plus `active_quest.description`
+  and `active_quest.objectives` fully populated.
 
-- Extend candidate offsets to 0x24..0x40 and beyond.
-- For each pointer-shaped slot at ANY offset, check whether the
-  dereferenced memory looks like ASCII text (regardless of the
-  encoded sibling heuristic). This would find a decoded string
-  pointer even if it's stored separately.
-- Hook `OnKeydown_callbacks` / `kQuestAdded` / `kQuestDetailsChanged`
-  UIMessages and cache strings as GW hands them to the UI pipeline
-  (opportunistic fill, no memory walking needed).
+### Three investigation directions — closed
+
+- **Extend candidate offsets to 0x24..0x40+.** Tested up to
+  0x7C. Found 777 encoded-string candidates across frame
+  contexts, but *zero* ASCII-readable pointers at any offset
+  in any context — the decoded text is not stored in the
+  frame-context struct at all in this build.
+- **Decoded-pointer-anywhere scan.** Same result — zero ASCII
+  pointers found. Walker is kept as diagnostic only.
+- **UIMessage cache hook.** Superseded by the broader decoder
+  hook, which catches the exact moment GW produces decoded
+  text rather than waiting for quest-specific messages.
+
+### The final mechanism in three lines
+
+```cpp
+static void __cdecl HookedValidateAsyncDecodeStr(
+        const wchar_t* enc, DecodeCallback cb, void* param) {
+    auto* hc = new HookedCallbackCtx{cb, param, std::wstring(enc)};
+    s_hookTrampoline(enc, WrappedDecodeCallback, hc);
+}
+static void __cdecl WrappedDecodeCallback(void* param, wchar_t* decoded) {
+    auto* c = static_cast<HookedCallbackCtx*>(param);
+    InsertDecoded(c->encCopy.c_str(), Utf8FromWide(decoded));
+    c->originalCb(c->originalParam, decoded);
+    delete c;
+}
+```
+
+No memory walking, no offset guessing, no invocations that could
+crash GW. Just observing calls GW is already making.
 
 ## Programmatic Quest Log open (2026-04-18)
 
