@@ -10,6 +10,9 @@
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/managers/UIMgr.h>
+#include <gwa3/game/NPC.h>
+#include <gwa3/game/Player.h>
+#include <gwa3/game/GameTypes.h>
 
 #include <Windows.h>
 #include <cmath>
@@ -759,6 +762,128 @@ float GetDistance(float x1, float y1, float x2, float y2) {
 
 bool GetAgentExists(uint32_t agentId) {
     return GetAgentByID(agentId) != nullptr;
+}
+
+// --- Encoded agent name resolution ---
+//
+// Mirrors GWCA AgentMgr::GetAgentEncName. WorldContext layout offsets
+// from GWCA's WorldContext.h (verified working in this build since
+// PlayerMgr already uses +0x80C successfully for the PlayerArray):
+//   +0x7CC  AgentInfoArray  agent_infos   (GWArray<AgentInfo>, 16 bytes)
+//   +0x7FC  NPCArray        npcs          (GWArray<NPC>,       16 bytes)
+//   +0x80C  PlayerArray     players       (GWArray<Player>,    16 bytes)
+//
+// AgentInfo has name_enc at +0x34 (sizeof 0x38). NPC has name_enc at
+// +0x20 (sizeof 0x30). Player has name_enc at +0x24.
+//
+// For LIVING agents:
+//   - If ag->login_number != 0 -> it's a human player, read from
+//     players[login_number].name_enc.
+//   - Otherwise try agent_infos[ag->agent_id].name_enc first; fall
+//     back to npcs[ag->player_number].name_enc (dummy agents like
+//     "Suit of xx Armor" only live in NPCArray). See GWCA comments
+//     around AgentMgr.cpp:440-449 for the historical rationale.
+//
+// For ITEM agents and GADGET agents the lookup differs (ItemMgr or
+// GadgetInfo); those are not implemented here yet. This helper only
+// covers living agents, which is what BuildNearbyAgentsJson needs.
+static constexpr uintptr_t kAgentInfosOffset = 0x7CC;
+static constexpr uintptr_t kNpcsOffset       = 0x7FC;
+static constexpr uintptr_t kPlayersOffset    = 0x80C;
+static constexpr size_t    kAgentInfoSize    = 0x38;
+static constexpr size_t    kAgentInfoNameEnc = 0x34;
+
+template <typename T>
+static GWArray<T>* SafeReadArray(uintptr_t worldCtx, uintptr_t fieldOffset,
+                                 uint32_t maxSize) {
+    __try {
+        auto* arr = reinterpret_cast<GWArray<T>*>(worldCtx + fieldOffset);
+        if (!arr->buffer || arr->size == 0 || arr->size > maxSize) {
+            return nullptr;
+        }
+        return arr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+static wchar_t* ReadAgentInfoNameEnc(uintptr_t worldCtx, uint32_t agentId) {
+    __try {
+        auto* arr = reinterpret_cast<GWArray<uint8_t>*>(worldCtx + kAgentInfosOffset);
+        if (!arr->buffer || arr->size == 0 || arr->size > 0x4000) return nullptr;
+        if (agentId >= arr->size) return nullptr;
+        uintptr_t slot = reinterpret_cast<uintptr_t>(arr->buffer)
+                         + static_cast<uintptr_t>(agentId) * kAgentInfoSize;
+        return *reinterpret_cast<wchar_t**>(slot + kAgentInfoNameEnc);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+wchar_t* GetAgentEncName(const Agent* agent) {
+    if (!agent) return nullptr;
+    const uintptr_t worldCtx = Offsets::ResolveWorldContext();
+    if (!worldCtx) return nullptr;
+
+    uint32_t agentType = 0;
+    uint32_t agentId = 0;
+    uint32_t loginNumber = 0;
+    uint32_t playerNumber = 0;
+    __try {
+        agentType = agent->type;
+        agentId = agent->agent_id;
+        if (agentType == 0xDB) {
+            auto* ag = reinterpret_cast<const AgentLiving*>(agent);
+            loginNumber = ag->login_number;
+            playerNumber = ag->player_number;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+
+    // Only living agents for now; gadget + item paths are not wired.
+    if (agentType != 0xDB) return nullptr;
+
+    // Player: look up by login_number in PlayerArray.
+    if (loginNumber != 0) {
+        auto* players = SafeReadArray<Player>(worldCtx, kPlayersOffset, 1024);
+        if (players && loginNumber < players->size) {
+            __try {
+                return players->buffer[loginNumber].name_enc;
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                return nullptr;
+            }
+        }
+        return nullptr;
+    }
+
+    // NPC: try agent_infos[agent_id].name_enc first...
+    if (wchar_t* enc = ReadAgentInfoNameEnc(worldCtx, agentId)) {
+        return enc;
+    }
+
+    // ...fall back to npcs[player_number].name_enc.
+    auto* npcs = SafeReadArray<NPC>(worldCtx, kNpcsOffset, 0x8000);
+    if (npcs && playerNumber < npcs->size) {
+        __try {
+            return npcs->buffer[playerNumber].name_enc;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return nullptr;
+        }
+    }
+    return nullptr;
+}
+
+wchar_t* GetAgentEncName(uint32_t agentId) {
+    Agent* agent = GetAgentByID(agentId);
+    if (agent) {
+        return GetAgentEncName(agent);
+    }
+    // Agent no longer in the agent array (despawned, etc.) — still try
+    // a direct agent_infos lookup in case the slot persists.
+    const uintptr_t worldCtx = Offsets::ResolveWorldContext();
+    if (!worldCtx) return nullptr;
+    return ReadAgentInfoNameEnc(worldCtx, agentId);
 }
 
 } // namespace GWA3::AgentMgr

@@ -513,6 +513,14 @@ namespace GWA3::LLM::GameSnapshot {
                 a["allegiance"] = living.allegiance;
                 a["is_alive"] = (living.hp > 0.0f);
                 a["player_number"] = living.player_number;
+                // Decoded nametag: players come from WorldContext.players,
+                // NPCs from WorldContext.agent_infos (with NPCArray fallback).
+                // EmitBestText prefers cached decoded text from the passive
+                // ValidateAsyncDecodeStr hook; if the tag hasn't rendered
+                // yet the field is simply omitted.
+                if (wchar_t* encName = AgentMgr::GetAgentEncName(agent)) {
+                    EmitBestText(a, encName, "name");
+                }
             } else if (ReadGadgetAgentSeed(agent, gadget)) {
                 a["agent_type"] = "gadget";
                 a["gadget_id"] = gadget.gadget_id;
