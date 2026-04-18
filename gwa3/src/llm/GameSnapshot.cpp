@@ -243,6 +243,30 @@ namespace GWA3::LLM::GameSnapshot {
         return (n > 0) ? std::string(buf) : std::string{};
     }
 
+    // Does the wide-char string look like GW's encoded-reference format
+    // (as opposed to plain human-readable text)? Used by EmitBestText
+    // to decide whether the raw WideCharToMultiByte fallback is
+    // meaningful or just Private-Use-Area noise.
+    //
+    // GW's encoded format starts with one of:
+    //   0x8101 / 0x8102         — database reference (e.g. quest name,
+    //                             NPC name, item name)
+    //   0x2000..0x2FFF          — formatted-string header
+    //   0x1000..0x1FFF          — literal reference
+    //   0xE000..0xF8FF          — other PUA codepoints the decoder expands
+    //
+    // Plain strings (player account names, item "customized by" tags,
+    // chat sender handles) sit in the normal BMP range and pass this
+    // check, so they still round-trip through the raw fallback.
+    static bool LooksEncoded(const wchar_t* p) {
+        if (!p) return false;
+        const wchar_t c0 = p[0];
+        if (c0 == 0x8101 || c0 == 0x8102) return true;
+        if (c0 >= 0x1000 && c0 < 0x3000) return true;
+        if (c0 >= 0xE000 && c0 <= 0xF8FF) return true;
+        return false;
+    }
+
     // Emit the raw encoded wide-char string as `<key>_enc`, and the
     // decoded UTF-8 form as `<key>` when the passive decode-hook cache
     // already has it. Used for quest fields where the LLM must see the
@@ -267,10 +291,14 @@ namespace GWA3::LLM::GameSnapshot {
     // where the caller only wants one string (not the enc + decoded
     // pair), e.g. dialog button labels or item/agent names.
     //
-    // If the string is encoded and the cache has not yet seen it, the
-    // raw conversion will fail the strict check and the field is
-    // omitted — better than emitting garbage bytes that crash the
-    // Python decoder downstream.
+    // The raw fallback is gated on LooksEncoded(): if the wchar
+    // sequence is in GW's encoded-reference format (PUA sentinels
+    // etc.), emitting its UTF-8 bytes produces human-unreadable
+    // gibberish that clutters the snapshot and confuses the LLM.
+    // In that case we omit the field entirely and let the caller
+    // retry on the next snapshot after the passive decode hook has
+    // had a chance to fill the cache. Plain-text wchars (player
+    // names, customized-by tags) still pass through.
     static void EmitBestText(json& dst, const wchar_t* p, const char* key) {
         if (!p || !p[0]) return;
         std::string dec = EncStringCache::Lookup(p);
@@ -278,6 +306,7 @@ namespace GWA3::LLM::GameSnapshot {
             dst[key] = std::move(dec);
             return;
         }
+        if (LooksEncoded(p)) return;
         std::string raw = SafeWideToUtf8(p);
         if (!raw.empty()) dst[key] = std::move(raw);
     }
