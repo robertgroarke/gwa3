@@ -120,6 +120,13 @@ namespace GWA3::UIMgr {
     // See BotsHub-latest/lib/GWA2_Assembly.au3 1320 + 1643 for the
     // reference implementation.
     bool PerformUiAction(uint32_t action);
+
+    // Diagnostic variant: force a specific ActionBase slot instead of
+    // auto-picking the first pointer-shaped one. slotIndex 0..15 maps
+    // to offset slotIndex*4 inside the ActionBase struct. Used to
+    // identify which slot holds the type-0 UI-action context in a
+    // given GW build.
+    bool PerformUiActionAtSlot(uint32_t action, uint32_t slotIndex);
     // Mouse action testing
     bool TestMouseClickAction(uintptr_t frame, uint32_t currentState, uint32_t wparam, uint32_t lparam);
     bool TestMouseAction(uintptr_t frame, uint32_t currentState, uint32_t wparam, uint32_t lparam);

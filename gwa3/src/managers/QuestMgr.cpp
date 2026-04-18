@@ -425,24 +425,31 @@ uint32_t ScanLabelFramesForQuestStrings() {
 }
 
 void ToggleQuestLogWindow() {
-    // BotsHub-proven path: PerformAction(0x8E, CONTROL_TYPE_ACTIVATE).
-    // Uses UIMgr::PerformUiAction, which drives the Action() function
-    // with the exact BotsHub struct shape (action + flag dwords, single
-    // &action pointer, UI-action context = *(ActionBase+0xC)+0xA8).
-    // See BotsHub-latest/lib/GWA2_Assembly.au3:1320,1643 and
-    // BotsHub-latest/lib/GWA2.au3:2251.
+    // Programmatic open of the Quest Log window is currently unresolved
+    // in this GW Reforged build. All four paths we tried crash GW:
     //
-    // Previously we tried two other paths:
-    //   - UIMgr::ActionKeyPress(0x8E) — crashed GW the first time it
-    //     fired. Wrong packet shape (3-dword ControlActionPacket with
-    //     0x4000 filler in the middle slot, where UI actions expect a
-    //     single dword + flag).
-    //   - SetWindowVisible(WindowID_QuestLog=0x4F, 1) via a wildcarded
-    //     GWCA byte pattern. Call returned cleanly but the Quest Log
-    //     window never appeared on-screen — either wrong WindowID or
-    //     the scanned address wasn't really that function.
-    constexpr uint32_t kActionOpenQuestLog = 0x8E;
-    UIMgr::PerformUiAction(kActionOpenQuestLog);
+    //   1. UIMgr::ActionKeyPress(0x8E)  — 3-dword ControlActionPacket
+    //      with 0x4000 filler; crashes on first drain.
+    //   2. SetWindowVisible(0x4F, 1) via a wildcarded GWCA byte pattern
+    //      — returns cleanly but Quest Log never renders.
+    //   3. UIMgr::PerformUiAction with BotsHub's action struct shape
+    //      and ActionBase+0xC context — ActionBase+0xC is 0x40 (not a
+    //      pointer) in this build; fallback slots all crash DoAction.
+    //   4. Same shape with gwa3's proven FrameArray[1]+0xA0 context
+    //      (from SendControlAction) — also crashes.
+    //
+    // Diagnostic evidence suggests the DoAction function itself takes
+    // a different arg shape for UI actions (0x8E) than skill actions
+    // (0xA4..0xAB), but we haven't identified what that shape is. For
+    // now: this function is a no-op and the LLM must ask the user to
+    // press 'L' manually before firing scan_ui_labels. The walker
+    // infrastructure works as soon as labels are populated — that was
+    // proven visually (the in-game Quest Log already shows decoded
+    // names like "Heart or Mind: Garden in Danger").
+    //
+    // See QUEST_LOG_RESEARCH.md for the full triangulation.
+    Log::Warn("QuestMgr: ToggleQuestLogWindow is currently a no-op on this "
+              "GW build — press 'L' manually to open the Quest Log.");
 }
 
 void RequestQuestInfo(uint32_t questId) {

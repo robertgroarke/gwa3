@@ -13,6 +13,7 @@
 #include <gwa3/managers/ChatMgr.h>
 #include <gwa3/managers/TradeMgr.h>
 #include <gwa3/managers/CameraMgr.h>
+#include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/TraderHook.h>
@@ -249,6 +250,20 @@ namespace GWA3::LLM::ActionExecutor {
         // the "encoded | '\0' | decoded | '\0'" sibling layout we need
         // for read-only quest-name decoding.
         GWA3::GameThread::Enqueue([]() { QuestMgr::ToggleQuestLogWindow(); });
+        return MakeOk();
+    }
+
+    static ActionResult HandlePerformUiActionSlot(const json& p) {
+        // Diagnostic: call UIMgr::PerformUiActionAtSlot with a chosen
+        // action id and ActionBase slot index. Used to identify which
+        // ActionBase slot holds the type-0 UI-action context on this
+        // GW build. Normal flow should use open_quest_log.
+        if (!p.contains("action")) return MakeError("missing action");
+        uint32_t action = p["action"].get<uint32_t>();
+        uint32_t slot = p.contains("slot") ? p["slot"].get<uint32_t>() : 4u;  // default +0x10
+        GWA3::GameThread::Enqueue([action, slot]() {
+            GWA3::UIMgr::PerformUiActionAtSlot(action, slot);
+        });
         return MakeOk();
     }
 
@@ -960,6 +975,7 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["request_quest_info"] = HandleRequestQuestInfo;
         g_dispatch["open_quest_log"] = HandleOpenQuestLog;
         g_dispatch["scan_ui_labels"] = HandleScanUiLabels;
+        g_dispatch["perform_ui_action_slot"] = HandlePerformUiActionSlot;
 
         // Party/Hero
         g_dispatch["add_hero"] = HandleAddHero;

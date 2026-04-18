@@ -306,6 +306,71 @@ whole `ValidateAsyncDecodeStr` hazard. The `EncStringCache`
 module stays checked in so if a working decode path is ever
 found, it plugs in without reworking callers.
 
+## Programmatic Quest Log open (2026-04-18)
+
+The sibling-decode walker (`QuestMgr::ScanLabelFramesForQuestStrings`)
+is ready and the path is proven in concept — the in-game Quest Log
+visibly renders decoded text ("Heart or Mind: Garden in Danger",
+"Visit Ruthless Sevad to collect Koss's winnings", etc.) which is
+exactly what the walker wants to find. The blocker is triggering
+that render from code.
+
+Four paths attempted, all crash GW on this Reforged build:
+
+1. `UIMgr::ActionKeyPress(0x8E)` — gwa3's existing 3-dword
+   ControlActionPacket with 0x4000 filler. Crashes first drain
+   because the "0x4000" is wrong filler for UI actions.
+2. `SetWindowVisible(0x4F, 1)` via a wildcarded GWCA byte
+   pattern. Returns cleanly, but the Quest Log never actually
+   renders — either 0x4F is wrong WindowID for this build, or
+   the scanned address isn't really `SetWindowVisible`.
+3. BotsHub-style `PerformUiAction` with `{action, flag=0x20, 0}`
+   and `ctx = *(ActionBase + 0xC) + 0xA8`. `*(ActionBase + 0xC)`
+   in this build is `0x40`, not a pointer — the struct BotsHub's
+   ASM assumed has been reorganised. Slot-sweeping each pointer
+   in the struct and passing it as context crashes DoAction.
+4. Same PerformUiAction shape but using gwa3's proven
+   `FrameArray[1]+0xA0` context (which works for skill actions).
+   Also crashes — the DoAction function appears to take a
+   different arg shape for UI actions (0x8E) than skill actions
+   (0xA4..0xAB), and we haven't identified it.
+
+Runtime dump of `Offsets::ActionBase = 0x00A0C4E8`:
+
+```
++00=2242B208 (ptr)   +04=0x180  +08=0x145  +0C=0x40
++10=246E8AC0 (ptr)   +14=0x40   +18=0x26   +1C=0x40
++20=243B3510 (ptr)   +24=0x1C0  +28=0x1A7  +2C=0x40
++30=2482FC30 (ptr)   +34=0x89   +38=0x71   +3C=0x15
+```
+
+Shape is a ring of 4 `(ptr, int, int, int)` records — looks more
+like a pending-actions queue than BotsHub's single dispatch
+context. The `0x26` / `0x89` / `0x71` / `0x15` values in the
+int slots look like historical action IDs, which supports the
+"queue of command records" interpretation.
+
+### Current workaround
+
+`QuestMgr::ToggleQuestLogWindow()` is a no-op with a warning
+log. The LLM tool schema keeps `open_quest_log` as a tool name
+for discoverability but it won't open the window. For
+`scan_ui_labels` to find matches, the user must press 'L'
+manually in-game first. Once the labels are populated, the
+walker picks them up correctly on the next call.
+
+The unblock is a working programmatic open; options still
+worth trying:
+
+- Find a different scanner pattern that resolves the real
+  `SetWindowVisible` for Reforged, or find the correct
+  `WindowID` constant.
+- Look for a UIMessage in the `0x10000xxx` range that toggles
+  windows directly (GWCA exposes `kOpenTemplate`, etc.).
+- Walk the `FrameArray` for a Quest-Log button frame, match
+  it by hash or child offset, and use the existing
+  `UIMgr::ButtonClickByHash` / frame-click shellcode path.
+
 We stopped calling `Prime` from `QuestMgr::RequestQuestInfo`. The
 `EncStringCache` API (`Lookup` + `Prime`) stays checked in so a
 future decode mechanism can drop into it without rewiring callers.
