@@ -199,20 +199,13 @@ void AbandonQuest(uint32_t questId) {
 void RequestQuestInfo(uint32_t questId) {
     if (questId == 0) return;
 
-    // The EncStringCache::Prime path (commented below) is deliberately
-    // dormant. Three progressively-safer attempts at calling
-    // ValidateAsyncDecodeStr at our scanned offset all produced the
-    // same ~46-second delayed crash on BISCUIT — GameThread-enqueue +
-    // wait, fire-and-forget via GameThread, and GWCA-style direct
-    // fire-and-forget from a worker thread all hit the same wall. The
-    // function at address `Offsets::ValidateAsyncDecodeStr` is either
-    // the wrong function entirely for this GW client, or calling it
-    // from an injected DLL imposes requirements we don't yet satisfy.
-    //
-    // The Prime() API and the fire-and-forget cache machinery stay
-    // checked in so the next attempt (different scan pattern, direct
-    // message-table memory read, or opportunistic packet-tap fills)
-    // can plug in without rewiring callers. See QUEST_LOG_RESEARCH.md.
+    // EncStringCache now prefers GWCA's byte-pattern-scanned address
+    // (Offsets::ValidateAsyncDecodeStrGwca). Live testing on BISCUIT
+    // confirmed the two scans resolve to different addresses
+    // (assertion=0x5F4C44, gwca=0x5F5050) but the GWCA-scanned address
+    // still produces the same delayed crash. Prime call stays dormant
+    // while we pursue the text_parser / AsyncDecodeStringPtr hook
+    // investigation. See QUEST_LOG_RESEARCH.md.
     //
     // if (Quest* q = GetQuestById(questId)) {
     //     EncStringCache::Prime(q->name);

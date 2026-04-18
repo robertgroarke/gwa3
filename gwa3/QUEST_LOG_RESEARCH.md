@@ -195,6 +195,17 @@ Possibilities to test next:
   (`\x83\xC4\x10\x3B\xC6\x5E\x74\x14` at offset `-0x70`). Swapping
   in the byte pattern is cheap — compare the resolved addresses. If
   they differ, try the byte-pattern result directly.
+  **Result (2026-04-17):** the two scans resolve to *different*
+  addresses — assertion `0x005F4C44`, GWCA pattern `0x005F5050`.
+  Swapping to the GWCA-scanned address still produced the same
+  delayed crash (this time ~80 s after worker start on BISCUIT).
+  That's informative on its own — our original assertion scan was
+  indeed landing on the wrong function — but it's not the whole
+  story, since the GWCA-scanned address also crashes the client.
+  Both offsets are retained in `Offsets.h` as
+  `ValidateAsyncDecodeStr` (assertion, legacy) and
+  `ValidateAsyncDecodeStrGwca` (byte pattern, preferred by
+  EncStringCache when available).
 - **Missing text-parser context.** GWCA's `AsyncDecodeStr`
   overloads read `GetGameContext()->text_parser` and temporarily
   swap its `language_id`. Our injection may not initialise that

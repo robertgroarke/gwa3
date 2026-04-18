@@ -122,9 +122,25 @@ static void WorkerLoop() {
 bool Initialize() {
     if (s_running.load()) return true;
 
-    if (Offsets::ValidateAsyncDecodeStr > 0x10000) {
-        s_decodeFn = reinterpret_cast<ValidateAsyncDecodeStrFn>(
-            Offsets::ValidateAsyncDecodeStr);
+    // Two independent scans for the same function. GWCA's byte-pattern
+    // scan is considered authoritative upstream; our assertion-based
+    // scan is what QuestMgr + prior testing has been using. Log both
+    // so we can spot the case where they disagree — a difference there
+    // is the smoking gun for the delayed-crash we've been chasing. See
+    // QUEST_LOG_RESEARCH.md.
+    const uintptr_t assertAddr = Offsets::ValidateAsyncDecodeStr;
+    const uintptr_t gwcaAddr   = Offsets::ValidateAsyncDecodeStrGwca;
+    Log::Info("EncStringCache: scan assertion=0x%08X gwca=0x%08X match=%s",
+              static_cast<unsigned>(assertAddr),
+              static_cast<unsigned>(gwcaAddr),
+              (assertAddr == gwcaAddr) ? "yes" : "NO");
+
+    // Prefer the GWCA-scanned address when present — that's what GWCA
+    // and GWToolbox actually call.
+    if (gwcaAddr > 0x10000) {
+        s_decodeFn = reinterpret_cast<ValidateAsyncDecodeStrFn>(gwcaAddr);
+    } else if (assertAddr > 0x10000) {
+        s_decodeFn = reinterpret_cast<ValidateAsyncDecodeStrFn>(assertAddr);
     }
 
     s_stopping.store(false);
@@ -136,8 +152,8 @@ bool Initialize() {
         Log::Warn("EncStringCache: failed to start worker thread");
         return false;
     }
-    Log::Info("EncStringCache: worker started (decode=%s gap=%ums)",
-              s_decodeFn ? "resolved" : "MISSING",
+    Log::Info("EncStringCache: worker started (decode=0x%08X gap=%ums)",
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_decodeFn)),
               kInterDecodeSleepMs);
     return true;
 }

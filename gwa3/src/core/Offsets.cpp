@@ -80,6 +80,7 @@ uintptr_t Trader = 0;
 uintptr_t TradePartner = 0;
 
 uintptr_t ValidateAsyncDecodeStr = 0;
+uintptr_t ValidateAsyncDecodeStrGwca = 0;
 
 uintptr_t PostMessage = 0;
 uintptr_t ChatLog = 0;
@@ -101,6 +102,7 @@ uintptr_t LevelDataBypass = 0;
 uintptr_t MapPortBypass = 0;
 
 uintptr_t InteractAgent = 0;
+uintptr_t WorldActionFunc = 0;
 uintptr_t CallTargetFunc = 0;
 uintptr_t InteractNPCFunc = 0;
 
@@ -255,6 +257,12 @@ static const PatternDef s_patterns[] = {
 
     // ===== Text (P1) =====
     ASSERT_PAT("ValidateAsyncDecodeStr", ValidateAsyncDecodeStr, 0, Priority::P1, PatternType::Func, "P:\\Code\\Engine\\Text\\TextApi.cpp", "codedString"),
+    // GWCA's exact byte-pattern scan for the same function. Kept alongside
+    // the assertion-based scan so we can compare resolved addresses — if
+    // they disagree, one of them is wrong. See QUEST_LOG_RESEARCH.md.
+    PAT("ValidateAsyncDecodeStrGwca", ValidateAsyncDecodeStrGwca,
+        "\x83\xC4\x10\x3B\xC6\x5E\x74\x14", "xxxxxxxx", -0x70,
+        Priority::P1, PatternType::Func),
 
     // ===== Chat (P2) =====
     PAT("PostMessage",    PostMessage,    "\x6A\xFF\x6A\x00\x68\x01\x80",       "xxxxxxx",  0x18,   Priority::P2, PatternType::Ptr),
@@ -277,6 +285,7 @@ static const PatternDef s_patterns[] = {
     // ===== Agent Interaction GWCA (P1) =====
     // InteractAgent dispatcher — resolves CallTarget at +0xD6 via FunctionFromNearCall
     PAT("InteractAgent", InteractAgent, "\xC7\x45\xF0\x98\x3A\x00\x00",                  "xxxxxxx",    0x41, Priority::P1, PatternType::Func),
+    PAT("WorldActionFunc", WorldActionFunc, "\x55\x8B\xEC\x83\xEC\x10\x53\x8B\x5D\x08\x56\x57\x83\xFB\x06\x7C\x14", "xxxxxxxxxxxxxxxxx", 0x0, Priority::P1, PatternType::Func),
 
     // ===== Trade GWCA (P2) =====
     PAT("OfferTradeItem",  OfferTradeItem,  "\x68\x49\x04\x00\x00\x89\x5D\xE4\xE8",       "xxxxxxxxx",  -0x6B, Priority::P2, PatternType::Func),
@@ -527,6 +536,14 @@ static void PostProcessOffsets() {
         }
         if (InteractNPCFunc <= 0x10000) {
             Log::Warn("Offsets: InteractNPCFunc resolution failed (InteractAgent=0x%08X)", InteractAgent);
+        }
+    }
+
+    if (WorldActionFunc > 0x10000) {
+        uintptr_t worldActionStart = Scanner::ToFunctionStart(WorldActionFunc + 1, 0x40);
+        if (worldActionStart > 0x10000) {
+            WorldActionFunc = worldActionStart;
+            Log::Info("Offsets: WorldActionFunc function start -> 0x%08X", WorldActionFunc);
         }
     }
 

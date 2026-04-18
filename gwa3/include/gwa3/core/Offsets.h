@@ -102,7 +102,8 @@ namespace GWA3::Offsets {
     extern uintptr_t TradePartner;       // hook
 
     // ===== Text =====
-    extern uintptr_t ValidateAsyncDecodeStr; // assertion-based, func
+    extern uintptr_t ValidateAsyncDecodeStr;     // assertion-based, func
+    extern uintptr_t ValidateAsyncDecodeStrGwca; // GWCA byte-pattern scan, func
 
     // ===== Chat =====
     extern uintptr_t PostMessage;
@@ -132,6 +133,7 @@ namespace GWA3::Offsets {
 
     // ===== Agent Interaction (GWCA) =====
     extern uintptr_t InteractAgent;      // func — interaction dispatcher (resolves CallTarget at +0xD6)
+    extern uintptr_t WorldActionFunc;    // func — native WorldAction(action_id, agent_id, call_target)
     extern uintptr_t CallTargetFunc;     // func — native CallTarget(type, agent_id)
     extern uintptr_t InteractNPCFunc;    // func — native InteractNPC(agent_id, call_target)
 
