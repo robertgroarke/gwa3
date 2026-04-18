@@ -306,6 +306,35 @@ whole `ValidateAsyncDecodeStr` hazard. The `EncStringCache`
 module stays checked in so if a working decode path is ever
 found, it plugs in without reworking callers.
 
+## Status as of 2026-04-18 (late)
+
+- ✅ **Programmatic open works.** `QuestMgr::ToggleQuestLogWindow()`
+  → `UIMgr::ActionKeyPress(0x8E)` → `SendControlAction` via the
+  frame-dispatch path opens the Quest Log panel reliably. Live
+  screenshot on BISCUIT confirms "Quest Log [L]" with decoded
+  quest names like "Heart or Mind: Garden in Danger" rendered.
+- ❌ **Sibling-decode walker finds zero matches.** After the
+  window is open and the decoded text is visibly rendered, the
+  walker's sweep of frame contexts at offsets 0x00..0x20 still
+  reports `seen=0 matched=0`. The `encoded | '\0' | decoded | '\0'`
+  back-to-back layout described in
+  `GWCA_UIMessage_Research.md:3644–3656` appears not to hold at
+  the offsets we probe in this build — the decoded wide-string
+  must live in a separate allocation, or at a ctx offset we
+  haven't tried, or the span-bound check in GWCA's getter rules
+  out the second slot for our candidates.
+
+Next investigation directions for the walker:
+
+- Extend candidate offsets to 0x24..0x40 and beyond.
+- For each pointer-shaped slot at ANY offset, check whether the
+  dereferenced memory looks like ASCII text (regardless of the
+  encoded sibling heuristic). This would find a decoded string
+  pointer even if it's stored separately.
+- Hook `OnKeydown_callbacks` / `kQuestAdded` / `kQuestDetailsChanged`
+  UIMessages and cache strings as GW hands them to the UI pipeline
+  (opportunistic fill, no memory walking needed).
+
 ## Programmatic Quest Log open (2026-04-18)
 
 The sibling-decode walker (`QuestMgr::ScanLabelFramesForQuestStrings`)
