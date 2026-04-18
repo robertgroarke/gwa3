@@ -135,16 +135,25 @@ def _scripted_tool_call(call_id: str, name: str, params: dict) -> ToolCall:
 
 
 async def _wait_for_loop_dispatched(
-    loop: AgentLoop, scripted: "ScriptedLLM", timeout: float
+    scripted: "ScriptedLLM", timeout: float
 ) -> None:
-    """Wait until the scripted LLM has been consulted AND the AgentLoop has
-    executed its tool call batch. The AgentLoop owns the pipe while it's
-    running, so callers must await this and THEN stop the loop before
-    reading further from tc.ipc."""
+    """Wait until the scripted LLM has been called (meaning the AgentLoop
+    reached chat_completion with observations and is executing the tool
+    call), then give a short grace period for the ipc.send_action to
+    actually reach the DLL and for the DLL to apply any state change.
+
+    We used to gate on cycle_count as well, but cycle_count increments
+    at the TOP of each cycle — so "cycle_count >= 2" can fire at the
+    moment cycle 2 begins, before cycle 1's execute_tool_calls has had
+    a chance to send through the pipe. scripted._idx >= 1 is the right
+    signal: it only advances after Gemma's response is consumed."""
     end = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < end:
         await asyncio.sleep(0.1)
-        if scripted._idx >= 1 and loop._cycle_count >= 2:
+        if scripted._idx >= 1:
+            # Grace period: execute_tool_calls does the pipe send + a
+            # 0.1s pause + a follow-up observation drain. 1.0s is ample.
+            await asyncio.sleep(1.0)
             return
 
 
@@ -204,7 +213,7 @@ async def test_llm_scripted_gemma_switches_active_quest(tc: BridgeTestCase):
 
     run_task = asyncio.create_task(loop.run())
     try:
-        await _wait_for_loop_dispatched(loop, scripted, timeout=6.0)
+        await _wait_for_loop_dispatched(scripted, timeout=6.0)
     finally:
         # Stop the AgentLoop before using tc.ipc — they share the pipe and
         # we need tc.ipc exclusively for the state-change poll below.
@@ -274,7 +283,7 @@ async def test_llm_scripted_gemma_requests_quest_info(tc: BridgeTestCase):
 
     run_task = asyncio.create_task(loop.run())
     try:
-        await _wait_for_loop_dispatched(loop, scripted, timeout=6.0)
+        await _wait_for_loop_dispatched(scripted, timeout=6.0)
     finally:
         await _stop_agent_loop(loop, run_task)
 
