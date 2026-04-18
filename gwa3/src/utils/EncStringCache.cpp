@@ -53,6 +53,22 @@ struct DecodeCtx {
     std::atomic<bool> claimed{false};
 };
 
+// SEH probe of GameContext.text_parser. Kept in its own function so MSVC
+// doesn't complain about __try in a function that also manages C++
+// objects with destructors.
+static void ProbeTextParser(uintptr_t gc, uintptr_t* outTextParser, uint32_t* outLanguageId) {
+    *outTextParser = 0;
+    *outLanguageId = 0xFFFFFFFF;
+    if (gc <= 0x10000) return;
+    __try {
+        uintptr_t tp = *reinterpret_cast<uintptr_t*>(gc + 0x18);
+        *outTextParser = tp;
+        if (tp > 0x10000) {
+            *outLanguageId = *reinterpret_cast<uint32_t*>(tp + 0x1D0);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
 static std::string Utf8FromWide(const wchar_t* w) {
     if (!w || !w[0]) return {};
     char buf[1024] = {};
@@ -134,6 +150,20 @@ bool Initialize() {
               static_cast<unsigned>(assertAddr),
               static_cast<unsigned>(gwcaAddr),
               (assertAddr == gwcaAddr) ? "yes" : "NO");
+
+    // Read-only probe of the GWCA-documented text_parser context chain.
+    // GWCA's AsyncDecodeStr wrappers read/write text_parser->language_id
+    // around every decode call; if that chain is null or garbage in our
+    // injection state, the decoder is being driven blind and that could
+    // explain the delayed crashes. See QUEST_LOG_RESEARCH.md.
+    uintptr_t gc = Offsets::ResolveGameContext();
+    uintptr_t textParser = 0;
+    uint32_t languageId = 0;
+    ProbeTextParser(gc, &textParser, &languageId);
+    Log::Info("EncStringCache: gameContext=0x%08X textParser=0x%08X languageId=%u",
+              static_cast<unsigned>(gc),
+              static_cast<unsigned>(textParser),
+              languageId);
 
     // Prefer the GWCA-scanned address when present — that's what GWCA
     // and GWToolbox actually call.

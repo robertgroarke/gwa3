@@ -210,10 +210,55 @@ Possibilities to test next:
   overloads read `GetGameContext()->text_parser` and temporarily
   swap its `language_id`. Our injection may not initialise that
   parser context the way vanilla game startup does.
+  **Result (2026-04-17):** read-only probe on BISCUIT shows the
+  chain is fully populated — `gameContext=0x0159F048`,
+  `textParser=0x015CDFD0`, `languageId=0` (English). So the context
+  is fine; that's not the missing piece either.
 - **Missing callback hook.** GWCA hooks `AsyncDecodeStringPtr` (the
   underlying `__fastcall` method) at start-of-day even for clients
   that just want to call it. Maybe that hook is load-bearing for
   internal ref-counting.
+  **Result (2026-04-17):** source inspection shows GWCA declares
+  the hook target and calls `EnableHooks(AsyncDecodeStringPtr)` but
+  never calls `CreateHook(...)` for it — the enable is a no-op in
+  MinHook if there's no prior create. So the hook is effectively
+  inactive even in upstream; not load-bearing.
+
+### Status as of 2026-04-17
+
+All three candidate fixes from the original list have been tried
+and ruled out on BISCUIT:
+
+1. Wrong function — partially true (our assertion scan landed
+   `0x40C` before GWCA's byte-pattern result) but the correct GWCA
+   address still crashes.
+2. Missing text_parser context — ruled out by direct probe.
+3. Missing AsyncDecodeStringPtr hook — ruled out by reading GWCA's
+   own source.
+
+At this point the honest conclusion is that `ValidateAsyncDecodeStr`
+is effectively unreachable from our injection surface via any
+documented GWCA path. Possible but speculative causes:
+
+- The byte-pattern scan has multiple matches in this GW build and
+  the first match is a different function (we haven't verified
+  this — would need to enumerate all matches and examine each).
+- Something else gwa3 hooks on init (engine, trader, dialog,
+  packet, render) races with the string decoder's internal state.
+- The decoder expects to be called only from the game's own
+  render/UI thread, and the worker thread we call from doesn't
+  satisfy some thread-affinity check that silently corrupts state.
+
+### Pragmatic path forward
+
+Drop runtime decoding entirely. Maintain a `quest_id -> name` table
+in `bridge/farming_knowledge.py` alongside the existing Tekks's War
+(825) entry. That covers every well-known quest deterministically,
+keeps the LLM snapshot surface clean (`name` field when known,
+`name_enc` raw when not), and sidesteps the whole
+`ValidateAsyncDecodeStr` hazard. The `EncStringCache` module stays
+checked in so if a working decode path is ever found, it plugs in
+without reworking callers.
 
 We stopped calling `Prime` from `QuestMgr::RequestQuestInfo`. The
 `EncStringCache` API (`Lookup` + `Prime`) stays checked in so a
