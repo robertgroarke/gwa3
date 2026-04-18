@@ -196,6 +196,54 @@ void AbandonQuest(uint32_t questId) {
     CtoS::QuestAbandon(questId);
 }
 
+void ToggleQuestLogWindow() {
+    // Path chosen: call GWCA's `SetWindowVisible(WindowID_QuestLog=0x4F, 1)`.
+    // This is a cleaner dedicated UI function (not a key-action), and is
+    // what GWCA/GWToolbox use for window toggling. We scan it from a
+    // distinctive prologue pattern (same pattern GWCA uses upstream).
+    //
+    // An earlier attempt via `UIMgr::ActionKeyPress(0x8E)` — which maps
+    // to the "press 'L'" key-action binding — crashed GW the first time
+    // it fired on BISCUIT (the action-context packet layout is wrong
+    // for UI actions vs. the skill-slot actions that codepath was built
+    // for). The SetWindowVisible path avoids that codepath entirely.
+    using SetWindowVisibleFn = void(__cdecl*)(uint32_t windowId, uint32_t isVisible,
+                                              void* wParam, void* lParam);
+    static SetWindowVisibleFn s_fn = nullptr;
+    static bool s_resolveAttempted = false;
+    if (!s_resolveAttempted) {
+        s_resolveAttempted = true;
+        // GWCA pattern uses literal 0x66 (window-array size) in the cmp.
+        // That number may shift across GW builds, so we also try the
+        // pattern with that byte wildcarded.
+        uintptr_t addr = Scanner::Find(
+            "\x8B\x75\x08\x83\xFE\x66\x7C\x19\x68", "xxxxxxxxx", -0x7);
+        if (addr <= 0x10000) {
+            addr = Scanner::Find(
+                "\x8B\x75\x08\x83\xFE\x66\x7C\x19\x68", "xxxxx?xxx", -0x7);
+        }
+        if (addr > 0x10000) {
+            s_fn = reinterpret_cast<SetWindowVisibleFn>(addr);
+        }
+        Log::Info("QuestMgr: SetWindowVisible_Func=0x%08X",
+                  static_cast<unsigned>(addr));
+    }
+    if (!s_fn) {
+        Log::Warn("QuestMgr: ToggleQuestLogWindow has no SetWindowVisible_Func");
+        return;
+    }
+    constexpr uint32_t kWindowIdQuestLog = 0x4F;
+    auto fn = s_fn;
+    const uint32_t windowId = kWindowIdQuestLog;
+    if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
+        GameThread::Enqueue([fn, windowId]() {
+            fn(windowId, 1, nullptr, nullptr);
+        });
+    } else {
+        fn(windowId, 1, nullptr, nullptr);
+    }
+}
+
 void RequestQuestInfo(uint32_t questId) {
     if (questId == 0) return;
 

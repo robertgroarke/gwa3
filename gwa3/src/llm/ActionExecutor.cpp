@@ -243,6 +243,15 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
+    static ActionResult HandleOpenQuestLog(const json&) {
+        // ControlAction 0x8E toggles the quest log window. Opening it is
+        // also how we prime GW to render TextLabelFrames with the
+        // "encoded | '\0' | decoded | '\0'" sibling layout we need for
+        // read-only quest-name decoding (see QUEST_LOG_RESEARCH.md).
+        GWA3::GameThread::Enqueue([]() { QuestMgr::ToggleQuestLogWindow(); });
+        return MakeOk();
+    }
+
     static ActionResult HandleAddHero(const json& p) {
         if (!p.contains("hero_id")) return MakeError("missing hero_id");
         uint32_t id = p["hero_id"].get<uint32_t>();
@@ -937,6 +946,7 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["set_active_quest"] = HandleSetActiveQuest;
         g_dispatch["abandon_quest"] = HandleAbandonQuest;
         g_dispatch["request_quest_info"] = HandleRequestQuestInfo;
+        g_dispatch["open_quest_log"] = HandleOpenQuestLog;
 
         // Party/Hero
         g_dispatch["add_hero"] = HandleAddHero;

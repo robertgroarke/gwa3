@@ -17,6 +17,18 @@ namespace GWA3::QuestMgr {
     void AbandonQuest(uint32_t questId);
     void RequestQuestInfo(uint32_t questId);
 
+    // Toggle the in-game Quest Log window. Under the hood this fires
+    // ControlAction 0x8E (ControlAction_OpenQuestLog per GWCA),
+    // matching AutoIt BotsHub's `PerformAction(0x8E)` path.
+    //
+    // Toggles: if the window is closed it opens; if open it closes.
+    // Side effect of interest: opening it populates GW's UI label
+    // frames with decoded quest-name strings, which we can then read
+    // via the sibling-decode memory pattern documented in
+    // QUEST_LOG_RESEARCH.md. Only works while in an outpost or
+    // explorable (ignored in pre-game / char-select).
+    void ToggleQuestLogWindow();
+
     // Cinematic
     void SkipCinematic();
 

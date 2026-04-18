@@ -212,6 +212,16 @@ REQUEST_QUEST_INFO = _tool(
     },
 )
 
+OPEN_QUEST_LOG = _tool(
+    "open_quest_log",
+    "Toggle the in-game Quest Log window (same effect as pressing 'L' "
+    "in-game). Primarily useful as a side-effect: opening the window "
+    "makes GW render decoded quest-name text to UI label frames, which "
+    "the snapshot reader can then pick up. Calling it again closes the "
+    "window. No parameters.",
+    {"properties": {}, "required": []},
+)
+
 # --- Party/Hero ---
 
 ADD_HERO = _tool(
@@ -974,6 +984,7 @@ ALL_TOOLS = [
     SET_ACTIVE_QUEST,
     ABANDON_QUEST,
     REQUEST_QUEST_INFO,
+    OPEN_QUEST_LOG,
     # Party/Hero
     ADD_HERO,
     KICK_HERO,
