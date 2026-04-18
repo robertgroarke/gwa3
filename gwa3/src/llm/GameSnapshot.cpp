@@ -28,6 +28,7 @@
 #include <nlohmann/json.hpp>
 #include <cmath>
 #include <string>
+#include <utility>
 
 using json = nlohmann::json;
 
@@ -227,42 +228,58 @@ namespace GWA3::LLM::GameSnapshot {
         return buf;
     }
 
+    // Convert a wchar_t* to strict UTF-8 via WideCharToMultiByte with
+    // WC_ERR_INVALID_CHARS. Returns empty on failure. This matters for
+    // GW's encoded-string wchars: those contain PUA codepoints and
+    // occasionally lone surrogate halves which, without the strict
+    // flag, get written as invalid UTF-8 bytes that then crash Python's
+    // .decode("utf-8") when the snapshot JSON reaches the bridge.
+    static std::string SafeWideToUtf8(const wchar_t* p) {
+        if (!p || !p[0]) return {};
+        char buf[1024] = {};
+        int n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+                                    p, -1, buf, sizeof(buf) - 1,
+                                    nullptr, nullptr);
+        return (n > 0) ? std::string(buf) : std::string{};
+    }
+
     // Emit the raw encoded wide-char string as `<key>_enc`, and the
     // decoded UTF-8 form as `<key>` when the passive decode-hook cache
     // already has it. Used for quest fields where the LLM must see the
     // raw encoded marker even if the decode is not yet available.
     //
-    // The Lookup here is strictly read-only — it never enqueues a
-    // decode. Decode volume is bounded by GW's own UI rendering and by
-    // explicit `request_quest_info` calls. See QUEST_LOG_RESEARCH.md.
+    // `_enc` is only emitted when the raw wchar sequence produces valid
+    // UTF-8. GW-encoded strings often don't, and shipping invalid bytes
+    // through the pipe breaks the Python bridge. Callers that want a
+    // guaranteed field use EmitBestText below instead.
     static void EmitEnc(json& dst, const wchar_t* p,
                         const char* rawKey, const char* decodedKey) {
         if (!p || !p[0]) return;
-        char raw[1024] = {};
-        WideCharToMultiByte(CP_UTF8, 0, p, -1, raw, sizeof(raw) - 1,
-                            nullptr, nullptr);
-        dst[rawKey] = raw;
+        std::string raw = SafeWideToUtf8(p);
+        if (!raw.empty()) dst[rawKey] = std::move(raw);
         std::string dec = EncStringCache::Lookup(p);
-        if (!dec.empty()) dst[decodedKey] = dec;
+        if (!dec.empty()) dst[decodedKey] = std::move(dec);
     }
 
     // Emit a wchar_t* as the best human-readable UTF-8 form into
     // dst[key]: prefer the passive decode-hook cache, fall back to
-    // direct WideCharToMultiByte. Use this for fields where the caller
-    // only wants one string (not the enc + decoded pair), e.g. dialog
-    // button labels or item/agent names.
+    // direct WideCharToMultiByte (strict UTF-8). Use this for fields
+    // where the caller only wants one string (not the enc + decoded
+    // pair), e.g. dialog button labels or item/agent names.
+    //
+    // If the string is encoded and the cache has not yet seen it, the
+    // raw conversion will fail the strict check and the field is
+    // omitted — better than emitting garbage bytes that crash the
+    // Python decoder downstream.
     static void EmitBestText(json& dst, const wchar_t* p, const char* key) {
         if (!p || !p[0]) return;
         std::string dec = EncStringCache::Lookup(p);
         if (!dec.empty()) {
-            dst[key] = dec;
+            dst[key] = std::move(dec);
             return;
         }
-        char raw[1024] = {};
-        if (WideCharToMultiByte(CP_UTF8, 0, p, -1, raw, sizeof(raw) - 1,
-                                nullptr, nullptr) > 0) {
-            dst[key] = raw;
-        }
+        std::string raw = SafeWideToUtf8(p);
+        if (!raw.empty()) dst[key] = std::move(raw);
     }
 
     // Build player ("me") object
