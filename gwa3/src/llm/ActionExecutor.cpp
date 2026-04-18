@@ -3,7 +3,6 @@
 #include <gwa3/llm/LlmBridge.h>
 #include <gwa3/llm/GameSnapshot.h>
 #include <gwa3/core/Log.h>
-#include <gwa3/core/Scanner.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/SkillMgr.h>
@@ -251,74 +250,6 @@ namespace GWA3::LLM::ActionExecutor {
         // the "encoded | '\0' | decoded | '\0'" sibling layout we need
         // for read-only quest-name decoding.
         GWA3::GameThread::Enqueue([]() { QuestMgr::ToggleQuestLogWindow(); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleActionKeyPressRaw(const json& p) {
-        // Diagnostic: invoke UIMgr::ActionKeyPress(action) — the SAME
-        // proven path that drives skill slots 0xA4..0xAB. Used to retest
-        // UI actions like 0x8E (OpenQuestLog) after our SetWindowVisible
-        // work revealed that first-time window opens need the keybind
-        // path, not the visibility flag.
-        if (!p.contains("action")) return MakeError("missing action");
-        uint32_t action = p["action"].get<uint32_t>();
-        GWA3::GameThread::Enqueue([action]() {
-            GWA3::Log::Info("ActionKeyPress probe: action=0x%X", action);
-            UIMgr::ActionKeyPress(action);
-        });
-        return MakeOk();
-    }
-
-    static ActionResult HandleSetWindowVisibleRaw(const json& p) {
-        // Diagnostic: call the scanned SetWindowVisible directly with any
-        // window id, so we can confirm the function identity and hunt the
-        // right Quest Log WindowID by probing known-visible windows.
-        if (!p.contains("window_id")) return MakeError("missing window_id");
-        uint32_t windowId = p["window_id"].get<uint32_t>();
-        uint32_t visible = p.value("visible", 1u);
-        GWA3::GameThread::Enqueue([windowId, visible]() {
-            using Fn = void(__cdecl*)(uint32_t, uint32_t, void*, void*);
-            static Fn s_fn = nullptr;
-            if (!s_fn) {
-                uintptr_t a = GWA3::Scanner::Find(
-                    "\x8B\x75\x08\x83\xFE\x66\x7C\x19\x68", "xxxxx?xxx", -0x7);
-                if (a > 0x10000) s_fn = reinterpret_cast<Fn>(a);
-            }
-            if (s_fn) {
-                GWA3::Log::Info("SetWindowVisible probe: id=0x%X visible=%u fn=0x%08X",
-                                windowId, visible,
-                                static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_fn)));
-                s_fn(windowId, visible, nullptr, nullptr);
-            } else {
-                GWA3::Log::Warn("SetWindowVisible probe: no function resolved");
-            }
-        });
-        return MakeOk();
-    }
-
-    static ActionResult HandlePerformUiActionSlot(const json& p) {
-        // Diagnostic: call UIMgr::PerformUiActionAtSlot with a chosen
-        // action id and ActionBase slot index. Used to identify which
-        // ActionBase slot holds the type-0 UI-action context on this
-        // GW build. Normal flow should use open_quest_log.
-        if (!p.contains("action")) return MakeError("missing action");
-        uint32_t action = p["action"].get<uint32_t>();
-        uint32_t slot = p.contains("slot") ? p["slot"].get<uint32_t>() : 4u;  // default +0x10
-        GWA3::GameThread::Enqueue([action, slot]() {
-            GWA3::UIMgr::PerformUiActionAtSlot(action, slot);
-        });
-        return MakeOk();
-    }
-
-    static ActionResult HandleScanUiLabels(const json&) {
-        // Walk the UI frame tree looking for label-frame contexts with
-        // an encoded|decoded sibling buffer that matches a quest-log
-        // string (GWCA_UIMessage_Research.md 3644-3656). Must be
-        // invoked AFTER open_quest_log has had a few frames to render,
-        // otherwise labels are empty and nothing matches.
-        GWA3::GameThread::Enqueue([]() {
-            (void)QuestMgr::ScanLabelFramesForQuestStrings();
-        });
         return MakeOk();
     }
 
@@ -1017,10 +948,6 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["abandon_quest"] = HandleAbandonQuest;
         g_dispatch["request_quest_info"] = HandleRequestQuestInfo;
         g_dispatch["open_quest_log"] = HandleOpenQuestLog;
-        g_dispatch["scan_ui_labels"] = HandleScanUiLabels;
-        g_dispatch["perform_ui_action_slot"] = HandlePerformUiActionSlot;
-        g_dispatch["set_window_visible_raw"] = HandleSetWindowVisibleRaw;
-        g_dispatch["action_key_press_raw"] = HandleActionKeyPressRaw;
 
         // Party/Hero
         g_dispatch["add_hero"] = HandleAddHero;

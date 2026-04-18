@@ -62,12 +62,6 @@ namespace GWA3::UIMgr {
     // Frame context (parent frame for SendFrameUIMsg)
     uintptr_t GetFrameContext(uintptr_t frame);
 
-    // Iterate all live frames. Callback fires once per frame pointer that
-    // passes the basic > 0x10000 sanity check, inside an SEH guard. Used
-    // by QuestMgr's label-frame walker to find TextLabelFrame contexts
-    // that carry decoded quest strings.
-    void ForEachFrame(void (*cb)(uintptr_t frame, void* userdata), void* userdata);
-
     // Send UI message (must be on game thread)
     void SendUIMessage(uint32_t msgId, void* wParam, void* lParam);
 
@@ -121,12 +115,6 @@ namespace GWA3::UIMgr {
     // reference implementation.
     bool PerformUiAction(uint32_t action);
 
-    // Diagnostic variant: force a specific ActionBase slot instead of
-    // auto-picking the first pointer-shaped one. slotIndex 0..15 maps
-    // to offset slotIndex*4 inside the ActionBase struct. Used to
-    // identify which slot holds the type-0 UI-action context in a
-    // given GW build.
-    bool PerformUiActionAtSlot(uint32_t action, uint32_t slotIndex);
     // Mouse action testing
     bool TestMouseClickAction(uintptr_t frame, uint32_t currentState, uint32_t wparam, uint32_t lparam);
     bool TestMouseAction(uintptr_t frame, uint32_t currentState, uint32_t wparam, uint32_t lparam);

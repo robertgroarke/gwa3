@@ -653,46 +653,6 @@ static uintptr_t GetUiActionContext() {
     return GetUiActionContextRaw(&t0, &t1);
 }
 
-bool PerformUiActionAtSlot(uint32_t action, uint32_t slotIndex) {
-    if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
-        GameThread::Enqueue([action, slotIndex]() {
-            PerformUiActionAtSlot(action, slotIndex);
-        });
-        return true;
-    }
-    if (!s_doActionFn) {
-        Log::Warn("UIMgr: PerformUiActionAtSlot no DoActionFn action=0x%X", action);
-        return false;
-    }
-    if (slotIndex >= 16) {
-        Log::Warn("UIMgr: PerformUiActionAtSlot slot out of range %u", slotIndex);
-        return false;
-    }
-    const uintptr_t base = GetBotsHubActionBase();
-    ActionBaseDump dump{};
-    if (base < 0x10000 || !ReadSlotsAt(base, &dump)) {
-        if (!ReadActionBaseDump(&dump)) {
-            Log::Warn("UIMgr: PerformUiActionAtSlot ReadSlotsAt failed");
-            return false;
-        }
-    }
-    const uintptr_t p = dump.slots[slotIndex];
-    if (p < 0x10000) {
-        Log::Warn("UIMgr: PerformUiActionAtSlot slot+0x%X=0x%08X not a pointer",
-                  slotIndex * 4, static_cast<unsigned>(p));
-        return false;
-    }
-    const uintptr_t ctx = p + 0xA8;
-    constexpr uint32_t kControlTypeActivate = 0x20;
-    uint32_t payload[2] = { action, kControlTypeActivate };
-    s_doActionFn(reinterpret_cast<void*>(ctx), nullptr,
-                 payload[1], &payload[0], nullptr);
-    Log::Info("UIMgr: PerformUiActionAtSlot slot=+0x%X ptr=0x%08X ctx=0x%08X action=0x%X FIRED",
-              slotIndex * 4, static_cast<unsigned>(p),
-              static_cast<unsigned>(ctx), action);
-    return true;
-}
-
 bool PerformUiAction(uint32_t action) {
     if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
         GameThread::Enqueue([action]() { PerformUiAction(action); });
@@ -771,23 +731,6 @@ bool PerformUiAction(uint32_t action) {
     s_doActionFn(reinterpret_cast<void*>(fallbackCtx), nullptr,
                  fallbackPayload[1], &fallbackPayload[0], nullptr);
     return true;
-}
-
-void ForEachFrame(void (*cb)(uintptr_t, void*), void* userdata) {
-    if (!cb) return;
-    auto* arr = GetFrameArray();
-    if (!arr) return;
-    __try {
-        if (!arr->buffer || arr->size == 0 || arr->size > 5000) return;
-        const uint32_t n = arr->size;
-        for (uint32_t i = 0; i < n; ++i) {
-            const uintptr_t frame = arr->buffer[i];
-            if (frame < 0x10000) continue;
-            cb(frame, userdata);
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return;
-    }
 }
 
 void SendUIMessage(uint32_t msgId, void* wParam, void* lParam) {
