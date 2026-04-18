@@ -1,5 +1,6 @@
 #include <Windows.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/core/CrashDiag.h>
 #include <gwa3/core/Scanner.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
@@ -252,25 +253,43 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     GWA3::Log::Initialize();
     GWA3::Log::Info("gwa3.dll loaded at 0x%08X", static_cast<uintptr_t>(reinterpret_cast<uintptr_t>(hModule)));
 
+    // Install the top-level unhandled-exception filter and VEH *first* so
+    // that any crash during subsequent hook installation or later runtime
+    // writes a real exception-stream minidump (EIP, stack, registers, and
+    // the faulting module offset) to the log. Without this, the watchdog's
+    // post-dialog CaptureProcessState captures only the process state
+    // while GW's crash dialog is already up — no exception data.
+    GWA3::CrashDiag::Initialize();
+
     bool smokeTest = CheckFlag("GWA3_SMOKE_TEST", "gwa3_smoke_test.flag");
     bool botTest = CheckFlag("GWA3_TEST_BOT", "gwa3_test_bot.flag");
     bool cmdTest = CheckFlag("GWA3_TEST_COMMANDS", "gwa3_test_commands.flag");
     bool integrationTest = CheckFlag("GWA3_TEST_INTEGRATION", "gwa3_test_integration.flag");
     bool npcDialogTest = CheckFlag("GWA3_TEST_NPC_DIALOG", "gwa3_test_npc_dialog.flag");
     bool merchantQuoteTest = CheckFlag("GWA3_TEST_MERCHANT_QUOTE", "gwa3_test_merchant_quote.flag");
+    bool identifySalvageTest = CheckFlag("GWA3_TEST_IDENTSALVAGE", "gwa3_test_identsalvage.flag");
     bool merchantShellTest = CheckFlag("GWA3_TEST_MERCHANT_SHELL", "gwa3_test_merchant_shell.flag");
     bool tradeHelperTest = CheckFlag("GWA3_TEST_TRADE_HELPER", "gwa3_test_trade_helper.flag");
     bool advancedTest = CheckFlag("GWA3_TEST_ADVANCED", "gwa3_test_advanced.flag");
     bool workflowTest = CheckFlag("GWA3_TEST_WORKFLOW", "gwa3_test_workflow.flag");
     bool froggyTest = CheckFlag("GWA3_TEST_FROGGY", "gwa3_test_froggy.flag");
+    bool rragarsTest = CheckFlag("GWA3_TEST_RRAGARS", "gwa3_test_rragars.flag");
+    bool arachnisTest = CheckFlag("GWA3_TEST_ARACHNIS", "gwa3_test_arachnis.flag");
+    bool ravensTest = CheckFlag("GWA3_TEST_RAVENS", "gwa3_test_ravens.flag");
     bool froggyFlaggingTest = CheckFlag("GWA3_TEST_FROGGY_FLAGGING", "gwa3_test_froggy_flagging.flag");
     bool froggySparkflyTest = CheckFlag("GWA3_TEST_FROGGY_SPARKFLY", "gwa3_test_froggy_sparkfly.flag");
     bool consumableCraftingTest = CheckFlag("GWA3_TEST_CONSUMABLES", "gwa3_test_consumables.flag");
     bool llmMode = CheckFlag("GWA3_LLM_MODE", "gwa3_llm_mode.flag");
     bool llmAdvisory = CheckFlag("GWA3_LLM_ADVISORY", "gwa3_llm_advisory.flag");
-    bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || merchantShellTest || tradeHelperTest || advancedTest || workflowTest || froggyTest || froggyFlaggingTest || froggySparkflyTest || consumableCraftingTest;
-    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d merchantShell=%d tradeHelper=%d consumables=%d advanced=%d workflow=%d froggy=%d froggyFlagging=%d froggySparkfly=%d llm=%d advisory=%d",
-                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest, merchantShellTest, tradeHelperTest, consumableCraftingTest, advancedTest, workflowTest, froggyTest, froggyFlaggingTest, froggySparkflyTest, llmMode, llmAdvisory);
+    bool anyTest = smokeTest || botTest || cmdTest || integrationTest || npcDialogTest || merchantQuoteTest || identifySalvageTest ||
+                   merchantShellTest || tradeHelperTest || advancedTest || workflowTest || froggyTest ||
+                   rragarsTest || arachnisTest || ravensTest || froggyFlaggingTest || froggySparkflyTest ||
+                   consumableCraftingTest;
+    GWA3::Log::Info("Test flags: smoke=%d bot=%d cmd=%d integ=%d npc=%d merchant=%d identsalvage=%d merchantShell=%d tradeHelper=%d consumables=%d advanced=%d workflow=%d froggy=%d rragars=%d arachnis=%d ravens=%d froggyFlagging=%d froggySparkfly=%d llm=%d advisory=%d",
+                    smokeTest, botTest, cmdTest, integrationTest, npcDialogTest, merchantQuoteTest,
+                    identifySalvageTest, merchantShellTest, tradeHelperTest, consumableCraftingTest, advancedTest, workflowTest,
+                    froggyTest, rragarsTest, arachnisTest, ravensTest, froggyFlaggingTest,
+                    froggySparkflyTest, llmMode, llmAdvisory);
 
     HMODULE gwModule = GetModuleHandleA(nullptr);
     if (!GWA3::Scanner::Initialize(gwModule)) {
@@ -333,7 +352,9 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     // first for char select, then GameThread after map load.
     bool gameThreadOk = false;
 
-    if (integrationTest || npcDialogTest || merchantQuoteTest || merchantShellTest || tradeHelperTest || consumableCraftingTest || advancedTest || workflowTest || froggyTest || froggyFlaggingTest || froggySparkflyTest || !anyTest) {
+    if (integrationTest || npcDialogTest || merchantQuoteTest || identifySalvageTest || merchantShellTest || tradeHelperTest ||
+        consumableCraftingTest || advancedTest || workflowTest || froggyTest || rragarsTest ||
+        arachnisTest || ravensTest || froggyFlaggingTest || froggySparkflyTest || !anyTest) {
         // Always init RenderHook for bootstrap char select UI clicks
         if (!GWA3::RenderHook::Initialize()) {
             GWA3::Log::Error("RenderHook failed - aborting");
@@ -415,10 +436,53 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         return static_cast<DWORD>(failures);
     }
 
+    if (identifySalvageTest) {
+        GWA3::Log::Info("=== IDENTIFY/SALVAGE ISOLATION TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunIdentifySalvageIsolationTest();
+        GWA3::Log::Info("Identify/salvage isolation test complete: %d failures", failures);
+        GWA3::Log::Shutdown();
+        Sleep(100);
+        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
+        return static_cast<DWORD>(failures);
+    }
+
     if (consumableCraftingTest) {
         GWA3::Log::Info("=== CONSUMABLE CRAFTING TEST MODE ===");
         int failures = GWA3::SmokeTest::RunConsumableCraftingTest();
         GWA3::Log::Info("Consumable crafting test complete: %d failures", failures);
+        GWA3::Log::Shutdown();
+        Sleep(100);
+        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
+        return static_cast<DWORD>(failures);
+    }
+
+    if (rragarsTest) {
+        GWA3::Log::Info("=== RRAGARS MENAGERIE FEATURE TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunRragarsMenagerieFeatureTest();
+        GWA3::Log::Info("Rragars Menagerie feature test complete: %d failures", failures);
+        GWA3::Log::Info("Rragars Menagerie test finished - terminating GW process");
+        GWA3::Log::Shutdown();
+        Sleep(100);
+        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
+        return static_cast<DWORD>(failures);
+    }
+
+    if (arachnisTest) {
+        GWA3::Log::Info("=== ARACHNIS HAUNT FEATURE TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunArachnisHauntFeatureTest();
+        GWA3::Log::Info("Arachnis Haunt feature test complete: %d failures", failures);
+        GWA3::Log::Info("Arachnis Haunt test finished - terminating GW process");
+        GWA3::Log::Shutdown();
+        Sleep(100);
+        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
+        return static_cast<DWORD>(failures);
+    }
+
+    if (ravensTest) {
+        GWA3::Log::Info("=== RAVEN'S POINT FEATURE TEST MODE ===");
+        int failures = GWA3::SmokeTest::RunRavensPointFeatureTest();
+        GWA3::Log::Info("Raven's Point feature test complete: %d failures", failures);
+        GWA3::Log::Info("Raven's Point test finished - terminating GW process");
         GWA3::Log::Shutdown();
         Sleep(100);
         TerminateProcess(GetCurrentProcess(), static_cast<UINT>(failures));
@@ -573,6 +637,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
         GWA3::TargetLogHook::Shutdown();
         GWA3::RenderHook::Shutdown();
         GWA3::GameThread::Shutdown();
+        GWA3::CrashDiag::Shutdown();
         GWA3::Log::Shutdown();
     }
     return TRUE;
