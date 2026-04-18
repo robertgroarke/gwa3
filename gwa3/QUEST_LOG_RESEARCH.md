@@ -249,16 +249,62 @@ documented GWCA path. Possible but speculative causes:
   render/UI thread, and the worker thread we call from doesn't
   satisfy some thread-affinity check that silently corrupts state.
 
+### GWCA disassembly research — sibling-decode insight and memory probe
+
+`research/GWCA_Disassembly_Research/GWCA_UIMessage_Research.md`
+lines 3519, 3644–3656 describe a very promising layout:
+
+> label frames store encoded and decoded strings back-to-back in
+> context memory rather than via a fresh decode call at getter time
+>
+>     encoded = ctx->string_base;
+>     decoded = encoded + wcslen(encoded) + 1;
+
+That would be exactly the "read-only decode" primitive we want —
+no function call, no thread context, no crash risk.
+
+We probed this against the `Quest` struct's five encoded-string
+pointers on BISCUIT by reading wchars past the null terminator.
+Result (log excerpt):
+
+```
+name=19F04430 location=1BBCB9F8 npc=1BBCB918 description=1D0D6608
+[name]        enc: 8101 0312 969C F77E 43CB
+[name]        after-null hex: FFFF FFFF CB6B DF32 ...
+[description] after-null hex: A82C 4DDB 0101 0164  (looks like next alloc's enc header)
+```
+
+Conclusion: each quest string lives in its own small heap
+allocation. The bytes after the encoded null terminator are heap
+metadata or the start of an unrelated neighbouring allocation —
+*not* a decoded sibling. The back-to-back layout is specific to
+`TextLabelFrame` / `MultiLineTextLabelFrame` **UI frame
+contexts**, which only exist after the game has drawn that label
+to screen.
+
+### Practical implications
+
+- The sibling-decode trick works only for strings the game has
+  already rendered through a label frame. The Quest struct's
+  encoded pointers never cross that path, so there's no sibling
+  to read.
+- A future attempt along this axis would need to iterate the
+  game's UI frame tree, find label frames whose encoded string
+  matches a quest pointer, and read the decoded sibling from
+  that frame's context. That requires the player to have opened
+  the Quest Log or related UI at least once during the session
+  so the labels get populated.
+
 ### Pragmatic path forward
 
-Drop runtime decoding entirely. Maintain a `quest_id -> name` table
-in `bridge/farming_knowledge.py` alongside the existing Tekks's War
-(825) entry. That covers every well-known quest deterministically,
-keeps the LLM snapshot surface clean (`name` field when known,
-`name_enc` raw when not), and sidesteps the whole
-`ValidateAsyncDecodeStr` hazard. The `EncStringCache` module stays
-checked in so if a working decode path is ever found, it plugs in
-without reworking callers.
+Drop runtime decoding entirely. Maintain a `quest_id -> name`
+table in `bridge/farming_knowledge.py` alongside the existing
+Tekks's War (825) entry. That covers every well-known quest
+deterministically, keeps the LLM snapshot surface clean (`name`
+field when known, `name_enc` raw when not), and sidesteps the
+whole `ValidateAsyncDecodeStr` hazard. The `EncStringCache`
+module stays checked in so if a working decode path is ever
+found, it plugs in without reworking callers.
 
 We stopped calling `Prime` from `QuestMgr::RequestQuestInfo`. The
 `EncStringCache` API (`Lookup` + `Prime`) stays checked in so a
