@@ -210,6 +210,12 @@ async def test_llm_scripted_gemma_switches_active_quest(tc: BridgeTestCase):
             "Use set_active_quest exactly once and then stop acting."
         ),
     )
+    # Seed the loop with the tier-2 snapshot we already have so the
+    # first chat_completion's prompt contains quest_log entries.
+    # Without this, the first cycle often grabs a tier-1 snapshot from
+    # the pipe (which doesn't carry quest state) and the prompt-
+    # visibility assertion below fails.
+    loop.observations.add_snapshot(snap)
 
     run_task = asyncio.create_task(loop.run())
     try:
