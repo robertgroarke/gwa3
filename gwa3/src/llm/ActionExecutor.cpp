@@ -3,6 +3,7 @@
 #include <gwa3/llm/LlmBridge.h>
 #include <gwa3/llm/GameSnapshot.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/core/Scanner.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/SkillMgr.h>
@@ -250,6 +251,33 @@ namespace GWA3::LLM::ActionExecutor {
         // the "encoded | '\0' | decoded | '\0'" sibling layout we need
         // for read-only quest-name decoding.
         GWA3::GameThread::Enqueue([]() { QuestMgr::ToggleQuestLogWindow(); });
+        return MakeOk();
+    }
+
+    static ActionResult HandleSetWindowVisibleRaw(const json& p) {
+        // Diagnostic: call the scanned SetWindowVisible directly with any
+        // window id, so we can confirm the function identity and hunt the
+        // right Quest Log WindowID by probing known-visible windows.
+        if (!p.contains("window_id")) return MakeError("missing window_id");
+        uint32_t windowId = p["window_id"].get<uint32_t>();
+        uint32_t visible = p.value("visible", 1u);
+        GWA3::GameThread::Enqueue([windowId, visible]() {
+            using Fn = void(__cdecl*)(uint32_t, uint32_t, void*, void*);
+            static Fn s_fn = nullptr;
+            if (!s_fn) {
+                uintptr_t a = GWA3::Scanner::Find(
+                    "\x8B\x75\x08\x83\xFE\x66\x7C\x19\x68", "xxxxx?xxx", -0x7);
+                if (a > 0x10000) s_fn = reinterpret_cast<Fn>(a);
+            }
+            if (s_fn) {
+                GWA3::Log::Info("SetWindowVisible probe: id=0x%X visible=%u fn=0x%08X",
+                                windowId, visible,
+                                static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_fn)));
+                s_fn(windowId, visible, nullptr, nullptr);
+            } else {
+                GWA3::Log::Warn("SetWindowVisible probe: no function resolved");
+            }
+        });
         return MakeOk();
     }
 
@@ -976,6 +1004,7 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["open_quest_log"] = HandleOpenQuestLog;
         g_dispatch["scan_ui_labels"] = HandleScanUiLabels;
         g_dispatch["perform_ui_action_slot"] = HandlePerformUiActionSlot;
+        g_dispatch["set_window_visible_raw"] = HandleSetWindowVisibleRaw;
 
         // Party/Hero
         g_dispatch["add_hero"] = HandleAddHero;

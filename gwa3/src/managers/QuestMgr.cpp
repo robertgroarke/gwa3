@@ -425,31 +425,45 @@ uint32_t ScanLabelFramesForQuestStrings() {
 }
 
 void ToggleQuestLogWindow() {
-    // Programmatic open of the Quest Log window is currently unresolved
-    // in this GW Reforged build. All four paths we tried crash GW:
+    // Path: GWCA's SetWindowVisible(windowId, is_visible) via byte-pattern
+    // scan. Our earlier attempt used WindowID_QuestLog = 0x4F (legacy GWCA
+    // header value) and the function returned cleanly but the window never
+    // rendered. Py4GW (maintained against current Reforged) uses
+    //   WindowID_QuestLog = 0x52
+    // — the WindowID enum was renumbered. See:
+    //   GWA Censured/Py4GW-main/Py4GWCoreLib/enums_src/UI_enums.py:457
     //
-    //   1. UIMgr::ActionKeyPress(0x8E)  — 3-dword ControlActionPacket
-    //      with 0x4000 filler; crashes on first drain.
-    //   2. SetWindowVisible(0x4F, 1) via a wildcarded GWCA byte pattern
-    //      — returns cleanly but Quest Log never renders.
-    //   3. UIMgr::PerformUiAction with BotsHub's action struct shape
-    //      and ActionBase+0xC context — ActionBase+0xC is 0x40 (not a
-    //      pointer) in this build; fallback slots all crash DoAction.
-    //   4. Same shape with gwa3's proven FrameArray[1]+0xA0 context
-    //      (from SendControlAction) — also crashes.
-    //
-    // Diagnostic evidence suggests the DoAction function itself takes
-    // a different arg shape for UI actions (0x8E) than skill actions
-    // (0xA4..0xAB), but we haven't identified what that shape is. For
-    // now: this function is a no-op and the LLM must ask the user to
-    // press 'L' manually before firing scan_ui_labels. The walker
-    // infrastructure works as soon as labels are populated — that was
-    // proven visually (the in-game Quest Log already shows decoded
-    // names like "Heart or Mind: Garden in Danger").
-    //
-    // See QUEST_LOG_RESEARCH.md for the full triangulation.
-    Log::Warn("QuestMgr: ToggleQuestLogWindow is currently a no-op on this "
-              "GW build — press 'L' manually to open the Quest Log.");
+    // Scanner pattern: GWCA's `\x8B\x75\x08\x83\xFE\x66\x7C\x19\x68` at
+    // offset -7. The literal 0x66 (WindowID_Count from GWCA, now ~0x68 in
+    // this build) is wildcarded so the pattern survives the renumber.
+    using SetWindowVisibleFn = void(__cdecl*)(uint32_t windowId, uint32_t isVisible,
+                                              void* wParam, void* lParam);
+    static SetWindowVisibleFn s_fn = nullptr;
+    static bool s_resolveAttempted = false;
+    if (!s_resolveAttempted) {
+        s_resolveAttempted = true;
+        uintptr_t addr = Scanner::Find(
+            "\x8B\x75\x08\x83\xFE\x66\x7C\x19\x68", "xxxxx?xxx", -0x7);
+        if (addr > 0x10000) {
+            s_fn = reinterpret_cast<SetWindowVisibleFn>(addr);
+        }
+        Log::Info("QuestMgr: SetWindowVisible_Func=0x%08X (Py4GW WindowID=0x52)",
+                  static_cast<unsigned>(addr));
+    }
+    if (!s_fn) {
+        Log::Warn("QuestMgr: ToggleQuestLogWindow has no SetWindowVisible_Func");
+        return;
+    }
+    constexpr uint32_t kWindowIdQuestLog_Reforged = 0x52;
+    auto fn = s_fn;
+    const uint32_t windowId = kWindowIdQuestLog_Reforged;
+    if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
+        GameThread::Enqueue([fn, windowId]() {
+            fn(windowId, 1, nullptr, nullptr);
+        });
+    } else {
+        fn(windowId, 1, nullptr, nullptr);
+    }
 }
 
 void RequestQuestInfo(uint32_t questId) {
