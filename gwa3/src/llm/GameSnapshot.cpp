@@ -227,6 +227,44 @@ namespace GWA3::LLM::GameSnapshot {
         return buf;
     }
 
+    // Emit the raw encoded wide-char string as `<key>_enc`, and the
+    // decoded UTF-8 form as `<key>` when the passive decode-hook cache
+    // already has it. Used for quest fields where the LLM must see the
+    // raw encoded marker even if the decode is not yet available.
+    //
+    // The Lookup here is strictly read-only — it never enqueues a
+    // decode. Decode volume is bounded by GW's own UI rendering and by
+    // explicit `request_quest_info` calls. See QUEST_LOG_RESEARCH.md.
+    static void EmitEnc(json& dst, const wchar_t* p,
+                        const char* rawKey, const char* decodedKey) {
+        if (!p || !p[0]) return;
+        char raw[1024] = {};
+        WideCharToMultiByte(CP_UTF8, 0, p, -1, raw, sizeof(raw) - 1,
+                            nullptr, nullptr);
+        dst[rawKey] = raw;
+        std::string dec = EncStringCache::Lookup(p);
+        if (!dec.empty()) dst[decodedKey] = dec;
+    }
+
+    // Emit a wchar_t* as the best human-readable UTF-8 form into
+    // dst[key]: prefer the passive decode-hook cache, fall back to
+    // direct WideCharToMultiByte. Use this for fields where the caller
+    // only wants one string (not the enc + decoded pair), e.g. dialog
+    // button labels or item/agent names.
+    static void EmitBestText(json& dst, const wchar_t* p, const char* key) {
+        if (!p || !p[0]) return;
+        std::string dec = EncStringCache::Lookup(p);
+        if (!dec.empty()) {
+            dst[key] = dec;
+            return;
+        }
+        char raw[1024] = {};
+        if (WideCharToMultiByte(CP_UTF8, 0, p, -1, raw, sizeof(raw) - 1,
+                                nullptr, nullptr) > 0) {
+            dst[key] = raw;
+        }
+    }
+
     // Build player ("me") object
     static json BuildPlayerJson() {
         json me;
@@ -465,6 +503,14 @@ namespace GWA3::LLM::GameSnapshot {
                 a["agent_type"] = "item";
                 a["item_id"] = item.item_id;
                 a["owner"] = item.owner;
+                // Resolve to the backing Item* so we can surface the
+                // decoded item name — the passive decode hook caches
+                // whatever tooltip GW renders when hovering.
+                Item* inv = ItemMgr::GetItemById(item.item_id);
+                if (inv) {
+                    a["model_id"] = inv->model_id;
+                    EmitBestText(a, inv->name_enc, "name");
+                }
             } else {
                 a["agent_type"] = "unknown";
             }
@@ -499,6 +545,10 @@ namespace GWA3::LLM::GameSnapshot {
                 it["slot"] = item->slot;
                 it["equipped"] = item->equipped;
                 it["interaction"] = item->interaction;
+                // Decoded item name (when GW has rendered the tooltip at
+                // least once, the passive hook has cached it). Falls back
+                // to the raw encoded bytes via EmitBestText.
+                EmitBestText(it, item->name_enc, "name");
                 // Rarity from interaction flags
                 uint32_t inter = item->interaction;
                 const char* rarity = "white";
@@ -597,10 +647,10 @@ namespace GWA3::LLM::GameSnapshot {
             json b;
             b["dialog_id"] = btn->dialog_id;
             b["icon"] = btn->button_icon;
-            // Convert button label to UTF-8
-            char labelUtf8[256] = {};
-            WideCharToMultiByte(CP_UTF8, 0, btn->label, -1, labelUtf8, sizeof(labelUtf8) - 1, nullptr, nullptr);
-            b["label"] = labelUtf8;
+            // Prefer the decoded form from the passive decode-hook cache;
+            // fall back to raw UTF-8 of the wchar_t (which may be gibberish
+            // for encoded labels that haven't been rendered yet).
+            EmitBestText(b, btn->label, "label");
             if (btn->skill_id != 0xFFFFFFFF) {
                 b["skill_id"] = btn->skill_id;
             }
@@ -665,7 +715,10 @@ namespace GWA3::LLM::GameSnapshot {
         // thread despite item_count being correct.
         // First gather item data into a plain struct array (SEH-safe),
         // then build JSON from the results.
-        struct MerchantItemData { uint32_t item_id, model_id, type, value, quantity, interaction; };
+        struct MerchantItemData {
+            uint32_t item_id, model_id, type, value, quantity, interaction;
+            wchar_t* name_enc;
+        };
         MerchantItemData itemData[256] = {};
         uint32_t readCount = 0;
         for (uint32_t pos = 1; pos <= itemCount && pos <= 256; ++pos) {
@@ -678,6 +731,7 @@ namespace GWA3::LLM::GameSnapshot {
             d.value = item->value;
             d.quantity = item->quantity;
             d.interaction = item->interaction;
+            d.name_enc = item->name_enc;
         }
 
         json items = json::array();
@@ -689,6 +743,7 @@ namespace GWA3::LLM::GameSnapshot {
             it["value"] = itemData[i].value;
             it["quantity"] = itemData[i].quantity;
             it["interaction"] = itemData[i].interaction;
+            EmitBestText(it, itemData[i].name_enc, "name");
             items.push_back(it);
         }
         m["items"] = items;
@@ -1002,25 +1057,6 @@ namespace GWA3::LLM::GameSnapshot {
             titles[entry.name] = t;
         }
         return titles;
-    }
-
-    // Emit the raw encoded wide-char string as `<key>_enc`, and the
-    // decoded UTF-8 form as `<key>` when the cache already has it.
-    //
-    // The Lookup here is strictly read-only — it never enqueues a
-    // decode. Priming happens only in response to an explicit
-    // `request_quest_info` LLM action, which bounds decode volume to
-    // the LLM's pace (well below the rate that destabilises GW's own
-    // string decoder). See QUEST_LOG_RESEARCH.md.
-    static void EmitEnc(json& dst, const wchar_t* p,
-                        const char* rawKey, const char* decodedKey) {
-        if (!p || !p[0]) return;
-        char raw[1024] = {};
-        WideCharToMultiByte(CP_UTF8, 0, p, -1, raw, sizeof(raw) - 1,
-                            nullptr, nullptr);
-        dst[rawKey] = raw;
-        std::string dec = EncStringCache::Lookup(p);
-        if (!dec.empty()) dst[decodedKey] = dec;
     }
 
     // Build quest state: active quest + quest log summary
