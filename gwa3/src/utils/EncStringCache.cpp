@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include <MinHook.h>
 #include <Windows.h>
 
 namespace GWA3::EncStringCache {
@@ -135,6 +136,103 @@ static void WorkerLoop() {
     }
 }
 
+// --- Passive decode hook ---
+//
+// GW's UI pipeline calls ValidateAsyncDecodeStr(enc, cb, param) every
+// time it needs to render an encoded string. If we MinHook-install a
+// detour on that entry, we can observe every decode the game does
+// "for free": the encoded input is in front of us, and the callback
+// delivers the decoded output. Forwarding to the original keeps the
+// game's own flow intact.
+//
+// Note this is safe where CALLING the function from our code wasn't:
+// passive observation runs in whatever thread GW calls from, with
+// whatever state GW has set up. We don't trigger new decodes, we
+// just capture the ones happening anyway.
+
+struct HookedCallbackCtx {
+    DecodeCallback  originalCb;
+    void*           originalParam;
+    std::wstring    encCopy;
+};
+
+static uintptr_t s_hookTarget = 0;
+static ValidateAsyncDecodeStrFn s_hookTrampoline = nullptr;
+
+static void __cdecl WrappedDecodeCallback(void* param, wchar_t* decoded) {
+    auto* c = static_cast<HookedCallbackCtx*>(param);
+    if (!c) return;
+    if (decoded && decoded[0] && !c->encCopy.empty()) {
+        std::string utf8 = Utf8FromWide(decoded);
+        if (!utf8.empty()) {
+            InsertDecoded(c->encCopy.c_str(), std::move(utf8));
+        }
+    }
+    // Forward to the game's original callback so the UI flow continues.
+    if (c->originalCb) {
+        c->originalCb(c->originalParam, decoded);
+    }
+    delete c;
+}
+
+static void __cdecl HookedValidateAsyncDecodeStr(
+        const wchar_t* enc, DecodeCallback cb, void* param) {
+    if (!s_hookTrampoline) return;
+    // Wrap the callback to capture decoded output, then defer to the
+    // game's original function. On any failure fall through so GW's
+    // own UI work keeps happening.
+    if (enc && enc[0] && cb) {
+        auto* hc = new HookedCallbackCtx{};
+        hc->originalCb = cb;
+        hc->originalParam = param;
+        hc->encCopy = enc;
+        s_hookTrampoline(enc, WrappedDecodeCallback, hc);
+        return;
+    }
+    s_hookTrampoline(enc, cb, param);
+}
+
+static bool InstallDecodeHook() {
+    if (s_hookTarget) return true;
+    MH_STATUS st = MH_Initialize();
+    if (st != MH_OK && st != MH_ERROR_ALREADY_INITIALIZED) {
+        Log::Warn("EncStringCache: MH_Initialize failed: %s", MH_StatusToString(st));
+        return false;
+    }
+    // Prefer GWCA's byte-pattern scan; fall back to our assertion scan.
+    uintptr_t target = Offsets::ValidateAsyncDecodeStrGwca;
+    if (target < 0x10000) target = Offsets::ValidateAsyncDecodeStr;
+    if (target < 0x10000) {
+        Log::Warn("EncStringCache: no ValidateAsyncDecodeStr to hook");
+        return false;
+    }
+    st = MH_CreateHook(reinterpret_cast<void*>(target),
+                       reinterpret_cast<void*>(HookedValidateAsyncDecodeStr),
+                       reinterpret_cast<void**>(&s_hookTrampoline));
+    if (st != MH_OK && st != MH_ERROR_ALREADY_CREATED) {
+        Log::Warn("EncStringCache: MH_CreateHook failed: %s", MH_StatusToString(st));
+        return false;
+    }
+    st = MH_EnableHook(reinterpret_cast<void*>(target));
+    if (st != MH_OK && st != MH_ERROR_ENABLED) {
+        Log::Warn("EncStringCache: MH_EnableHook failed: %s", MH_StatusToString(st));
+        return false;
+    }
+    s_hookTarget = target;
+    Log::Info("EncStringCache: ValidateAsyncDecodeStr hooked at 0x%08X trampoline=0x%08X",
+              static_cast<unsigned>(target),
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_hookTrampoline)));
+    return true;
+}
+
+static void UninstallDecodeHook() {
+    if (!s_hookTarget) return;
+    MH_DisableHook(reinterpret_cast<void*>(s_hookTarget));
+    MH_RemoveHook(reinterpret_cast<void*>(s_hookTarget));
+    s_hookTarget = 0;
+    s_hookTrampoline = nullptr;
+}
+
 bool Initialize() {
     if (s_running.load()) return true;
 
@@ -185,11 +283,16 @@ bool Initialize() {
     Log::Info("EncStringCache: worker started (decode=0x%08X gap=%ums)",
               static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_decodeFn)),
               kInterDecodeSleepMs);
+
+    // Install the passive ValidateAsyncDecodeStr hook so every decode
+    // GW performs for its own UI also populates our cache.
+    InstallDecodeHook();
     return true;
 }
 
 void Shutdown() {
     if (!s_running.load()) return;
+    UninstallDecodeHook();
     s_stopping.store(true);
     s_cv.notify_all();
     if (s_worker.joinable()) {

@@ -224,9 +224,14 @@ void AbandonQuest(uint32_t questId) {
 
 namespace {
 
-constexpr uintptr_t kCandidateOffsets[] = {
-    0x00, 0x04, 0x08, 0x0C, 0x10, 0x14, 0x18, 0x1C, 0x20
-};
+// Extended sweep — every 4-byte aligned slot in the first 0x80 bytes
+// of a frame's context. The previous run (offsets 0x00..0x20, sibling
+// layout only) found zero matches even against a visibly-populated
+// Quest Log, which means the decoded string is either further out or
+// stored as a separate pointer rather than back-to-back with the
+// encoded string. This sweep catches both layouts.
+constexpr uintptr_t kMaxProbeOffset = 0x80;
+constexpr uintptr_t kSlotStride     = 0x04;
 
 struct EncStringView {
     const wchar_t* ptr;   // start of the encoded wchars (valid until null)
@@ -268,7 +273,7 @@ __declspec(noinline) static bool LooksLikeReadableSibling(const wchar_t* s, size
 struct WalkerCtx {
     uint32_t          pairsSeen = 0;
     uint32_t          pairsMatched = 0;
-    uint32_t          logSampleBudget = 6;  // cap log noise
+    uint32_t          logSampleBudget = 20;  // more generous for the new sweep
     // Quest strings we care about, keyed by encoded content. We keep a
     // vector of {wchar_t* from quest struct, its length} for O(logCount)
     // comparison per candidate.
@@ -338,54 +343,152 @@ __declspec(noinline) static bool SafeCopyWchars(const wchar_t* src, size_t n, wc
     }
 }
 
+// A single wchar_t* slot found in a frame's context. `text` is read
+// only if the pointer is classified as ENCODED (sentinel wchar) or
+// ASCII (printable run); for OTHER, text is left empty.
+struct ContextSlot {
+    uint32_t        offset = 0;
+    const wchar_t*  ptr = nullptr;
+    bool            isEncoded = false;
+    bool            isAscii = false;
+    size_t          encLen = 0;        // length of encoded run (if encoded)
+    size_t          asciiLen = 0;      // length of ASCII run (if ascii)
+};
+
+constexpr uint32_t kMaxSlotsPerFrame = 32;  // 0x00..0x7C / 4
+
+__declspec(noinline) static bool SafeReadAscii(const wchar_t* p, size_t maxLen, size_t* outLen) {
+    if (!p) return false;
+    size_t i = 0;
+    int readable = 0;
+    for (; i < maxLen; ++i) {
+        wchar_t c = 0;
+        __try { c = p[i]; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        if (c == 0) break;
+        bool ok = (c >= 0x20 && c < 0x7F)
+               || (c >= 0xA0 && c <= 0x017F)
+               || c == L'\n' || c == L'\t';
+        if (!ok) return false;
+        if (c != L'\n' && c != L'\t') ++readable;
+    }
+    if (outLen) *outLen = i;
+    return i >= 3 && readable >= 3 && readable * 10 >= static_cast<int>(i) * 8;
+}
+
+static void ClassifySlot(const wchar_t* p, ContextSlot* out) {
+    if (reinterpret_cast<uintptr_t>(p) <= 0x10000) return;
+    EncStringView enc{};
+    if (TryReadEncodedView(p, &enc)) {
+        out->isEncoded = true;
+        out->encLen = enc.length;
+        return;
+    }
+    size_t aLen = 0;
+    if (SafeReadAscii(p, 256, &aLen)) {
+        out->isAscii = true;
+        out->asciiLen = aLen;
+    }
+}
+
 static void ProbeFrameContext(uintptr_t frame, void* userdata) {
     auto* wc = static_cast<WalkerCtx*>(userdata);
     const uintptr_t ctx = UIMgr::GetFrameContext(frame);
     if (ctx <= 0x10000) return;
 
-    for (uintptr_t off : kCandidateOffsets) {
-        const wchar_t* encPtr = nullptr;
-        if (!SafeReadPtr(ctx + off, &encPtr)) continue;
+    // Read every pointer-shaped slot in ctx+0x00..+0x7C. Classify each
+    // as encoded / ascii / other. Side-by-side back-to-back is only one
+    // of the layouts we want; separated enc+dec pointers within the
+    // same context are another.
+    ContextSlot slots[kMaxSlotsPerFrame] = {};
+    uint32_t nEncoded = 0, nAscii = 0;
+    for (uint32_t i = 0; i < kMaxSlotsPerFrame; ++i) {
+        const uintptr_t off = i * kSlotStride;
+        if (off >= kMaxProbeOffset) break;
+        const wchar_t* p = nullptr;
+        if (!SafeReadPtr(ctx + off, &p)) continue;
+        slots[i].offset = static_cast<uint32_t>(off);
+        slots[i].ptr = p;
+        ClassifySlot(p, &slots[i]);
+        if (slots[i].isEncoded) ++nEncoded;
+        if (slots[i].isAscii)   ++nAscii;
+    }
 
-        EncStringView enc{};
-        if (!TryReadEncodedView(encPtr, &enc)) continue;
+    if (!nEncoded && !nAscii) return;
 
-        const wchar_t* after = encPtr + enc.length + 1;
-        size_t decLen = 0;
-        if (!LooksLikeReadableSibling(after, 256, &decLen)) continue;
+    // For each encoded slot, find the best-matching ASCII slot in the
+    // same frame's context. "Best" currently means: first one we find
+    // (heuristic — can be refined). Also try the back-to-back layout
+    // as a fallback (decoded sits immediately after the encoded null).
+    for (uint32_t ei = 0; ei < kMaxSlotsPerFrame; ++ei) {
+        const auto& encSlot = slots[ei];
+        if (!encSlot.isEncoded) continue;
 
+        // Content-match against quest struct encoded strings up-front.
+        const wchar_t* questEncPtr = nullptr;
+        for (uint32_t t = 0; t < wc->targetCount; ++t) {
+            if (WcsEqualsBounded(encSlot.ptr, encSlot.encLen,
+                                 wc->targets[t].encPtr, wc->targets[t].encLen)) {
+                questEncPtr = wc->targets[t].encPtr;
+                break;
+            }
+        }
+        // Classify regardless of match — lets us see overall hit rate.
         ++wc->pairsSeen;
-        if (wc->logSampleBudget > 0) {
-            --wc->logSampleBudget;
-            char decUtf8[512] = {};
-            WideCharToMultiByte(CP_UTF8, 0, after, static_cast<int>(decLen),
-                                decUtf8, sizeof(decUtf8) - 1, nullptr, nullptr);
-            Log::Info("QuestMgr::ScanLabelFrames: frame=0x%08X ctx=0x%08X +0x%X enc[%zu] decoded=\"%s\"",
-                      static_cast<unsigned>(frame),
-                      static_cast<unsigned>(ctx),
-                      static_cast<unsigned>(off),
-                      enc.length, decUtf8);
+
+        // Candidate decoded: (a) an ASCII slot elsewhere in ctx, or
+        // (b) back-to-back after enc null.
+        const wchar_t* decPtr = nullptr;
+        size_t         decLen = 0;
+        uint32_t       decOffset = 0xFFFFFFFFu;
+
+        for (uint32_t di = 0; di < kMaxSlotsPerFrame; ++di) {
+            if (di == ei) continue;
+            if (!slots[di].isAscii) continue;
+            decPtr    = slots[di].ptr;
+            decLen    = slots[di].asciiLen;
+            decOffset = slots[di].offset;
+            break;
+        }
+        if (!decPtr) {
+            const wchar_t* after = encSlot.ptr + encSlot.encLen + 1;
+            size_t lenAfter = 0;
+            if (SafeReadAscii(after, 256, &lenAfter)) {
+                decPtr    = after;
+                decLen    = lenAfter;
+                decOffset = static_cast<uint32_t>(-1);  // "back-to-back"
+            }
         }
 
-        // Content-match against quest struct encoded strings. The label
-        // frame allocates its own copy, so pointer identity won't work.
-        for (uint32_t i = 0; i < wc->targetCount; ++i) {
-            const auto& t = wc->targets[i];
-            if (!WcsEqualsBounded(enc.ptr, enc.length, t.encPtr, t.encLen)) continue;
-
-            wchar_t decBuf[256] = {};
-            size_t copyLen = decLen < 255 ? decLen : 255;
-            if (!SafeCopyWchars(after, copyLen, decBuf)) break;
-            decBuf[copyLen] = 0;
-
-            char utf8[1024] = {};
-            int n = WideCharToMultiByte(CP_UTF8, 0, decBuf, -1, utf8,
-                                        sizeof(utf8) - 1, nullptr, nullptr);
-            if (n > 0) {
-                CacheDecodedQuestString(t.encPtr, utf8);
-                ++wc->pairsMatched;
+        // Log a sample of what we found for diagnostic signal.
+        if (wc->logSampleBudget > 0) {
+            --wc->logSampleBudget;
+            char decUtf8[256] = {};
+            if (decPtr && decLen > 0) {
+                WideCharToMultiByte(CP_UTF8, 0, decPtr, static_cast<int>(decLen),
+                                    decUtf8, sizeof(decUtf8) - 1, nullptr, nullptr);
             }
-            break;
+            Log::Info("QuestMgr::ScanLabelFrames: frame=0x%08X ctx=0x%08X +0x%X enc[%zu] dec@0x%X=\"%s\" match=%s",
+                      static_cast<unsigned>(frame),
+                      static_cast<unsigned>(ctx),
+                      encSlot.offset,
+                      encSlot.encLen,
+                      decOffset,
+                      decPtr ? decUtf8 : "(none)",
+                      questEncPtr ? "YES" : "no");
+        }
+
+        if (!questEncPtr || !decPtr || decLen == 0) continue;
+
+        wchar_t decBuf[256] = {};
+        size_t copyLen = decLen < 255 ? decLen : 255;
+        if (!SafeCopyWchars(decPtr, copyLen, decBuf)) continue;
+        decBuf[copyLen] = 0;
+        char utf8[1024] = {};
+        int n = WideCharToMultiByte(CP_UTF8, 0, decBuf, -1, utf8,
+                                    sizeof(utf8) - 1, nullptr, nullptr);
+        if (n > 0) {
+            CacheDecodedQuestString(questEncPtr, utf8);
+            ++wc->pairsMatched;
         }
     }
 }
