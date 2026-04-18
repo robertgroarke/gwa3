@@ -211,16 +211,36 @@ class ObservationWindow:
 
         # Quest state (from tier 2+)
         quests = snap.get("quests", {})
-        if quests and quests.get("active_quest_id", 0) != 0:
-            aq = quests.get("active_quest", {})
-            qname = aq.get("name", f"Quest#{quests['active_quest_id']}")
-            completed = "COMPLETED" if aq.get("is_completed") else "in progress"
-            obj = aq.get("objectives", "")
-            obj_str = f" — {obj[:150]}" if obj else ""
-            lines.append(f"Active Quest: {qname} ({completed}){obj_str}")
-            log_size = quests.get("quest_log_size", 0)
-            if log_size > 1:
-                lines.append(f"  Quest log: {log_size} quests total")
+        if quests:
+            active_id = quests.get("active_quest_id", 0)
+            if active_id:
+                aq = quests.get("active_quest", {})
+                qname = aq.get("name", f"Quest#{active_id}")
+                completed = "COMPLETED" if aq.get("is_completed") else "in progress"
+                obj = aq.get("objectives", "")
+                obj_str = f" — {obj[:150]}" if obj else ""
+                lines.append(f"Active Quest: {qname} ({completed}){obj_str}")
+            log = quests.get("quest_log", [])
+            if log:
+                lines.append(f"Quest Log ({len(log)} quests):")
+                for q in log:
+                    qid = q.get("quest_id", 0)
+                    qn = q.get("name", f"Quest#{qid}")
+                    flags = []
+                    if q.get("is_active"):
+                        flags.append("ACTIVE")
+                    if q.get("is_completed"):
+                        flags.append("COMPLETED")
+                    if q.get("is_primary"):
+                        flags.append("PRIMARY")
+                    flag_str = f" [{','.join(flags)}]" if flags else ""
+                    loc = q.get("location", "")
+                    loc_str = f" @ {loc}" if loc else ""
+                    npc = q.get("npc", "")
+                    npc_str = f" (giver: {npc})" if npc else ""
+                    lines.append(
+                        f"  quest_id={qid} \"{qn}\"{flag_str}{loc_str}{npc_str}"
+                    )
 
         # Dialog state (from tier 2+)
         dialog = snap.get("dialog", {})

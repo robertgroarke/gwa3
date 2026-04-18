@@ -24,6 +24,7 @@ DEFAULT_MODULE_NAMES = [
     "test_f_player_trade",
     "test_g_kamadan",
     "test_m_quest_log",
+    "test_m_quest_log_llm",
 ]
 
 
