@@ -97,14 +97,20 @@ async def main():
     for mid, nm, qty in with_name[:8]:
         print(f"    model={mid} qty={qty} name={nm!r}")
     with_full = []
+    with_info = []
     for bag in bags:
         for item in bag.get("items", []):
             if "full_name" in item and item["full_name"]:
                 with_full.append((item.get("model_id"), item["full_name"],
                                   item.get("quantity", 1)))
+            if "info_string" in item and item["info_string"]:
+                with_info.append((item.get("model_id"), item["info_string"]))
     print(f"  items with full_name (modifier-decorated): {len(with_full)}")
     for mid, fn, qty in with_full[:8]:
         print(f"    model={mid} qty={qty} full_name={fn!r}")
+    print(f"  items with info_string (tooltip body): {len(with_info)}")
+    for mid, info in with_info[:8]:
+        print(f"    model={mid} info_string={info!r}")
 
     # Merchant items
     merch = tier2.get("merchant", {}) or {}

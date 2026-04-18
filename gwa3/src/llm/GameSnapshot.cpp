@@ -607,6 +607,10 @@ namespace GWA3::LLM::GameSnapshot {
                     EmitBestText(a, inv->name_enc, "name",
                                  inv->single_item_name);
                     EmitBestText(a, inv->complete_name_enc, "full_name");
+                    // Tooltip body (damage range, armor, requirement,
+                    // inherent mods, runes/insignias) — GW's
+                    // hover-text decoded via the passive hook.
+                    EmitBestText(a, inv->info_string, "info_string");
                 }
             } else {
                 a["agent_type"] = "unknown";
@@ -647,9 +651,14 @@ namespace GWA3::LLM::GameSnapshot {
                 // is the base model name, `full_name` includes prefix/
                 // suffix modifiers, `single_item_name` backs `name`
                 // with a plain form when the encoded ref isn't cached.
+                // `info_string` carries the tooltip body text:
+                // damage range, armor, attribute requirement, inherent
+                // modifiers, runes/insignias — what Gemma needs to
+                // make equipment decisions.
                 EmitBestText(it, item->name_enc, "name",
                              item->single_item_name);
                 EmitBestText(it, item->complete_name_enc, "full_name");
+                EmitBestText(it, item->info_string, "info_string");
                 // Rarity from interaction flags
                 uint32_t inter = item->interaction;
                 const char* rarity = "white";
@@ -821,6 +830,7 @@ namespace GWA3::LLM::GameSnapshot {
             wchar_t* name_enc;
             wchar_t* complete_name_enc;
             wchar_t* single_item_name;
+            wchar_t* info_string;
         };
         MerchantItemData itemData[256] = {};
         uint32_t readCount = 0;
@@ -837,6 +847,7 @@ namespace GWA3::LLM::GameSnapshot {
             d.name_enc = item->name_enc;
             d.complete_name_enc = item->complete_name_enc;
             d.single_item_name = item->single_item_name;
+            d.info_string = item->info_string;
         }
 
         json items = json::array();
@@ -851,6 +862,7 @@ namespace GWA3::LLM::GameSnapshot {
             EmitBestText(it, itemData[i].name_enc, "name",
                          itemData[i].single_item_name);
             EmitBestText(it, itemData[i].complete_name_enc, "full_name");
+            EmitBestText(it, itemData[i].info_string, "info_string");
             items.push_back(it);
         }
         m["items"] = items;
