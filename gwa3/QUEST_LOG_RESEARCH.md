@@ -154,11 +154,35 @@ quest log exceeded a few entries. Observations:
 - Tight per-call budgets (25–60 ms) always time out because the
   callback fires later than that window.
 
-**Future work** — an async fill path: the snapshot thread enqueues a
-decode request to a dedicated worker thread that listens for the
-callback and writes into a `pointer -> utf8` cache. Subsequent
-snapshots read straight from that cache. LLM clients and tests that
-want human-readable names today can fall back to:
+**What we tried (2026-04-17)** — a dedicated worker thread
+(`EncStringCache`) with a bounded rate (one decode every ~550 ms) and
+a pointer cache keyed by the encoded string's content. The module is
+checked in and wired into `dllmain`, and `StringEncoding::DecodeStr`
+was hardened against its original ctx-race (heap context + atomic
+state `pending / fulfilled / abandoned`, so a late callback never
+touches a closed event handle or freed stack memory).
+
+That fixed the memory-corruption crash, but GW still terminates
+after ~170 cumulative `ValidateAsyncDecodeStr` calls even when every
+call is paced and uses a safe context. The game's own string-decoder
+state appears to accumulate unbounded pending work when we fire
+lookup requests faster than the normal UI would. So the snapshot
+path currently does **not** call `EncStringCache::Lookup` — the hook
+is in place but commented out until we find a safer trigger, e.g.:
+
+- Call `Lookup` only in response to an explicit LLM action
+  (`request_quest_info(quest_id)`), so decodes happen at LLM pace
+  rather than snapshot pace.
+- Populate the cache opportunistically from `SMSG_QUEST_GENERAL_INFO`
+  / `SMSG_QUEST_DESCRIPTION` packet taps, so decoded text lands only
+  for quests the game itself has already fetched.
+- Find a read-only path into the game's local string table (read
+  memory directly, no `ValidateAsyncDecodeStr` call at all) so we
+  can emit decoded text for strings GW has already cached without
+  triggering any new fetches.
+
+**Today**, LLM clients and tests that want human-readable names fall
+back to:
 
 1. Looking up known `quest_id`s against the `get_quest_info`
    farming-knowledge table.

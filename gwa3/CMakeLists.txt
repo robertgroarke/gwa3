@@ -151,6 +151,7 @@ target_link_libraries(gwa3_core PUBLIC minhook version nlohmann_json::nlohmann_j
 add_library(gwa3 SHARED
     src/dllmain.cpp
     src/utils/StringEncoding.cpp
+    src/utils/EncStringCache.cpp
     $<TARGET_OBJECTS:gwa3_core>
 )
 set_target_properties(gwa3 PROPERTIES OUTPUT_NAME "${GWA3_DLL_NAME}")

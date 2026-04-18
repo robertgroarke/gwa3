@@ -31,6 +31,7 @@
 #include <gwa3/bot/FroggyHM.h>
 #include <gwa3/core/SmokeTest.h>
 #include <gwa3/utils/StringEncoding.h>
+#include <gwa3/utils/EncStringCache.h>
 #include <gwa3/llm/LlmBridge.h>
 #include <gwa3/llm/IpcServer.h>
 #include <gwa3/llm/GameSnapshot.h>
@@ -371,6 +372,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::DialogMgr::Initialize();
         GWA3::ChatLogMgr::Initialize();
         GWA3::StringEncoding::Initialize();
+        GWA3::EncStringCache::Initialize();
     }
 
     if (cmdTest) {
@@ -561,6 +563,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
     } else if (reason == DLL_PROCESS_DETACH) {
         GWA3::LLM::Shutdown();
         GWA3::Bot::Stop();
+        GWA3::EncStringCache::Shutdown();
         GWA3::ChatLogMgr::Shutdown();
         GWA3::DialogMgr::Shutdown();
         GWA3::DialogHook::Shutdown();

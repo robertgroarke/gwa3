@@ -22,6 +22,8 @@
 #include <gwa3/game/Skill.h>
 #include <gwa3/game/Item.h>
 #include <gwa3/game/Effect.h>
+#include <gwa3/utils/EncStringCache.h>
+
 #include <Windows.h>
 #include <nlohmann/json.hpp>
 #include <cmath>
@@ -1002,24 +1004,28 @@ namespace GWA3::LLM::GameSnapshot {
         return titles;
     }
 
-    // Quest strings are GW's encoded wide-char format (first wchar is a
-    // PUA sentinel, followed by a message id). They decode via the game's
-    // ValidateAsyncDecodeStr helper — but that's truly async (callback
-    // fires much later than any reasonable snapshot-thread wait). Doing
-    // synchronous decode-per-quest on every snapshot floods the GameThread
-    // queue and crashed the client in testing.
+    // Emit the raw encoded wide-char string as `<key>_enc`.
     //
-    // For now we ship the raw encoded strings as `*_enc` fields. The LLM
-    // can (a) look up known quests via the farming_knowledge table keyed
-    // by quest_id, or (b) use quest_id + map_from / map_to / log_state to
-    // reason about quests without human-readable names. Decoded-name
-    // background enrichment is future work.
-    static void EmitEnc(json& dst, const wchar_t* p, const char* key) {
+    // EncStringCache provides a decoded form, but actively driving
+    // `ValidateAsyncDecodeStr` from the snapshot path crashes GW after
+    // ~170 cumulative decode calls — the game's own string-decoder
+    // state appears to accumulate unbounded work when we fire requests
+    // faster than the UI normally would. See QUEST_LOG_RESEARCH.md.
+    //
+    // The Lookup() call is wired up (commented out below) so this spot
+    // is ready once we find a safer trigger — e.g. opportunistic
+    // population from packet taps, or calling only on explicit LLM
+    // action (`request_quest_info`) rather than every snapshot.
+    static void EmitEnc(json& dst, const wchar_t* p,
+                        const char* rawKey, const char* decodedKey) {
+        (void)decodedKey;
         if (!p || !p[0]) return;
         char raw[1024] = {};
         WideCharToMultiByte(CP_UTF8, 0, p, -1, raw, sizeof(raw) - 1,
                             nullptr, nullptr);
-        dst[key] = raw;
+        dst[rawKey] = raw;
+        // std::string dec = EncStringCache::Lookup(p);
+        // if (!dec.empty()) dst[decodedKey] = dec;
     }
 
     // Build quest state: active quest + quest log summary
@@ -1045,11 +1051,11 @@ namespace GWA3::LLM::GameSnapshot {
                 aq["marker_x"] = active->marker_x;
                 aq["marker_y"] = active->marker_y;
 
-                EmitEnc(aq, active->name,        "name_enc");
-                EmitEnc(aq, active->objectives,  "objectives_enc");
-                EmitEnc(aq, active->description, "description_enc");
-                EmitEnc(aq, active->location,    "location_enc");
-                EmitEnc(aq, active->npc,         "npc_enc");
+                EmitEnc(aq, active->name,        "name_enc",        "name");
+                EmitEnc(aq, active->objectives,  "objectives_enc",  "objectives");
+                EmitEnc(aq, active->description, "description_enc", "description");
+                EmitEnc(aq, active->location,    "location_enc",    "location");
+                EmitEnc(aq, active->npc,         "npc_enc",         "npc");
                 q["active_quest"] = aq;
             }
         }
@@ -1070,9 +1076,9 @@ namespace GWA3::LLM::GameSnapshot {
             entry["map_to"] = quest->map_to;
             entry["marker_x"] = quest->marker_x;
             entry["marker_y"] = quest->marker_y;
-            EmitEnc(entry, quest->name,     "name_enc");
-            EmitEnc(entry, quest->location, "location_enc");
-            EmitEnc(entry, quest->npc,      "npc_enc");
+            EmitEnc(entry, quest->name,     "name_enc",     "name");
+            EmitEnc(entry, quest->location, "location_enc", "location");
+            EmitEnc(entry, quest->npc,      "npc_enc",      "npc");
             log.push_back(entry);
         }
         q["quest_log"] = log;
