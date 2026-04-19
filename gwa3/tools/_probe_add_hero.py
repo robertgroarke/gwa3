@@ -58,8 +58,9 @@ async def main():
               f"is_player={mem.get('is_player')} "
               f"is_hero={mem.get('is_hero')}")
     print(f"heroes[] count={len(heroes)}")
+    import json as _json
     for h in heroes:
-        print(f"  hero agent_id={h.get('agent_id')} prof={h.get('primary')}")
+        print(f"  hero raw={_json.dumps(h)}")
 
     return 0
 

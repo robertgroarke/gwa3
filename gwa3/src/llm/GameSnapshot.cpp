@@ -658,6 +658,49 @@ namespace GWA3::LLM::GameSnapshot {
         }
     }
 
+    // SEH-isolated: look up WorldContext->hero_info[hero_id] and copy
+    // primary/secondary/name into a POD record. Per GWCA's
+    // WorldContext.h, the array is at +0x594, but Reforged drifts
+    // field offsets; if 0x594 yields an invalid buffer we bail.
+    struct HeroInfoRecord {
+        bool     ok;
+        uint32_t hero_id;
+        uint32_t agent_id;
+        uint32_t level;
+        uint32_t primary;
+        uint32_t secondary;
+        uint32_t hero_file_id;
+        uint32_t model_file_id;
+        wchar_t  name[20];
+    };
+    __declspec(noinline) static HeroInfoRecord ReadHeroInfoByHeroId(uint32_t heroId) {
+        HeroInfoRecord r{};
+        uintptr_t wc = Offsets::ResolveWorldContext();
+        if (!wc) return r;
+        __try {
+            auto* arr = reinterpret_cast<GWArray<HeroInfo>*>(wc + 0x594);
+            if (!arr->buffer || arr->size == 0 || arr->size > 64) return r;
+            for (uint32_t i = 0; i < arr->size; ++i) {
+                const auto& hi = arr->buffer[i];
+                if (hi.hero_id != heroId) continue;
+                r.ok = true;
+                r.hero_id = hi.hero_id;
+                r.agent_id = hi.agent_id;
+                r.level = hi.level;
+                r.primary = hi.primary;
+                r.secondary = hi.secondary;
+                r.hero_file_id = hi.hero_file_id;
+                r.model_file_id = hi.model_file_id;
+                for (int k = 0; k < 20; ++k) r.name[k] = hi.name[k];
+                return r;
+            }
+            return r;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            r.ok = false;
+            return r;
+        }
+    }
+
     // Build hero skillbars array (one entry per hero in party).
     //
     // Driven by PartyInfo.heroes[] rather than agent enumeration —
@@ -672,6 +715,9 @@ namespace GWA3::LLM::GameSnapshot {
     // usual living-agent fields (hp, energy, profession, casting
     // state) + skillbar + 16-bit weapon/offhand. When agent_id == 0
     // (outpost) we emit just the party-level fields.
+    //
+    // Either way, we also look up WorldContext->hero_info[hero_id] to
+    // fill primary/secondary/name which are available even in outpost.
     static json BuildHeroSkillbarsJson() {
         json heroes = json::array();
         HeroPartyEntry entries[16] = {};
@@ -686,6 +732,28 @@ namespace GWA3::LLM::GameSnapshot {
             h["owner_player_id"] = e.owner_player_id;
             h["level"] = e.level;
 
+            // WorldContext->hero_info populates prof/name even in outpost.
+            HeroInfoRecord info = ReadHeroInfoByHeroId(e.hero_id);
+            if (info.ok) {
+                h["primary"] = info.primary;
+                h["secondary"] = info.secondary;
+                h["hero_file_id"] = info.hero_file_id;
+                h["model_file_id"] = info.model_file_id;
+                // Emit name only if it looks plausible (first char ASCII/Latin).
+                if (info.name[0] >= 0x20 && info.name[0] < 0x2000) {
+                    // Narrow the UTF-16 name into UTF-8 (bounded, ASCII-safe
+                    // path for hero display names which are all Latin).
+                    char narrow[64] = {};
+                    int w = 0;
+                    for (int k = 0; k < 20 && info.name[k] != 0 && w < 63; ++k) {
+                        wchar_t c = info.name[k];
+                        if (c < 0x80) narrow[w++] = static_cast<char>(c);
+                    }
+                    narrow[w] = 0;
+                    if (narrow[0]) h["name"] = narrow;
+                }
+            }
+
             // Enrich when the hero is spawned as an agent (explorable).
             if (e.agent_id != 0) {
                 Agent* agent = AgentMgr::GetAgentByID(e.agent_id);
@@ -694,8 +762,12 @@ namespace GWA3::LLM::GameSnapshot {
                     if (ReadLivingAgentSeed(agent, living)) {
                         h["hp"] = living.hp;
                         h["energy"] = living.energy;
-                        h["primary"] = living.primary;
-                        h["secondary"] = living.secondary;
+                        // Only overwrite prof fields if HeroInfo didn't fill them
+                        // and the living read produced non-zero values.
+                        if (!info.ok && living.primary != 0) {
+                            h["primary"] = living.primary;
+                            h["secondary"] = living.secondary;
+                        }
                         h["is_casting"] = (living.casting_skill_id != 0);
                         h["casting_skill_id"] = living.casting_skill_id;
                     }
