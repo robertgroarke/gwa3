@@ -79,9 +79,13 @@ static bool s_loggedInteractNpcNative = false;
 static bool s_loggedInteractNpcFallback = false;
 static bool s_loggedInteractNpcVariant = false;
 static bool s_loggedInteractNpcWorldAction = false;
+static bool s_loggedInteractAgentWorldAction = false;
+static bool s_loggedInteractAgentWorldActionFallback = false;
+static bool s_loggedLegacySignpostPath = false;
 static bool s_loggedMoveQueuedOnce = false;
 static bool s_loggedSparkflyMoveLane = false;
 static bool s_loggedSparkflyMoveLaneUnavailable = false;
+static bool s_loggedChangeTargetNativeLane = false;
 static bool s_loggedChangeTargetEngineLane = false;
 static SRWLOCK s_moveQueueLock = SRWLOCK_INIT;
 static MoveData s_pendingQueuedMove{};
@@ -346,22 +350,21 @@ bool ShouldSuppressMove(float x, float y) {
 }
 
 void DrainQueuedMove() {
-    for (;;) {
-        MoveData nextMove{};
-        bool haveMove = false;
+    MoveData nextMove{};
+    bool haveMove = false;
 
-        AcquireSRWLockExclusive(&s_moveQueueLock);
-        if (s_pendingQueuedMoveValid) {
-            nextMove = s_pendingQueuedMove;
-            s_pendingQueuedMoveValid = false;
-            haveMove = true;
-        }
-        ReleaseSRWLockExclusive(&s_moveQueueLock);
+    AcquireSRWLockExclusive(&s_moveQueueLock);
+    if (s_pendingQueuedMoveValid) {
+        nextMove = s_pendingQueuedMove;
+        s_pendingQueuedMoveValid = false;
+        haveMove = true;
+    }
+    ReleaseSRWLockExclusive(&s_moveQueueLock);
 
-        if (!haveMove) {
-            break;
-        }
-
+    if (haveMove) {
+        // Native movement must stay at one call per engine tick. If a newer
+        // move arrives while this one is draining, schedule another post
+        // rather than chaining a second native move in the same callback.
         IssueNativeMove(nextMove.x, nextMove.y);
     }
 
@@ -487,41 +490,123 @@ void Move(float x, float y) {
     CtoS::MoveToCoord(x, y);
 }
 
-static bool s_loggedChangeTargetDeferred = false;
-static bool s_loggedChangeTargetNative = false;
+void ResetMoveState(const char* reason) {
+    MoveData pendingMove{};
+    bool hadPendingMove = false;
+    AcquireSRWLockExclusive(&s_moveQueueLock);
+    if (s_pendingQueuedMoveValid) {
+        pendingMove = s_pendingQueuedMove;
+        hadPendingMove = true;
+    }
+    s_pendingQueuedMove = {};
+    s_pendingQueuedMoveValid = false;
+    ReleaseSRWLockExclusive(&s_moveQueueLock);
 
-void ChangeTarget(uint32_t agentId) {
-    // Native ChangeTarget is stable only when stationary. Defer until
-    // movement settles and the botshub move queue drains, matching the
-    // upstream Move -> settle -> ChangeTarget sequencing.
-    const auto* me = GetMyAgent();
-    if ((me && (me->move_x != 0.0f || me->move_y != 0.0f)) || !CtoS::IsBotshubQueueIdle()) {
-        if (!s_loggedChangeTargetDeferred) {
-            Log::Info("AgentMgr: ChangeTarget deferred until movement settles");
-            s_loggedChangeTargetDeferred = true;
-        }
+    const LONG hadDrainQueued = InterlockedExchange(&s_moveDrainQueued, 0);
+    const bool hadLastIssuedMove = s_haveLastIssuedMove;
+    const MoveData lastIssuedMove = s_lastIssuedMove;
+    const DWORD lastIssuedAgeMs =
+        hadLastIssuedMove && s_lastIssuedMoveAt != 0u
+            ? (GetTickCount() - s_lastIssuedMoveAt)
+            : 0u;
+    s_lastIssuedMove = {};
+    s_lastIssuedMoveAt = 0u;
+    s_haveLastIssuedMove = false;
+
+    Log::Info(
+        "AgentMgr: ResetMoveState reason=%s hadPending=%d pendingTarget=(%.0f, %.0f) hadDrainQueued=%ld hadLast=%d lastTarget=(%.0f, %.0f) lastAgeMs=%lu",
+        reason != nullptr ? reason : "",
+        hadPendingMove ? 1 : 0,
+        hadPendingMove ? pendingMove.x : 0.0f,
+        hadPendingMove ? pendingMove.y : 0.0f,
+        static_cast<long>(hadDrainQueued),
+        hadLastIssuedMove ? 1 : 0,
+        hadLastIssuedMove ? lastIssuedMove.x : 0.0f,
+        hadLastIssuedMove ? lastIssuedMove.y : 0.0f,
+        static_cast<unsigned long>(lastIssuedAgeMs));
+}
+
+static bool s_loggedChangeTargetFallback = false;
+static uint32_t s_lastQueuedTargetId = 0u;
+static DWORD s_lastQueuedTargetAt = 0u;
+static constexpr DWORD kChangeTargetMoveSettleMs = 1500u;
+
+static void ChangeTargetImpl(uint32_t agentId, bool respectMoveSettle, const char* modeLabel) {
+    const DWORD now = GetTickCount();
+    if (GetTargetId() == agentId) {
+        s_lastQueuedTargetId = agentId;
+        s_lastQueuedTargetAt = now;
+        return;
+    }
+    if (agentId == s_lastQueuedTargetId && (now - s_lastQueuedTargetAt) < 250u) {
+        return;
+    }
+    if (respectMoveSettle && agentId != 0u && s_haveLastIssuedMove &&
+        (now - s_lastIssuedMoveAt) < kChangeTargetMoveSettleMs) {
+        Log::Info("AgentMgr: ChangeTarget deferred until movement settles");
+        s_lastQueuedTargetId = agentId;
+        s_lastQueuedTargetAt = now;
         return;
     }
 
-    if (!s_loggedChangeTargetNative) {
-        Log::Info("AgentMgr: ChangeTarget using native GameThread path agentId=%u", agentId);
-        s_loggedChangeTargetNative = true;
-    }
+    s_lastQueuedTargetId = agentId;
+    s_lastQueuedTargetAt = now;
 
     if (GameThread::IsOnGameThread()) {
+        if (!s_loggedChangeTargetNativeLane) {
+            Log::Info("AgentMgr: ChangeTarget using native GameThread path");
+            s_loggedChangeTargetNativeLane = true;
+        }
+        if (!respectMoveSettle) {
+            Log::Info("AgentMgr: ChangeTarget forced target=%u via %s", agentId, modeLabel);
+        }
         InvokeChangeTargetRaw(agentId);
         return;
     }
-
     if (GameThread::IsInitialized()) {
-        Log::Info("AgentMgr: ChangeTarget queueing native dispatch agentId=%u", agentId);
-        GameThread::Enqueue([agentId]() {
+        if (!s_loggedChangeTargetNativeLane) {
+            Log::Info("AgentMgr: ChangeTarget using native post-dispatch path");
+            s_loggedChangeTargetNativeLane = true;
+        }
+        GameThread::EnqueuePost([agentId, respectMoveSettle, modeLabel]() {
+            if (!respectMoveSettle) {
+                Log::Info("AgentMgr: ChangeTarget forced target=%u via %s", agentId, modeLabel);
+            }
             InvokeChangeTargetRaw(agentId);
         });
         return;
     }
 
+    if (CtoS::Initialize() && CtoS::IsBotshubCommandLaneAvailable()) {
+        if (!s_loggedChangeTargetEngineLane) {
+            Log::Warn("AgentMgr: ChangeTarget falling back to engine command lane (GameThread unavailable)");
+            s_loggedChangeTargetEngineLane = true;
+        }
+        ChangeTargetCommand cmd{};
+        cmd.fn = reinterpret_cast<uintptr_t>(&BotshubChangeTargetCommandStub);
+        cmd.agent_id = agentId;
+        if (CtoS::EnqueueBotshubCommand(&cmd, sizeof(cmd))) {
+            if (!respectMoveSettle) {
+                Log::Info("AgentMgr: ChangeTarget forced target=%u via %s", agentId, modeLabel);
+            }
+            return;
+        }
+        Log::Warn("AgentMgr: ChangeTarget engine command lane rejected target=%u", agentId);
+    }
+
+    if (!s_loggedChangeTargetFallback) {
+        Log::Warn("AgentMgr: ChangeTarget falling back to direct raw path");
+        s_loggedChangeTargetFallback = true;
+    }
     InvokeChangeTargetRaw(agentId);
+}
+
+void ChangeTarget(uint32_t agentId) {
+    ChangeTargetImpl(agentId, true, "normal");
+}
+
+void ForceChangeTarget(uint32_t agentId) {
+    ChangeTargetImpl(agentId, false, "force");
 }
 
 uint32_t GetTargetId() {
@@ -565,9 +650,37 @@ uint32_t GetTargetIdFromLog() {
     return value;
 }
 
+// Cache for GetMyId — Offsets::MyID transiently reads 0 for a few
+// hundred ms after a player skill cast (the game briefly rewrites the
+// slot during cast state transitions). Without the cache, every caller
+// that gates on "do we have a player" (GetPlayerSkillbar,
+// MapMgr::GetIsMapLoaded, MovePlayerNear's position read) sees 0 and
+// fails, which cascades into broken skill dispatch, broken movement,
+// and map_not_loaded action rejections for minutes.
+//
+// The cache holds the last non-zero id for up to kMyIdCacheTtlMs. The
+// id can only legitimately change on zone transition or disconnect, and
+// both of those take far longer than the TTL, so a stale cache is
+// bounded and recoverable.
+static DWORD s_cachedMyIdTick = 0;
+static uint32_t s_cachedMyId = 0;
+static constexpr DWORD kMyIdCacheTtlMs = 1500;
+
 uint32_t GetMyId() {
     if (!Offsets::MyID) return 0;
-    return *reinterpret_cast<uint32_t*>(Offsets::MyID);
+    uint32_t liveId = *reinterpret_cast<uint32_t*>(Offsets::MyID);
+    const DWORD now = GetTickCount();
+    if (liveId != 0) {
+        s_cachedMyId = liveId;
+        s_cachedMyIdTick = now;
+        return liveId;
+    }
+    // Live read is 0. If the cache is fresh enough, trust it.
+    if (s_cachedMyId != 0 && (now - s_cachedMyIdTick) <= kMyIdCacheTtlMs) {
+        return s_cachedMyId;
+    }
+    s_cachedMyId = 0;
+    return 0;
 }
 
 void Attack(uint32_t agentId) {
@@ -584,11 +697,53 @@ void CancelAction() {
 }
 
 bool ActionInteract() {
-    if (!UIMgr::HasControlActionKeypress()) {
-        Log::Warn("AgentMgr: ActionInteract unavailable (DoAction/action context missing)");
+    const bool fired = UIMgr::PerformUiAction(kActionInteractCode);
+    if (!fired) {
+        Log::Warn("AgentMgr: ActionInteract unavailable (PerformUiAction failed)");
+    }
+    return fired;
+}
+
+bool InteractAgentWorldAction(uint32_t agentId, bool callTarget) {
+    if (agentId == 0u) {
         return false;
     }
-    return UIMgr::ActionKeyPress(kActionInteractCode);
+
+    const uint32_t ct = callTarget ? 1u : 0u;
+    if (GameThread::IsInitialized() && Offsets::UIMessage > 0x10000) {
+        if (!s_loggedInteractAgentWorldAction) {
+            Log::Info("AgentMgr: InteractAgentWorldAction using UI message path msg=0x%08X",
+                      kSendWorldActionUiMessage);
+            s_loggedInteractAgentWorldAction = true;
+        }
+        GameThread::Enqueue([agentId, ct]() {
+            WorldActionUIPacket packet{
+                static_cast<uint32_t>(ResolveWorldActionId(agentId)),
+                agentId,
+                ct
+            };
+            UIMgr::SendUIMessage(kSendWorldActionUiMessage, &packet, nullptr);
+        });
+        return true;
+    }
+
+    if (s_worldActionFn && GameThread::IsInitialized()) {
+        if (!s_loggedInteractAgentWorldAction) {
+            Log::Info("AgentMgr: InteractAgentWorldAction using native world-action path fn=0x%08X",
+                      static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_worldActionFn)));
+            s_loggedInteractAgentWorldAction = true;
+        }
+        GameThread::Enqueue([agentId, ct]() {
+            InvokeWorldActionRaw(agentId, ct);
+        });
+        return true;
+    }
+
+    if (!s_loggedInteractAgentWorldActionFallback) {
+        Log::Warn("AgentMgr: InteractAgentWorldAction unavailable");
+        s_loggedInteractAgentWorldActionFallback = true;
+    }
+    return false;
 }
 
 void CallTarget(uint32_t agentId) {
@@ -705,7 +860,21 @@ void InteractPlayer(uint32_t agentId) {
 }
 
 void InteractSignpost(uint32_t agentId) {
+    if (agentId == 0u) {
+        return;
+    }
     CtoS::SendPacket(3, Packets::SIGNPOST_RUN, agentId, 0u);
+}
+
+void InteractSignpostLegacy(uint32_t agentId) {
+    if (agentId == 0u) {
+        return;
+    }
+    if (!s_loggedLegacySignpostPath) {
+        Log::Info("AgentMgr: InteractSignpostLegacy using direct INTERACT_GADGET packet path");
+        s_loggedLegacySignpostPath = true;
+    }
+    CtoS::SendPacketDirect(3, Packets::INTERACT_GADGET, agentId, 0u);
 }
 
 // Agent access via flat pointer chain: *AgentBase = agent_ptr_array, *(AgentBase+8) = maxAgents
@@ -778,6 +947,7 @@ bool GetAgentExists(uint32_t agentId) {
 //
 // For LIVING agents:
 //   - If ag->login_number != 0 -> it's a human player, read from
+//   - If ag->login_number != 0 → it's a human player, read from
 //     players[login_number].name_enc.
 //   - Otherwise try agent_infos[ag->agent_id].name_enc first; fall
 //     back to npcs[ag->player_number].name_enc (dummy agents like
@@ -820,6 +990,68 @@ static wchar_t* ReadAgentInfoNameEnc(uintptr_t worldCtx, uint32_t agentId) {
     }
 }
 
+// --- Gadget name resolution ---
+//
+// Gadget names live outside WorldContext. GWCA's algorithm
+// (AgentMgr.cpp:451-465):
+//   1. GameContext.agent (AgentContext*, at GC+0x08)
+//   2. AgentContext.agent_summary_info[agent_id].extra_info_sub
+//      (AgentSummaryInfo is 12 bytes, extra_info_sub at +0x08;
+//       array starts at AgentContext+0x98)
+//   3. Prefer extra_info_sub->gadget_name_enc (at +0x10)
+//   4. Fall back to GameContext.gadget (GadgetContext*, at GC+0x38)
+//      -> GadgetInfo[gadget_id].name_enc (GadgetInfo is 16 bytes,
+//         name_enc at +0x0C; array starts at GadgetContext+0x00)
+//   5. extra_info_sub->gadget_id lives at +0x08 of the sub struct.
+static constexpr uintptr_t kGameCtxAgentContextPtr   = 0x08;
+static constexpr uintptr_t kGameCtxGadgetContextPtr  = 0x38;
+static constexpr uintptr_t kAgentSummaryInfoArray    = 0x98;
+static constexpr size_t    kAgentSummaryInfoSize     = 0x0C;
+static constexpr uintptr_t kAgentSummaryInfoSubPtr   = 0x08;
+static constexpr uintptr_t kSubStructGadgetId        = 0x08;
+static constexpr uintptr_t kSubStructGadgetNameEnc   = 0x10;
+static constexpr size_t    kGadgetInfoSize           = 0x10;
+static constexpr uintptr_t kGadgetInfoNameEnc        = 0x0C;
+
+static wchar_t* ReadGadgetNameEnc(uint32_t agentId) {
+    const uintptr_t gc = Offsets::ResolveGameContext();
+    if (!gc) return nullptr;
+
+    __try {
+        const uintptr_t agentCtx = *reinterpret_cast<uintptr_t*>(gc + kGameCtxAgentContextPtr);
+        if (agentCtx <= 0x10000) return nullptr;
+
+        auto* asi = reinterpret_cast<GWArray<uint8_t>*>(agentCtx + kAgentSummaryInfoArray);
+        if (!asi->buffer || asi->size == 0 || asi->size > 0x4000) return nullptr;
+        if (agentId >= asi->size) return nullptr;
+
+        const uintptr_t slot = reinterpret_cast<uintptr_t>(asi->buffer)
+                             + static_cast<uintptr_t>(agentId) * kAgentSummaryInfoSize;
+        const uintptr_t subPtr = *reinterpret_cast<uintptr_t*>(slot + kAgentSummaryInfoSubPtr);
+        if (subPtr <= 0x10000) return nullptr;
+
+        // Primary: agent_summary_info[agent_id].extra_info_sub->gadget_name_enc
+        if (wchar_t* enc = *reinterpret_cast<wchar_t**>(subPtr + kSubStructGadgetNameEnc)) {
+            return enc;
+        }
+
+        // Fallback: GadgetContext.GadgetInfo[gadget_id].name_enc
+        const uint32_t gadgetId = *reinterpret_cast<uint32_t*>(subPtr + kSubStructGadgetId);
+        const uintptr_t gadgetCtx = *reinterpret_cast<uintptr_t*>(gc + kGameCtxGadgetContextPtr);
+        if (gadgetCtx <= 0x10000) return nullptr;
+
+        auto* gi = reinterpret_cast<GWArray<uint8_t>*>(gadgetCtx);
+        if (!gi->buffer || gi->size == 0 || gi->size > 0x4000) return nullptr;
+        if (gadgetId >= gi->size) return nullptr;
+
+        const uintptr_t giSlot = reinterpret_cast<uintptr_t>(gi->buffer)
+                               + static_cast<uintptr_t>(gadgetId) * kGadgetInfoSize;
+        return *reinterpret_cast<wchar_t**>(giSlot + kGadgetInfoNameEnc);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
 wchar_t* GetAgentEncName(const Agent* agent) {
     if (!agent) return nullptr;
     const uintptr_t worldCtx = Offsets::ResolveWorldContext();
@@ -841,7 +1073,15 @@ wchar_t* GetAgentEncName(const Agent* agent) {
         return nullptr;
     }
 
-    // Only living agents for now; gadget + item paths are not wired.
+    // Gadgets (chests, signposts, portals, shrines): resolve via
+    // AgentContext.agent_summary_info[agent_id].extra_info_sub with
+    // GadgetContext.GadgetInfo[gadget_id] as the fallback.
+    if (agentType == 0x200) {
+        return ReadGadgetNameEnc(agentId);
+    }
+
+    // Item agents are not handled here — BuildNearbyAgentsJson already
+    // resolves them via ItemMgr::GetItemById(item.item_id)->name_enc.
     if (agentType != 0xDB) return nullptr;
 
     // Player: look up by login_number in PlayerArray.
@@ -884,6 +1124,39 @@ wchar_t* GetAgentEncName(uint32_t agentId) {
     const uintptr_t worldCtx = Offsets::ResolveWorldContext();
     if (!worldCtx) return nullptr;
     return ReadAgentInfoNameEnc(worldCtx, agentId);
+}
+
+// Plain-name fallback for players: the Player struct carries both an
+// encoded reference (+0x24, title-decorated) and a plain wchar handle
+// (+0x28, bare account name). When the encoded form hasn't decoded
+// yet (player has an active title so name_enc is a format-string ref
+// the decoder needs to expand), this returns the plain handle so the
+// caller can emit SOMETHING readable immediately.
+wchar_t* GetAgentPlainName(const Agent* agent) {
+    if (!agent) return nullptr;
+    const uintptr_t worldCtx = Offsets::ResolveWorldContext();
+    if (!worldCtx) return nullptr;
+
+    uint32_t agentType = 0;
+    uint32_t loginNumber = 0;
+    __try {
+        agentType = agent->type;
+        if (agentType == 0xDB) {
+            loginNumber = reinterpret_cast<const AgentLiving*>(agent)->login_number;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+
+    if (agentType != 0xDB || loginNumber == 0) return nullptr;
+
+    auto* players = SafeReadArray<Player>(worldCtx, kPlayersOffset, 1024);
+    if (!players || loginNumber >= players->size) return nullptr;
+    __try {
+        return players->buffer[loginNumber].name;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
 }
 
 } // namespace GWA3::AgentMgr

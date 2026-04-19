@@ -4,6 +4,7 @@
 
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/Scanner.h>
+#include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/SkillMgr.h>
 
@@ -26,8 +27,12 @@ uint32_t ReadMapId() {
 }
 
 uint32_t ReadMyId() {
-    if (Offsets::MyID < 0x10000) return 0;
-    return *reinterpret_cast<uint32_t*>(Offsets::MyID);
+    // Delegate to AgentMgr::GetMyId so MovePlayerNear benefits from the
+    // same short-TTL cache that papers over the post-skill-cast MyID
+    // flicker. Without this, the test harness's direct read reports
+    // "could not read player position yet" for ~30s after every player
+    // cast, breaking movement.
+    return AgentMgr::GetMyId();
 }
 
 bool TryReadAgentPosition(uint32_t agentId, float& x, float& y) {
