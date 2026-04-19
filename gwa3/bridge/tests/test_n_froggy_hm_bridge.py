@@ -836,7 +836,11 @@ class FroggyHmBridgeTest:
         if not await self.wait_for_map(MAP_SPARKFLY, timeout=60.0):
             self._record("phase3_sparkfly", "FAIL", "Sparkfly never loaded")
             return False
-        await asyncio.sleep(5.0)
+        # Extended stabilization wait — the DLL's snapshot thread crashes if
+        # we query state while GW's world-load is still hydrating (observed
+        # ~3s post-load crashes in early iteration). Mirror the C++ Froggy
+        # test's WaitForStablePlayerState(10000) + Sleep(5000) pattern.
+        await asyncio.sleep(15.0)
         self._record("phase3_sparkfly", "PASS")
         return True
 
