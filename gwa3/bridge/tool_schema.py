@@ -31,6 +31,28 @@ MOVE_TO = _tool(
     },
 )
 
+AGGRO_MOVE_TO = _tool(
+    "aggro_move_to",
+    "Walk to a position and stop to fight any foe that enters fight_range. "
+    "Mirrors the Froggy bot's AggroMoveToEx path: it re-issues the move if "
+    "interrupted, sidesteps on stuck detection, and engages enemies "
+    "opportunistically as heroes aggro them, rather than sprinting past. "
+    "Prefer this over plain move_to whenever you're walking through an "
+    "explorable area with live enemies (e.g. Sparkfly Swamp, Bogroot "
+    "Growths). fight_range defaults to 1350 units — the Froggy default.",
+    {
+        "properties": {
+            "x": {"type": "number", "description": "X coordinate"},
+            "y": {"type": "number", "description": "Y coordinate"},
+            "fight_range": {
+                "type": "number",
+                "description": "Combat engagement radius in game units (default 1350)",
+            },
+        },
+        "required": ["x", "y"],
+    },
+)
+
 CHANGE_TARGET = _tool(
     "change_target",
     "Change the current target to the specified agent.",
@@ -514,6 +536,38 @@ REQUEST_QUOTE = _tool(
     },
 )
 
+MERCHANT_BUY = _tool(
+    "merchant_buy",
+    "Buy an item from an open merchant window using the native Transaction "
+    "path (safe: avoids raw packet 0x4D which can crash the client). "
+    "item_id must come from the current merchant.items list. quantity "
+    "defaults to 1. Requires merchant.is_open == true.",
+    {
+        "properties": {
+            "item_id": {"type": "integer", "description": "Item ID from merchant.items"},
+            "quantity": {"type": "integer", "description": "Quantity to buy (default 1)"},
+        },
+        "required": ["item_id"],
+    },
+)
+
+MERCHANT_SELL = _tool(
+    "merchant_sell",
+    "Sell an inventory item to an open merchant using the native "
+    "Transaction path (safe). item_id is an inventory item_id. quantity "
+    "is optional — 0 or omitted sells the full stack.",
+    {
+        "properties": {
+            "item_id": {"type": "integer", "description": "Inventory item_id to sell"},
+            "quantity": {
+                "type": "integer",
+                "description": "Quantity to sell (0 = full stack, default 0)",
+            },
+        },
+        "required": ["item_id"],
+    },
+)
+
 TRANSACT_ITEMS = _tool(
     "transact_items",
     "Execute a transaction with an NPC merchant/crafter/trader. "
@@ -967,6 +1021,7 @@ GET_QUEST_INFO = _tool(
 ALL_TOOLS = [
     # Movement
     MOVE_TO,
+    AGGRO_MOVE_TO,
     CHANGE_TARGET,
     CANCEL_ACTION,
     # Combat
@@ -1014,6 +1069,8 @@ ALL_TOOLS = [
     LOAD_SKILLBAR,
     # Trade & Crafting
     BUY_MATERIALS,
+    MERCHANT_BUY,
+    MERCHANT_SELL,
     REQUEST_QUOTE,
     TRANSACT_ITEMS,
     CRAFT_ITEM,

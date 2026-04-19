@@ -39,11 +39,12 @@ LLM bridge surface area — inventory/gold reads, merchant buy+sell, identify
     8b. If the Tekks' War quest is in the reward state, walk back to Tekks
         and dialog-accept the reward (``DIALOG_TEKKS_REWARD``).
 
-Capabilities NOT yet exposed on the bridge (explicitly called out so the
-gap is visible in the test report rather than hidden):
-    * ``aggro_move_to`` — there is only ``move_to``; aggressive movement
-      (pulling enemies into a kill box) is not yet a bridge action. The
-      test uses plain ``move_to`` and lets heroes aggro via proximity.
+``aggro_move_to`` is used for every segment that crosses live-enemy terrain
+(Sparkfly -> Tekks, Tekks -> Bogroot portal, Bogroot waypoints). It wraps
+``Bot::Froggy::DebugAggroMoveTo`` — walk toward the target, fight any foe
+that enters fight_range, sidestep on stuck detection, and re-issue the
+move. Outpost segments and final-mile approaches still use plain
+``move_to`` because there are no enemies to engage.
 
 Usage (stand-alone, like ``test_conset_bridge.py``):
 
@@ -454,6 +455,47 @@ class FroggyHmBridgeTest:
         print(f"[MOVE] TIMEOUT reaching {label}")
         return False
 
+    async def aggro_walk_to(
+        self,
+        x: float,
+        y: float,
+        label: str,
+        fight_range: float = 1350.0,
+        threshold: float = 500.0,
+        timeout: float = 90.0,
+    ) -> bool:
+        """Walk to (x, y) with aggro-fight behavior via ``aggro_move_to``.
+
+        ``aggro_move_to`` is a long-running server-side walk (it blocks on
+        combat) — we fire it once and then poll for arrival. If it hasn't
+        converged within ``timeout`` we return False so the phase logic
+        can decide whether to retry.
+        """
+        print(f"[AGGRO-MOVE] -> {label} ({x:.0f}, {y:.0f}) fight_range={fight_range:.0f}")
+        snap = await self.query_fresh(settle_ms=150, timeout=4.0)
+        if snap is not None:
+            px, py = self.pos()
+            if ((px - x) ** 2 + (py - y) ** 2) ** 0.5 <= threshold:
+                print(f"[AGGRO-MOVE] Already at {label}")
+                return True
+        await self.action(
+            "aggro_move_to",
+            {"x": x, "y": y, "fight_range": fight_range},
+            wait_ms=100,
+        )
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            snap = await self.query_fresh(settle_ms=250, timeout=3.0)
+            if snap is not None:
+                px, py = self.pos()
+                dist = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
+                if dist <= threshold:
+                    print(f"[AGGRO-MOVE] Arrived at {label} (dist={dist:.0f})")
+                    return True
+            await asyncio.sleep(1.0)
+        print(f"[AGGRO-MOVE] TIMEOUT reaching {label}")
+        return False
+
     async def push_until_map_changes(
         self,
         x: float,
@@ -573,6 +615,10 @@ class FroggyHmBridgeTest:
         print(f"[MERCHANT] {len(items)} items available")
 
         # BUY: pick a salvage kit or ID kit if the merchant sells one.
+        # Use merchant_buy (native Transaction path) instead of
+        # transact_items — the raw 0x4D packet crashes the client on some
+        # merchant states (same family as the documented 0x39 INTERACT
+        # crash in project memory).
         bought_any = False
         for target_model in (SALVAGE_KIT_MODEL, ID_KIT_MODEL):
             for it in items:
@@ -581,9 +627,9 @@ class FroggyHmBridgeTest:
                     if merch_item_id <= 0:
                         continue
                     await self.action(
-                        "transact_items",
-                        {"type": 1, "quantity": 1, "item_id": merch_item_id},
-                        wait_ms=1000,
+                        "merchant_buy",
+                        {"item_id": merch_item_id, "quantity": 1},
+                        wait_ms=1500,
                     )
                     bought_any = True
                     print(f"[MERCHANT] Bought model={target_model}")
@@ -604,9 +650,9 @@ class FroggyHmBridgeTest:
                 break
         if sell_item_id:
             await self.action(
-                "transact_items",
-                {"type": 11, "quantity": 1, "item_id": sell_item_id},
-                wait_ms=1000,
+                "merchant_sell",
+                {"item_id": sell_item_id, "quantity": 1},
+                wait_ms=1500,
             )
             print(f"[MERCHANT] Sold 1x item {sell_item_id}")
         else:
@@ -847,7 +893,15 @@ class FroggyHmBridgeTest:
             return False
         for x, y, label in SPARKFLY_TO_TEKKS_PATH:
             threshold = 250.0 if label == "Tekks" else 500.0
-            if not await self.walk_to(x, y, label, threshold=threshold, timeout=60.0):
+            # aggro_move_to for the enemy-populated legs, plain move_to for
+            # the final approach to Tekks himself (no foes on the platform).
+            if label == "Tekks":
+                arrived = await self.walk_to(x, y, label, threshold=threshold, timeout=60.0)
+            else:
+                arrived = await self.aggro_walk_to(
+                    x, y, label, threshold=threshold, timeout=90.0
+                )
+            if not arrived:
                 self._record("phase5_tekks", "FAIL", f"stuck at {label}")
                 return False
         self._record("phase5_tekks", "PASS")
@@ -893,7 +947,7 @@ class FroggyHmBridgeTest:
             self._record("phase7_bogroot", "SKIP", "not in Sparkfly")
             return False
         for x, y, label in TEKKS_TO_DUNGEON_PATH:
-            if not await self.walk_to(x, y, label, threshold=500.0, timeout=45.0):
+            if not await self.aggro_walk_to(x, y, label, threshold=500.0, timeout=60.0):
                 self._record("phase7_bogroot", "FAIL", f"stuck at {label}")
                 return False
         snap = await self.query_fresh(settle_ms=400, timeout=6.0)
@@ -918,7 +972,7 @@ class FroggyHmBridgeTest:
             self._record("phase8_blessing", "SKIP", "not in Bogroot Lvl1")
             return False
         for x, y, label in BOGROOT_TO_BLESSING_PATH:
-            if not await self.walk_to(x, y, label, threshold=500.0, timeout=45.0):
+            if not await self.aggro_walk_to(x, y, label, threshold=500.0, timeout=60.0):
                 self._record("phase8_blessing", "FAIL", f"stuck at {label}")
                 return False
         snap = await self.query_fresh(settle_ms=400, timeout=6.0)

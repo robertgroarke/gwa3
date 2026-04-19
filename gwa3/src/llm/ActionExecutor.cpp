@@ -23,6 +23,7 @@
 namespace GWA3::SmokeTest { bool MovePlayerNear(float x, float y, float threshold, int timeoutMs); }
 #include <gwa3/game/Agent.h>
 #include <gwa3/bot/BotFramework.h>
+#include <gwa3/bot/FroggyHM.h>
 
 #include <nlohmann/json.hpp>
 #include <unordered_map>
@@ -114,6 +115,25 @@ namespace GWA3::LLM::ActionExecutor {
         // and re-issues moves every 500ms via GameThread::EnqueuePost.
         std::thread([x, y]() {
             GWA3::SmokeTest::MovePlayerNear(x, y, 250.0f, 30000);
+        }).detach();
+        return MakeOk();
+    }
+
+    static ActionResult HandleAggroMoveTo(const json& p) {
+        if (!p.contains("x") || !p.contains("y")) return MakeError("missing x or y");
+        float x = p["x"].get<float>();
+        float y = p["y"].get<float>();
+        if (std::abs(x) > 100000 || std::abs(y) > 100000) return MakeError("coordinates_out_of_range");
+        if (!MapMgr::GetIsMapLoaded()) return MakeError("map_not_loaded");
+        // aggro_move_to wraps Froggy's DebugAggroMoveTo — it walks toward
+        // (x, y), fights any enemy that enters fight_range, sidesteps on
+        // stuck detection, and re-issues moves until it arrives or times
+        // out (internal ~240s budget). Handler returns immediately; the
+        // walk completes on the detached worker thread so the bridge
+        // pipe is not blocked.
+        const float fightRange = p.value("fight_range", 1350.0f);
+        std::thread([x, y, fightRange]() {
+            Bot::Froggy::DebugAggroMoveTo(x, y, fightRange);
         }).detach();
         return MakeOk();
     }
@@ -422,6 +442,28 @@ namespace GWA3::LLM::ActionExecutor {
             TradeMgr::TransactItems(type, qty, itemId);
         });
         return MakeOk();
+    }
+
+    // Safer merchant buy/sell: route through TradeMgr's native helpers
+    // (TransactionBuyNative / TransactionSellNative) instead of raw packet
+    // 0x4D. The packet path crashes on some merchant states the same way
+    // raw 0x39 INTERACT does. The native path computes the total value
+    // from the item itself so we don't have to trust LLM-supplied prices.
+    static ActionResult HandleMerchantBuy(const json& p) {
+        if (!p.contains("item_id")) return MakeError("missing item_id");
+        uint32_t itemId = p["item_id"].get<uint32_t>();
+        uint32_t qty = p.value("quantity", 1u);
+        if (qty == 0) return MakeError("invalid_quantity");
+        bool ok = TradeMgr::BuyMerchantItem(itemId, qty);
+        return ok ? MakeOk() : MakeError("buy_merchant_item_failed");
+    }
+
+    static ActionResult HandleMerchantSell(const json& p) {
+        if (!p.contains("item_id")) return MakeError("missing item_id");
+        uint32_t itemId = p["item_id"].get<uint32_t>();
+        uint32_t qty = p.value("quantity", 0u);
+        bool ok = TradeMgr::SellInventoryItem(itemId, qty);
+        return ok ? MakeOk() : MakeError("sell_inventory_item_failed");
     }
 
     static ActionResult HandleSendChat(const json& p) {
@@ -928,6 +970,7 @@ namespace GWA3::LLM::ActionExecutor {
 
         // Movement
         g_dispatch["move_to"] = HandleMoveTo;
+        g_dispatch["aggro_move_to"] = HandleAggroMoveTo;
         g_dispatch["change_target"] = HandleChangeTarget;
         g_dispatch["cancel_action"] = HandleCancelAction;
 
@@ -993,6 +1036,8 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["buy_materials"] = HandleBuyMaterials;
         g_dispatch["request_quote"] = HandleRequestQuote;
         g_dispatch["transact_items"] = HandleTransactItems;
+        g_dispatch["merchant_buy"] = HandleMerchantBuy;
+        g_dispatch["merchant_sell"] = HandleMerchantSell;
         g_dispatch["craft_item"] = HandleCraftItem;
         g_dispatch["open_merchant"] = HandleOpenMerchant;
         g_dispatch["withdraw_gold"] = HandleWithdrawGold;
