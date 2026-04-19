@@ -1304,7 +1304,6 @@ class FroggyHmBridgeTest:
                 (self.phase2c_identify_salvage, False),
                 (self.phase2d_xunlai, False),
                 (self.phase2e_town_blessing, False),
-                (self.phase2f_skill_usage, False),
                 (self.phase3_enter_sparkfly, True),
                 (self.phase4_combat_proof, False),
                 (self.phase4b_loot, False),
@@ -1315,6 +1314,14 @@ class FroggyHmBridgeTest:
                 (self.phase8b_dungeon_gadgets, False),
                 (self.phase9_return_to_outpost, True),
                 (self.phase9b_quest_reward, False),
+                # phase2f runs LAST intentionally. Firing a player skill
+                # against target=0 in an outpost persistently invalidates
+                # the DLL's player-agent pointer (SkillMgr::
+                # GetPlayerSkillbar returns null, MovePlayerNear can't
+                # read position) for minutes. Running this phase at the
+                # end means the state-break happens after every useful
+                # bridge-surface check has already run.
+                (self.phase2f_skill_usage, False),
             ]
             aborted = False
             for phase, blocking in phases:
