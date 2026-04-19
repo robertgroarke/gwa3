@@ -51,11 +51,29 @@ PartyInfo* ResolvePlayerParty() {
 bool Initialize() {
     if (s_initialized) return true;
 
-    uintptr_t addHero = Scanner::Find(
-        "\x55\x8B\xEC\x56\x8B\x75\x08\x83\xFE\x26\x7C\x0C\x68\x0C\x11\x00\x00\xB9",
-        "xxxxxxxxxxxxxxxxxx", 0x0);
-    if (addHero > 0x10000) {
-        s_addHeroFn = reinterpret_cast<AddHeroFn>(addHero);
+    // Port GWCA's resolution (GWCA-master/Source/PartyMgr.cpp:102-106):
+    //   address = FindAssertion("p:\\code\\gw\\ui\\game\\party\\ptsearch.cpp",
+    //                           "m_activeList == LIST_HEROES", -0xd5);
+    //   AddHero_Func = FunctionFromNearCall(address + 0x100);
+    // Byte-pattern scans for the AddHero prologue stopped matching in
+    // Reforged; the assertion-string anchor is stable across builds
+    // because the source filename + assertion message live in .rdata.
+    uintptr_t anchor = Scanner::FindAssertion(
+        "p:\\code\\gw\\ui\\game\\party\\ptsearch.cpp",
+        "m_activeList == LIST_HEROES",
+        -0xd5);
+    if (anchor > 0x10000) {
+        uintptr_t fn = Scanner::FunctionFromNearCall(anchor + 0x100);
+        if (fn > 0x10000) {
+            s_addHeroFn = reinterpret_cast<AddHeroFn>(fn);
+        }
+        Log::Info("PartyMgr: ptsearch anchor=0x%08X addHero=0x%08X",
+                  static_cast<unsigned>(anchor),
+                  static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_addHeroFn)));
+    } else {
+        Log::Warn("PartyMgr: FindAssertion(ptsearch.cpp, m_activeList == "
+                  "LIST_HEROES) failed — AddHero disabled, will fall back "
+                  "to CtoS::HeroAdd packet");
     }
 
     s_initialized = true;
@@ -80,24 +98,18 @@ void AddHero(uint32_t heroId) {
 
 void KickHero(uint32_t heroId)   { CtoS::HeroKick(heroId); }
 void KickAllHeroes() {
-    // Confirmed on the current client/test environment: HERO_KICK with the
-    // upstream 0x27 "kick all" sentinel does work, while the older 0x26
-    // sentinel does not reliably remove party heroes. We still prefer the
-    // observed per-hero path when party state is available because it gives
-    // us deterministic behavior and clearer recovery when a specific hero
-    // fails to leave.
+    // Send the 0x27 "kick all" sentinel first: confirmed to reliably clear
+    // party heroes on the current client. Per-hero HERO_KICK with the
+    // internal hero_id has stopped removing heroes on the current build,
+    // so we issue it only as a fallback behind the sentinel.
+    CtoS::SendPacket(2, Packets::HERO_KICK, 0x27u);
     uint32_t heroIds[16] = {};
     const size_t heroCount = GetPartyHeroIds(heroIds, _countof(heroIds));
-    if (heroCount) {
-        for (size_t i = 0; i < heroCount; ++i) {
-            if (heroIds[i] != 0) {
-                CtoS::HeroKick(heroIds[i]);
-            }
+    for (size_t i = 0; i < heroCount; ++i) {
+        if (heroIds[i] != 0) {
+            CtoS::HeroKick(heroIds[i]);
         }
-        return;
     }
-    // Fallback only when party state is unavailable.
-    CtoS::SendPacket(2, Packets::HERO_KICK, 0x27u);
 }
 
 void SetHeroBehavior(uint32_t heroIndex, uint32_t behavior) {
