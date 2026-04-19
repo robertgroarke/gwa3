@@ -345,18 +345,29 @@ namespace GWA3::LLM::GameSnapshot {
     // objects in the caller) conflict with __try/__except in MSVC —
     // C2712 rejects mixing them in one function.
     struct EquipItemIds {
-        uint32_t weapon, offhand, chest, legs, head, feet, hands;
-        uint16_t weapon_id16, offhand_id16;  // fallback from AgentLiving
+        uint16_t weapon_id16, offhand_id16;
     };
-    // Reads AgentLiving's direct weapon/offhand 16-bit ids plus the
-    // 32-bit Equipment-struct item_ids at the GWCA-documented offsets
-    // (+0xB4..+0xCC). GW Reforged appears to have shifted the
-    // Equipment layout — on BISCUIT at char select the struct pointer
-    // is non-null but the +0xB4..+0xCC range reads all zeros, so the
-    // caller falls back to the 16-bit ids or emits nothing. The
-    // code path is kept because (a) the 16-bit fallback works in
-    // combat, and (b) the 32-bit reads are free: they return 0
-    // cleanly when the layout shifts further, never crash.
+    // Reads AgentLiving's 16-bit weapon + offhand item ids (+0x1BE,
+    // +0x1C0). These are the only reliable equipment identifiers we
+    // can expose today — they update in combat when a weapon is in
+    // hand and are zero in outposts where the weapon isn't drawn.
+    //
+    // GWCA's AgentLiving.equip (+0xFC) + Equipment struct (item_ids
+    // at +0xB4..+0xCC, 9 slots) doesn't match GW Reforged. Live
+    // dumps of the struct show the pointer is valid but the
+    // +0xB4..+0xCC slots read all zeros; the first 0xE0 bytes are
+    // reshuffled with pointer clusters at non-GWCA offsets, and the
+    // slot-record +0x08 pointers do NOT target Item structs
+    // (dereferenced dumps show vtable-prefixed objects whose +0x00
+    // is in the 0x00CA000-0x00CE000 .data range, not an item_id).
+    //
+    // Small integers at slot-record +0x04 (1, 3, 4, 10, 16) look
+    // like item TYPES or slot indexes rather than ItemMgr item_ids.
+    // Cross-referencing equipment to inventory Item* would need a
+    // different mechanism (likely an ApplyEquipment StoC packet
+    // hook, or a different pointer chain we haven't mapped). Out of
+    // scope for this session — see tools/_dump_equip_slots.py for
+    // the investigation harness.
     //
     // SEH-isolated from the caller so json destructors don't fight
     // MSVC's unwind restrictions (C2712).
@@ -367,52 +378,26 @@ namespace GWA3::LLM::GameSnapshot {
         __try {
             out->weapon_id16 = agent->weapon_item_id;
             out->offhand_id16 = agent->offhand_item_id;
-
-            uintptr_t equipPtr = reinterpret_cast<uintptr_t>(agent->equip);
-            if (equipPtr <= 0x10000) return true;  // 16-bit ids still valid
-            out->weapon  = *reinterpret_cast<uint32_t*>(equipPtr + 0xB4);
-            out->offhand = *reinterpret_cast<uint32_t*>(equipPtr + 0xB8);
-            out->chest   = *reinterpret_cast<uint32_t*>(equipPtr + 0xBC);
-            out->legs    = *reinterpret_cast<uint32_t*>(equipPtr + 0xC0);
-            out->head    = *reinterpret_cast<uint32_t*>(equipPtr + 0xC4);
-            out->feet    = *reinterpret_cast<uint32_t*>(equipPtr + 0xC8);
-            out->hands   = *reinterpret_cast<uint32_t*>(equipPtr + 0xCC);
             return true;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             return false;
         }
     }
 
-    // Emit an `equipment` sub-object for the given living agent. Slot
-    // item_ids come from ReadEquipItemIds (SEH-isolated above); each
-    // non-zero slot is resolved via ItemMgr::GetItemById and emits the
-    // standard name/full_name/info_string triple. Costume slots
-    // (+0xD0/+0xD4) are cosmetic and skipped.
+    // Emit an `equipment` sub-object for the given living agent. Today
+    // only weapon + offhand light up, via the 16-bit ids stored
+    // directly on AgentLiving (+0x1BE / +0x1C0). Populated in combat
+    // when the weapon is drawn; zero in outposts. Armor slots require
+    // deeper Reforged struct RE — see ReadEquipItemIds comment.
     static void EmitEquipmentForAgent(json& dst, const AgentLiving* agent) {
         EquipItemIds ids{};
-        ReadEquipItemIds(agent, &ids);
+        if (!ReadEquipItemIds(agent, &ids)) return;
 
         struct Slot { uint32_t itemId; const char* name; };
-        Slot kGearSlots[] = {
-            {ids.weapon,  "weapon"},
-            {ids.offhand, "offhand"},
-            {ids.chest,   "chest"},
-            {ids.legs,    "legs"},
-            {ids.head,    "head"},
-            {ids.feet,    "feet"},
-            {ids.hands,   "hands"},
+        const Slot kGearSlots[] = {
+            {ids.weapon_id16,  "weapon"},
+            {ids.offhand_id16, "offhand"},
         };
-        // If the Equipment struct read returned all zeros (equip ptr
-        // not materialized, or struct offsets shifted in this build),
-        // fall back to the 16-bit IDs stored directly on AgentLiving.
-        // They only cover weapon + offhand but are sufficient for
-        // combat-gear awareness.
-        if (kGearSlots[0].itemId == 0 && ids.weapon_id16 != 0) {
-            kGearSlots[0].itemId = ids.weapon_id16;
-        }
-        if (kGearSlots[1].itemId == 0 && ids.offhand_id16 != 0) {
-            kGearSlots[1].itemId = ids.offhand_id16;
-        }
 
         json eq = json::object();
         for (const auto& slot : kGearSlots) {
