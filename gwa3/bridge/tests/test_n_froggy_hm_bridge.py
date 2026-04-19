@@ -121,32 +121,40 @@ EXIT_WP1 = (-10018.0, -21892.0)
 EXIT_WP2 = (-9550.0, -20400.0)
 EXIT_PUSH = (-9451.0, -19766.0)
 
-# Sparkfly -> Tekks path (C++ kSparkflyToTekksPath)
+# Sparkfly -> Tekks path, matching AutoIt Froggy_HM RunToDungeon()
+# waypoint array. Each entry: (x, y, fight_range, label). fight_range
+# mirrors AutoIt — it drops from 1300 through the early aggro zones to
+# 900/600/0 near the end, so the final approach to Tekks/portal isn't
+# wasted on unnecessary engagements. A fight_range of 0 means "walk
+# through, no aggro-fight" — agent should use plain move_to there.
 SPARKFLY_TO_TEKKS_PATH = [
-    (-4559.0, -14406.0, "Sparkfly waypoint 1"),
-    (-5204.0, -9831.0, "Sparkfly waypoint 2"),
-    (-928.0, -8699.0, "Sparkfly waypoint 3"),
-    (4200.0, -4897.0, "Sparkfly waypoint 4"),
-    (6114.0, 819.0, "Sparkfly waypoint 5"),
-    (9500.0, 2281.0, "Sparkfly waypoint 6"),
-    (11570.0, 6120.0, "Sparkfly waypoint 7"),
-    (11025.0, 11710.0, "Sparkfly waypoint 8"),
-    (14624.0, 19314.0, "Sparkfly waypoint 9"),
-    (TEKKS_X, TEKKS_Y, "Tekks"),
+    (-4559.0, -14406.0, 1300.0, "Sparkfly waypoint 1"),
+    (-5204.0, -9831.0,  1300.0, "Sparkfly waypoint 2"),
+    (-928.0,  -8699.0,  1300.0, "Sparkfly waypoint 3"),
+    (4200.0,  -4897.0,  1500.0, "Sparkfly waypoint 4"),
+    (6114.0,  819.0,    1300.0, "Sparkfly waypoint 5"),
+    (9500.0,  2281.0,   1300.0, "Sparkfly waypoint 6"),
+    (11570.0, 6120.0,   1200.0, "Sparkfly waypoint 7"),
+    (11025.0, 11710.0,  900.0,  "Sparkfly waypoint 8"),
+    (14624.0, 19314.0,  600.0,  "Sparkfly waypoint 9"),
+    (TEKKS_X, TEKKS_Y,  0.0,    "Tekks"),
 ]
 
-# Tekks -> Bogroot portal (C++ kTekksToDungeonPath)
+# Tekks -> Bogroot portal (from C++ kTekksToDungeonPath). AutoIt's
+# TakeQuest0 follow-up walks this with fight_range=0 — it's a stretch
+# past Tekks's platform where enemies don't normally roam.
 TEKKS_TO_DUNGEON_PATH = [
-    (12228.0, 22677.0, "Dungeon approach 1"),
-    (12470.0, 25036.0, "Dungeon approach 2"),
-    (12968.0, 26219.0, "Dungeon approach 3"),
-    (DUNGEON_PORTAL_X, DUNGEON_PORTAL_Y, "Bogroot portal"),
+    (12228.0, 22677.0, 0.0, "Dungeon approach 1"),
+    (12470.0, 25036.0, 0.0, "Dungeon approach 2"),
+    (12968.0, 26219.0, 0.0, "Dungeon approach 3"),
+    (DUNGEON_PORTAL_X, DUNGEON_PORTAL_Y, 0.0, "Bogroot portal"),
 ]
 
-# Bogroot spawn -> blessing shrine (C++ kBogrootToBlessingPath)
+# Bogroot spawn -> blessing shrine. Bogroot Lvl1 does have enemies on
+# the path so use aggro-fight range for the approach.
 BOGROOT_TO_BLESSING_PATH = [
-    (17026.0, 2168.0, "Bogroot start"),
-    (BLESSING_X, BLESSING_Y, "Blessing shrine"),
+    (17026.0, 2168.0, 1300.0, "Bogroot start"),
+    (BLESSING_X, BLESSING_Y, 900.0, "Blessing shrine"),
 ]
 
 # Standard.txt hero order (GWA Censured/hero_configs/Standard.txt)
@@ -262,6 +270,72 @@ class FroggyHmBridgeTest:
 
     def party_size(self) -> int:
         return int(self.snapshot.get("party", {}).get("size", 0) or 0)
+
+    def player_hp_fraction(self) -> float:
+        """0.0..1.0. 0.0 = dead, 1.0 = full. Mirrors AutoIt GetMyHealth."""
+        me = self.snapshot.get("me", {})
+        return float(me.get("hp", 0.0) or 0.0)
+
+    def party_hp_fraction(self) -> float:
+        """Average HP fraction across player + heroes in the current party.
+
+        Mirrors AutoIt's ``GetPartyHealth()`` — used by ``MoveandAggroEx``
+        for wipe detection (waits for the party to rez back above 50%).
+        Snapshot exposes per-hero hp fractions in ``heroes[].hp`` and the
+        player's in ``me.hp``.
+        """
+        hps: list[float] = []
+        me_hp = float(self.snapshot.get("me", {}).get("hp", -1.0) or -1.0)
+        if me_hp >= 0.0:
+            hps.append(me_hp)
+        for h in self.snapshot.get("heroes", []) or []:
+            hp = h.get("hp", None)
+            if hp is not None:
+                hps.append(float(hp or 0.0))
+        if not hps:
+            return 0.0
+        return sum(hps) / len(hps)
+
+    def is_player_dead(self) -> bool:
+        return self.player_hp_fraction() <= 0.001
+
+    def is_party_wiped(self) -> bool:
+        """True when player is dead AND >=75% of the party is at 0 HP.
+
+        One hero going down is not a wipe; three+ down while the player
+        is also dead is. Mirrors AutoIt ``Wipe()`` — the real Wipe() also
+        checks GetPartyDefeated but that would require a new snapshot
+        field; the hp-fraction heuristic is a close stand-in that uses
+        only fields already exposed.
+        """
+        if not self.is_player_dead():
+            return False
+        heroes = self.snapshot.get("heroes", []) or []
+        if not heroes:
+            return self.is_player_dead()
+        down = sum(1 for h in heroes if float(h.get("hp", 0.0) or 0.0) <= 0.001)
+        return down >= (len(heroes) * 3) // 4
+
+    def nearest_waypoint_index(self, waypoints: list) -> int:
+        """Index of the waypoint closest to the player's current position.
+
+        Mirrors AutoIt ``GetNearestWaypointIndex($aWaypoints)`` — used on
+        recovery after a wipe or stuck state to pick the best restart
+        point rather than blindly resuming from the last attempted
+        waypoint. Waypoint entries may be either ``(x, y, label)`` or
+        ``(x, y, fight_range, label)``.
+        """
+        px, py = self.pos()
+        best_idx = 0
+        best_dist = float("inf")
+        for idx, wp in enumerate(waypoints):
+            wx = float(wp[0])
+            wy = float(wp[1])
+            d = ((wx - px) ** 2 + (wy - py) ** 2) ** 0.5
+            if d < best_dist:
+                best_dist = d
+                best_idx = idx
+        return best_idx
 
     # --- Inventory / merchant helpers ---
 
@@ -1103,29 +1177,116 @@ class FroggyHmBridgeTest:
         self._record("phase4b_loot", "PASS", f"picked={picked}")
         return True
 
+    async def _walk_waypoint_route(
+        self,
+        waypoints: list,
+        *,
+        route_label: str,
+        final_threshold: float = 250.0,
+        interior_threshold: float = 500.0,
+        per_wp_timeout: float = 300.0,
+        wipe_recovery_timeout: float = 180.0,
+    ) -> tuple[bool, str]:
+        """Iterate an AutoIt-style waypoint route with wipe recovery.
+
+        Mirrors AutoIt ``MoveandAggroEx($aWaypoints)`` at the primitive
+        level: for each ``(x, y, fight_range, label)`` entry walk toward
+        (x, y) — via ``aggro_walk_to`` if fight_range > 0, else plain
+        ``walk_to`` — then check for wipe. On wipe, cancel, wait for
+        party HP to recover above 50%, then resume at
+        ``nearest_waypoint_index`` instead of the last attempted
+        waypoint. Returns (arrived_at_final, detail).
+
+        The last entry's arrival uses ``final_threshold``; interior
+        entries use ``interior_threshold`` (matches the AutoIt pattern
+        where final-approach waypoints need tighter precision).
+        """
+        if not waypoints:
+            return True, "empty route"
+
+        idx = 0
+        visited_after_wipe = 0
+        while idx < len(waypoints):
+            wp = waypoints[idx]
+            x, y, fight_range, label = float(wp[0]), float(wp[1]), float(wp[2]), str(wp[3])
+            is_last = idx == len(waypoints) - 1
+            threshold = final_threshold if is_last else interior_threshold
+
+            print(f"[ROUTE {route_label}] waypoint {idx + 1}/{len(waypoints)}: {label} "
+                  f"fight_range={fight_range:.0f}")
+
+            if fight_range > 0.0:
+                arrived = await self.aggro_walk_to(
+                    x, y, label,
+                    fight_range=fight_range,
+                    threshold=threshold,
+                    timeout=per_wp_timeout,
+                )
+            else:
+                arrived = await self.walk_to(
+                    x, y, label, threshold=threshold, timeout=per_wp_timeout
+                )
+
+            # After every leg: check wipe. AutoIt MoveandAggroEx does
+            # this in its outer loop. We skip the `Wipe()` deadlock of
+            # the AutoIt path in favor of a simpler "dead + majority of
+            # heroes down -> wait for rez" check since the snapshot
+            # doesn't yet expose GetPartyDefeated.
+            await self.query_fresh(settle_ms=200, timeout=4.0)
+            if self.is_party_wiped():
+                print(f"[ROUTE {route_label}] WIPE detected at {label} — "
+                      f"player_hp={self.player_hp_fraction():.2f} party_hp="
+                      f"{self.party_hp_fraction():.2f}. Waiting for rez...")
+                await self.action("cancel_action", {}, wait_ms=500)
+                if not await self._wait_for_party_rez(timeout=wipe_recovery_timeout):
+                    return False, f"wipe at {label}, rez timeout"
+                # Restart at the nearest waypoint. AutoIt uses
+                # WipeManagement to pick; we use plain nearest.
+                new_idx = self.nearest_waypoint_index(waypoints)
+                print(f"[ROUTE {route_label}] Rezzed. Resuming at nearest "
+                      f"waypoint {new_idx + 1}/{len(waypoints)} ({waypoints[new_idx][3]})")
+                idx = new_idx
+                visited_after_wipe += 1
+                if visited_after_wipe > 3:
+                    return False, f"too many wipes at {label}"
+                continue
+
+            if not arrived:
+                return False, f"stuck at {label}"
+
+            idx += 1
+
+        return True, "ok"
+
+    async def _wait_for_party_rez(self, timeout: float) -> bool:
+        """Wait for party HP fraction to climb above 0.5 (mirrors AutoIt)."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            await self.query_fresh(settle_ms=300, timeout=5.0)
+            if self.party_hp_fraction() > 0.5:
+                return True
+            await asyncio.sleep(3.0)
+        return False
+
     async def phase5_walk_to_tekks(self) -> bool:
         print("\n=== PHASE 5: Walk Sparkfly -> Tekks ===")
         if self.map_id() != MAP_SPARKFLY:
             self._record("phase5_tekks", "SKIP", "not in Sparkfly")
             return False
-        # aggro_move_to runs a long combat loop server-side: walk, engage
-        # anything in fight_range, resume walk. HM Sparkfly legs can take
-        # several minutes each (tight aggro groups + 7 heroes slowly
-        # clearing). Per-waypoint timeouts pulled up from 90s to 300s so
-        # the test doesn't bail on legitimately slow combat legs.
-        for x, y, label in SPARKFLY_TO_TEKKS_PATH:
-            threshold = 250.0 if label == "Tekks" else 500.0
-            # aggro_move_to for the enemy-populated legs, plain move_to for
-            # the final approach to Tekks himself (no foes on the platform).
-            if label == "Tekks":
-                arrived = await self.walk_to(x, y, label, threshold=threshold, timeout=120.0)
-            else:
-                arrived = await self.aggro_walk_to(
-                    x, y, label, threshold=threshold, timeout=300.0
-                )
-            if not arrived:
-                self._record("phase5_tekks", "FAIL", f"stuck at {label}")
-                return False
+        # Drive the route at the AutoIt MoveandAggroEx level: iterate the
+        # waypoint array, use aggro_move_to for legs with a fight_range,
+        # plain move_to for the zero-fight tail. On wipe, resume at the
+        # nearest waypoint rather than failing outright.
+        ok, detail = await self._walk_waypoint_route(
+            SPARKFLY_TO_TEKKS_PATH,
+            route_label="Sparkfly->Tekks",
+            final_threshold=250.0,
+            interior_threshold=500.0,
+            per_wp_timeout=300.0,
+        )
+        if not ok:
+            self._record("phase5_tekks", "FAIL", detail)
+            return False
         self._record("phase5_tekks", "PASS")
         return True
 
@@ -1168,10 +1329,16 @@ class FroggyHmBridgeTest:
         if self.map_id() != MAP_SPARKFLY:
             self._record("phase7_bogroot", "SKIP", "not in Sparkfly")
             return False
-        for x, y, label in TEKKS_TO_DUNGEON_PATH:
-            if not await self.aggro_walk_to(x, y, label, threshold=500.0, timeout=240.0):
-                self._record("phase7_bogroot", "FAIL", f"stuck at {label}")
-                return False
+        ok, detail = await self._walk_waypoint_route(
+            TEKKS_TO_DUNGEON_PATH,
+            route_label="Tekks->Bogroot",
+            final_threshold=500.0,
+            interior_threshold=500.0,
+            per_wp_timeout=240.0,
+        )
+        if not ok:
+            self._record("phase7_bogroot", "FAIL", detail)
+            return False
         snap = await self.query_fresh(settle_ms=400, timeout=6.0)
         portal_id = None
         if snap is not None:
@@ -1193,10 +1360,16 @@ class FroggyHmBridgeTest:
         if self.map_id() != MAP_BOGROOT_LVL1:
             self._record("phase8_blessing", "SKIP", "not in Bogroot Lvl1")
             return False
-        for x, y, label in BOGROOT_TO_BLESSING_PATH:
-            if not await self.aggro_walk_to(x, y, label, threshold=500.0, timeout=240.0):
-                self._record("phase8_blessing", "FAIL", f"stuck at {label}")
-                return False
+        ok, detail = await self._walk_waypoint_route(
+            BOGROOT_TO_BLESSING_PATH,
+            route_label="Bogroot->Blessing",
+            final_threshold=500.0,
+            interior_threshold=500.0,
+            per_wp_timeout=240.0,
+        )
+        if not ok:
+            self._record("phase8_blessing", "FAIL", detail)
+            return False
         snap = await self.query_fresh(settle_ms=400, timeout=6.0)
         shrine_id = 0
         if snap is not None:
@@ -1311,13 +1484,21 @@ class FroggyHmBridgeTest:
             self._record("phase9b_reward", "SKIP", "not in Sparkfly")
             return True
 
-        # Reuse the Sparkfly->Tekks path end. Only walk the last few waypoints
-        # to save time (we are already past the early ones).
-        for x, y, label in SPARKFLY_TO_TEKKS_PATH[-3:]:
-            threshold = 250.0 if label == "Tekks" else 500.0
-            if not await self.walk_to(x, y, label, threshold=threshold, timeout=60.0):
-                self._record("phase9b_reward", "SKIP", f"stuck at {label}")
-                return True
+        # Reuse the Sparkfly->Tekks path end. Only walk the last few
+        # waypoints to save time (we are already past the early ones).
+        # Use _walk_waypoint_route so wipe recovery + fight_range=0 tail
+        # semantics are handled consistently with the main phase 5.
+        tail = SPARKFLY_TO_TEKKS_PATH[-3:]
+        ok, detail = await self._walk_waypoint_route(
+            tail,
+            route_label="Sparkfly->Tekks (reward tail)",
+            final_threshold=250.0,
+            interior_threshold=500.0,
+            per_wp_timeout=120.0,
+        )
+        if not ok:
+            self._record("phase9b_reward", "SKIP", f"reward walk: {detail}")
+            return True
 
         snap = await self.query_fresh(settle_ms=400, timeout=6.0)
         if snap is not None:
