@@ -416,47 +416,91 @@ namespace GWA3::LLM::GameSnapshot {
         }
     }
 
+    // SEH-isolated read of AgentLiving's 16-bit weapon + offhand
+    // fields. Used as a fallback for heroes (whose full equipment
+    // isn't yet plumbed — see EmitEquipmentForAgent below).
+    struct AgentWeaponIds {
+        uint16_t weapon_id16;
+        uint16_t offhand_id16;
+    };
+    __declspec(noinline) static bool ReadAgentWeaponIds(
+            const AgentLiving* agent, AgentWeaponIds* out) {
+        if (!agent || !out) return false;
+        *out = {};
+        __try {
+            out->weapon_id16 = agent->weapon_item_id;
+            out->offhand_id16 = agent->offhand_item_id;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    // Helper: resolve a single slot from an item_id and add to `eq`.
+    static void EmitOneEquipmentSlot(json& eq, uint32_t itemId,
+                                     const char* slotName) {
+        if (itemId == 0) return;
+        Item* item = ItemMgr::GetItemById(itemId);
+        if (!item) return;
+        json it;
+        it["item_id"] = itemId;
+        it["model_id"] = item->model_id;
+        EmitBestText(it, item->name_enc, "name", item->single_item_name);
+        EmitBestText(it, item->complete_name_enc, "full_name");
+        EmitBestText(it, item->info_string, "info_string");
+        eq[slotName] = it;
+    }
+
     // Emit an `equipment` sub-object for the given living agent.
     //
-    // Bypasses the Reforged Equipment struct (layout drift RE'd in
-    // c6a5906 — item_ids not resolvable through the struct pointer)
-    // and reads directly from ItemMgr::GetBag(0), the equipment bag.
-    // Each Item in bag 0 carries `equipped` (+0x4E, nonzero when in
-    // an active slot) and `slot` (+0x50, the 0..6 slot index mapped
-    // from GWCA's Equipment union: weapon, offhand, chest, legs,
-    // head, feet, hands). Skip costume_body (7) and costume_head (8)
-    // since those are cosmetic.
+    // For the PLAYER (isMe=true): iterate bag 22 (GWCA
+    // Bag::Equipped_Items), bucket by Item.slot. Produces all 7 gear
+    // slots when the character has equipped them (verified in d4dac60).
     //
-    // Only emits the PLAYER's equipment — bag 0 belongs to the local
-    // character. Heroes carry their own inventory bags we don't
-    // currently map; their `equipment` object will remain absent
-    // until a future session plumbs hero inventory access.
+    // For HEROES: full bag iteration isn't possible because
+    // ItemMgr::GetBag() returns player-local bags only; hero
+    // inventories aren't plumbed into our struct definitions yet.
+    // Fall back to AgentLiving.weapon_item_id / offhand_item_id — the
+    // 16-bit fields populate in combat when the weapon is drawn.
+    // Armor slots for heroes are not emitted (future work: hero
+    // inventory RE; the Item.agent_id field at +0x04 is 0 across the
+    // player's bags, so the "item belongs to this agent_id" cross-
+    // reference path doesn't work — probed empirically with
+    // tools/_probe_all_items.py).
     //
     // Item names flow through the same name / full_name / info_string
     // triple as everywhere else, reusing EmitBestText's positive-gate
     // encoding filter.
     static void EmitEquipmentForAgent(json& dst, const AgentLiving* agent,
                                       bool isMe) {
-        if (!agent || !isMe) return;
-
-        static const char* kSlotNames[7] = {
-            "weapon", "offhand", "chest", "legs", "head", "feet", "hands",
-        };
-
-        EquippedItem items[16] = {};
-        uint32_t count = ReadEquippedItems(items, 16);
-        if (count == 0) return;
+        if (!agent) return;
 
         json eq = json::object();
-        for (uint32_t i = 0; i < count; ++i) {
-            const auto& r = items[i];
-            json it;
-            it["item_id"] = r.item_id;
-            it["model_id"] = r.model_id;
-            EmitBestText(it, r.name_enc, "name", r.single_item_name);
-            EmitBestText(it, r.complete_name_enc, "full_name");
-            EmitBestText(it, r.info_string, "info_string");
-            eq[kSlotNames[r.slot]] = it;
+
+        if (isMe) {
+            static const char* kSlotNames[7] = {
+                "weapon", "offhand", "chest", "legs",
+                "head", "feet", "hands",
+            };
+            EquippedItem items[16] = {};
+            uint32_t count = ReadEquippedItems(items, 16);
+            for (uint32_t i = 0; i < count; ++i) {
+                const auto& r = items[i];
+                json it;
+                it["item_id"] = r.item_id;
+                it["model_id"] = r.model_id;
+                EmitBestText(it, r.name_enc, "name", r.single_item_name);
+                EmitBestText(it, r.complete_name_enc, "full_name");
+                EmitBestText(it, r.info_string, "info_string");
+                eq[kSlotNames[r.slot]] = it;
+            }
+        } else {
+            // Hero fallback: weapon + offhand only, from direct fields.
+            AgentWeaponIds ids{};
+            if (ReadAgentWeaponIds(agent, &ids)) {
+                EmitOneEquipmentSlot(eq, ids.weapon_id16,  "weapon");
+                EmitOneEquipmentSlot(eq, ids.offhand_id16, "offhand");
+            }
         }
 
         if (!eq.empty()) dst["equipment"] = eq;
