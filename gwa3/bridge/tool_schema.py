@@ -33,13 +33,15 @@ MOVE_TO = _tool(
 
 AGGRO_MOVE_TO = _tool(
     "aggro_move_to",
-    "Walk to a position and stop to fight any foe that enters fight_range. "
-    "Mirrors the Froggy bot's AggroMoveToEx path: it re-issues the move if "
-    "interrupted, sidesteps on stuck detection, and engages enemies "
-    "opportunistically as heroes aggro them, rather than sprinting past. "
-    "Prefer this over plain move_to whenever you're walking through an "
-    "explorable area with live enemies (e.g. Sparkfly Swamp, Bogroot "
-    "Growths). fight_range defaults to 1350 units — the Froggy default.",
+    "Walk to a position AND fight anything that enters fight_range along "
+    "the way. Internally runs Froggy's AggroMoveToEx -> "
+    "FightEnemiesInAggro loop: when an enemy is in aggro it picks the "
+    "best target, calls native Attack, and cycles your skillbar via "
+    "UseSkillsInSlotOrder (so the PLAYER casts skills too — not just "
+    "heroes). It also re-issues the move on interrupt and sidesteps on "
+    "stuck detection. This is a long, blocking walk-and-fight (can take "
+    "minutes). Prefer it over plain move_to for any explorable segment "
+    "with live enemies. fight_range defaults to 1350 units.",
     {
         "properties": {
             "x": {"type": "number", "description": "X coordinate"},
