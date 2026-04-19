@@ -6,6 +6,7 @@
 
 #include <Windows.h>
 #include <MinHook.h>
+#include <cstddef>
 #include <cstdarg>
 #include <cstring>
 
@@ -17,27 +18,22 @@ using PacketSendFn = void(__cdecl*)(void*, uint32_t, uint32_t*);
 
 static PacketSendFn s_packetSendFn = nullptr;
 static PacketSendFn s_packetSendOriginal = nullptr;  // trampoline for packet tap
+static uintptr_t s_packetSendRawAsmTarget = 0;
 static bool s_packetTapEnabled = false;
+static bool s_packetTapHookInstalled = false;
 static uintptr_t s_packetLocation = 0;
+static uintptr_t s_packetLocationPtrAddr = 0;
 static bool s_initialized = false;
+static volatile LONG s_packetTapTotal = 0;
+static volatile LONG s_packetTapCounts[0x200] = {};
 
 // Packet tap: intercept ALL outgoing CtoS packets (including game UI actions)
 static void __cdecl PacketSendTap(void* loc, uint32_t sizeBytes, uint32_t* data) {
     if (s_packetTapEnabled && data && sizeBytes >= 4) {
         const uint32_t hdr = data[0];
-        const uint32_t numDwords = sizeBytes / 4;
-        // Log header + first 4 data dwords for identification
-        if (numDwords >= 4) {
-            Log::Info("[PACKET-TAP] hdr=0x%02X size=%u d1=0x%08X d2=0x%08X d3=0x%08X",
-                      hdr, sizeBytes, data[1], data[2], data[3]);
-        } else if (numDwords >= 3) {
-            Log::Info("[PACKET-TAP] hdr=0x%02X size=%u d1=0x%08X d2=0x%08X",
-                      hdr, sizeBytes, data[1], data[2]);
-        } else if (numDwords >= 2) {
-            Log::Info("[PACKET-TAP] hdr=0x%02X size=%u d1=0x%08X",
-                      hdr, sizeBytes, data[1]);
-        } else {
-            Log::Info("[PACKET-TAP] hdr=0x%02X size=%u", hdr, sizeBytes);
+        InterlockedIncrement(&s_packetTapTotal);
+        if (hdr < _countof(s_packetTapCounts)) {
+            InterlockedIncrement(&s_packetTapCounts[hdr]);
         }
     }
     if (s_packetSendOriginal) {
@@ -46,6 +42,8 @@ static void __cdecl PacketSendTap(void* loc, uint32_t sizeBytes, uint32_t* data)
 }
 
 static void IssuePacketSend(const uint32_t* data, uint32_t sizeBytes);
+static void IssuePacketSendRaw(const uint32_t* data, uint32_t sizeBytes);
+static uintptr_t ResolvePacketLocation();
 
 // ===== Engine inline hook for CtoS dispatch =====
 // Hooks at Offsets::Engine (0x00C93C91) -- a DIFFERENT function from the
@@ -67,6 +65,11 @@ static uint8_t s_engineSavedBytes[8] = {};
 static uint8_t s_enginePatchedBytes[8] = {};
 static bool s_engineInitialized = false;
 static volatile bool s_engineSuspended = false;
+static volatile DWORD s_watchdogLastRepairTick = 0;
+static volatile DWORD s_watchdogLastRepairLogTick = 0;
+static volatile DWORD s_watchdogLastUnexpectedLogTick = 0;
+static volatile LONG s_watchdogRepairCount = 0;
+static bool s_forceAutoItSalvageEntryForIdentSalvage = false;
 
 // Watchdog: re-patches the Engine hook when game integrity checker restores bytes
 static HANDLE s_watchdogThread = nullptr;
@@ -92,6 +95,7 @@ struct PacketTask {
 static PacketTask s_packetRing[64];
 static volatile LONG s_pktHead = 0;
 static volatile LONG s_pktTail = 0;
+static volatile LONG s_pktWriteLock = 0;
 
 static DWORD WINAPI PacketSenderThread(LPVOID) {
     while (s_watchdogRunning) { // reuse watchdog flag for lifetime
@@ -101,12 +105,9 @@ static DWORD WINAPI PacketSenderThread(LPVOID) {
             PacketTask t = s_packetRing[idx];
             InterlockedIncrement(&s_pktTail);
 
-            // Re-read PacketLocation fresh
             uintptr_t loc = t.location;
-            if (Offsets::PacketLocation) {
-                uintptr_t fresh = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
-                if (fresh) loc = fresh;
-            }
+            const uintptr_t fresh = ResolvePacketLocation();
+            if (fresh) loc = fresh;
             __try {
                 t.fn(reinterpret_cast<void*>(loc), t.sizeBytes, t.data);
             } __except(
@@ -131,6 +132,8 @@ static DWORD WINAPI PacketSenderThread(LPVOID) {
 static volatile LONG s_engineCallTest = 0;
 static void (__stdcall* s_engineDispatchOnePtr)() = nullptr;
 static int (__stdcall* s_shouldDeferBotshubCommandsPtr)() = nullptr;
+static bool s_disableBotshubDeferForIdentSalvage = false;
+static bool s_identifySalvageRuntimeOverrideActive = false;
 
 // Cached offset pointers for the inline asm environment gate (avoids C++
 // function calls on the engine hook hot path — C++ calls corrupt EBP and
@@ -165,6 +168,7 @@ static constexpr LONG kBotshubCommandQueueSize = 64;
 static BotshubCommandSlot s_botshubCmdRing[kBotshubCommandQueueSize];
 static volatile LONG s_botshubCmdHead = 0;
 static volatile LONG s_botshubCmdTail = 0;
+static volatile LONG s_botshubSavedIndex = 0;
 static volatile LONG s_botshubCmdWriteLock = 0;
 
 static void __stdcall EngineDispatchCommand() {
@@ -185,17 +189,46 @@ static void __stdcall EngineDispatchOne() {
     InterlockedIncrement(&s_pktTail);
 
     uintptr_t loc = t.location;
-    if (Offsets::PacketLocation) {
-        uintptr_t fresh = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
-        if (fresh) loc = fresh;
-    }
+    const uintptr_t fresh = ResolvePacketLocation();
+    if (fresh) loc = fresh;
 
     InterlockedIncrement(&s_engineCallTest);
     t.fn(reinterpret_cast<void*>(loc), t.sizeBytes, t.data);
 }
 
 static void (__stdcall* s_engineDispatchCmdPtr)() = nullptr;
+static bool IsLocalFlagFilePresent(const char* flagFile) {
+    if (!flagFile || !flagFile[0]) return false;
+    char path[MAX_PATH] = {};
+    HMODULE hSelf = nullptr;
+    if (!GetModuleHandleExA(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCSTR>(&IsLocalFlagFilePresent), &hSelf)) {
+        return false;
+    }
+    const DWORD len = GetModuleFileNameA(hSelf, path, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return false;
+    char* slash = strrchr(path, '\\');
+    if (!slash) return false;
+    *(slash + 1) = '\0';
+    if (strcat_s(path, MAX_PATH, flagFile) != 0) {
+        return false;
+    }
+    const DWORD attr = GetFileAttributesA(path);
+    return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+void SetIdentifySalvageRuntimeOverrides(bool disableBotshubDefer, bool forceAutoItSalvageEntry) {
+    s_identifySalvageRuntimeOverrideActive = true;
+    s_disableBotshubDeferForIdentSalvage = disableBotshubDefer;
+    s_forceAutoItSalvageEntryForIdentSalvage = forceAutoItSalvageEntry;
+    Log::Info("CtoS: runtime identify/salvage overrides set defer=%u autoitEntry=%u",
+              s_disableBotshubDeferForIdentSalvage ? 1u : 0u,
+              s_forceAutoItSalvageEntryForIdentSalvage ? 1u : 0u);
+}
+
 static int __stdcall ShouldDeferBotshubCommands() {
+    if (s_disableBotshubDeferForIdentSalvage) return 0;
     if (!Offsets::BasePointer || !Offsets::Environment) return 0;
 
     __try {
@@ -245,6 +278,27 @@ struct TradeOfferItemBotshubCommand {
     uint32_t quantity;
 };
 
+struct PacketSendBotshubCommand {
+    uintptr_t fn;
+    uint32_t size_bytes;
+    uint32_t data[12];
+};
+
+struct PacketSendGameCommand {
+    uint32_t size_bytes;
+    uint32_t data[12];
+};
+
+struct SalvageBotshubCommand {
+    uintptr_t fn;
+    uint32_t item_id;
+    uint32_t kit_id;
+    uint32_t session_id;
+};
+
+static uintptr_t s_salvageFunctionPtr = 0;
+static uintptr_t s_salvageGlobalPtr = 0;
+
 void __cdecl TradeOfferItemCommandThunk(uint32_t itemId, uint32_t quantity) {
     if (!s_initialized && !Initialize()) {
         Log::Warn("CtoS: TradeOfferItemCommandThunk dropped item=%u qty=%u -- not initialized", itemId, quantity);
@@ -252,6 +306,45 @@ void __cdecl TradeOfferItemCommandThunk(uint32_t itemId, uint32_t quantity) {
     }
     const uint32_t data[3] = { Packets::TRADE_ADD_ITEM, itemId, quantity };
     IssuePacketSend(data, sizeof(data));
+}
+
+void __cdecl PacketSendBotshubCommandThunk(const uint32_t* data, uint32_t sizeBytes) {
+    if (!s_initialized && !Initialize()) {
+        Log::Warn("CtoS: PacketSendBotshubCommandThunk dropped size=%u -- not initialized", sizeBytes);
+        return;
+    }
+    if (!data || sizeBytes == 0u || sizeBytes > sizeof(PacketSendBotshubCommand::data)) {
+        Log::Warn("CtoS: PacketSendBotshubCommandThunk rejected size=%u", sizeBytes);
+        return;
+    }
+    Log::Info("CtoS: PacketSendBotshubCommandThunk begin hdr=0x%X size=%u", data[0], sizeBytes);
+    IssuePacketSendRaw(data, sizeBytes);
+    Log::Info("CtoS: PacketSendBotshubCommandThunk return hdr=0x%X", data[0]);
+}
+
+void __cdecl PacketSendBotshubHookedCommandThunk(const uint32_t* data, uint32_t sizeBytes) {
+    if (!s_initialized && !Initialize()) {
+        Log::Warn("CtoS: PacketSendBotshubHookedCommandThunk dropped size=%u -- not initialized", sizeBytes);
+        return;
+    }
+    if (!data || sizeBytes == 0u || sizeBytes > sizeof(PacketSendBotshubCommand::data)) {
+        Log::Warn("CtoS: PacketSendBotshubHookedCommandThunk rejected size=%u", sizeBytes);
+        return;
+    }
+    Log::Info("CtoS: PacketSendBotshubHookedCommandThunk begin hdr=0x%X size=%u", data[0], sizeBytes);
+    IssuePacketSend(data, sizeBytes);
+    Log::Info("CtoS: PacketSendBotshubHookedCommandThunk return hdr=0x%X", data[0]);
+}
+
+void RawPacketGameCommandInvoker(void* params) {
+    auto* cmd = reinterpret_cast<PacketSendGameCommand*>(params);
+    if (!cmd || cmd->size_bytes == 0u || cmd->size_bytes > sizeof(cmd->data)) {
+        Log::Warn("CtoS: RawPacketGameCommandInvoker rejected size=%u", cmd ? cmd->size_bytes : 0u);
+        return;
+    }
+    Log::Info("CtoS: RawPacketGameCommandInvoker begin hdr=0x%X size=%u", cmd->data[0], cmd->size_bytes);
+    IssuePacketSendRaw(cmd->data, cmd->size_bytes);
+    Log::Info("CtoS: RawPacketGameCommandInvoker return hdr=0x%X", cmd->data[0]);
 }
 
 __declspec(naked) void BotshubTradeOfferItemCommandStub() {
@@ -264,14 +357,81 @@ __declspec(naked) void BotshubTradeOfferItemCommandStub() {
     }
 }
 
+__declspec(naked) void BotshubPacketSendCommandStub() {
+    __asm {
+        lea edx, dword ptr [eax+8]
+        push edx
+        mov ebx, dword ptr [eax+4]
+        push ebx
+        mov eax, dword ptr [s_packetLocationPtrAddr]
+        test eax, eax
+        jnz packet_location_ready
+        mov eax, dword ptr [s_packetLocation]
+    packet_location_ready:
+        push eax
+        call dword ptr [s_packetSendRawAsmTarget]
+        pop eax
+        pop ebx
+        pop edx
+        jmp GWA3BotshubCommandReturnThunk
+    }
+}
+
+__declspec(naked) void BotshubPacketSendHookedCommandStub() {
+    __asm {
+        lea edx, dword ptr [eax+8]
+        push edx
+        mov ebx, dword ptr [eax+4]
+        push ebx
+        mov eax, dword ptr [s_packetLocationPtrAddr]
+        test eax, eax
+        jnz packet_location_ready
+        mov eax, dword ptr [s_packetLocation]
+    packet_location_ready:
+        push eax
+        call dword ptr [s_packetSendFn]
+        pop eax
+        pop ebx
+        pop edx
+        jmp GWA3BotshubCommandReturnThunk
+    }
+}
+
+__declspec(naked) void BotshubSalvageCommandStub() {
+    __asm {
+        push eax
+        push ecx
+        push ebx
+        mov ebx, dword ptr [s_salvageGlobalPtr]
+        mov ecx, dword ptr [eax+4]
+        mov dword ptr [ebx], ecx
+        add ebx, 4
+        mov ecx, dword ptr [eax+8]
+        mov dword ptr [ebx], ecx
+        mov ebx, dword ptr [eax+4]
+        push ebx
+        mov ebx, dword ptr [eax+8]
+        push ebx
+        mov ebx, dword ptr [eax+0Ch]
+        push ebx
+        call dword ptr [s_salvageFunctionPtr]
+        add esp, 0Ch
+        pop ebx
+        pop ecx
+        pop eax
+        jmp GWA3BotshubCommandReturnThunk
+    }
+}
+
 } // namespace
 
 extern "C" void __declspec(naked) GWA3BotshubCommandReturnThunk() {
     __asm {
-        pop eax
-        mov ecx, dword ptr [s_botshubCmdTail]
-        cmp ecx, eax
+        mov ecx, dword ptr [s_botshubSavedIndex]
+        mov edx, dword ptr [s_botshubCmdTail]
+        cmp edx, ecx
         jne skip_tail_advance
+        mov eax, ecx
         inc eax
         mov dword ptr [s_botshubCmdTail], eax
     skip_tail_advance:
@@ -303,6 +463,20 @@ static __declspec(naked) void EngineDetourNaked() {
 
         inc dword ptr [s_heartbeat]
 
+        call dword ptr [s_shouldDeferBotshubCommandsPtr]
+        test eax, eax
+        jz regular_flow
+
+        // HandleCase: defer queued botshub commands until the engine state
+        // matches the upstream RegularFlow path again.
+        inc dword ptr [s_deferCount]
+        mov ecx, dword ptr [s_botshubCmdTail]
+        cmp ecx, dword ptr [s_botshubCmdHead]
+        je no_botshub_command
+        inc dword ptr [s_deferWithCmd]
+        jmp no_botshub_command
+
+    regular_flow:
         // === Botshub command dispatch ===
         mov ecx, dword ptr [s_botshubCmdTail]
         cmp ecx, dword ptr [s_botshubCmdHead]
@@ -316,7 +490,7 @@ static __declspec(naked) void EngineDetourNaked() {
         test edx, edx
         jz no_botshub_command
         inc dword ptr [s_regularFlowExec]
-        push ecx
+        mov dword ptr [s_botshubSavedIndex], ecx
         mov dword ptr [eax], 0
         jmp edx
     no_botshub_command:
@@ -348,16 +522,36 @@ static DWORD WINAPI EngineWatchdog(LPVOID) {
         if (s_engineSuspended) continue;  // Don't re-patch while suspended
 
         const uint8_t* cur = reinterpret_cast<const uint8_t*>(s_engineHookAddr);
-        if (memcmp(cur, s_enginePatchedBytes, 5) != 0) {
-            DWORD oldProtect;
-            if (VirtualProtect(reinterpret_cast<void*>(s_engineHookAddr), 5,
-                               PAGE_EXECUTE_READWRITE, &oldProtect)) {
-                memcpy(reinterpret_cast<void*>(s_engineHookAddr), s_enginePatchedBytes, 5);
-                FlushInstructionCache(GetCurrentProcess(),
-                                     reinterpret_cast<void*>(s_engineHookAddr), 5);
-                VirtualProtect(reinterpret_cast<void*>(s_engineHookAddr), 5,
-                               oldProtect, &oldProtect);
-                Log::Info("CtoS: [WATCHDOG] Engine hook re-patched");
+        if (memcmp(cur, s_enginePatchedBytes, 5) == 0) continue;
+
+        const DWORD now = GetTickCount();
+        const bool matchesOriginal = memcmp(cur, s_engineSavedBytes, 5) == 0;
+        if (!matchesOriginal) {
+            if (now - s_watchdogLastUnexpectedLogTick >= 1000) {
+                s_watchdogLastUnexpectedLogTick = now;
+                Log::Warn("CtoS: [WATCHDOG] Engine hook mismatch ignored (bytes=%02X %02X %02X %02X %02X)",
+                          cur[0], cur[1], cur[2], cur[3], cur[4]);
+            }
+            continue;
+        }
+
+        // Only repair known-safe "original bytes restored" cases and throttle
+        // writes so the watchdog does not hammer the hook site under load.
+        if (now - s_watchdogLastRepairTick < 100) continue;
+
+        DWORD oldProtect;
+        if (VirtualProtect(reinterpret_cast<void*>(s_engineHookAddr), 5,
+                           PAGE_EXECUTE_READWRITE, &oldProtect)) {
+            memcpy(reinterpret_cast<void*>(s_engineHookAddr), s_enginePatchedBytes, 5);
+            FlushInstructionCache(GetCurrentProcess(),
+                                 reinterpret_cast<void*>(s_engineHookAddr), 5);
+            VirtualProtect(reinterpret_cast<void*>(s_engineHookAddr), 5,
+                           oldProtect, &oldProtect);
+            s_watchdogLastRepairTick = now;
+            const LONG repairCount = InterlockedIncrement(&s_watchdogRepairCount);
+            if (repairCount == 1 || now - s_watchdogLastRepairLogTick >= 1000) {
+                s_watchdogLastRepairLogTick = now;
+                Log::Info("CtoS: [WATCHDOG] Engine hook re-patched count=%ld", repairCount);
             }
         }
     }
@@ -395,6 +589,14 @@ static bool InstallEngineHook() {
     s_engineReplayTrampoline = reinterpret_cast<uintptr_t>(tramp);
     s_engineDispatchOnePtr = &EngineDispatchOne;
     s_engineDispatchCmdPtr = &EngineDispatchCommand;
+    s_shouldDeferBotshubCommandsPtr = &ShouldDeferBotshubCommands;
+    if (!s_identifySalvageRuntimeOverrideActive) {
+        s_disableBotshubDeferForIdentSalvage = IsLocalFlagFilePresent("gwa3_test_identsalvage.flag");
+        s_forceAutoItSalvageEntryForIdentSalvage = false;
+    }
+    Log::Info("CtoS: identify/salvage defer override=%u", s_disableBotshubDeferForIdentSalvage ? 1u : 0u);
+    Log::Info("CtoS: identify/salvage AutoIt salvage-entry override=%u",
+              s_forceAutoItSalvageEntryForIdentSalvage ? 1u : 0u);
 
     // Cache offset pointers for the inline asm environment gate.
     // BasePointer is already dereferenced in PostProcessOffsets.
@@ -513,6 +715,48 @@ bool IsBotshubQueueIdle() {
     return s_botshubCmdHead == s_botshubCmdTail;
 }
 
+void DumpBotshubQueueState(const char* label) {
+    const LONG head = s_botshubCmdHead;
+    const LONG tail = s_botshubCmdTail;
+    Log::Info("CtoS: Botshub queue state %s head=%ld tail=%ld pending=%ld defer=%ld deferCmd=%ld exec=%ld hb=%ld suspended=%u",
+              label ? label : "queue",
+              head,
+              tail,
+              head - tail,
+              s_deferCount,
+              s_deferWithCmd,
+              s_regularFlowExec,
+              s_heartbeat,
+              s_engineSuspended ? 1u : 0u);
+
+    const LONG pending = head - tail;
+    const LONG dumpCount = pending > 3 ? 3 : pending;
+    for (LONG i = 0; i < dumpCount; ++i) {
+        const LONG idx = tail + i;
+        const BotshubCommandSlot& slot = s_botshubCmdRing[idx % kBotshubCommandQueueSize];
+        __try {
+            const uintptr_t fn = *reinterpret_cast<const uintptr_t*>(slot.bytes + 0);
+            const uint32_t a = *reinterpret_cast<const uint32_t*>(slot.bytes + 4);
+            const uint32_t b = *reinterpret_cast<const uint32_t*>(slot.bytes + 8);
+            const uint32_t c = *reinterpret_cast<const uint32_t*>(slot.bytes + 12);
+            const uint32_t d = *reinterpret_cast<const uint32_t*>(slot.bytes + 16);
+            Log::Info("CtoS: Botshub queue slot[%ld] fn=0x%08X +4=0x%08X +8=0x%08X +C=0x%08X +10=0x%08X",
+                      idx,
+                      static_cast<unsigned>(fn),
+                      a,
+                      b,
+                      c,
+                      d);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("CtoS: Botshub queue slot[%ld] unreadable", idx);
+        }
+    }
+}
+
+bool IsGameCommandQueueIdle() {
+    return s_cmdHead == s_cmdTail;
+}
+
 bool IsBotshubCommandLaneAvailable() {
     return s_engineInitialized && !s_engineSuspended;
 }
@@ -575,10 +819,11 @@ bool Initialize() {
     }
 
     s_packetSendFn = reinterpret_cast<PacketSendFn>(Offsets::PacketSend);
-
-    s_packetLocation = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
+    s_packetSendRawAsmTarget = reinterpret_cast<uintptr_t>(s_packetSendFn);
+    s_packetLocation = ResolvePacketLocation();
+    s_packetLocationPtrAddr = s_packetLocation;
     if (!s_packetLocation) {
-        Log::Error("CtoS: PacketLocation dereference returned null");
+        Log::Error("CtoS: PacketLocation resolved null");
         return false;
     }
 
@@ -586,8 +831,30 @@ bool Initialize() {
     Log::Info("CtoS: Initialized (PacketSend=0x%08X, PacketLocation=0x%08X)",
               Offsets::PacketSend, s_packetLocation);
 
-    // Packet tap hook disabled — was used for opcode capture, now removed
-    // to eliminate it as a crash source.
+    if (!s_packetTapHookInstalled) {
+        const MH_STATUS createStatus = MH_CreateHook(
+            reinterpret_cast<LPVOID>(Offsets::PacketSend),
+            reinterpret_cast<LPVOID>(&PacketSendTap),
+            reinterpret_cast<LPVOID*>(&s_packetSendOriginal));
+        if (createStatus == MH_OK || createStatus == MH_ERROR_ALREADY_CREATED) {
+            const MH_STATUS enableStatus =
+                MH_EnableHook(reinterpret_cast<LPVOID>(Offsets::PacketSend));
+            if (enableStatus == MH_OK || enableStatus == MH_ERROR_ENABLED) {
+                s_packetTapHookInstalled = true;
+                s_packetTapEnabled = true;
+                s_packetSendRawAsmTarget = reinterpret_cast<uintptr_t>(s_packetSendOriginal ? s_packetSendOriginal : s_packetSendFn);
+                ResetPacketTap();
+                Log::Info("CtoS: Packet tap hook enabled at 0x%08X",
+                          static_cast<unsigned>(Offsets::PacketSend));
+            } else {
+                Log::Warn("CtoS: MH_EnableHook failed for packet tap: %s",
+                          MH_StatusToString(enableStatus));
+            }
+        } else {
+            Log::Warn("CtoS: MH_CreateHook failed for packet tap: %s",
+                      MH_StatusToString(createStatus));
+        }
+    }
 
     // Install Engine inline hook for packet dispatch
     if (!InstallEngineHook()) {
@@ -597,14 +864,21 @@ bool Initialize() {
     return true;
 }
 
+static uintptr_t ResolvePacketLocation() {
+    const uintptr_t ptrAddr = Offsets::PacketLocation;
+    if (ptrAddr) {
+        const uintptr_t fresh = *reinterpret_cast<uintptr_t*>(ptrAddr);
+        if (fresh) {
+            s_packetLocation = fresh;
+            s_packetLocationPtrAddr = ptrAddr;
+        }
+    }
+    return s_packetLocation;
+}
+
 // Issue PacketSend on the current thread (must be game thread).
 static void IssuePacketSend(const uint32_t* data, uint32_t sizeBytes) {
-    // Re-read PacketLocation fresh every call
-    uintptr_t loc = s_packetLocation;
-    if (Offsets::PacketLocation) {
-        uintptr_t fresh = *reinterpret_cast<uintptr_t*>(Offsets::PacketLocation);
-        if (fresh) { loc = fresh; s_packetLocation = fresh; }
-    }
+    uintptr_t loc = ResolvePacketLocation();
     Log::Info("CtoS: IssuePacketSend hdr=0x%X size=%u loc=0x%08X fn=0x%08X",
               data[0], sizeBytes, static_cast<unsigned>(loc),
               static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_packetSendFn)));
@@ -615,6 +889,54 @@ static void IssuePacketSend(const uint32_t* data, uint32_t sizeBytes) {
         Log::Error("CtoS: PacketSend exception 0x%08X hdr=0x%X",
                    GetExceptionCode(), data[0]);
     }
+}
+
+static void IssuePacketSendRaw(const uint32_t* data, uint32_t sizeBytes) {
+    uintptr_t loc = ResolvePacketLocation();
+
+    PacketSendFn fn = s_packetSendOriginal ? s_packetSendOriginal : s_packetSendFn;
+    Log::Info("CtoS: IssuePacketSendRaw hdr=0x%X size=%u loc=0x%08X fn=0x%08X",
+              data[0], sizeBytes, static_cast<unsigned>(loc),
+              static_cast<unsigned>(reinterpret_cast<uintptr_t>(fn)));
+    __try {
+        fn(reinterpret_cast<void*>(loc), sizeBytes, const_cast<uint32_t*>(data));
+        Log::Info("CtoS: IssuePacketSendRaw returned hdr=0x%X", data[0]);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Error("CtoS: Raw PacketSend exception 0x%08X hdr=0x%X",
+                   GetExceptionCode(), data[0]);
+    }
+}
+
+static bool EnqueuePacketTask(const uint32_t* data, uint32_t sizeBytes) {
+    if (!s_packetReadyEvent || !s_packetSendFn || !data || sizeBytes == 0 || sizeBytes > sizeof(s_packetRing[0].data)) {
+        return false;
+    }
+
+    while (InterlockedCompareExchange(&s_pktWriteLock, 1, 0) != 0) {
+        Sleep(0);
+    }
+
+    const LONG head = s_pktHead;
+    const LONG tail = s_pktTail;
+    if (head - tail >= 64) {
+        InterlockedExchange(&s_pktWriteLock, 0);
+        Log::Warn("CtoS: EnqueuePacketTask queue full hdr=0x%X head=%ld tail=%ld",
+                  data[0], head, tail);
+        return false;
+    }
+
+    PacketTask& task = s_packetRing[head % 64];
+    ZeroMemory(&task, sizeof(task));
+    task.fn = s_packetSendFn;
+    task.location = s_packetLocation;
+    task.sizeBytes = sizeBytes;
+    memcpy(task.data, data, sizeBytes);
+    MemoryBarrier();
+    InterlockedExchange(&s_pktHead, head + 1);
+    InterlockedExchange(&s_pktWriteLock, 0);
+    SetEvent(s_packetReadyEvent);
+    Log::Info("CtoS: EnqueuePacketTask hdr=0x%X size=%u idx=%ld", data[0], sizeBytes, head);
+    return true;
 }
 
 // Core send: GWCA pattern — call PacketSend on game thread only.
@@ -648,18 +970,158 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
     if (GameThread::IsInitialized()) {
         // Off game thread: copy packet data into the lambda capture and
         // enqueue for the game thread to dispatch.
+        //
+        // Use EnqueueSerialPre, not Enqueue. IssuePacketSend -> PacketSend
+        // has internal locks that break when called >1x per frame (the
+        // DrainPostQueues comment in GameThread.cpp warns about this and
+        // throttles its own post-queue to one-per-frame). The general
+        // pre-queue drains EVERYTHING per frame, so under HM combat with
+        // 7 heroes all casting (each producing a 0x26 USE_SKILL packet),
+        // PacketSend gets called many times per frame and the game
+        // crashes after ~minutes. Serial-pre processes one task per
+        // frame, matching the lock's expectation.
         struct PktCopy { uint32_t d[12]; uint32_t sz; };
         PktCopy copy{};
         memcpy(copy.d, data, sizeBytes);
         copy.sz = sizeBytes;
         Log::Info("CtoS: SendPacket queueing on GameThread hdr=0x%X size=%u", header, sizeBytes);
-        GameThread::Enqueue([copy]() {
+        GameThread::EnqueueSerialPre([copy]() {
             IssuePacketSend(copy.d, copy.sz);
         });
         return;
     }
 
     Log::Warn("CtoS: SendPacket dropped header=0x%X -- GameThread not ready", header);
+}
+
+bool SendPacketBotshub(uint32_t size, uint32_t header, ...) {
+    if (!s_initialized && !Initialize()) {
+        Log::Warn("CtoS: SendPacketBotshub dropped (header=0x%X) -- not initialized", header);
+        return false;
+    }
+    if (!IsBotshubCommandLaneAvailable() || size == 0u || size > 12u) {
+        return false;
+    }
+    s_packetSendRawAsmTarget = reinterpret_cast<uintptr_t>(s_packetSendOriginal ? s_packetSendOriginal : s_packetSendFn);
+    ResolvePacketLocation();
+    if (!s_packetSendRawAsmTarget || !s_packetLocation) {
+        Log::Warn("CtoS: SendPacketBotshub missing raw send target/location hdr=0x%X fn=0x%08X loc=0x%08X",
+                  header,
+                  static_cast<unsigned>(s_packetSendRawAsmTarget),
+                  static_cast<unsigned>(s_packetLocation));
+        return false;
+    }
+
+    PacketSendBotshubCommand cmd{};
+    cmd.fn = reinterpret_cast<uintptr_t>(&BotshubPacketSendCommandStub);
+    cmd.size_bytes = size * 4u;
+    cmd.data[0] = header;
+
+    va_list args;
+    va_start(args, header);
+    for (uint32_t i = 1; i < size && i < 12u; ++i) {
+        cmd.data[i] = va_arg(args, uint32_t);
+    }
+    va_end(args);
+
+    const size_t slotSize = offsetof(PacketSendBotshubCommand, data) + cmd.size_bytes;
+    const bool queued = EnqueueBotshubCommand(&cmd, slotSize);
+    Log::Info("CtoS: SendPacketBotshub hdr=0x%X size=%u queued=%d", header, cmd.size_bytes, queued ? 1 : 0);
+    return queued;
+}
+
+bool SendPacketBotshubHooked(uint32_t size, uint32_t header, ...) {
+    if (!s_initialized && !Initialize()) {
+        Log::Warn("CtoS: SendPacketBotshubHooked dropped (header=0x%X) -- not initialized", header);
+        return false;
+    }
+    if (!IsBotshubCommandLaneAvailable() || size == 0u || size > 12u) {
+        return false;
+    }
+
+    PacketSendBotshubCommand cmd{};
+    cmd.fn = reinterpret_cast<uintptr_t>(&BotshubPacketSendHookedCommandStub);
+    cmd.size_bytes = size * 4u;
+    cmd.data[0] = header;
+
+    va_list args;
+    va_start(args, header);
+    for (uint32_t i = 1; i < size && i < 12u; ++i) {
+        cmd.data[i] = va_arg(args, uint32_t);
+    }
+    va_end(args);
+
+    const size_t slotSize = offsetof(PacketSendBotshubCommand, data) + cmd.size_bytes;
+    const bool queued = EnqueueBotshubCommand(&cmd, slotSize);
+    Log::Info("CtoS: SendPacketBotshubHooked hdr=0x%X size=%u queued=%d", header, cmd.size_bytes, queued ? 1 : 0);
+    return queued;
+}
+
+bool SendPacketGameCommandRaw(uint32_t size, uint32_t header, ...) {
+    if (!s_initialized && !Initialize()) {
+        Log::Warn("CtoS: SendPacketGameCommandRaw dropped (header=0x%X) -- not initialized", header);
+        return false;
+    }
+    if (size == 0u || size > 12u) {
+        return false;
+    }
+
+    PacketSendGameCommand cmd{};
+    cmd.size_bytes = size * 4u;
+    cmd.data[0] = header;
+
+    va_list args;
+    va_start(args, header);
+    for (uint32_t i = 1; i < size && i < 12u; ++i) {
+        cmd.data[i] = va_arg(args, uint32_t);
+    }
+    va_end(args);
+
+    const bool queued = EnqueueGameCommand(&RawPacketGameCommandInvoker, &cmd, sizeof(cmd));
+    Log::Info("CtoS: SendPacketGameCommandRaw hdr=0x%X size=%u queued=%d", header, cmd.size_bytes, queued ? 1 : 0);
+    return queued;
+}
+
+bool SalvageItemBotshub(uint32_t itemId, uint32_t kitId, uint32_t sessionId) {
+    if (!s_initialized && !Initialize()) {
+        Log::Warn("CtoS: SalvageItemBotshub dropped item=%u kit=%u session=%u -- not initialized",
+                  itemId, kitId, sessionId);
+        return false;
+    }
+    if (!IsBotshubCommandLaneAvailable() || !itemId || !kitId) {
+        Log::Warn("CtoS: SalvageItemBotshub rejected item=%u kit=%u session=%u lane=%d",
+                  itemId, kitId, sessionId, IsBotshubCommandLaneAvailable() ? 1 : 0);
+        return false;
+    }
+    if (!Offsets::Salvage || !Offsets::SalvageGlobal) {
+        Log::Warn("CtoS: SalvageItemBotshub missing offsets salvage=0x%08X global=0x%08X",
+                  static_cast<unsigned>(Offsets::Salvage),
+                  static_cast<unsigned>(Offsets::SalvageGlobal));
+        return false;
+    }
+
+    s_salvageFunctionPtr = Offsets::Salvage;
+    s_salvageGlobalPtr = Offsets::SalvageGlobal;
+
+    Log::Info("CtoS: SalvageItemBotshub entry item=%u kit=%u session=%u salvageFn=0x%08X autoItEntry=%u",
+              itemId,
+              kitId,
+              sessionId,
+              static_cast<unsigned>(s_salvageFunctionPtr),
+              s_forceAutoItSalvageEntryForIdentSalvage ? 1u : 0u);
+
+    SalvageBotshubCommand cmd{};
+    cmd.fn = reinterpret_cast<uintptr_t>(&BotshubSalvageCommandStub);
+    cmd.item_id = itemId;
+    cmd.kit_id = kitId;
+    cmd.session_id = sessionId;
+
+    const bool queued = EnqueueBotshubCommand(&cmd, sizeof(cmd));
+    Log::Info("CtoS: SalvageItemBotshub item=%u kit=%u session=%u queued=%d salvageFn=0x%08X salvageGlobal=0x%08X",
+              itemId, kitId, sessionId, queued ? 1 : 0,
+              static_cast<unsigned>(s_salvageFunctionPtr),
+              static_cast<unsigned>(s_salvageGlobalPtr));
+    return queued;
 }
 
 void SendPacketDirect(uint32_t size, uint32_t header, ...) {
@@ -698,6 +1160,63 @@ void SendPacketDirect(uint32_t size, uint32_t header, ...) {
         });
     } else {
         Log::Warn("CtoS: SendPacketDirect dropped hdr=0x%X -- GameThread not ready", header);
+    }
+}
+
+void SendPacketDirectRaw(uint32_t size, uint32_t header, ...) {
+    if (!s_initialized && !Initialize()) {
+        Log::Warn("CtoS: SendPacketDirectRaw dropped (header=0x%X) -- not initialized", header);
+        return;
+    }
+
+    uint32_t data[12];
+    data[0] = header;
+
+    va_list args;
+    va_start(args, header);
+    for (uint32_t i = 1; i < size && i < 12; i++) {
+        data[i] = va_arg(args, uint32_t);
+    }
+    va_end(args);
+
+    const uint32_t sizeBytes = size * 4;
+
+    if (GameThread::IsOnGameThread()) {
+        Log::Info("CtoS: SendPacketDirectRaw hdr=0x%X size=%u (on game thread)", header, sizeBytes);
+        IssuePacketSendRaw(data, sizeBytes);
+    } else if (GameThread::IsInitialized()) {
+        struct PktCopy { uint32_t d[12]; uint32_t sz; };
+        PktCopy copy{};
+        memcpy(copy.d, data, sizeBytes);
+        copy.sz = sizeBytes;
+        Log::Info("CtoS: SendPacketDirectRaw hdr=0x%X size=%u (via post-dispatch)", header, sizeBytes);
+        GameThread::EnqueuePost([copy]() {
+            IssuePacketSendRaw(copy.d, copy.sz);
+        });
+    } else {
+        Log::Warn("CtoS: SendPacketDirectRaw dropped hdr=0x%X -- GameThread not ready", header);
+    }
+}
+
+void SendPacketThreaded(uint32_t size, uint32_t header, ...) {
+    if (!s_initialized && !Initialize()) {
+        Log::Warn("CtoS: SendPacketThreaded dropped (header=0x%X) -- not initialized", header);
+        return;
+    }
+
+    uint32_t data[12];
+    data[0] = header;
+
+    va_list args;
+    va_start(args, header);
+    for (uint32_t i = 1; i < size && i < 12; i++) {
+        data[i] = va_arg(args, uint32_t);
+    }
+    va_end(args);
+
+    const uint32_t sizeBytes = size * 4;
+    if (!EnqueuePacketTask(data, sizeBytes)) {
+        Log::Warn("CtoS: SendPacketThreaded dropped hdr=0x%X size=%u -- enqueue failed", header, sizeBytes);
     }
 }
 
@@ -787,8 +1306,15 @@ void QuestSetActive(uint32_t questId) {
     SendPacket(2, Packets::QUEST_SET_ACTIVE, questId);
 }
 
-void UseSkill(uint32_t skillSlot, uint32_t targetAgentId, uint32_t callTarget) {
-    SendPacket(4, Packets::USE_SKILL, skillSlot, targetAgentId, callTarget);
+void UseSkill(uint32_t skillId, uint32_t targetAgentId, uint32_t callTarget) {
+    // Captured live 0x46 traffic is a 20-byte packet whose first payload dword
+    // is the resolved skill id. The second payload dword remains zero in those
+    // traces, followed by target agent id and call-target flag.
+    Log::Info("CtoS: UseSkill packet skillId=%u target=%u callTarget=%u via=pre-dispatch",
+              skillId,
+              targetAgentId,
+              callTarget);
+    SendPacket(5, Packets::USE_SKILL, skillId, 0u, targetAgentId, callTarget);
 }
 
 void TradeOfferItem(uint32_t itemId, uint32_t quantity) {
@@ -817,12 +1343,44 @@ void TradeAccept() {
     SendPacket(1, Packets::TRADE_ACCEPT);
 }
 
+void TradeCancelThreaded() {
+    SendPacketThreaded(1, Packets::TRADE_CANCEL);
+}
+
+void TradeAcceptThreaded() {
+    SendPacketThreaded(1, Packets::TRADE_ACCEPT);
+}
+
 // Stub packet tap diagnostics (referenced by IntegrationTestSession)
 PacketTapSnapshot GetPacketTapSnapshot() {
-    return PacketTapSnapshot{};
+    PacketTapSnapshot snap{};
+    snap.total_packets = static_cast<uint32_t>(
+        InterlockedCompareExchange(&s_packetTapTotal, 0, 0));
+
+    for (uint32_t header = 0; header < _countof(s_packetTapCounts); ++header) {
+        const uint32_t count = static_cast<uint32_t>(
+            InterlockedCompareExchange(&s_packetTapCounts[header], 0, 0));
+        if (count == 0) continue;
+        ++snap.unique_headers;
+        for (uint32_t i = 0; i < _countof(snap.headers); ++i) {
+            if (snap.counts[i] >= count) continue;
+            for (uint32_t j = _countof(snap.headers) - 1; j > i; --j) {
+                snap.headers[j] = snap.headers[j - 1];
+                snap.counts[j] = snap.counts[j - 1];
+            }
+            snap.headers[i] = header;
+            snap.counts[i] = count;
+            break;
+        }
+    }
+    return snap;
 }
 
 void ResetPacketTap() {
+    InterlockedExchange(&s_packetTapTotal, 0);
+    for (uint32_t header = 0; header < _countof(s_packetTapCounts); ++header) {
+        InterlockedExchange(&s_packetTapCounts[header], 0);
+    }
 }
 
 } // namespace GWA3::CtoS

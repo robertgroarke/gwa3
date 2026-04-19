@@ -108,7 +108,13 @@ namespace GWA3::LLM::ActionExecutor {
         float x = p["x"].get<float>();
         float y = p["y"].get<float>();
         if (std::abs(x) > 100000 || std::abs(y) > 100000) return MakeError("coordinates_out_of_range");
-        if (!MapMgr::GetIsMapLoaded()) return MakeError("map_not_loaded");
+        // Lenient gate: accept any state where GW has a non-zero map and a
+        // player id. The stricter GetIsMapLoaded() adds an extra check
+        // that GetAgentByID(myId) is non-null, which transiently fails
+        // for a few ticks after a skill cast (the agent pointer gets
+        // refreshed by the cast) and was blocking every subsequent
+        // action with map_not_loaded for ~30+ seconds at a time.
+        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
         // Use MovePlayerNear (the proven movement function from the test harness)
         // on a background thread. AgentMgr::Move crashes in LLM mode, but
         // MovePlayerNear works in the consumable test — it has stuck detection
@@ -124,7 +130,13 @@ namespace GWA3::LLM::ActionExecutor {
         float x = p["x"].get<float>();
         float y = p["y"].get<float>();
         if (std::abs(x) > 100000 || std::abs(y) > 100000) return MakeError("coordinates_out_of_range");
-        if (!MapMgr::GetIsMapLoaded()) return MakeError("map_not_loaded");
+        // Lenient gate: accept any state where GW has a non-zero map and a
+        // player id. The stricter GetIsMapLoaded() adds an extra check
+        // that GetAgentByID(myId) is non-null, which transiently fails
+        // for a few ticks after a skill cast (the agent pointer gets
+        // refreshed by the cast) and was blocking every subsequent
+        // action with map_not_loaded for ~30+ seconds at a time.
+        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
         // aggro_move_to wraps Froggy's DebugAggroMoveTo — it walks toward
         // (x, y), fights any enemy that enters fight_range, sidesteps on
         // stuck detection, and re-issues moves until it arrives or times
@@ -155,7 +167,13 @@ namespace GWA3::LLM::ActionExecutor {
         if (!p.contains("agent_id")) return MakeError("missing agent_id");
         uint32_t id = p["agent_id"].get<uint32_t>();
         if (!AgentMgr::GetAgentExists(id)) return MakeError("agent_not_found");
-        if (!MapMgr::GetIsMapLoaded()) return MakeError("map_not_loaded");
+        // Lenient gate: accept any state where GW has a non-zero map and a
+        // player id. The stricter GetIsMapLoaded() adds an extra check
+        // that GetAgentByID(myId) is non-null, which transiently fails
+        // for a few ticks after a skill cast (the agent pointer gets
+        // refreshed by the cast) and was blocking every subsequent
+        // action with map_not_loaded for ~30+ seconds at a time.
+        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
         auto* agent = AgentMgr::GetAgentByID(id);
         if (agent && agent->type == 0xDB) {
             auto* living = reinterpret_cast<AgentLiving*>(agent);
@@ -177,16 +195,27 @@ namespace GWA3::LLM::ActionExecutor {
         if (!p.contains("slot")) return MakeError("missing slot");
         uint32_t slot = p["slot"].get<uint32_t>();
         if (slot >= 8) return MakeError("invalid_slot");
-        if (!MapMgr::GetIsMapLoaded()) return MakeError("map_not_loaded");
+        // Lenient gate: accept any state where GW has a non-zero map and a
+        // player id. The stricter GetIsMapLoaded() adds an extra check
+        // that GetAgentByID(myId) is non-null, which transiently fails
+        // for a few ticks after a skill cast (the agent pointer gets
+        // refreshed by the cast) and was blocking every subsequent
+        // action with map_not_loaded for ~30+ seconds at a time.
+        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
 
-        // Check recharge
+        // Check recharge (GetSkillbarSkill uses 0-based indexing)
         auto* skill = SkillMgr::GetSkillbarSkill(slot);
         if (skill && skill->recharge > 0) return MakeError("skill_on_recharge");
 
         uint32_t target = p.value("target_agent_id", 0u);
         uint32_t callTarget = p.value("call_target", 0u);
-        GWA3::GameThread::Enqueue([slot, target, callTarget]() {
-            SkillMgr::UseSkill(slot, target, callTarget);
+        // SkillMgr::UseSkill uses 1-BASED slot indexing internally (it
+        // skips slot==0 as a sentinel and reads bar->skills[slot-1]).
+        // The bridge schema advertises 0..7, so translate here rather
+        // than leak the 1-based convention out to every LLM prompt.
+        uint32_t nativeSlot = slot + 1u;
+        GWA3::GameThread::Enqueue([nativeSlot, target, callTarget]() {
+            SkillMgr::UseSkill(nativeSlot, target, callTarget);
         });
         return MakeOk();
     }
@@ -197,8 +226,11 @@ namespace GWA3::LLM::ActionExecutor {
         uint32_t slot = p["slot"].get<uint32_t>();
         if (slot >= 8) return MakeError("invalid_slot");
         uint32_t target = p.value("target_agent_id", 0u);
-        GWA3::GameThread::Enqueue([heroIdx, slot, target]() {
-            SkillMgr::UseHeroSkill(heroIdx, slot, target);
+        // Match HandleUseSkill: the native SkillMgr helpers use 1-based
+        // slot indexing, the bridge schema advertises 0..7.
+        uint32_t nativeSlot = slot + 1u;
+        GWA3::GameThread::Enqueue([heroIdx, nativeSlot, target]() {
+            SkillMgr::UseHeroSkill(heroIdx, nativeSlot, target);
         });
         return MakeOk();
     }
