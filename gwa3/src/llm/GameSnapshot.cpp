@@ -336,6 +336,103 @@ namespace GWA3::LLM::GameSnapshot {
         if (!raw.empty()) dst[key] = std::move(raw);
     }
 
+    // SEH-only helper: read agent->equip plus the 7 gear-slot item_ids
+    // into a plain struct. Returns true if the equip pointer is
+    // plausible; item_ids are zero-filled on per-slot fault so callers
+    // can skip empty slots without further guards.
+    //
+    // This lives in its own function because C++ destructors (json
+    // objects in the caller) conflict with __try/__except in MSVC —
+    // C2712 rejects mixing them in one function.
+    struct EquipItemIds {
+        uint32_t weapon, offhand, chest, legs, head, feet, hands;
+        uint16_t weapon_id16, offhand_id16;  // fallback from AgentLiving
+    };
+    // Reads AgentLiving's direct weapon/offhand 16-bit ids plus the
+    // 32-bit Equipment-struct item_ids at the GWCA-documented offsets
+    // (+0xB4..+0xCC). GW Reforged appears to have shifted the
+    // Equipment layout — on BISCUIT at char select the struct pointer
+    // is non-null but the +0xB4..+0xCC range reads all zeros, so the
+    // caller falls back to the 16-bit ids or emits nothing. The
+    // code path is kept because (a) the 16-bit fallback works in
+    // combat, and (b) the 32-bit reads are free: they return 0
+    // cleanly when the layout shifts further, never crash.
+    //
+    // SEH-isolated from the caller so json destructors don't fight
+    // MSVC's unwind restrictions (C2712).
+    __declspec(noinline) static bool ReadEquipItemIds(const AgentLiving* agent,
+                                                      EquipItemIds* out) {
+        if (!agent || !out) return false;
+        *out = {};
+        __try {
+            out->weapon_id16 = agent->weapon_item_id;
+            out->offhand_id16 = agent->offhand_item_id;
+
+            uintptr_t equipPtr = reinterpret_cast<uintptr_t>(agent->equip);
+            if (equipPtr <= 0x10000) return true;  // 16-bit ids still valid
+            out->weapon  = *reinterpret_cast<uint32_t*>(equipPtr + 0xB4);
+            out->offhand = *reinterpret_cast<uint32_t*>(equipPtr + 0xB8);
+            out->chest   = *reinterpret_cast<uint32_t*>(equipPtr + 0xBC);
+            out->legs    = *reinterpret_cast<uint32_t*>(equipPtr + 0xC0);
+            out->head    = *reinterpret_cast<uint32_t*>(equipPtr + 0xC4);
+            out->feet    = *reinterpret_cast<uint32_t*>(equipPtr + 0xC8);
+            out->hands   = *reinterpret_cast<uint32_t*>(equipPtr + 0xCC);
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    // Emit an `equipment` sub-object for the given living agent. Slot
+    // item_ids come from ReadEquipItemIds (SEH-isolated above); each
+    // non-zero slot is resolved via ItemMgr::GetItemById and emits the
+    // standard name/full_name/info_string triple. Costume slots
+    // (+0xD0/+0xD4) are cosmetic and skipped.
+    static void EmitEquipmentForAgent(json& dst, const AgentLiving* agent) {
+        EquipItemIds ids{};
+        ReadEquipItemIds(agent, &ids);
+
+        struct Slot { uint32_t itemId; const char* name; };
+        Slot kGearSlots[] = {
+            {ids.weapon,  "weapon"},
+            {ids.offhand, "offhand"},
+            {ids.chest,   "chest"},
+            {ids.legs,    "legs"},
+            {ids.head,    "head"},
+            {ids.feet,    "feet"},
+            {ids.hands,   "hands"},
+        };
+        // If the Equipment struct read returned all zeros (equip ptr
+        // not materialized, or struct offsets shifted in this build),
+        // fall back to the 16-bit IDs stored directly on AgentLiving.
+        // They only cover weapon + offhand but are sufficient for
+        // combat-gear awareness.
+        if (kGearSlots[0].itemId == 0 && ids.weapon_id16 != 0) {
+            kGearSlots[0].itemId = ids.weapon_id16;
+        }
+        if (kGearSlots[1].itemId == 0 && ids.offhand_id16 != 0) {
+            kGearSlots[1].itemId = ids.offhand_id16;
+        }
+
+        json eq = json::object();
+        for (const auto& slot : kGearSlots) {
+            if (slot.itemId == 0) continue;
+            Item* item = ItemMgr::GetItemById(slot.itemId);
+            if (!item) continue;
+
+            json it;
+            it["item_id"] = slot.itemId;
+            it["model_id"] = item->model_id;
+            EmitBestText(it, item->name_enc, "name",
+                         item->single_item_name);
+            EmitBestText(it, item->complete_name_enc, "full_name");
+            EmitBestText(it, item->info_string, "info_string");
+            eq[slot.name] = it;
+        }
+
+        if (!eq.empty()) dst["equipment"] = eq;
+    }
+
     // Build player ("me") object
     static json BuildPlayerJson() {
         json me;
@@ -365,6 +462,7 @@ namespace GWA3::LLM::GameSnapshot {
         me["skill_casting"] = static_cast<uint32_t>(agent->skill);
         me["model_state"] = agent->model_state;
 
+        EmitEquipmentForAgent(me, agent);
         return me;
     }
 
@@ -426,6 +524,7 @@ namespace GWA3::LLM::GameSnapshot {
             h["is_casting"] = (living.casting_skill_id != 0);
             h["casting_skill_id"] = living.casting_skill_id;
             h["skillbar"] = BuildSkillbarFromBar(bar);
+            EmitEquipmentForAgent(h, reinterpret_cast<AgentLiving*>(agent));
             heroes.push_back(h);
         });
         return heroes;
