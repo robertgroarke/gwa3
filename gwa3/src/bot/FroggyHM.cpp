@@ -102,6 +102,14 @@ static const Waypoint SPARKFLY_TO_DUNGEON[] = {
     {14624,  19314,  1250, "9"},
 };
 
+static constexpr float kSparkflyTekksStageX = 12061.0f;
+static constexpr float kSparkflyTekksStageY = 22485.0f;
+static constexpr float kSparkflyTekksSearchX = 12396.0f;
+static constexpr float kSparkflyTekksSearchY = 22407.0f;
+static constexpr float kSparkflyDungeonEntryStageX = 12228.0f;
+static constexpr float kSparkflyDungeonEntryStageY = 22677.0f;
+static constexpr float kSparkflyDungeonSideThreshold = 12000.0f;
+
 static const Waypoint BOGROOT_LVL1[] = {
     {17026,  2168,   1200, "0"},
     {19099,  7762,   1200, "Blessing"},
@@ -199,6 +207,7 @@ static void SuspendTransitionSensitiveHooks();
 static void ResumeTransitionSensitiveHooks();
 static bool OpenChestAt(float chestX, float chestY, float searchRadius = 1500.0f);
 static bool WaitForPostDungeonReturn(uint32_t expectedMapId, DWORD transitionTimeoutMs, DWORD loadTimeoutMs);
+static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunning);
 
 // ===== Skill Template Decoder (GWA3-101) =====
 
@@ -1064,6 +1073,7 @@ static const char* ExplainCanCastFailure(const CachedSkill& skill) {
     auto* me = AgentMgr::GetMyAgent();
     if (!me) return "no_player";
     if (me->hp <= 0.0f) return "dead";
+    if (AgentMgr::IsCasting(me)) return "casting";
 
     const uint32_t loadingState = MapMgr::GetLoadingState();
     if (loadingState == 2) return "disconnected";
@@ -1287,24 +1297,82 @@ static bool TryUseSkillIndex(int idx, uint32_t targetId, bool waitForCompletion 
     if (skillTarget != 0 && skillTarget != me->agent_id) {
         AgentMgr::ChangeTarget(skillTarget);
     }
+    const uint32_t rechargeBefore = bar->skills[idx].recharge;
+    const uint32_t eventBefore = bar->skills[idx].event;
     SkillMgr::UseSkill(idx + 1, skillTarget, 0);
     if (!waitForCompletion) {
         s_lastCombatStepInfo.finished_at_ms = GetTickCount();
         return true;
     }
 
-    DWORD castStart = GetTickCount();
-    while ((GetTickCount() - castStart) < kUseSkillTimeoutMs) {
-        if (IsDead()) break;
-        if (!CanCast(c)) break;
-        WaitMs(50);
+    const auto* skillData = SkillMgr::GetSkillConstantData(c.skill_id);
+    const float activation = (skillData && skillData->activation > 0.0f) ? skillData->activation : 0.0f;
+    float aftercast = (skillData && skillData->aftercast > 0.0f) ? skillData->aftercast : 0.0f;
+    const bool bogrootMap =
+        MapMgr::GetMapId() == MAP_BOGROOT_LVL1 ||
+        MapMgr::GetMapId() == MAP_BOGROOT_LVL2;
+    if (!std::isfinite(aftercast) || aftercast < 0.0f) {
+        Log::Warn("Froggy: clamping invalid aftercast slot=%d skill=%u raw=%.3f",
+                  idx + 1,
+                  c.skill_id,
+                  aftercast);
+        aftercast = 0.0f;
+    } else {
+        const float aftercastCap = bogrootMap ? 1.5f : 3.0f;
+        if (aftercast > aftercastCap) {
+            Log::Info("Froggy: clamping long aftercast slot=%d skill=%u raw=%.3f cap=%.3f",
+                      idx + 1,
+                      c.skill_id,
+                      aftercast,
+                      aftercastCap);
+            aftercast = aftercastCap;
+        }
     }
 
-    float aftercast = c.activation > 0 ? c.activation : 0.0f;
-    const auto* skillData = SkillMgr::GetSkillConstantData(c.skill_id);
-    if (skillData && skillData->aftercast > 0) {
-        aftercast = skillData->aftercast;
+    // Mirror AutoIt's UseSkillEX pacing: wait for the cast to latch, then
+    // wait until casting clears, then honor the skill's aftercast window
+    // before allowing the next skill.
+    const DWORD castLatchStart = GetTickCount();
+    DWORD castLatchTimeoutMs = static_cast<DWORD>(activation * 1000.0f) + 750u;
+    if (castLatchTimeoutMs < 500u) {
+        castLatchTimeoutMs = 500u;
     }
+    bool sawCastLatch = false;
+    while ((GetTickCount() - castLatchStart) < castLatchTimeoutMs) {
+        if (IsDead()) break;
+        auto* meNow = AgentMgr::GetMyAgent();
+        auto* barNow = SkillMgr::GetPlayerSkillbar();
+        if (!meNow || !barNow) break;
+        const bool castingNow = AgentMgr::IsCasting(meNow) || meNow->skill == c.skill_id;
+        const bool slotChanged =
+            barNow->skills[idx].recharge != rechargeBefore ||
+            barNow->skills[idx].event != eventBefore;
+        if (castingNow || slotChanged) {
+            sawCastLatch = true;
+            break;
+        }
+        WaitMs(25);
+    }
+
+    DWORD castWaitStart = GetTickCount();
+    while ((GetTickCount() - castWaitStart) < kUseSkillTimeoutMs) {
+        if (IsDead()) break;
+        auto* meNow = AgentMgr::GetMyAgent();
+        if (!meNow) break;
+        const bool castingNow = AgentMgr::IsCasting(meNow) || meNow->skill == c.skill_id;
+        if (!castingNow) {
+            if (!sawCastLatch) {
+                break;
+            }
+            WaitMs(75);
+            meNow = AgentMgr::GetMyAgent();
+            if (!meNow || !(AgentMgr::IsCasting(meNow) || meNow->skill == c.skill_id)) {
+                break;
+            }
+        }
+        WaitMs(25);
+    }
+
     s_lastCombatStepInfo.expected_aftercast_ms =
         aftercast > 0 ? static_cast<uint32_t>(aftercast * 1000.0f) : 0;
     if (aftercast > 0) {
@@ -1494,8 +1562,17 @@ static int LootAfterCombatSweep(float aggroRange, const char* reason) {
     return totalPicked;
 }
 
+static bool IsBogrootMap(uint32_t mapId = 0) {
+    if (mapId == 0) {
+        mapId = MapMgr::GetMapId();
+    }
+    return mapId == MAP_BOGROOT_LVL1 || mapId == MAP_BOGROOT_LVL2;
+}
+
 static void FightEnemiesInAggro(float aggroRange, bool careful = false,
-                                SparkflyTraversalCombatStats* stats = nullptr) {
+                                SparkflyTraversalCombatStats* stats = nullptr,
+                                bool waitForSkillCompletion = true,
+                                DWORD maxFightMs = 240000u) {
     const DWORD fightStart = GetTickCount();
     const bool sparkflyMap = MapMgr::GetMapId() == MAP_SPARKFLY_SWAMP;
     if (sparkflyMap) {
@@ -1506,7 +1583,7 @@ static void FightEnemiesInAggro(float aggroRange, bool careful = false,
            !IsDead() &&
            MapMgr::GetIsMapLoaded() &&
            !PartyMgr::GetIsPartyDefeated() &&
-           (GetTickCount() - fightStart) < 240000) {
+           (GetTickCount() - fightStart) < maxFightMs) {
         if (careful) {
             AgentMgr::CancelAction();
         }
@@ -1537,7 +1614,7 @@ static void FightEnemiesInAggro(float aggroRange, bool careful = false,
         }
 
         const DWORD actionStart = GetTickCount();
-        const int uses = UseSkillsInSlotOrder(bestTarget, aggroRange, true);
+        const int uses = UseSkillsInSlotOrder(bestTarget, aggroRange, waitForSkillCompletion);
         if (uses <= 0 && attacked) {
             SetLastCombatStepDescription("auto_attack target=%u", bestTarget);
             ResetLastCombatStepInfo();
@@ -1558,6 +1635,21 @@ static void FightEnemiesInAggro(float aggroRange, bool careful = false,
         }
 
         WaitMs(100);
+    }
+
+    const DWORD elapsedFightMs = GetTickCount() - fightStart;
+    if (elapsedFightMs >= maxFightMs &&
+        GetNearestEnemyDistance() <= aggroRange &&
+        !IsDead() &&
+        MapMgr::GetIsMapLoaded()) {
+        auto* me = AgentMgr::GetMyAgent();
+        Log::Warn("Froggy: FightEnemiesInAggro budget hit elapsed=%lums aggroRange=%.0f player=(%.0f, %.0f) nearestEnemy=%.0f target=%u",
+                  static_cast<unsigned long>(elapsedFightMs),
+                  aggroRange,
+                  me ? me->x : 0.0f,
+                  me ? me->y : 0.0f,
+                  GetNearestEnemyDistance(aggroRange + 500.0f),
+                  AgentMgr::GetTargetId());
     }
 
     if (sparkflyMap) {
@@ -1712,20 +1804,27 @@ static void HoldForLocalClear(const char* label,
                               float fightRange,
                               uint32_t bestId,
                               SparkflyTraversalCombatStats* stats) {
+    const uint32_t mapId = MapMgr::GetMapId();
+    const bool bogrootMap = IsBogrootMap(mapId);
     const float clearRange = max(fightRange + 250.0f, 1600.0f);
+    const DWORD localClearBudgetMs = bogrootMap ? 20000u : 120000u;
+    const DWORD quietDwellMs = bogrootMap ? 700u : 1250u;
+    const DWORD initialDwellTimeoutMs = bogrootMap ? 1500u : 2500u;
+    const DWORD settleDwellTimeoutMs = bogrootMap ? 2000u : 4000u;
+    const int maxClearPasses = bogrootMap ? 1 : 0x7FFFFFFF;
     const DWORD localClearStart = GetTickCount();
     int clearPasses = 0;
     const char* clearLabel = label ? label : "Route";
     const char* lootReason = stats ? "sparkfly-local-clear" : "local-clear";
 
-    while ((GetTickCount() - localClearStart) < 120000) {
+    while ((GetTickCount() - localClearStart) < localClearBudgetMs) {
         if (IsDead() || !MapMgr::GetIsMapLoaded() || PartyMgr::GetIsPartyDefeated()) {
             return;
         }
 
         const uint32_t nearbyBefore = CountEnemiesInRange(clearRange);
         if (nearbyBefore == 0) {
-            if (WaitForAggroClearDwell(clearRange, 1250, 2500)) {
+            if (WaitForAggroClearDwell(clearRange, quietDwellMs, initialDwellTimeoutMs)) {
                 LootAfterCombatSweep(clearRange, lootReason);
                 return;
             }
@@ -1748,19 +1847,39 @@ static void HoldForLocalClear(const char* label,
 
         AgentMgr::CancelAction();
         WaitMs(50);
-        FightEnemiesInAggro(clearRange, false, stats);
+        const DWORD fightBudgetMs = bogrootMap ? 8000u : 240000u;
+        FightEnemiesInAggro(clearRange, false, stats, true, fightBudgetMs);
         AgentMgr::CancelAction();
         WaitMs(150);
 
         const uint32_t nearbyAfter = CountEnemiesInRange(clearRange);
+        const float nearestAfter = GetNearestEnemyDistance(clearRange + 250.0f);
         Log::Info("Froggy: %s local clear result pass=%d target=%u nearbyAfter=%u nearestAfter=%.0f",
                   clearLabel,
                   clearPasses,
                   bestId,
                   nearbyAfter,
-                  GetNearestEnemyDistance(clearRange + 250.0f));
+                  nearestAfter);
 
-        if (WaitForAggroClearDwell(clearRange, 1250, 4000)) {
+        if (nearbyAfter == 0 && nearestAfter > (clearRange + 75.0f)) {
+            LootAfterCombatSweep(clearRange, lootReason);
+            return;
+        }
+
+        if (WaitForAggroClearDwell(clearRange, quietDwellMs, settleDwellTimeoutMs)) {
+            LootAfterCombatSweep(clearRange, lootReason);
+            return;
+        }
+
+        if (bogrootMap && clearPasses >= maxClearPasses) {
+            Log::Info("Froggy: %s local clear early-exit target=%u waypoint=(%.0f, %.0f) nearby=%u nearest=%.0f budget=%lums",
+                      clearLabel,
+                      bestId,
+                      waypointX,
+                      waypointY,
+                      CountEnemiesInRange(clearRange),
+                      GetNearestEnemyDistance(clearRange + 250.0f),
+                      static_cast<unsigned long>(GetTickCount() - localClearStart));
             LootAfterCombatSweep(clearRange, lootReason);
             return;
         }
@@ -1954,11 +2073,83 @@ static void MoveToLikeAutoIt(float x, float y, float randomRadius = 50.0f, DWORD
 static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
       LogBot("AggroMoveToEx start target=(%.0f, %.0f) fightRange=%.0f", x, y, fightRange);
       const bool sparkflyMap = MapMgr::GetMapId() == MAP_SPARKFLY_SWAMP;
+      const bool bogrootMap = IsBogrootMap();
+      if (bogrootMap) {
+          // Match AutoIt's Bogroot traversal more closely: keep advancing toward
+          // the waypoint, fight opportunistically, and loot between movement
+          // bursts rather than holding a full local-clear on every nearby pack.
+          const float arrivalThreshold = 250.0f;
+          const float moveRandomRadius = 100.0f;
+          DWORD start = GetTickCount();
+          int blockedCount = 0;
+          float moveTargetX = x;
+          float moveTargetY = y;
+
+          auto issueBogrootMove = [&]() {
+              moveTargetX = RandomizedMoveCoord(x, moveRandomRadius);
+              moveTargetY = RandomizedMoveCoord(y, moveRandomRadius);
+              AgentMgr::Move(moveTargetX, moveTargetY);
+          };
+          auto issueBogrootSidestep = [&]() {
+              auto* me = AgentMgr::GetMyAgent();
+              if (!me) return;
+              AgentMgr::Move(RandomizedMoveCoord(me->x, 500.0f),
+                             RandomizedMoveCoord(me->y, 500.0f));
+          };
+
+          if (WeCanMove(fightRange)) {
+              issueBogrootMove();
+          }
+
+          while (DistanceTo(x, y) > arrivalThreshold && (GetTickCount() - start) < 240000u) {
+              if (IsDead() || !IsMapLoaded()) return;
+
+              auto* meBefore = AgentMgr::GetMyAgent();
+              const float oldX = meBefore ? meBefore->x : 0.0f;
+              const float oldY = meBefore ? meBefore->y : 0.0f;
+
+              if (GetNearestEnemyDistance() < fightRange) {
+                FightEnemiesInAggro(fightRange, false, nullptr, true, 4000u);
+              }
+
+              if (WeCanMove(fightRange) || (GetTickCount() - start) > 60000u) {
+                  issueBogrootMove();
+                  PickupNearbyLoot(3000.0f);
+                  WaitMs(100);
+
+                  auto* meAfter = AgentMgr::GetMyAgent();
+                  if (meAfter && meAfter->x == oldX && meAfter->y == oldY) {
+                      ++blockedCount;
+                      issueBogrootSidestep();
+                      WaitMs(350);
+                      issueBogrootMove();
+                  } else {
+                      blockedCount = 0;
+                  }
+              }
+
+              if (blockedCount > 30) {
+                  LogBot("AggroMoveToEx Bogroot blocked limit reached (%d) target=(%.0f, %.0f) remaining=%.0f",
+                         blockedCount, x, y, DistanceTo(x, y));
+                  return;
+              }
+
+              WaitMs(100);
+          }
+
+          LogBot("AggroMoveToEx Bogroot end target=(%.0f, %.0f) remaining=%.0f threshold=%.0f",
+                 x, y, DistanceTo(x, y), arrivalThreshold);
+          return;
+      }
       const float localClearRange = max(fightRange + 250.0f, 1600.0f);
       float moveTargetX = x;
       float moveTargetY = y;
       bool moveTargetInitialized = false;
       DWORD lastMoveIssuedAt = 0;
+      DWORD localClearCooldownUntil = 0;
+      float localClearCooldownX = 0.0f;
+      float localClearCooldownY = 0.0f;
+      bool localClearCooldownActive = false;
       auto issueMove = [&](bool force = false) {
           auto* me = AgentMgr::GetMyAgent();
           const bool isMoving = me && (me->move_x != 0.0f || me->move_y != 0.0f);
@@ -2005,6 +2196,20 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
         // entering the fight loop as soon as a foe is inside aggro range.
         {
             if (nearestDistance < localClearRange) {
+                const DWORD now = GetTickCount();
+                if (bogrootMap && localClearCooldownActive) {
+                    auto* meCooldown = AgentMgr::GetMyAgent();
+                    const float movedSinceCooldown = meCooldown
+                        ? AgentMgr::GetDistance(localClearCooldownX, localClearCooldownY, meCooldown->x, meCooldown->y)
+                        : 0.0f;
+                    if (now < localClearCooldownUntil && movedSinceCooldown < 450.0f) {
+                        issueMove(true);
+                        WaitMs(150);
+                        continue;
+                    }
+                    localClearCooldownActive = false;
+                }
+
                 blockedCount = 0;
                 const uint32_t bestId = GetBestEnemy(localClearRange);
                 if (!bestId) {
@@ -2029,6 +2234,13 @@ static void AggroMoveToEx(float x, float y, float fightRange = 1350.0f) {
                 HoldForLocalClear("Route", x, y, fightRange, bestId, nullptr);
                 currentTargetId = 0;
                 targetFightStart = 0;
+                if (bogrootMap) {
+                    auto* meCooldown = AgentMgr::GetMyAgent();
+                    localClearCooldownX = meCooldown ? meCooldown->x : x;
+                    localClearCooldownY = meCooldown ? meCooldown->y : y;
+                    localClearCooldownUntil = GetTickCount() + 2500u;
+                    localClearCooldownActive = true;
+                }
                 WaitForLocalPositionSettle(1200, 18.0f);
                 issueMove(true);
                 WaitMs(250);
@@ -2084,11 +2296,13 @@ static int GetWipeRestartWaypoint(const Waypoint* wps, int count) {
 }
 
 static void SuspendTransitionSensitiveHooks() {
+    AgentMgr::ResetMoveState("Froggy transition suspend");
     CtoS::SuspendEngineHook();
     DialogMgr::Shutdown();
 }
 
 static void ResumeTransitionSensitiveHooks() {
+    AgentMgr::ResetMoveState("Froggy transition resume");
     CtoS::ResumeEngineHook();
     DialogMgr::Initialize();
 }
@@ -2146,6 +2360,52 @@ static bool ReturnToSparkflyFromBogroot() {
 
     WaitMs(3000);
     return WaitForMapReady(MAP_SPARKFLY_SWAMP, 30000);
+}
+
+static bool IsNearSparkflyDungeonSide() {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != MAP_SPARKFLY_SWAMP) {
+        return false;
+    }
+
+    const float distToTekksStage =
+        AgentMgr::GetDistance(me->x, me->y, kSparkflyTekksStageX, kSparkflyTekksStageY);
+    const float distToDungeonStage =
+        AgentMgr::GetDistance(me->x, me->y, kSparkflyDungeonEntryStageX, kSparkflyDungeonEntryStageY);
+    return distToTekksStage <= kSparkflyDungeonSideThreshold ||
+           distToDungeonStage <= kSparkflyDungeonSideThreshold;
+}
+
+static bool MoveToTekksFromSparkflyCurrentSide() {
+    if (MapMgr::GetMapId() != MAP_SPARKFLY_SWAMP || !MapMgr::GetIsMapLoaded()) {
+        return false;
+    }
+
+    auto* me = AgentMgr::GetMyAgent();
+    Log::Info("Froggy: Sparkfly Tekks approach map=%u player=(%.0f, %.0f) nearDungeonSide=%d distStage=%.0f distSearch=%.0f",
+              MapMgr::GetMapId(),
+              me ? me->x : 0.0f,
+              me ? me->y : 0.0f,
+              IsNearSparkflyDungeonSide() ? 1 : 0,
+              me ? AgentMgr::GetDistance(me->x, me->y, kSparkflyTekksStageX, kSparkflyTekksStageY) : -1.0f,
+              me ? AgentMgr::GetDistance(me->x, me->y, kSparkflyTekksSearchX, kSparkflyTekksSearchY) : -1.0f);
+
+    if (IsNearSparkflyDungeonSide()) {
+        LogBot("Sparkfly near-dungeon return detected; using short Tekks approach");
+        const bool stageReached = MoveToAndWait(kSparkflyTekksStageX, kSparkflyTekksStageY, 700.0f);
+        const bool searchReached = MoveToAndWait(kSparkflyTekksSearchX, kSparkflyTekksSearchY, 700.0f);
+        return stageReached || searchReached ||
+               DistanceTo(kSparkflyTekksStageX, kSparkflyTekksStageY) <= 900.0f ||
+               DistanceTo(kSparkflyTekksSearchX, kSparkflyTekksSearchY) <= 900.0f;
+    }
+
+    LogBot("Sparkfly south-side entry detected; using full aggro route to Tekks");
+    FollowWaypoints(SPARKFLY_TO_DUNGEON, sizeof(SPARKFLY_TO_DUNGEON) / sizeof(SPARKFLY_TO_DUNGEON[0]), true);
+    const bool stageReached = MoveToAndWait(kSparkflyTekksStageX, kSparkflyTekksStageY, 900.0f);
+    const bool searchReached = MoveToAndWait(kSparkflyTekksSearchX, kSparkflyTekksSearchY, 900.0f);
+    return stageReached || searchReached ||
+           DistanceTo(kSparkflyTekksStageX, kSparkflyTekksStageY) <= 1100.0f ||
+           DistanceTo(kSparkflyTekksSearchX, kSparkflyTekksSearchY) <= 1100.0f;
 }
 
 static bool EnterBogrootFromSparkfly() {
@@ -2621,7 +2881,7 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
                           DialogMgr::GetDialogSenderAgentId(),
                           DialogMgr::GetButtonCount(),
                           DialogMgr::IsDialogOpen() ? 1 : 0);
-                const bool rewardCleared = AcceptQuestRewardWithRetry(QUEST_TEKKS_WAR, tekksId, 1000);
+                const bool rewardCleared = AcceptQuestRewardWithRetry(QUEST_TEKKS_WAR, tekksId, 5000);
                 Log::Info("Froggy: Boss QuestReward cleared=%d questPresent=%d",
                           rewardCleared ? 1 : 0,
                           QuestMgr::GetQuestById(QUEST_TEKKS_WAR) ? 1 : 0);
@@ -2638,7 +2898,7 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
                 }
             } else {
                 Log::Info("Froggy: Boss reward NPC not found near staging coords; sending reward dialog directly");
-                const bool rewardCleared = AcceptQuestRewardWithRetry(QUEST_TEKKS_WAR, 0, 1000);
+                const bool rewardCleared = AcceptQuestRewardWithRetry(QUEST_TEKKS_WAR, 0, 5000);
                 Log::Info("Froggy: Boss QuestReward fallback cleared=%d questPresent=%d",
                           rewardCleared ? 1 : 0,
                           QuestMgr::GetQuestById(QUEST_TEKKS_WAR) ? 1 : 0);
@@ -2651,40 +2911,70 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
                 s_dungeonLoopTelemetry.last_dialog_id == DIALOG_QUEST_REWARD;
             s_dungeonLoopTelemetry.boss_completed = true;
 
-            const uint32_t postRunGoldSalvaged = MaintenanceMgr::IdentifyAndSalvageGoldItems();
-            Log::Info("Froggy: Boss post-run identify/salvage complete salvagedGold=%u",
-                      postRunGoldSalvaged);
+            const bool questRewardAccepted = QuestMgr::GetQuestById(QUEST_TEKKS_WAR) == nullptr;
+            // Run salvage when either the quest cleared OR the reward dialog
+            // was latched. The stricter "quest gone from log" gate misses cases
+            // where the dialog fired and server-side accept is in-flight, and
+            // salvaging whatever gold is in inventory is safe regardless.
+            if (questRewardAccepted || s_dungeonLoopTelemetry.reward_dialog_latched) {
+                const uint32_t salvaged = MaintenanceMgr::IdentifyAndSalvageGoldItems();
+                Log::Info("Froggy: Boss post-reward gold salvage result salvaged=%u questAccepted=%d rewardLatched=%d",
+                          salvaged,
+                          questRewardAccepted ? 1 : 0,
+                          s_dungeonLoopTelemetry.reward_dialog_latched ? 1 : 0);
+            } else {
+                Log::Info("Froggy: Boss reward not accepted and dialog not latched; skipping post-reward gold salvage");
+            }
 
             // The historical script expects the client to unwind back out after the
-            // reward dialog, but on the current client that auto-return is not
-            // reliable. Give it a short grace period, then explicitly walk the known
-            // Bogroot exit if we are still in-dungeon.
-            const bool questRewardAccepted = QuestMgr::GetQuestById(QUEST_TEKKS_WAR) == nullptr;
+            // reward dialog. On the current client the natural unload-then-load
+            // cycle routinely leaves loaded=0 for a minute or more before the
+            // new map finishes loading, so give the load phase a generous
+            // window before falling back to explicit reverse / ReturnToOutpost.
+            // Use the long window whenever we at least latched the reward
+            // dialog: the client may still be in a natural unload/reload
+            // cycle, and firing explicit reverse / ReturnToOutpost early
+            // crashes Gw.exe.
+            const bool usePostRewardLongWait =
+                questRewardAccepted || s_dungeonLoopTelemetry.reward_dialog_latched;
             bool returnedToSparkfly =
                 WaitForPostDungeonReturn(MAP_SPARKFLY_SWAMP,
-                                         questRewardAccepted ? 210000 : 45000,
-                                         30000);
-            if (!returnedToSparkfly && !questRewardAccepted) {
+                                         usePostRewardLongWait ? 210000 : 45000,
+                                         usePostRewardLongWait ? 180000 : 30000);
+            if (!returnedToSparkfly) {
                 const uint32_t mapAfterReward = MapMgr::GetMapId();
                 const bool mapLoadedAfterReward = MapMgr::GetIsMapLoaded();
                 const uint32_t myIdAfterReward = AgentMgr::GetMyId();
-                Log::Info("Froggy: Boss post-reward auto-return failed map=%u loaded=%d myId=%u; attempting explicit reverse",
-                          mapAfterReward,
-                          mapLoadedAfterReward ? 1 : 0,
-                          myIdAfterReward);
                 if (mapAfterReward == MAP_BOGROOT_LVL1 || mapAfterReward == MAP_BOGROOT_LVL2) {
-                    returnedToSparkfly = ReverseToSparkflySwamp();
-                    Log::Info("Froggy: Boss explicit reverse to Sparkfly result=%d finalMap=%u loaded=%d myId=%u",
-                              returnedToSparkfly ? 1 : 0,
-                              MapMgr::GetMapId(),
-                              MapMgr::GetIsMapLoaded() ? 1 : 0,
-                              AgentMgr::GetMyId());
+                    // If the client is mid-transition (loaded=0 and myId=0),
+                    // sending movement or ReturnToOutpost packets can crash
+                    // Gw.exe. Skip the explicit reverse and let the caller
+                    // report the stuck state cleanly.
+                    if (!mapLoadedAfterReward || myIdAfterReward == 0) {
+                        Log::Info("Froggy: Boss post-reward map stuck in ghost state map=%u loaded=%d myId=%u; skipping explicit reverse to avoid crash",
+                                  mapAfterReward,
+                                  mapLoadedAfterReward ? 1 : 0,
+                                  myIdAfterReward);
+                    } else {
+                        Log::Info("Froggy: Boss post-reward still in Bogroot after wait questRewardAccepted=%d map=%u loaded=%d myId=%u; attempting explicit reverse",
+                                  questRewardAccepted ? 1 : 0,
+                                  mapAfterReward,
+                                  mapLoadedAfterReward ? 1 : 0,
+                                  myIdAfterReward);
+                        returnedToSparkfly = ReverseToSparkflySwamp();
+                        Log::Info("Froggy: Boss explicit reverse to Sparkfly result=%d finalMap=%u loaded=%d myId=%u",
+                                  returnedToSparkfly ? 1 : 0,
+                                  MapMgr::GetMapId(),
+                                  MapMgr::GetIsMapLoaded() ? 1 : 0,
+                                  AgentMgr::GetMyId());
+                    }
+                } else {
+                    Log::Info("Froggy: Boss post-reward wait ended off-Bogroot map questRewardAccepted=%d map=%u loaded=%d myId=%u",
+                              questRewardAccepted ? 1 : 0,
+                              mapAfterReward,
+                              mapLoadedAfterReward ? 1 : 0,
+                              myIdAfterReward);
                 }
-            } else if (!returnedToSparkfly) {
-                Log::Info("Froggy: Boss reward accepted but post-reward auto-return still pending after extended wait; leaving map=%u loaded=%d myId=%u without explicit reverse",
-                          MapMgr::GetMapId(),
-                          MapMgr::GetIsMapLoaded() ? 1 : 0,
-                          AgentMgr::GetMyId());
             }
             s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
             s_dungeonLoopTelemetry.returned_to_sparkfly =
@@ -2721,9 +3011,11 @@ static constexpr uint16_t RARITY_PURPLE = 2626;
 static constexpr uint16_t RARITY_GREEN  = 2627;
 
 static uint16_t GetItemRarity(const Item* item) {
-    if (!item || !item->name_enc) return 0;
+    if (!item) return 0;
+    const wchar_t* raritySource = item->complete_name_enc ? item->complete_name_enc : item->name_enc;
+    if (!raritySource) return 0;
     __try {
-        return *reinterpret_cast<const uint16_t*>(item->name_enc);
+        return *reinterpret_cast<const uint16_t*>(raritySource);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
@@ -3083,6 +3375,47 @@ static bool PrepareTekksDungeonEntry() {
           Log::Info("Froggy: Tekks sending reward dialog 0x%X", DIALOG_QUEST_REWARD);
           QuestMgr::Dialog(DIALOG_QUEST_REWARD);
           WaitMs(500 + ping);
+          QuestMgr::RequestQuestInfo(QUEST_TEKKS_WAR);
+          WaitMs(150);
+          const bool clearedAfterReward = QuestMgr::GetQuestById(QUEST_TEKKS_WAR) == nullptr;
+          Log::Info("Froggy: Tekks reward-first snapshot clearedAfterReward=%d", clearedAfterReward ? 1 : 0);
+          // Dialog closes after reward turn-in; we have to walk up and
+          // re-interact with Tekks to surface the new quest accept button.
+          if (clearedAfterReward) {
+              AgentMgr::ChangeTarget(tekksId);
+              WaitMs(150 + ping);
+              for (int go = 0; go < 3; ++go) {
+                  Log::Info("Froggy: Tekks re-interact for new accept pass %d agent=%u", go + 1, tekksId);
+                  CtoS::SendPacketDirect(3, Packets::INTERACT_NPC, tekksId, 0u);
+                  WaitMs(1500);
+                  if (!(DialogMgr::IsDialogOpen() &&
+                        DialogMgr::GetDialogSenderAgentId() == tekksId)) {
+                      continue;
+                  }
+                  // Tekks opens the post-reward dialog with a continuation
+                  // button (dialog_id=0x80 observed). That button has to be
+                  // clicked before a fresh interaction will surface the new
+                  // quest accept. Walk the existing buttons until we either
+                  // find DIALOG_QUEST_ACCEPT or run out of non-accept
+                  // buttons to advance.
+                  if (hasDialogButton(DIALOG_QUEST_ACCEPT)) {
+                      break;
+                  }
+                  const uint32_t btns = DialogMgr::GetButtonCount();
+                  for (uint32_t bi = 0; bi < btns && bi < 4; ++bi) {
+                      const auto* btn = DialogMgr::GetButton(bi);
+                      if (!btn) continue;
+                      if (btn->dialog_id == DIALOG_QUEST_ACCEPT) continue;
+                      Log::Info("Froggy: Tekks advancing post-reward dialog button_id=0x%X icon=%u",
+                                btn->dialog_id, btn->button_icon);
+                      QuestMgr::Dialog(btn->dialog_id);
+                      WaitMs(500 + ping);
+                  }
+                  if (hasDialogButton(DIALOG_QUEST_ACCEPT)) {
+                      break;
+                  }
+              }
+          }
       }
       // AcceptQuest
       Log::Info("Froggy: Tekks sending accept dialog 0x%X", DIALOG_QUEST_ACCEPT);
@@ -3242,7 +3575,7 @@ static bool ShouldPickUp(const Agent* agent, uint32_t myAgentId) {
     }
 
     uint16_t rarity = GetItemRarity(item);
-    return rarity == RARITY_GOLD && freeSlots > 8;
+    return rarity == RARITY_GOLD && freeSlots >= 2;
 }
 
 static uint32_t CountNearbyPickupCandidates(float maxRange) {
@@ -3524,7 +3857,8 @@ static bool AcquireBogrootBossKey() {
 // Known chest gadget IDs
 static bool IsChestGadgetId(uint32_t gadgetId) {
     return gadgetId == 6062 || gadgetId == 4579 || gadgetId == 4582 ||
-           gadgetId == 8141 || gadgetId == 74 || gadgetId == 68 || gadgetId == 9157;
+           gadgetId == 8141 || gadgetId == 74 || gadgetId == 68 || gadgetId == 9157 ||
+           gadgetId == 8932;
 }
 
 // GWA3-139: Track opened chests to avoid re-interaction
@@ -3594,7 +3928,29 @@ static bool OpenChestAt(float chestX, float chestY, float searchRadius) {
     Log::Info("Froggy: OpenChestAt start target=(%.0f, %.0f) player=(%.0f, %.0f) dist=%.0f radius=%.0f",
               chestX, chestY, playerX, playerY, playerDist, searchRadius);
 
+    auto tryGenericChestFallback = [&](uint32_t signpostId, const char* label) -> uint32_t {
+        if (signpostId == 0) return 0;
+        auto* signpost = AgentMgr::GetAgentByID(signpostId);
+        if (!signpost) return 0;
+        const float distToChest = AgentMgr::GetDistance(signpost->x, signpost->y, chestX, chestY);
+        if (distToChest > max(800.0f, searchRadius * 0.5f)) {
+            return 0;
+        }
+        Log::Info("Froggy: OpenChestAt using generic signpost fallback %s agent=%u gadget=%u distToChest=%.0f",
+                  label ? label : "",
+                  signpostId,
+                  signpost->type == 0x200 ? static_cast<const AgentGadget*>(signpost)->gadget_id : 0u,
+                  distToChest);
+        return signpostId;
+    };
+
     uint32_t chestId = FindNearestChestSignpost(chestX, chestY, searchRadius);
+    if (chestId == 0) {
+        // AutoIt uses GetNearestSignpostToCoords() for the boss chest without
+        // applying a chest-only gadget whitelist, so do the same fallback here.
+        chestId = tryGenericChestFallback(FindNearestSignpost(chestX, chestY, searchRadius),
+                                          "target-coords");
+    }
     if (chestId == 0 && me) {
         // When the historical chest coordinates drift or MoveToAndWait cannot
         // settle on them, fall back to what the live player can actually see.
@@ -3604,6 +3960,10 @@ static bool OpenChestAt(float chestX, float chestY, float searchRadius) {
         LogNearbySignposts(playerX, playerY, playerSearchRadius, "OpenChestAt player-all-signpost scan", false);
         LogNearbySignposts(playerX, playerY, playerSearchRadius, "OpenChestAt player-chest-only scan", true);
         chestId = FindNearestChestSignpost(playerX, playerY, playerSearchRadius);
+        if (chestId == 0) {
+            chestId = tryGenericChestFallback(FindNearestSignpost(playerX, playerY, playerSearchRadius),
+                                              "live-player");
+        }
         if (chestId == 0) {
             // Last resort: try the nearest chest gadget relative to the player,
             // then let OpenNearbyChest drive the interaction once we are in range.
@@ -4188,6 +4548,14 @@ static int UseAllSkillsWithRole(uint32_t targetId, uint32_t roleMask, int maxUse
 }
 
 static int UseSkillsInSlotOrder(uint32_t targetId, float aggroRange, bool waitForCompletion) {
+    // Ensure the player skillbar cache is populated. Without this, every
+    // TryUseSkillIndex call sees s_skillCache[i].skill_id == 0 and
+    // returns false, so no player skills ever fire. FightTarget caches
+    // up front but the aggro path (FightEnemiesInAggro ->
+    // UseSkillsInSlotOrder) did not — meaning LLM-driven aggro_move_to
+    // walks would auto-attack + call targets but never cast player
+    // skills, while heroes fought normally.
+    if (!s_skillsCached) CacheSkillBar();
     int usedCount = 0;
     for (int i = 0; i < 8; ++i) {
         if (TryUseSkillIndex(i, targetId, waitForCompletion, aggroRange)) {
@@ -4972,11 +5340,10 @@ BotState HandleDungeon(BotConfig& cfg) {
         // GWA3-166: Renew consets at Sparkfly entry
         UseConsumables(cfg);
 
-        // Match the proven AutoIt Sparkfly aggro route instead of
-        // straight-lining to Tekks. This keeps combat active on approach and
-        // avoids the explorable glide/floating behavior seen on long direct
-        // movement.
-        FollowWaypoints(SPARKFLY_TO_DUNGEON, sizeof(SPARKFLY_TO_DUNGEON) / sizeof(SPARKFLY_TO_DUNGEON[0]));
+        if (!MoveToTekksFromSparkflyCurrentSide()) {
+            LogBot("Sparkfly Tekks approach failed; aborting dungeon push");
+            return BotState::Error;
+        }
 
         // AutoIt-faithful Tekks interaction: interact with Tekks, refresh the
         // quest dialog state, then send the dungeon-entry dialog so the door
@@ -4994,6 +5361,7 @@ BotState HandleDungeon(BotConfig& cfg) {
 
         // Suspend hooks before dungeon zone transition to prevent
         // stale-context crashes from CtoS engine hook and DialogMgr StoC hooks.
+        AgentMgr::ResetMoveState("Froggy dungeon entry suspend");
         CtoS::SuspendEngineHook();
         DialogMgr::Shutdown();
 
@@ -5007,6 +5375,7 @@ BotState HandleDungeon(BotConfig& cfg) {
         WaitMs(3000);
 
         // Resume hooks now that we're stable inside Bogroot
+        AgentMgr::ResetMoveState("Froggy dungeon entry resume");
         CtoS::ResumeEngineHook();
         DialogMgr::Initialize();
     }
@@ -5750,6 +6119,14 @@ bool DebugAggroMoveTo(float x, float y, float fightRange) {
         return false;
     }
 
+    // Populate the player skillbar cache up front. The bot's normal
+    // state machine caches in HandleOutpost, but LLM-bridge callers
+    // enter Froggy via this debug function without going through that
+    // path — without the cache, every TryUseSkillIndex / TryUseSkillWith
+    // Role lookup returns false and the PLAYER never casts (heroes
+    // still fight, and the LLM sees attack/call but no skill bumps).
+    if (!s_skillsCached) CacheSkillBar();
+
     LogBot("DebugAggroMoveTo request target=(%.0f, %.0f) fightRange=%.0f", x, y, fightRange);
     AggroMoveToEx(x, y, fightRange);
     const float arrivalThreshold = MapMgr::GetMapId() == MAP_SPARKFLY_SWAMP ? 500.0f : 250.0f;
@@ -5782,20 +6159,20 @@ bool DebugRunSparkflyRouteToTekks() {
         return false;
     }
 
-    static constexpr float kTekksStageX = 12061.0f;
-    static constexpr float kTekksStageY = 22485.0f;
     static constexpr float kTekksStageThreshold = 500.0f;
 
     LogBot("DebugRunSparkflyRouteToTekks start");
-    FollowWaypoints(SPARKFLY_TO_DUNGEON, sizeof(SPARKFLY_TO_DUNGEON) / sizeof(SPARKFLY_TO_DUNGEON[0]), true);
-    if (!MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != MAP_SPARKFLY_SWAMP) {
-        LogBot("DebugRunSparkflyRouteToTekks aborted after waypoint follow: map=%u loaded=%d",
-               MapMgr::GetMapId(), MapMgr::GetIsMapLoaded() ? 1 : 0);
+    const bool approached = MoveToTekksFromSparkflyCurrentSide();
+    if (!approached || !MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != MAP_SPARKFLY_SWAMP) {
+        LogBot("DebugRunSparkflyRouteToTekks aborted after approach: approached=%d map=%u loaded=%d",
+               approached ? 1 : 0,
+               MapMgr::GetMapId(),
+               MapMgr::GetIsMapLoaded() ? 1 : 0);
         return false;
     }
 
-    MoveToAndWait(kTekksStageX, kTekksStageY, kTekksStageThreshold);
-    const float remaining = DistanceTo(kTekksStageX, kTekksStageY);
+    MoveToAndWait(kSparkflyTekksStageX, kSparkflyTekksStageY, kTekksStageThreshold);
+    const float remaining = DistanceTo(kSparkflyTekksStageX, kSparkflyTekksStageY);
     const bool reached = remaining <= kTekksStageThreshold;
     LogBot("DebugRunSparkflyRouteToTekks end remaining=%.0f reached=%d", remaining, reached ? 1 : 0);
     return reached;
@@ -6120,6 +6497,11 @@ bool DebugRunDungeonLoopFromCurrentMap() {
                 break;
             }
             continue;
+        } else if (mapId == MAP_SPARKFLY_SWAMP && s_dungeonLoopTelemetry.entered_lvl2) {
+            s_dungeonLoopTelemetry.final_map_id = mapId;
+            s_dungeonLoopTelemetry.returned_to_sparkfly = true;
+            Log::Info("Froggy: Bogroot loop completed with Sparkfly return after level 2");
+            return true;
         } else {
             s_dungeonLoopTelemetry.final_map_id = mapId;
             Log::Info("Froggy: Bogroot loop exiting on unsupported map=%u", mapId);

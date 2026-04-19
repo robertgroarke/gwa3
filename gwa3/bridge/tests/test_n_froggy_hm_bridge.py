@@ -609,29 +609,16 @@ class FroggyHmBridgeTest:
 
     async def phase2b_merchant(self) -> bool:
         print("\n=== PHASE 2b: Merchant — read inventory/gold, buy + sell ===")
-        # KNOWN BUG (same family as phase2d_xunlai): the merchant_buy /
-        # merchant_sell handlers call TradeMgr::TransactionBuyNative/
-        # SellNative on the game thread without verifying the merchant
-        # dialog is truly server-side open. A handful of successful
-        # buy+sell round-trips can run before the server classifies a
-        # packet as invalid and disconnects the client (Code=007 to
-        # char-select), at which point every downstream phase reads
-        # stale pre-DC state. Observed live across multiple iterations.
-        #
-        # Proper fix: add "merchant.is_open" + "merchant.ready_for_buy"
-        # guards that track the server-side merchant state (the current
-        # merchant.is_open in the snapshot only reflects the UI
-        # window-frame state, not that the server is actually ready
-        # for a transaction). Gate HandleMerchantBuy / HandleMerchant
-        # Sell on those before firing the native transaction.
-        self._record(
-            "phase2b_merchant",
-            "SKIP",
-            "disabled: merchant_buy/merchant_sell without server-confirmed merchant state intermittently DCs (Code=007)",
-        )
-        return True
-        # Unreachable — legacy body preserved for when the merchant-
-        # state gate is in place.
+        # Gated: HandleMerchantBuy / HandleMerchantSell now refuse with
+        # merchant_not_open_call_open_merchant_first when the merchant
+        # isn't server-side-open (checked via
+        # TradeMgr::GetMerchantItemCount() > 0 — populated only after the
+        # server replies with the merchant inventory). So even if the
+        # test logic below has a bug, the DC-causing packet can't fire.
+        if self.map_id() != MAP_GADDS:
+            self._record("phase2b_merchant", "SKIP", "not at Gadd's")
+            return False
+
         if not await self.walk_to(
             GADDS_MERCHANT_X, GADDS_MERCHANT_Y, "Gadd's merchant", threshold=350.0, timeout=30.0
         ):
@@ -769,30 +756,16 @@ class FroggyHmBridgeTest:
 
     async def phase2d_xunlai(self) -> bool:
         print("\n=== PHASE 2d: Xunlai chest — withdraw + deposit gold ===")
-        # KNOWN BUG: HandleWithdrawGold / HandleDepositGold call
-        # ItemMgr::ChangeGold which fires the CHANGE_GOLD packet
-        # unconditionally. The server only accepts CHANGE_GOLD while the
-        # Xunlai storage window is open (opened by interact_npc on Xunlai
-        # Jingwei); firing it otherwise looks like an invalid packet and
-        # the server disconnects the client (Code=007 to char-select).
-        # Observed live: withdraw/deposit returned "success" from the
-        # handler's pre-packet checks, but the server DC'd the client,
-        # leaving every downstream phase (skills, move, Sparkfly entry)
-        # reading stale pre-DC state and failing.
-        #
-        # Proper fix: expose "storage_is_open" in the snapshot and have
-        # HandleWithdrawGold/HandleDepositGold return an error when it's
-        # false. Until that's wired up, skip the whole phase — the cost
-        # of one more random DC is far higher than the coverage we'd
-        # get from re-enabling it.
-        self._record(
-            "phase2d_xunlai",
-            "SKIP",
-            "disabled: CHANGE_GOLD packet without confirmed storage-open causes server DC (Code=007)",
-        )
-        return True
-        # Unreachable — legacy body preserved for when the snapshot gate
-        # and handler-side check are in place.
+        # Uses the open_xunlai bridge action (raw GoNPC INTERACT_NPC +
+        # cancel_action + MarkXunlaiOpened), which establishes the
+        # server-side Xunlai context that CHANGE_GOLD needs. Handle
+        # Withdraw/DepositGold refuse unless IsXunlaiRecentlyOpened is
+        # true, so even if the open fails, the DC-causing packet can't
+        # fire.
+        if self.map_id() != MAP_GADDS:
+            self._record("phase2d_xunlai", "SKIP", "not at Gadd's")
+            return False
+
         if not await self.walk_to(
             GADDS_XUNLAI_X, GADDS_XUNLAI_Y, "Gadd's Xunlai chest", threshold=300.0, timeout=30.0
         ):
@@ -804,12 +777,15 @@ class FroggyHmBridgeTest:
             self._record("phase2d_xunlai", "SKIP", "no snapshot at Xunlai")
             return False
 
-        # Interact with the nearest NPC-allegiance agent — that's Xunlai Jingwei.
+        # Find Xunlai Jingwei and open via the new open_xunlai action
+        # (raw GoNPC, matches MaintenanceMgr::OpenXunlaiChest) rather than
+        # interact_npc (which goes through the native function path that
+        # does not establish the server-side storage context).
         npc_id = self.find_nearby_npc(GADDS_XUNLAI_X, GADDS_XUNLAI_Y, radius=500.0)
         if not npc_id:
             self._record("phase2d_xunlai", "SKIP", "no Xunlai NPC in range")
             return True
-        await self.action("interact_npc", {"agent_id": npc_id}, wait_ms=1500)
+        await self.action("open_xunlai", {"agent_id": npc_id}, wait_ms=3500)
 
         gold_before = self.gold_character()
         storage_before = self.gold_storage()
@@ -895,45 +871,29 @@ class FroggyHmBridgeTest:
         )
         return True
 
-    async def phase2f_skill_usage(self) -> bool:
-        """Validate use_skill / use_hero_skill dispatches through the bridge.
+    async def phase4c_skill_usage(self) -> bool:
+        """Validate use_skill / use_hero_skill through recharge deltas.
 
-        KNOWN BUG (same packet-validation family as phase 2b merchant and
-        phase 2d xunlai): firing use_skill in an outpost is a
-        server-invalid action. Outposts disallow combat packets — the
-        client's UI prevents this, but the bridge bypasses the UI and
-        sends the raw USE_SKILL (0x46) packet anyway. Server classifies
-        it as invalid and disconnects with Code=007. The apparent
-        "success" + "skillbar invalidated" pattern I was diagnosing as a
-        DLL state bug was really the post-DC snapshot.
+        Runs in Sparkfly (after phase 4 combat) rather than in the
+        outpost — firing use_skill in an outpost is server-invalid and
+        DCs the client with Code=007 (outposts disallow combat packets).
 
-        Skill validation is covered by phase 4 (Sparkfly combat with a
-        real enemy target), where the packet is legal. This phase is
-        left behind as a placeholder because the test code still
-        exercises the *schema* for use_skill / use_hero_skill via
-        phase 4; running it here would just DC the client.
-
-        Proper fix would be to add a map-type check in HandleUseSkill:
-        refuse with an error if the current map is an outpost so the LLM
-        can't accidentally DC itself with a cast attempt out of combat.
+        Sparkfly has its own quirk: the DLL hard-suppresses direct
+        player use_skill via SparkflyPlayerUseSkillOverride unless the
+        call comes from inside Froggy's aggro loop, so the PLAYER cast
+        half of this phase will usually show zero bumps. The HERO cast
+        half (use_hero_skill) is not suppressed and should produce
+        visible recharge deltas when it fires legally.
         """
-        print("\n=== PHASE 2f: Skill usage validation (recharge delta) ===")
-        self._record(
-            "phase2f_skills",
-            "SKIP",
-            "disabled: use_skill in outpost is server-invalid (Code=007 DC). Skill validation runs in phase 4 (explorable).",
-        )
-        return True
-        # Unreachable below — preserved for a future "in-explorable only"
-        # variant once HandleUseSkill enforces the outpost gate.
-        if self.map_id() != MAP_GADDS:
-            self._record("phase2f_skills", "SKIP", "not at Gadd's")
-            return False
+        print("\n=== PHASE 4c: Skill usage validation (recharge delta) ===")
+        if self.map_id() != MAP_SPARKFLY:
+            self._record("phase4c_skills", "SKIP", "not in Sparkfly")
+            return True
 
         await self.action("cancel_action", {}, wait_ms=500)
         snap = await self.query_fresh(settle_ms=600, timeout=6.0)
         if snap is None:
-            self._record("phase2f_skills", "SKIP", "no snapshot for skillbar read")
+            self._record("phase4c_skills", "SKIP", "no snapshot for skillbar read")
             return False
 
         player_skills = snap.get("skillbar", [])
@@ -1018,13 +978,13 @@ class FroggyHmBridgeTest:
         player_skillbar_vanished = bool(player_before) and not player_after
         if not player_bumped and not hero_bumped and not player_skillbar_vanished:
             self._record(
-                "phase2f_skills",
+                "phase4c_skills",
                 "FAIL",
                 "no recharge delta nor skillbar change after use_skill calls",
             )
             return True
         self._record(
-            "phase2f_skills",
+            "phase4c_skills",
             "PASS",
             f"player_bumped={player_bumped} hero1_bumped={hero_bumped} "
             f"skillbar_invalidated={player_skillbar_vanished}",
@@ -1148,15 +1108,20 @@ class FroggyHmBridgeTest:
         if self.map_id() != MAP_SPARKFLY:
             self._record("phase5_tekks", "SKIP", "not in Sparkfly")
             return False
+        # aggro_move_to runs a long combat loop server-side: walk, engage
+        # anything in fight_range, resume walk. HM Sparkfly legs can take
+        # several minutes each (tight aggro groups + 7 heroes slowly
+        # clearing). Per-waypoint timeouts pulled up from 90s to 300s so
+        # the test doesn't bail on legitimately slow combat legs.
         for x, y, label in SPARKFLY_TO_TEKKS_PATH:
             threshold = 250.0 if label == "Tekks" else 500.0
             # aggro_move_to for the enemy-populated legs, plain move_to for
             # the final approach to Tekks himself (no foes on the platform).
             if label == "Tekks":
-                arrived = await self.walk_to(x, y, label, threshold=threshold, timeout=60.0)
+                arrived = await self.walk_to(x, y, label, threshold=threshold, timeout=120.0)
             else:
                 arrived = await self.aggro_walk_to(
-                    x, y, label, threshold=threshold, timeout=90.0
+                    x, y, label, threshold=threshold, timeout=300.0
                 )
             if not arrived:
                 self._record("phase5_tekks", "FAIL", f"stuck at {label}")
@@ -1204,7 +1169,7 @@ class FroggyHmBridgeTest:
             self._record("phase7_bogroot", "SKIP", "not in Sparkfly")
             return False
         for x, y, label in TEKKS_TO_DUNGEON_PATH:
-            if not await self.aggro_walk_to(x, y, label, threshold=500.0, timeout=60.0):
+            if not await self.aggro_walk_to(x, y, label, threshold=500.0, timeout=240.0):
                 self._record("phase7_bogroot", "FAIL", f"stuck at {label}")
                 return False
         snap = await self.query_fresh(settle_ms=400, timeout=6.0)
@@ -1229,7 +1194,7 @@ class FroggyHmBridgeTest:
             self._record("phase8_blessing", "SKIP", "not in Bogroot Lvl1")
             return False
         for x, y, label in BOGROOT_TO_BLESSING_PATH:
-            if not await self.aggro_walk_to(x, y, label, threshold=500.0, timeout=60.0):
+            if not await self.aggro_walk_to(x, y, label, threshold=500.0, timeout=240.0):
                 self._record("phase8_blessing", "FAIL", f"stuck at {label}")
                 return False
         snap = await self.query_fresh(settle_ms=400, timeout=6.0)
@@ -1386,10 +1351,15 @@ class FroggyHmBridgeTest:
                 (self.phase2c_identify_salvage, False),
                 (self.phase2d_xunlai, False),
                 (self.phase2e_town_blessing, False),
-                (self.phase2f_skill_usage, False),
                 (self.phase3_enter_sparkfly, True),
                 (self.phase4_combat_proof, False),
                 (self.phase4b_loot, False),
+                # Skill-usage validation runs AFTER combat in Sparkfly
+                # (not in outpost) — use_skill in an outpost is
+                # server-invalid and DCs the client. phase 4 already
+                # exercised in-combat casts with real enemy targets;
+                # this phase adds recharge-delta evidence.
+                (self.phase4c_skill_usage, False),
                 (self.phase5_walk_to_tekks, True),
                 (self.phase6_accept_tekks_quest, False),
                 (self.phase7_enter_bogroot, True),

@@ -538,6 +538,26 @@ REQUEST_QUOTE = _tool(
     },
 )
 
+OPEN_XUNLAI = _tool(
+    "open_xunlai",
+    "Open the Xunlai storage chest via the raw GoNPC (INTERACT_NPC) "
+    "packet. Call this on a nearby Xunlai Jingwei agent BEFORE firing "
+    "withdraw_gold / deposit_gold or any MoveItem to/from storage bags "
+    "— CHANGE_GOLD and storage MoveItem packets are only server-legal "
+    "for a short window (~15s) after this GoNPC lands, and firing them "
+    "otherwise disconnects the client with Code=007. The open sequence "
+    "also auto-closes the UI dialog (it disrupts player agent reads).",
+    {
+        "properties": {
+            "agent_id": {
+                "type": "integer",
+                "description": "Agent ID of the Xunlai Jingwei NPC",
+            },
+        },
+        "required": ["agent_id"],
+    },
+)
+
 MERCHANT_BUY = _tool(
     "merchant_buy",
     "Buy an item from an open merchant window using the native Transaction "
@@ -1071,6 +1091,7 @@ ALL_TOOLS = [
     LOAD_SKILLBAR,
     # Trade & Crafting
     BUY_MATERIALS,
+    OPEN_XUNLAI,
     MERCHANT_BUY,
     MERCHANT_SELL,
     REQUEST_QUOTE,

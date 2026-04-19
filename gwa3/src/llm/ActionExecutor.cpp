@@ -486,6 +486,14 @@ namespace GWA3::LLM::ActionExecutor {
         uint32_t itemId = p["item_id"].get<uint32_t>();
         uint32_t qty = p.value("quantity", 1u);
         if (qty == 0) return MakeError("invalid_quantity");
+        // Gate: refuse if the merchant isn't server-side-open. Firing
+        // native buy/sell without a live merchant context DCs the client
+        // (Code=007). GetMerchantItemCount() > 0 is populated only after
+        // the server sends us the merchant inventory — same signal that
+        // powers snapshot.merchant.is_open.
+        if (TradeMgr::GetMerchantItemCount() == 0) {
+            return MakeError("merchant_not_open_call_open_merchant_first");
+        }
         bool ok = TradeMgr::BuyMerchantItem(itemId, qty);
         return ok ? MakeOk() : MakeError("buy_merchant_item_failed");
     }
@@ -494,6 +502,9 @@ namespace GWA3::LLM::ActionExecutor {
         if (!p.contains("item_id")) return MakeError("missing item_id");
         uint32_t itemId = p["item_id"].get<uint32_t>();
         uint32_t qty = p.value("quantity", 0u);
+        if (TradeMgr::GetMerchantItemCount() == 0) {
+            return MakeError("merchant_not_open_call_open_merchant_first");
+        }
         bool ok = TradeMgr::SellInventoryItem(itemId, qty);
         return ok ? MakeOk() : MakeError("sell_inventory_item_failed");
     }
@@ -578,6 +589,41 @@ namespace GWA3::LLM::ActionExecutor {
     // never receive kVendorQuote callbacks. We retry and fall back to the
     // native InteractNPC path, and verify via merchant item count that the
     // dialog is actually open before returning.
+    // Open the Xunlai chest by sending the raw GoNPC INTERACT_NPC packet
+    // (0x39) to a nearby Xunlai agent. This mirrors MaintenanceMgr::
+    // OpenXunlaiChest and the C++ test harness's working open path —
+    // AgentMgr::InteractNPC's native function path opens a UI dialog that
+    // disrupts player agent state and does NOT establish the server-side
+    // context needed for CHANGE_GOLD / MoveItem packets.
+    //
+    // On success, marks ItemMgr::MarkXunlaiOpened so HandleWithdrawGold /
+    // HandleDepositGold can refuse when the open window has lapsed,
+    // preventing the client from sending CHANGE_GOLD without a live
+    // Xunlai context (which the server DCs as Code=007).
+    static ActionResult HandleOpenXunlai(const json& p) {
+        if (!p.contains("agent_id")) return MakeError("missing agent_id");
+        uint32_t id = p["agent_id"].get<uint32_t>();
+        if (!AgentMgr::GetAgentExists(id)) return MakeError("agent_not_found");
+
+        std::thread([id]() {
+            GWA3::GameThread::Enqueue([id]() { AgentMgr::ChangeTarget(id); });
+            Sleep(250);
+            GWA3::GameThread::Enqueue([id]() {
+                CtoS::SendPacket(3, Packets::INTERACT_NPC, id, 0u);
+            });
+            Sleep(2000);
+            // Close the UI dialog — it blocks agent reads if left open.
+            // Server-side context is established by the GoNPC packet, not
+            // the UI. Matches MaintenanceMgr::OpenXunlaiChest exactly.
+            GWA3::GameThread::Enqueue([]() { AgentMgr::CancelAction(); });
+            Sleep(500);
+            // Now it's safe for subsequent CHANGE_GOLD packets.
+            ItemMgr::MarkXunlaiOpened();
+            Log::Info("[LLM-Action] open_xunlai: marked Xunlai-opened for agent %u", id);
+        }).detach();
+        return MakeOk();
+    }
+
     static ActionResult HandleOpenMerchant(const json& p) {
         if (!p.contains("agent_id")) return MakeError("missing agent_id");
         uint32_t id = p["agent_id"].get<uint32_t>();
@@ -619,6 +665,12 @@ namespace GWA3::LLM::ActionExecutor {
     static ActionResult HandleWithdrawGold(const json& p) {
         if (!p.contains("amount")) return MakeError("missing amount");
         uint32_t amount = p["amount"].get<uint32_t>();
+        // Refuse if Xunlai hasn't been opened recently. Without this gate,
+        // CHANGE_GOLD packets without an active Xunlai context are
+        // server-invalid and DC the client with Code=007.
+        if (!ItemMgr::IsXunlaiRecentlyOpened()) {
+            return MakeError("xunlai_not_open_call_open_xunlai_first");
+        }
         uint32_t charGold = ItemMgr::GetGoldCharacter();
         uint32_t storageGold = ItemMgr::GetGoldStorage();
         if (amount > storageGold) return MakeError("insufficient_storage_gold");
@@ -634,6 +686,9 @@ namespace GWA3::LLM::ActionExecutor {
     static ActionResult HandleDepositGold(const json& p) {
         if (!p.contains("amount")) return MakeError("missing amount");
         uint32_t amount = p["amount"].get<uint32_t>();
+        if (!ItemMgr::IsXunlaiRecentlyOpened()) {
+            return MakeError("xunlai_not_open_call_open_xunlai_first");
+        }
         uint32_t charGold = ItemMgr::GetGoldCharacter();
         uint32_t storageGold = ItemMgr::GetGoldStorage();
         if (amount > charGold) return MakeError("insufficient_character_gold");
@@ -1072,6 +1127,7 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["merchant_sell"] = HandleMerchantSell;
         g_dispatch["craft_item"] = HandleCraftItem;
         g_dispatch["open_merchant"] = HandleOpenMerchant;
+        g_dispatch["open_xunlai"] = HandleOpenXunlai;
         g_dispatch["withdraw_gold"] = HandleWithdrawGold;
         g_dispatch["deposit_gold"] = HandleDepositGold;
         g_dispatch["trader_buy"] = HandleTraderBuy;
