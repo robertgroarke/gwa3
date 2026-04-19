@@ -575,32 +575,140 @@ namespace GWA3::LLM::GameSnapshot {
         return BuildSkillbarFromBar(SkillMgr::GetPlayerSkillbar());
     }
 
-    // Build hero skillbars array (one entry per hero in party)
+    // SEH-isolated: copy the PartyInfo.heroes array into POD records.
+    // Called off the json-building path because json destructors
+    // conflict with __try/__except in MSVC (C2712).
+    struct HeroPartyEntry {
+        uint32_t hero_id;
+        uint32_t agent_id;
+        uint32_t owner_player_id;
+        uint32_t level;
+    };
+    __declspec(noinline) static uint32_t ReadPartyHeroes(HeroPartyEntry* out,
+                                                          uint32_t max) {
+        PartyInfo* party = PartyMgr::ResolvePlayerParty();
+        if (!party) return 0;
+        uint32_t written = 0;
+        __try {
+            auto& arr = party->heroes;
+            if (!arr.buffer || arr.size == 0 || arr.size > 16) return 0;
+            for (uint32_t i = 0; i < arr.size && written < max; ++i) {
+                const auto& h = arr.buffer[i];
+                auto& r = out[written++];
+                r.hero_id = h.hero_id;
+                r.agent_id = h.agent_id;
+                r.owner_player_id = h.owner_player_id;
+                r.level = h.level;
+            }
+            return written;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return written;
+        }
+    }
+
+    struct PlayerPartyEntry {
+        uint32_t login_number;
+        uint32_t called_target_id;
+        uint32_t state;
+    };
+    __declspec(noinline) static uint32_t ReadPartyPlayers(PlayerPartyEntry* out,
+                                                           uint32_t max) {
+        PartyInfo* party = PartyMgr::ResolvePlayerParty();
+        if (!party) return 0;
+        uint32_t written = 0;
+        __try {
+            auto& arr = party->players;
+            if (!arr.buffer || arr.size == 0 || arr.size > 16) return 0;
+            for (uint32_t i = 0; i < arr.size && written < max; ++i) {
+                const auto& p = arr.buffer[i];
+                auto& r = out[written++];
+                r.login_number = p.login_number;
+                r.called_target_id = p.called_target_id;
+                r.state = p.state;
+            }
+            return written;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return written;
+        }
+    }
+
+    struct HenchPartyEntry {
+        uint32_t agent_id;
+        uint32_t profession;
+        uint32_t level;
+    };
+    __declspec(noinline) static uint32_t ReadPartyHenchmen(HenchPartyEntry* out,
+                                                            uint32_t max) {
+        PartyInfo* party = PartyMgr::ResolvePlayerParty();
+        if (!party) return 0;
+        uint32_t written = 0;
+        __try {
+            auto& arr = party->henchmen;
+            if (!arr.buffer || arr.size == 0 || arr.size > 16) return 0;
+            for (uint32_t i = 0; i < arr.size && written < max; ++i) {
+                const auto& h = arr.buffer[i];
+                auto& r = out[written++];
+                r.agent_id = h.agent_id;
+                r.profession = h.profession;
+                r.level = h.level;
+            }
+            return written;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return written;
+        }
+    }
+
+    // Build hero skillbars array (one entry per hero in party).
+    //
+    // Driven by PartyInfo.heroes[] rather than agent enumeration —
+    // heroes in OUTPOSTS don't exist as AgentLiving instances (they
+    // only spawn as agents when the player enters an explorable
+    // area), so ForEachAgent + allegiance==1 misses them entirely.
+    // Reading PartyInfo directly gives us the roster regardless of
+    // in-game vs outpost state.
+    //
+    // HeroPartyMember gives us (hero_id, agent_id, level, owner).
+    // When agent_id != 0 (explorable / rendered), we enrich with the
+    // usual living-agent fields (hp, energy, profession, casting
+    // state) + skillbar + 16-bit weapon/offhand. When agent_id == 0
+    // (outpost) we emit just the party-level fields.
     static json BuildHeroSkillbarsJson() {
         json heroes = json::array();
-        uint32_t myId = AgentMgr::GetMyId();
-        ForEachAgent([&](Agent* agent) {
-            LivingAgentSeed living{};
-            if (!ReadLivingAgentSeed(agent, living)) return;
-            if (living.agent_id == myId || living.allegiance != 1) return;
+        HeroPartyEntry entries[16] = {};
+        uint32_t count = ReadPartyHeroes(entries, 16);
+        if (count == 0) return heroes;
 
-            auto* bar = SkillMgr::GetSkillbarByAgentId(living.agent_id);
-            if (!bar) return;
-
+        for (uint32_t i = 0; i < count; ++i) {
+            const auto& e = entries[i];
             json h;
-            h["agent_id"] = living.agent_id;
-            h["hp"] = living.hp;
-            h["energy"] = living.energy;
-            h["primary"] = living.primary;
-            h["secondary"] = living.secondary;
-            h["level"] = living.level;
-            h["is_casting"] = (living.casting_skill_id != 0);
-            h["casting_skill_id"] = living.casting_skill_id;
-            h["skillbar"] = BuildSkillbarFromBar(bar);
-            EmitEquipmentForAgent(h, reinterpret_cast<AgentLiving*>(agent),
-                                  /*isMe=*/false);
+            h["hero_id"] = e.hero_id;
+            h["agent_id"] = e.agent_id;
+            h["owner_player_id"] = e.owner_player_id;
+            h["level"] = e.level;
+
+            // Enrich when the hero is spawned as an agent (explorable).
+            if (e.agent_id != 0) {
+                Agent* agent = AgentMgr::GetAgentByID(e.agent_id);
+                if (agent) {
+                    LivingAgentSeed living{};
+                    if (ReadLivingAgentSeed(agent, living)) {
+                        h["hp"] = living.hp;
+                        h["energy"] = living.energy;
+                        h["primary"] = living.primary;
+                        h["secondary"] = living.secondary;
+                        h["is_casting"] = (living.casting_skill_id != 0);
+                        h["casting_skill_id"] = living.casting_skill_id;
+                    }
+                    auto* bar = SkillMgr::GetSkillbarByAgentId(e.agent_id);
+                    if (bar) h["skillbar"] = BuildSkillbarFromBar(bar);
+                    EmitEquipmentForAgent(
+                        h, reinterpret_cast<AgentLiving*>(agent),
+                        /*isMe=*/false);
+                }
+            }
+
             heroes.push_back(h);
-        });
+        }
         return heroes;
     }
 
@@ -661,56 +769,108 @@ namespace GWA3::LLM::GameSnapshot {
         return m;
     }
 
-    // Build party with per-member status
+    // Build party with per-member status.
+    //
+    // Driven by PartyInfo (PartyMgr::ResolvePlayerParty) so we see the
+    // roster in OUTPOSTS too. The old implementation used
+    // ForEachAgent+allegiance==1 which only finds agents currently
+    // rendered in the world — in Embark Beach heroes aren't spawned
+    // yet, so they were invisible to the snapshot even while shown
+    // clearly in the Party Formation UI.
+    //
+    // Per-hero agent_id / hp / energy / profession are enriched only
+    // when the hero is actually spawned (agent_id != 0 and the Agent
+    // resolves via AgentMgr). In outposts we emit identity fields
+    // (hero_id, level, owner) without live-agent data.
     static json BuildPartyBasicsJson() {
         json p;
         p["is_defeated"] = PartyMgr::GetIsPartyDefeated();
-        p["morale"] = ReadMorale();  // -60 to +10 (0 = no DP/boost)
+        p["morale"] = ReadMorale();
 
-        // Build party member list from raw agent enumeration.
         auto* me = AgentMgr::GetMyAgent();
-        if (me) {
-            json members = json::array();
-            uint32_t partySize = 0;
-            uint32_t deadCount = 0;
-            ForEachAgent([&](Agent* agent) {
-                LivingAgentSeed living{};
-                if (!ReadLivingAgentSeed(agent, living)) return;
-                if (living.allegiance != 1 || living.agent_id == me->agent_id) return;
+        json members = json::array();
+        uint32_t size = 0;
+        uint32_t dead = 0;
 
-                json m;
-                m["agent_id"] = living.agent_id;
-                m["hp"] = living.hp;
-                m["energy"] = living.energy;
-                m["primary"] = living.primary;
-                m["level"] = living.level;
-                bool alive = living.hp > 0.0f;
-                m["is_alive"] = alive;
-                m["is_player"] = false;
-                m["is_hero"] = false;
-                members.push_back(m);
-                partySize++;
-                if (!alive) deadCount++;
-            });
-            // Include self
-            {
-                json m;
+        // Players (including self).
+        PlayerPartyEntry players[16] = {};
+        uint32_t playerCount = ReadPartyPlayers(players, 16);
+        for (uint32_t i = 0; i < playerCount; ++i) {
+            const auto& pl = players[i];
+            json m;
+            m["login_number"] = pl.login_number;
+            m["called_target_id"] = pl.called_target_id;
+            m["state"] = pl.state;
+            m["is_player"] = true;
+            m["is_hero"] = false;
+            if (me && pl.login_number ==
+                       static_cast<uint32_t>(me->login_number)) {
                 m["agent_id"] = me->agent_id;
                 m["hp"] = me->hp;
                 m["energy"] = me->energy;
                 m["primary"] = me->primary;
+                m["secondary"] = me->secondary;
                 m["level"] = me->level;
-                m["is_alive"] = (me->hp > 0.0f);
-                m["is_player"] = true;
-                m["is_hero"] = false;
-                members.push_back(m);
-                partySize++;
-                if (me->hp <= 0.0f) deadCount++;
+                bool alive = me->hp > 0.0f;
+                m["is_alive"] = alive;
+                if (!alive) dead++;
             }
-            p["members"] = members;
-            p["size"] = partySize;
-            p["dead_count"] = deadCount;
+            members.push_back(m);
+            size++;
         }
+
+        // Heroes: PartyInfo.heroes[] is the authoritative roster in
+        // outposts AND explorables. Enrich with AgentLiving when
+        // the hero is spawned.
+        HeroPartyEntry heroes[16] = {};
+        uint32_t heroCount = ReadPartyHeroes(heroes, 16);
+        for (uint32_t i = 0; i < heroCount; ++i) {
+            const auto& e = heroes[i];
+            json m;
+            m["hero_id"] = e.hero_id;
+            m["agent_id"] = e.agent_id;
+            m["owner_player_id"] = e.owner_player_id;
+            m["level"] = e.level;
+            m["is_player"] = false;
+            m["is_hero"] = true;
+            if (e.agent_id != 0) {
+                Agent* agent = AgentMgr::GetAgentByID(e.agent_id);
+                if (agent) {
+                    LivingAgentSeed living{};
+                    if (ReadLivingAgentSeed(agent, living)) {
+                        m["hp"] = living.hp;
+                        m["energy"] = living.energy;
+                        m["primary"] = living.primary;
+                        m["secondary"] = living.secondary;
+                        bool alive = living.hp > 0.0f;
+                        m["is_alive"] = alive;
+                        if (!alive) dead++;
+                    }
+                }
+            }
+            members.push_back(m);
+            size++;
+        }
+
+        // Henchmen: PartyInfo.henchmen[]
+        HenchPartyEntry henchmen[16] = {};
+        uint32_t henchCount = ReadPartyHenchmen(henchmen, 16);
+        for (uint32_t i = 0; i < henchCount; ++i) {
+            const auto& hm = henchmen[i];
+            json m;
+            m["agent_id"] = hm.agent_id;
+            m["profession"] = hm.profession;
+            m["level"] = hm.level;
+            m["is_player"] = false;
+            m["is_hero"] = false;
+            m["is_henchman"] = true;
+            members.push_back(m);
+            size++;
+        }
+
+        p["members"] = members;
+        p["size"] = size;
+        p["dead_count"] = dead;
         return p;
     }
 
@@ -1458,7 +1618,7 @@ namespace GWA3::LLM::GameSnapshot {
         j["map"] = BuildMapJson();
         j["party"] = BuildPartyBasicsJson();
         j["agents"] = BuildNearbyAgentsJson();
-        j["heroes"] = json::array();
+        j["heroes"] = BuildHeroSkillbarsJson();
         j["trade"] = BuildTradeJson();
         j["dialog"] = BuildDialogJson();
         j["merchant"] = BuildMerchantJson();
@@ -1478,7 +1638,7 @@ namespace GWA3::LLM::GameSnapshot {
         j["map"] = BuildMapJson();
         j["party"] = BuildPartyBasicsJson();
         j["agents"] = BuildNearbyAgentsJson();
-        j["heroes"] = json::array();
+        j["heroes"] = BuildHeroSkillbarsJson();
         j["trade"] = BuildTradeJson();
         j["dialog"] = BuildDialogJson();
         j["merchant"] = BuildMerchantJson();
