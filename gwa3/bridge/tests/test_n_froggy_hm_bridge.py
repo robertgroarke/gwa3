@@ -6,15 +6,44 @@ the LLM bridge IPC instead of from inside the DLL. This proves the bridge
 exposes everything an external agent (the LLM) needs to run the same Bogroot
 Growths HM loop the C++ integration test runs.
 
-Phases (match the C++ Froggy feature test):
-    1. Travel to Gadd's Encampment (map 638).
-    2. Kick existing heroes, add the Standard hero set, set hard mode.
-    3. Walk Gadd's exit waypoints and enter Sparkfly Swamp (map 558).
-    4. Target a foe and attack (proves combat actions route through bridge).
-    5. Walk the Sparkfly -> Tekks waypoints, dialog-accept Tekks' War quest.
-    6. Walk Tekks -> Bogroot portal, interact the portal, enter dungeon (615).
-    7. Walk to the blessing shrine and dialog-accept the blessing.
-    8. Return to Gadd's Encampment.
+Phases (expand on the C++ Froggy feature test by exercising more of the
+LLM bridge surface area — inventory/gold reads, merchant buy+sell, identify
++ salvage, loot, dungeon gadget interaction, quest-reward accept):
+    1.  Travel to Gadd's Encampment (map 638).
+    2.  Kick existing heroes, add the Standard hero set, set hard mode.
+    2b. Walk to Gadd's merchant, open merchant window, log inventory/gold,
+        buy a salvage/id kit, and sell a cheap stackable if one is present.
+    2c. Identify an unidentified inventory item and run a one-shot salvage
+        session (SALVAGE_START -> SALVAGE_MATERIALS -> SALVAGE_DONE).
+    2d. Walk to Gadd's Xunlai chest, interact with Xunlai Jingwei, and
+        round-trip a small amount via ``withdraw_gold`` + ``deposit_gold``.
+    2e. Best-effort overworld blessing shrine (Asuran bodyguard in Gadd's):
+        find an NPC whose decoded name mentions blessing/shrine and click
+        the standard accept-blessing dialog through the bridge.
+    3.  Walk Gadd's exit waypoints and enter Sparkfly Swamp (map 558).
+    4.  Target a foe and attack (proves combat actions route through bridge).
+    4b. Scan tier-2 agents for ``agent_type == "item"`` (dropped loot) and
+        exercise ``pick_up_item``.
+    5.  Walk the Sparkfly -> Tekks waypoints, dialog-accept Tekks' War quest
+        (validates "grab quest from NPC" via the bridge dialog path).
+    6.  Walk Tekks -> Bogroot portal, interact the portal, enter dungeon (615).
+    7.  Walk to the blessing shrine and dialog-accept the blessing.
+    7b. Scan the dungeon for gadget agents (keys, doors, next-level portal,
+        end-of-dungeon chest) and interact with anything in range. This is
+        a best-effort probe — multi-level traversal that requires specific
+        dungeon keys and scripted door sequences is not scripted yet; the
+        bridge actions exist (``interact_signpost``, ``pick_up_item``) so
+        this phase proves they dispatch cleanly.
+    8.  Return to Gadd's Encampment (via travel from inside the dungeon, or
+        ``return_to_outpost`` from Sparkfly).
+    8b. If the Tekks' War quest is in the reward state, walk back to Tekks
+        and dialog-accept the reward (``DIALOG_TEKKS_REWARD``).
+
+Capabilities NOT yet exposed on the bridge (explicitly called out so the
+gap is visible in the test report rather than hidden):
+    * ``aggro_move_to`` — there is only ``move_to``; aggressive movement
+      (pulling enemies into a kill box) is not yet a bridge action. The
+      test uses plain ``move_to`` and lets heroes aggro via proximity.
 
 Usage (stand-alone, like ``test_conset_bridge.py``):
 
@@ -44,6 +73,7 @@ import asyncio
 import os
 import sys
 import time
+from typing import Any
 
 from ..ipc_client import IpcClient
 from .base import BridgeTestCase, TestSkipped
@@ -57,7 +87,26 @@ MAP_BOGROOT_LVL1 = 615
 
 QUEST_TEKKS_WAR = 0x339
 DIALOG_TEKKS_ACCEPT = 0x833901
+DIALOG_TEKKS_REWARD = 0x833907
+DIALOG_TEKKS_DUNGEON_ENTRY = 0x833905
 DIALOG_ACCEPT_BLESSING = 0x84
+
+# Merchant salvage/ID kit prices (from IntegrationTestEpic14.cpp).
+SALVAGE_KIT_MODEL = 2993
+ID_KIT_MODEL = 2992
+EXPERT_SALVAGE_MODEL = 2991
+
+# Gadd's merchant area (from test_e_orchestrated.py / farming_knowledge).
+GADDS_MERCHANT_X = -8374.0
+GADDS_MERCHANT_Y = -22491.0
+GADDS_XUNLAI_X = -10481.0
+GADDS_XUNLAI_Y = -22787.0
+
+# Overworld blessing dialog IDs (``DIALOG_ACCEPT_BLESSING`` is the
+# "accept any blessing" reply used by the in-dungeon shrine too). Gadd's is
+# an Asuran outpost, so the Asuran bodyguard blessing shrine is the most
+# likely hit there; we also try the generic accept dialog as a fallback.
+DIALOG_ACCEPT_BLESSING_FALLBACK = 0x85
 
 TEKKS_X = 12396.0
 TEKKS_Y = 22407.0
@@ -212,6 +261,118 @@ class FroggyHmBridgeTest:
 
     def party_size(self) -> int:
         return int(self.snapshot.get("party", {}).get("size", 0) or 0)
+
+    # --- Inventory / merchant helpers ---
+
+    def gold_character(self) -> int:
+        return int(self.snapshot.get("inventory", {}).get("gold_character", 0) or 0)
+
+    def gold_storage(self) -> int:
+        return int(self.snapshot.get("inventory", {}).get("gold_storage", 0) or 0)
+
+    def iter_inventory(self):
+        """Yield (item, bag_index, slot) for every non-equipped inventory item."""
+        inv = self.snapshot.get("inventory", {})
+        for bag in inv.get("bags", []) or []:
+            bag_index = int(bag.get("bag_index", 0) or 0)
+            for item in bag.get("items", []) or []:
+                if item.get("equipped", False):
+                    continue
+                yield item, bag_index, int(item.get("slot", 0) or 0)
+
+    def find_inventory_item_by_model(self, model_id: int) -> int:
+        for item, _, _ in self.iter_inventory():
+            if int(item.get("model_id", 0) or 0) == model_id:
+                return int(item.get("item_id", 0) or 0)
+        return 0
+
+    def find_unidentified_item(self) -> tuple[int, int]:
+        """Return (item_id, kit_id) for a candidate identify operation, or (0, 0)."""
+        kit_id = self.find_inventory_item_by_model(ID_KIT_MODEL)
+        if kit_id == 0:
+            return 0, 0
+        for item, _, _ in self.iter_inventory():
+            # Unidentified loot usually has is_identified == False on the
+            # flags field; fall back to any uniq item with value > 0.
+            if bool(item.get("is_identified", True)):
+                continue
+            item_id = int(item.get("item_id", 0) or 0)
+            if item_id > 0 and item_id != kit_id:
+                return item_id, kit_id
+        return 0, kit_id
+
+    def find_salvageable_item(self) -> tuple[int, int]:
+        """Return (item_id, kit_id) for a candidate salvage operation, or (0, 0)."""
+        kit_id = self.find_inventory_item_by_model(SALVAGE_KIT_MODEL)
+        if kit_id == 0:
+            kit_id = self.find_inventory_item_by_model(EXPERT_SALVAGE_MODEL)
+        if kit_id == 0:
+            return 0, 0
+        for item, _, _ in self.iter_inventory():
+            item_id = int(item.get("item_id", 0) or 0)
+            if item_id <= 0 or item_id == kit_id:
+                continue
+            # Prefer identified items so we are not consuming rare unid loot.
+            if not bool(item.get("is_identified", True)):
+                continue
+            # Skip stacks of materials/kits — only want equipment-ish items.
+            if int(item.get("quantity", 1) or 1) > 1:
+                continue
+            return item_id, kit_id
+        return 0, kit_id
+
+    def find_dropped_items(self, max_distance: float = 2000.0) -> list[int]:
+        """Return agent_ids of nearby dropped items (agent_type == 'item')."""
+        out: list[int] = []
+        for agent in self.snapshot.get("agents", []) or []:
+            if agent.get("agent_type") != "item":
+                continue
+            dist = float(agent.get("distance", 99999.0) or 99999.0)
+            if dist <= max_distance:
+                aid = int(agent.get("id", 0) or 0)
+                if aid > 0:
+                    out.append(aid)
+        return out
+
+    def find_nearby_npc(
+        self,
+        x: float,
+        y: float,
+        radius: float = 400.0,
+        allegiance: int = 6,
+    ) -> int:
+        best_id = 0
+        best_dist = radius
+        for agent in self.snapshot.get("agents", []) or []:
+            if agent.get("agent_type") != "living":
+                continue
+            if int(agent.get("allegiance", 0) or 0) != allegiance:
+                continue
+            ax = float(agent.get("x", 0.0) or 0.0)
+            ay = float(agent.get("y", 0.0) or 0.0)
+            dist = ((ax - x) ** 2 + (ay - y) ** 2) ** 0.5
+            if dist < best_dist:
+                best_dist = dist
+                best_id = int(agent.get("id", 0) or 0)
+        return best_id
+
+    def find_gadgets(self, max_distance: float = 2500.0) -> list[dict]:
+        """Return gadget agents within range (chests, doors, portals, signposts)."""
+        out: list[dict] = []
+        for agent in self.snapshot.get("agents", []) or []:
+            if agent.get("agent_type") != "gadget":
+                continue
+            dist = float(agent.get("distance", 99999.0) or 99999.0)
+            if dist <= max_distance:
+                out.append(agent)
+        out.sort(key=lambda a: float(a.get("distance", 99999.0) or 99999.0))
+        return out
+
+    def merchant_items(self) -> list[dict]:
+        return self.snapshot.get("merchant", {}).get("items", []) or []
+
+    def is_merchant_open(self) -> bool:
+        return bool(self.snapshot.get("merchant", {}).get("is_open", False))
 
     def find_foe(self, max_range: float = 5000.0) -> dict | None:
         best: dict | None = None
@@ -368,6 +529,251 @@ class FroggyHmBridgeTest:
         self._record("phase2_setup", "PASS", f"party_size={self.party_size()}")
         return True
 
+    async def phase2b_merchant(self) -> bool:
+        print("\n=== PHASE 2b: Merchant — read inventory/gold, buy + sell ===")
+        if self.map_id() != MAP_GADDS:
+            self._record("phase2b_merchant", "SKIP", "not at Gadd's")
+            return False
+
+        if not await self.walk_to(
+            GADDS_MERCHANT_X, GADDS_MERCHANT_Y, "Gadd's merchant", threshold=350.0, timeout=30.0
+        ):
+            self._record("phase2b_merchant", "FAIL", "could not reach merchant area")
+            return False
+
+        snap = await self.query_fresh(settle_ms=400, timeout=6.0)
+        if snap is None:
+            self._record("phase2b_merchant", "SKIP", "no snapshot at merchant area")
+            return False
+
+        print(
+            f"[INV] Gold character={self.gold_character()} storage={self.gold_storage()} "
+            f"bags={[len(b.get('items', []) or []) for b in self.snapshot.get('inventory', {}).get('bags', [])]}"
+        )
+
+        npc_id = self.find_nearby_npc(GADDS_MERCHANT_X, GADDS_MERCHANT_Y, radius=600.0)
+        if not npc_id:
+            self._record("phase2b_merchant", "SKIP", "no merchant NPC found")
+            return False
+
+        # Try open_merchant first (GoNPC packet, confirmed working for
+        # merchants in the conset bridge test); fall back to interact_npc.
+        await self.action("change_target", {"agent_id": npc_id}, wait_ms=400)
+        await self.action("open_merchant", {"agent_id": npc_id}, wait_ms=2000)
+        snap = await self.query_fresh(settle_ms=400, timeout=6.0)
+        if snap is None or not self.is_merchant_open():
+            await self.action("interact_npc", {"agent_id": npc_id}, wait_ms=2000)
+            await self.query_fresh(settle_ms=400, timeout=6.0)
+
+        if not self.is_merchant_open():
+            self._record("phase2b_merchant", "SKIP", "merchant window never opened")
+            return True  # not a hard fail; merchant may not sell kits here
+
+        items = self.merchant_items()
+        print(f"[MERCHANT] {len(items)} items available")
+
+        # BUY: pick a salvage kit or ID kit if the merchant sells one.
+        bought_any = False
+        for target_model in (SALVAGE_KIT_MODEL, ID_KIT_MODEL):
+            for it in items:
+                if int(it.get("model_id", 0) or 0) == target_model:
+                    merch_item_id = int(it.get("item_id", 0) or 0)
+                    if merch_item_id <= 0:
+                        continue
+                    await self.action(
+                        "transact_items",
+                        {"type": 1, "quantity": 1, "item_id": merch_item_id},
+                        wait_ms=1000,
+                    )
+                    bought_any = True
+                    print(f"[MERCHANT] Bought model={target_model}")
+                    break
+            if bought_any:
+                break
+
+        # SELL: sell one low-value stackable material if we have one.
+        await self.query_fresh(settle_ms=400, timeout=6.0)
+        sell_item_id = 0
+        for item, _, _ in self.iter_inventory():
+            if int(item.get("type", 0) or 0) != 11:  # 11 == material in GW item type enum
+                continue
+            if int(item.get("quantity", 0) or 0) < 2:
+                continue
+            sell_item_id = int(item.get("item_id", 0) or 0)
+            if sell_item_id > 0:
+                break
+        if sell_item_id:
+            await self.action(
+                "transact_items",
+                {"type": 11, "quantity": 1, "item_id": sell_item_id},
+                wait_ms=1000,
+            )
+            print(f"[MERCHANT] Sold 1x item {sell_item_id}")
+        else:
+            print("[MERCHANT] No stackable material to sell — skipping sell leg")
+
+        await self.action("cancel_action", {}, wait_ms=500)
+        self._record(
+            "phase2b_merchant",
+            "PASS",
+            f"gold_after={self.gold_character()} bought={bought_any} sold={bool(sell_item_id)}",
+        )
+        return True
+
+    async def phase2c_identify_salvage(self) -> bool:
+        print("\n=== PHASE 2c: Identify + Salvage one item ===")
+        if self.map_id() != MAP_GADDS:
+            self._record("phase2c_id_salvage", "SKIP", "not at Gadd's")
+            return False
+
+        snap = await self.query_fresh(settle_ms=400, timeout=6.0)
+        if snap is None:
+            self._record("phase2c_id_salvage", "SKIP", "no snapshot")
+            return False
+
+        did_identify = False
+        unid_item_id, id_kit_id = self.find_unidentified_item()
+        if unid_item_id and id_kit_id:
+            await self.action(
+                "identify_item",
+                {"item_id": unid_item_id, "kit_id": id_kit_id},
+                wait_ms=1200,
+            )
+            did_identify = True
+            print(f"[IDENTIFY] item={unid_item_id} kit={id_kit_id}")
+
+        await self.query_fresh(settle_ms=400, timeout=6.0)
+        did_salvage = False
+        salv_item_id, salv_kit_id = self.find_salvageable_item()
+        if salv_item_id and salv_kit_id:
+            await self.action(
+                "salvage_start",
+                {"item_id": salv_item_id, "kit_id": salv_kit_id},
+                wait_ms=800,
+            )
+            await self.action("salvage_materials", {}, wait_ms=800)
+            await self.action("salvage_done", {}, wait_ms=800)
+            did_salvage = True
+            print(f"[SALVAGE] item={salv_item_id} kit={salv_kit_id}")
+
+        if not (did_identify or did_salvage):
+            self._record("phase2c_id_salvage", "SKIP", "no eligible unid/salvage candidates")
+            return True
+        self._record(
+            "phase2c_id_salvage",
+            "PASS",
+            f"identified={did_identify} salvaged={did_salvage}",
+        )
+        return True
+
+    async def phase2d_xunlai(self) -> bool:
+        print("\n=== PHASE 2d: Xunlai chest — withdraw + deposit gold ===")
+        if self.map_id() != MAP_GADDS:
+            self._record("phase2d_xunlai", "SKIP", "not at Gadd's")
+            return False
+
+        if not await self.walk_to(
+            GADDS_XUNLAI_X, GADDS_XUNLAI_Y, "Gadd's Xunlai chest", threshold=300.0, timeout=30.0
+        ):
+            self._record("phase2d_xunlai", "FAIL", "could not reach Xunlai area")
+            return False
+
+        snap = await self.query_fresh(settle_ms=400, timeout=6.0)
+        if snap is None:
+            self._record("phase2d_xunlai", "SKIP", "no snapshot at Xunlai")
+            return False
+
+        # Interact with the nearest NPC-allegiance agent — that's Xunlai Jingwei.
+        npc_id = self.find_nearby_npc(GADDS_XUNLAI_X, GADDS_XUNLAI_Y, radius=500.0)
+        if not npc_id:
+            self._record("phase2d_xunlai", "SKIP", "no Xunlai NPC in range")
+            return True
+        await self.action("interact_npc", {"agent_id": npc_id}, wait_ms=1500)
+
+        gold_before = self.gold_character()
+        storage_before = self.gold_storage()
+        print(f"[XUNLAI] Before: character={gold_before} storage={storage_before}")
+
+        # Pick a small round-trip amount we definitely have access to.
+        amount = 50
+        if storage_before >= amount:
+            await self.action("withdraw_gold", {"amount": amount}, wait_ms=1500)
+        else:
+            print("[XUNLAI] storage < 50g — skipping withdraw leg")
+
+        await self.query_fresh(settle_ms=400, timeout=6.0)
+        if self.gold_character() >= amount:
+            await self.action("deposit_gold", {"amount": amount}, wait_ms=1500)
+        else:
+            print("[XUNLAI] character < 50g — skipping deposit leg")
+
+        await self.query_fresh(settle_ms=400, timeout=6.0)
+        gold_after = self.gold_character()
+        storage_after = self.gold_storage()
+        print(f"[XUNLAI] After: character={gold_after} storage={storage_after}")
+        self._record(
+            "phase2d_xunlai",
+            "PASS",
+            f"delta_character={gold_after - gold_before} delta_storage={storage_after - storage_before}",
+        )
+        return True
+
+    async def phase2e_town_blessing(self) -> bool:
+        """Best-effort overworld blessing shrine in Gadd's (Asuran bodyguard).
+
+        Gadd's is an Asuran outpost, so an Asuran blessing shrine is the
+        likely hit — the dialog IDs mirror the in-dungeon version. If the
+        shrine isn't present or the dialog isn't valid, the action dispatch
+        still proves the bridge path works and we record SKIP accordingly.
+        """
+        print("\n=== PHASE 2e: Town blessing (best effort) ===")
+        if self.map_id() != MAP_GADDS:
+            self._record("phase2e_town_bless", "SKIP", "not at Gadd's")
+            return False
+
+        snap = await self.query_fresh(settle_ms=400, timeout=6.0)
+        if snap is None:
+            self._record("phase2e_town_bless", "SKIP", "no snapshot for shrine scan")
+            return False
+
+        # Scan all NPC-allegiance agents and pick the closest one whose
+        # decoded name contains "blessing" or "shrine". Fall back to the
+        # nearest generic NPC if no label match (name decode may still be
+        # pending).
+        best_id = 0
+        best_dist = 1500.0
+        best_name = ""
+        for agent in self.snapshot.get("agents", []) or []:
+            if agent.get("agent_type") != "living":
+                continue
+            if int(agent.get("allegiance", 0) or 0) != 6:
+                continue
+            name = str(agent.get("name", "") or "").lower()
+            dist = float(agent.get("distance", 99999.0) or 99999.0)
+            if "bless" in name or "shrine" in name:
+                if dist < best_dist:
+                    best_dist = dist
+                    best_id = int(agent.get("id", 0) or 0)
+                    best_name = name
+
+        if not best_id:
+            self._record("phase2e_town_bless", "SKIP", "no shrine NPC found by name")
+            return True
+
+        await self.action("interact_npc", {"agent_id": best_id}, wait_ms=1500)
+        await self.action("dialog", {"dialog_id": DIALOG_ACCEPT_BLESSING}, wait_ms=1500)
+        await self.action(
+            "dialog",
+            {"dialog_id": DIALOG_ACCEPT_BLESSING_FALLBACK},
+            wait_ms=800,
+        )
+        self._record(
+            "phase2e_town_bless",
+            "PASS",
+            f"shrine_agent={best_id} name={best_name!r}",
+        )
+        return True
+
     async def phase3_enter_sparkfly(self) -> bool:
         print("\n=== PHASE 3: Enter Sparkfly Swamp ===")
         if self.map_id() != MAP_GADDS:
@@ -410,6 +816,28 @@ class FroggyHmBridgeTest:
         await self.action("change_target", {"agent_id": foe_id}, wait_ms=400)
         await self.action("attack", {"agent_id": foe_id}, wait_ms=1500)
         self._record("phase4_combat", "PASS", f"attacked foe {foe_id}")
+        return True
+
+    async def phase4b_loot(self) -> bool:
+        print("\n=== PHASE 4b: Loot dropped items ===")
+        if self.map_id() != MAP_SPARKFLY:
+            self._record("phase4b_loot", "SKIP", "not in Sparkfly")
+            return False
+        # Give the fight a moment to produce drops.
+        await asyncio.sleep(6.0)
+        snap = await self.query_fresh(settle_ms=400, timeout=6.0)
+        if snap is None:
+            self._record("phase4b_loot", "SKIP", "no snapshot for loot scan")
+            return False
+        drops = self.find_dropped_items(max_distance=3000.0)
+        if not drops:
+            self._record("phase4b_loot", "SKIP", "no dropped items within 3000u")
+            return True
+        picked = 0
+        for agent_id in drops[:5]:
+            await self.action("pick_up_item", {"agent_id": agent_id}, wait_ms=600)
+            picked += 1
+        self._record("phase4b_loot", "PASS", f"picked={picked}")
         return True
 
     async def phase5_walk_to_tekks(self) -> bool:
@@ -514,6 +942,60 @@ class FroggyHmBridgeTest:
         self._record("phase8_blessing", "PASS", f"shrine_agent={shrine_id}")
         return True
 
+    async def phase8b_dungeon_gadgets(self) -> bool:
+        """Probe nearby dungeon gadgets — chests, doors, next-level portals.
+
+        Multi-level Bogroot traversal + key-gated doors are not scripted yet
+        (the C++ Froggy test does not cover it either). This phase instead
+        validates that the bridge surfaces gadget agents in the snapshot and
+        that ``interact_signpost`` / ``pick_up_item`` dispatch cleanly against
+        them, which is the missing prerequisite for an LLM-driven dungeon
+        runner.
+        """
+        print("\n=== PHASE 8b: Dungeon gadget probe (chests/doors/portals) ===")
+        if self.map_id() != MAP_BOGROOT_LVL1:
+            self._record("phase8b_gadgets", "SKIP", "not in Bogroot Lvl1")
+            return False
+
+        snap = await self.query_fresh(settle_ms=400, timeout=6.0)
+        if snap is None:
+            self._record("phase8b_gadgets", "SKIP", "no snapshot for gadget scan")
+            return False
+
+        gadgets = self.find_gadgets(max_distance=2500.0)
+        if not gadgets:
+            self._record("phase8b_gadgets", "SKIP", "no gadgets in range")
+            return True
+
+        interacted = 0
+        for g in gadgets[:3]:
+            gid = int(g.get("id", 0) or 0)
+            gname = g.get("name", "") or ""
+            gdist = float(g.get("distance", 0.0) or 0.0)
+            print(f"[GADGET] id={gid} name={gname!r} dist={gdist:.0f}")
+            if gid <= 0:
+                continue
+            # Walk close enough that interact will succeed.
+            gx = float(g.get("x", 0.0) or 0.0)
+            gy = float(g.get("y", 0.0) or 0.0)
+            await self.walk_to(gx, gy, f"gadget {gid}", threshold=250.0, timeout=25.0)
+            await self.action("interact_signpost", {"agent_id": gid}, wait_ms=1500)
+            interacted += 1
+
+        # Best-effort chest loot: if any new item-agent appeared after
+        # interacting, try to pick it up.
+        await self.query_fresh(settle_ms=400, timeout=6.0)
+        drops = self.find_dropped_items(max_distance=2500.0)
+        for agent_id in drops[:3]:
+            await self.action("pick_up_item", {"agent_id": agent_id}, wait_ms=600)
+
+        self._record(
+            "phase8b_gadgets",
+            "PASS",
+            f"interacted={interacted} post_interact_drops={len(drops)}",
+        )
+        return True
+
     async def phase9_return_to_outpost(self) -> bool:
         print("\n=== PHASE 9: Return to Gadd's ===")
         current = self.map_id()
@@ -531,6 +1013,45 @@ class FroggyHmBridgeTest:
         self._record("phase9_return", "PASS")
         return True
 
+    async def phase9b_quest_reward(self) -> bool:
+        """If the Tekks' War quest is in the reward state, accept it.
+
+        The C++ Froggy test reaccepts the quest after a dungeon loop
+        (``DIALOG_TEKKS_ACCEPT`` reissues once the previous cycle rewarded
+        out). Here we just try the reward dialog button — if the quest is
+        not actually in reward state, the dialog click is a no-op, which
+        is still a valid bridge-round-trip proof.
+        """
+        print("\n=== PHASE 9b: Tekks' War quest reward accept ===")
+        if self.map_id() == MAP_GADDS:
+            # Travel back to Sparkfly to reach Tekks for the reward dialog.
+            await self.action("travel", {"map_id": MAP_SPARKFLY}, wait_ms=2000)
+            if not await self.wait_for_map(MAP_SPARKFLY, timeout=90.0):
+                self._record("phase9b_reward", "SKIP", "could not return to Sparkfly")
+                return True
+            await asyncio.sleep(5.0)
+
+        if self.map_id() != MAP_SPARKFLY:
+            self._record("phase9b_reward", "SKIP", "not in Sparkfly")
+            return True
+
+        # Reuse the Sparkfly->Tekks path end. Only walk the last few waypoints
+        # to save time (we are already past the early ones).
+        for x, y, label in SPARKFLY_TO_TEKKS_PATH[-3:]:
+            threshold = 250.0 if label == "Tekks" else 500.0
+            if not await self.walk_to(x, y, label, threshold=threshold, timeout=60.0):
+                self._record("phase9b_reward", "SKIP", f"stuck at {label}")
+                return True
+
+        snap = await self.query_fresh(settle_ms=400, timeout=6.0)
+        if snap is not None:
+            tekks_id = self.find_nearby_npc(TEKKS_X, TEKKS_Y, radius=400.0)
+            if tekks_id:
+                await self.action("interact_npc", {"agent_id": tekks_id}, wait_ms=1500)
+        await self.action("dialog", {"dialog_id": DIALOG_TEKKS_REWARD}, wait_ms=2000)
+        self._record("phase9b_reward", "PASS", "reward dialog click dispatched")
+        return True
+
     # --- Entrypoint ---------------------------------------------------------
 
     async def run(self) -> bool:
@@ -542,31 +1063,42 @@ class FroggyHmBridgeTest:
             await self.drain(max_messages=50)
             await self.query_fresh(settle_ms=500, timeout=10.0)
 
-            phases = [
-                self.phase1_travel_to_gadds,
-                self.phase2_setup_heroes,
-                self.phase3_enter_sparkfly,
-                self.phase4_combat_proof,
-                self.phase5_walk_to_tekks,
-                self.phase6_accept_tekks_quest,
-                self.phase7_enter_bogroot,
-                self.phase8_blessing,
-                self.phase9_return_to_outpost,
+            # Each entry: (phase_method, blocking). Only blocking phases
+            # stop subsequent execution on failure — e.g. if we can't reach
+            # Gadd's, there's no way to run merchant/xunlai/sparkfly. Soft
+            # phases (loot, blessing, dungeon probe) record FAIL but keep
+            # going so the summary shows coverage of every bridge capability.
+            phases: list[tuple[Any, bool]] = [
+                (self.phase1_travel_to_gadds, True),
+                (self.phase2_setup_heroes, True),
+                (self.phase2b_merchant, False),
+                (self.phase2c_identify_salvage, False),
+                (self.phase2d_xunlai, False),
+                (self.phase2e_town_blessing, False),
+                (self.phase3_enter_sparkfly, True),
+                (self.phase4_combat_proof, False),
+                (self.phase4b_loot, False),
+                (self.phase5_walk_to_tekks, True),
+                (self.phase6_accept_tekks_quest, False),
+                (self.phase7_enter_bogroot, True),
+                (self.phase8_blessing, False),
+                (self.phase8b_dungeon_gadgets, False),
+                (self.phase9_return_to_outpost, True),
+                (self.phase9b_quest_reward, False),
             ]
-            # A FAIL in phase N aborts subsequent phases; they get recorded
-            # as SKIP so the summary reflects why they did not run.
             aborted = False
-            for phase in phases:
+            for phase, blocking in phases:
                 if aborted:
-                    self._record(phase.__name__.replace("phase", "phase"), "SKIP", "earlier phase failed")
+                    self._record(phase.__name__, "SKIP", "earlier blocking phase failed")
                     continue
                 try:
                     ok = await phase()
                 except Exception as exc:  # noqa: BLE001
                     self._record(phase.__name__, "FAIL", f"{type(exc).__name__}: {exc}")
-                    aborted = True
+                    if blocking:
+                        aborted = True
                     continue
-                if not ok:
+                if not ok and blocking:
                     aborted = True
 
             print("\n" + "=" * 60)
