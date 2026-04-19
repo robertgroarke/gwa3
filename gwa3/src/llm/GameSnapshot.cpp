@@ -344,75 +344,119 @@ namespace GWA3::LLM::GameSnapshot {
     // This lives in its own function because C++ destructors (json
     // objects in the caller) conflict with __try/__except in MSVC —
     // C2712 rejects mixing them in one function.
-    struct EquipItemIds {
-        uint16_t weapon_id16, offhand_id16;
+    // SEH-isolated: snapshot the equipped-item flags + pointers for
+    // bag 0 into a plain array. Caller builds JSON from the snapshot,
+    // which keeps __try/__except out of the function that holds json
+    // objects (MSVC C2712: "Cannot use __try in functions that
+    // require object unwinding").
+    struct EquippedItem {
+        Item* item;
+        uint32_t slot;      // 0..6 per GWCA Equipment union
+        uint32_t item_id;
+        uint32_t model_id;
+        wchar_t* name_enc;
+        wchar_t* complete_name_enc;
+        wchar_t* single_item_name;
+        wchar_t* info_string;
     };
-    // Reads AgentLiving's 16-bit weapon + offhand item ids (+0x1BE,
-    // +0x1C0). These are the only reliable equipment identifiers we
-    // can expose today — they update in combat when a weapon is in
-    // hand and are zero in outposts where the weapon isn't drawn.
-    //
-    // GWCA's AgentLiving.equip (+0xFC) + Equipment struct (item_ids
-    // at +0xB4..+0xCC, 9 slots) doesn't match GW Reforged. Live
-    // dumps of the struct show the pointer is valid but the
-    // +0xB4..+0xCC slots read all zeros; the first 0xE0 bytes are
-    // reshuffled with pointer clusters at non-GWCA offsets, and the
-    // slot-record +0x08 pointers do NOT target Item structs
-    // (dereferenced dumps show vtable-prefixed objects whose +0x00
-    // is in the 0x00CA000-0x00CE000 .data range, not an item_id).
-    //
-    // Small integers at slot-record +0x04 (1, 3, 4, 10, 16) look
-    // like item TYPES or slot indexes rather than ItemMgr item_ids.
-    // Cross-referencing equipment to inventory Item* would need a
-    // different mechanism (likely an ApplyEquipment StoC packet
-    // hook, or a different pointer chain we haven't mapped). Out of
-    // scope for this session — see tools/_dump_equip_slots.py for
-    // the investigation harness.
-    //
-    // SEH-isolated from the caller so json destructors don't fight
-    // MSVC's unwind restrictions (C2712).
-    __declspec(noinline) static bool ReadEquipItemIds(const AgentLiving* agent,
-                                                      EquipItemIds* out) {
-        if (!agent || !out) return false;
-        *out = {};
+    __declspec(noinline) static uint32_t ReadEquippedItems(EquippedItem* out,
+                                                           uint32_t max) {
+        // Read every item in bag 22 (GWCA Bag::Equipped_Items). Armor
+        // pieces live here alongside the active weapon+offhand, but
+        // `Item.equipped` is only set for the active weapon set, NOT
+        // for worn armor. So we iterate ALL items in the bag and
+        // bucket them by `Item.slot` (0..6 = weapon, offhand, chest,
+        // legs, head, feet, hands). Costume slots 7-8 are skipped.
+        //
+        // If two items report the same slot (e.g., weapon set A + B
+        // both in slot 0), the later iteration wins. The active weapon
+        // has `equipped != 0`, so we prefer that when there's a tie.
+        uint32_t written = 0;
+        Bag* bag = ItemMgr::GetBag(22);
+        if (!bag) return 0;
         __try {
-            out->weapon_id16 = agent->weapon_item_id;
-            out->offhand_id16 = agent->offhand_item_id;
-            return true;
+            if (!bag->items.buffer || bag->items.size == 0 ||
+                bag->items.size > 64) {
+                return 0;
+            }
+            // Track best record per slot: equipped-flag wins ties.
+            EquippedItem slots[7] = {};
+            uint8_t slotFilled[7] = {0};
+            uint8_t slotEquipped[7] = {0};
+            for (uint32_t i = 0; i < bag->items.size; ++i) {
+                Item* item = bag->items.buffer[i];
+                if (!item) continue;
+                uint32_t slot = item->slot;
+                if (slot >= 7) continue;
+                uint8_t equipped = item->equipped;
+                // If this slot already has a filled record AND the
+                // existing one is the active weapon (equipped!=0),
+                // don't overwrite.
+                if (slotFilled[slot] && slotEquipped[slot] && !equipped) {
+                    continue;
+                }
+                auto& rec = slots[slot];
+                rec.item              = item;
+                rec.slot              = slot;
+                rec.item_id           = item->item_id;
+                rec.model_id          = item->model_id;
+                rec.name_enc          = item->name_enc;
+                rec.complete_name_enc = item->complete_name_enc;
+                rec.single_item_name  = item->single_item_name;
+                rec.info_string       = item->info_string;
+                slotFilled[slot] = 1;
+                slotEquipped[slot] = equipped ? 1 : 0;
+            }
+            for (uint32_t s = 0; s < 7 && written < max; ++s) {
+                if (slotFilled[s]) out[written++] = slots[s];
+            }
+            return written;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
-            return false;
+            return written;
         }
     }
 
-    // Emit an `equipment` sub-object for the given living agent. Today
-    // only weapon + offhand light up, via the 16-bit ids stored
-    // directly on AgentLiving (+0x1BE / +0x1C0). Populated in combat
-    // when the weapon is drawn; zero in outposts. Armor slots require
-    // deeper Reforged struct RE — see ReadEquipItemIds comment.
-    static void EmitEquipmentForAgent(json& dst, const AgentLiving* agent) {
-        EquipItemIds ids{};
-        if (!ReadEquipItemIds(agent, &ids)) return;
+    // Emit an `equipment` sub-object for the given living agent.
+    //
+    // Bypasses the Reforged Equipment struct (layout drift RE'd in
+    // c6a5906 — item_ids not resolvable through the struct pointer)
+    // and reads directly from ItemMgr::GetBag(0), the equipment bag.
+    // Each Item in bag 0 carries `equipped` (+0x4E, nonzero when in
+    // an active slot) and `slot` (+0x50, the 0..6 slot index mapped
+    // from GWCA's Equipment union: weapon, offhand, chest, legs,
+    // head, feet, hands). Skip costume_body (7) and costume_head (8)
+    // since those are cosmetic.
+    //
+    // Only emits the PLAYER's equipment — bag 0 belongs to the local
+    // character. Heroes carry their own inventory bags we don't
+    // currently map; their `equipment` object will remain absent
+    // until a future session plumbs hero inventory access.
+    //
+    // Item names flow through the same name / full_name / info_string
+    // triple as everywhere else, reusing EmitBestText's positive-gate
+    // encoding filter.
+    static void EmitEquipmentForAgent(json& dst, const AgentLiving* agent,
+                                      bool isMe) {
+        if (!agent || !isMe) return;
 
-        struct Slot { uint32_t itemId; const char* name; };
-        const Slot kGearSlots[] = {
-            {ids.weapon_id16,  "weapon"},
-            {ids.offhand_id16, "offhand"},
+        static const char* kSlotNames[7] = {
+            "weapon", "offhand", "chest", "legs", "head", "feet", "hands",
         };
 
-        json eq = json::object();
-        for (const auto& slot : kGearSlots) {
-            if (slot.itemId == 0) continue;
-            Item* item = ItemMgr::GetItemById(slot.itemId);
-            if (!item) continue;
+        EquippedItem items[16] = {};
+        uint32_t count = ReadEquippedItems(items, 16);
+        if (count == 0) return;
 
+        json eq = json::object();
+        for (uint32_t i = 0; i < count; ++i) {
+            const auto& r = items[i];
             json it;
-            it["item_id"] = slot.itemId;
-            it["model_id"] = item->model_id;
-            EmitBestText(it, item->name_enc, "name",
-                         item->single_item_name);
-            EmitBestText(it, item->complete_name_enc, "full_name");
-            EmitBestText(it, item->info_string, "info_string");
-            eq[slot.name] = it;
+            it["item_id"] = r.item_id;
+            it["model_id"] = r.model_id;
+            EmitBestText(it, r.name_enc, "name", r.single_item_name);
+            EmitBestText(it, r.complete_name_enc, "full_name");
+            EmitBestText(it, r.info_string, "info_string");
+            eq[kSlotNames[r.slot]] = it;
         }
 
         if (!eq.empty()) dst["equipment"] = eq;
@@ -447,7 +491,7 @@ namespace GWA3::LLM::GameSnapshot {
         me["skill_casting"] = static_cast<uint32_t>(agent->skill);
         me["model_state"] = agent->model_state;
 
-        EmitEquipmentForAgent(me, agent);
+        EmitEquipmentForAgent(me, agent, /*isMe=*/true);
         return me;
     }
 
@@ -509,7 +553,8 @@ namespace GWA3::LLM::GameSnapshot {
             h["is_casting"] = (living.casting_skill_id != 0);
             h["casting_skill_id"] = living.casting_skill_id;
             h["skillbar"] = BuildSkillbarFromBar(bar);
-            EmitEquipmentForAgent(h, reinterpret_cast<AgentLiving*>(agent));
+            EmitEquipmentForAgent(h, reinterpret_cast<AgentLiving*>(agent),
+                                  /*isMe=*/false);
             heroes.push_back(h);
         });
         return heroes;

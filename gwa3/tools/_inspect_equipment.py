@@ -15,14 +15,10 @@ from bridge.ipc_client import IpcClient
 
 
 def _dump_equipment(label: str, eq: dict):
-    if not eq:
+    slots = {k: v for k, v in (eq or {}).items() if isinstance(v, dict)}
+    if not slots:
         print(f"  {label}: <no equipment>")
         return
-    diag = {k: v for k, v in eq.items() if k.startswith("_")}
-    slots = {k: v for k, v in eq.items() if not k.startswith("_")
-             and isinstance(v, dict)}
-    if diag:
-        print(f"  {label}: diag={diag}")
     print(f"  {label}: {len(slots)} slot(s)")
     for slot, it in slots.items():
         nm = it.get("name", "<no-name>")
