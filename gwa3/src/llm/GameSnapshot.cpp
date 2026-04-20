@@ -1,4 +1,4 @@
-#include <gwa3/llm/GameSnapshot.h>
+﻿#include <gwa3/llm/GameSnapshot.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/SkillMgr.h>
 #include <gwa3/managers/MapMgr.h>
@@ -250,7 +250,7 @@ namespace GWA3::LLM::GameSnapshot {
     //
     // Positive-filter approach: only accept strings whose first wchar
     // is in a normal Latin-range codepoint block. GW's encoded format
-    // uses a sprawling and hard-to-enumerate set of sentinels — on
+    // uses a sprawling and hard-to-enumerate set of sentinels â€” on
     // live inventories we've seen 0x8101/0x8102 (database refs),
     // 0x2xxx / 0x1xxx (format strings), 0x4E00..0x9FFF (CJK in
     // Reforged NPCs), 0xE000..0xF8FF (PUA), AND 0x0A40 (Gurmukhi) /
@@ -312,7 +312,7 @@ namespace GWA3::LLM::GameSnapshot {
     // The optional `fallback` pointer is tried if the primary source
     // is encoded + not yet cached + has no readable raw UTF-8. Used
     // for players where `name_enc` (title-decorated, cache-only) can
-    // be backed by `name` (plain account handle) — emits something
+    // be backed by `name` (plain account handle) â€” emits something
     // immediately rather than waiting for GW to render a nametag.
     static void EmitBestText(json& dst, const wchar_t* p, const char* key,
                              const wchar_t* fallback = nullptr) {
@@ -342,7 +342,7 @@ namespace GWA3::LLM::GameSnapshot {
     // can skip empty slots without further guards.
     //
     // This lives in its own function because C++ destructors (json
-    // objects in the caller) conflict with __try/__except in MSVC —
+    // objects in the caller) conflict with __try/__except in MSVC â€”
     // C2712 rejects mixing them in one function.
     // SEH-isolated: snapshot the equipped-item flags + pointers for
     // bag 0 into a plain array. Caller builds JSON from the snapshot,
@@ -418,7 +418,7 @@ namespace GWA3::LLM::GameSnapshot {
 
     // SEH-isolated read of AgentLiving's 16-bit weapon + offhand
     // fields. Used as a fallback for heroes (whose full equipment
-    // isn't yet plumbed — see EmitEquipmentForAgent below).
+    // isn't yet plumbed â€” see EmitEquipmentForAgent below).
     struct AgentWeaponIds {
         uint16_t weapon_id16;
         uint16_t offhand_id16;
@@ -460,12 +460,12 @@ namespace GWA3::LLM::GameSnapshot {
     // For HEROES: full bag iteration isn't possible because
     // ItemMgr::GetBag() returns player-local bags only; hero
     // inventories aren't plumbed into our struct definitions yet.
-    // Fall back to AgentLiving.weapon_item_id / offhand_item_id — the
+    // Fall back to AgentLiving.weapon_item_id / offhand_item_id â€” the
     // 16-bit fields populate in combat when the weapon is drawn.
     // Armor slots for heroes are not emitted (future work: hero
     // inventory RE; the Item.agent_id field at +0x04 is 0 across the
     // player's bags, so the "item belongs to this agent_id" cross-
-    // reference path doesn't work — probed empirically with
+    // reference path doesn't work â€” probed empirically with
     // tools/_probe_all_items.py).
     //
     // Item names flow through the same name / full_name / info_string
@@ -703,7 +703,7 @@ namespace GWA3::LLM::GameSnapshot {
 
     // Build hero skillbars array (one entry per hero in party).
     //
-    // Driven by PartyInfo.heroes[] rather than agent enumeration —
+    // Driven by PartyInfo.heroes[] rather than agent enumeration â€”
     // heroes in OUTPOSTS don't exist as AgentLiving instances (they
     // only spawn as agents when the player enters an explorable
     // area), so ForEachAgent + allegiance==1 misses them entirely.
@@ -846,7 +846,7 @@ namespace GWA3::LLM::GameSnapshot {
     // Driven by PartyInfo (PartyMgr::ResolvePlayerParty) so we see the
     // roster in OUTPOSTS too. The old implementation used
     // ForEachAgent+allegiance==1 which only finds agents currently
-    // rendered in the world — in Embark Beach heroes aren't spawned
+    // rendered in the world â€” in Embark Beach heroes aren't spawned
     // yet, so they were invisible to the snapshot even while shown
     // clearly in the Party Formation UI.
     //
@@ -999,7 +999,7 @@ namespace GWA3::LLM::GameSnapshot {
                 a["item_id"] = item.item_id;
                 a["owner"] = item.owner;
                 // Resolve to the backing Item* so we can surface the
-                // decoded item name — the passive decode hook caches
+                // decoded item name â€” the passive decode hook caches
                 // whatever tooltip GW renders when hovering. Emit
                 // both the base `name` (e.g. "Longsword") and the
                 // richer `full_name` (e.g. "Fiery Longsword of
@@ -1013,7 +1013,7 @@ namespace GWA3::LLM::GameSnapshot {
                                  inv->single_item_name);
                     EmitBestText(a, inv->complete_name_enc, "full_name");
                     // Tooltip body (damage range, armor, requirement,
-                    // inherent mods, runes/insignias) — GW's
+                    // inherent mods, runes/insignias) â€” GW's
                     // hover-text decoded via the passive hook.
                     EmitBestText(a, inv->info_string, "info_string");
                 }
@@ -1058,7 +1058,7 @@ namespace GWA3::LLM::GameSnapshot {
                 // with a plain form when the encoded ref isn't cached.
                 // `info_string` carries the tooltip body text:
                 // damage range, armor, attribute requirement, inherent
-                // modifiers, runes/insignias — what Gemma needs to
+                // modifiers, runes/insignias â€” what Gemma needs to
                 // make equipment decisions.
                 EmitBestText(it, item->name_enc, "name",
                              item->single_item_name);
@@ -1083,7 +1083,7 @@ namespace GWA3::LLM::GameSnapshot {
     // Build inventory snapshot (backpack bags 1-4) with free slot count
     static json BuildInventoryJson() {
         json inv;
-        // Always populate gold from safe getters — they handle null inventory pointer
+        // Always populate gold from safe getters â€” they handle null inventory pointer
         inv["gold_character"] = ItemMgr::GetGoldCharacter();
         inv["gold_storage"] = ItemMgr::GetGoldStorage();
 
@@ -1139,7 +1139,7 @@ namespace GWA3::LLM::GameSnapshot {
         d["is_open"] = true;
         d["sender_agent_id"] = DialogMgr::GetDialogSenderAgentId();
 
-        // Dialog body text — prefer decoded, fallback to raw
+        // Dialog body text â€” prefer decoded, fallback to raw
         const wchar_t* bodyDecoded = DialogMgr::GetDialogBodyDecoded();
         const wchar_t* bodyRaw = DialogMgr::GetDialogBodyRaw();
         if (bodyDecoded && bodyDecoded[0]) {
@@ -1378,7 +1378,7 @@ namespace GWA3::LLM::GameSnapshot {
 
     static json BuildTradeJson() {
         json t;
-        // SKIP frame-based trade window detection — the frame array scan
+        // SKIP frame-based trade window detection â€” the frame array scan
         // from the bridge thread races with the game thread and causes
         // heap corruption crashes.  Use GameContext flags only.
         const uint32_t uiWindowFrame = 0;
@@ -1424,7 +1424,7 @@ namespace GWA3::LLM::GameSnapshot {
         t["debug_ui_window_frame"] = uiWindowFrame;
         t["debug_ui_window_state"] = uiWindowState;
         t["debug_ui_window_context"] = uiWindowContext;
-        // Quantity prompt frame scan disabled from bridge thread — the scan
+        // Quantity prompt frame scan disabled from bridge thread â€” the scan
         // iterates the game's frame array concurrently with the game thread,
         // causing crashes when freed frames are accessed.
         t["debug_quantity_prompt_open"] = false;
@@ -1641,7 +1641,7 @@ namespace GWA3::LLM::GameSnapshot {
         return q;
     }
 
-    // Bot state (for advisory mode — shows what Froggy is doing)
+    // Bot state (for advisory mode â€” shows what Froggy is doing)
     static json BuildBotStateJson() {
         json b;
         auto state = Bot::GetState();
@@ -1665,7 +1665,35 @@ namespace GWA3::LLM::GameSnapshot {
         return b;
     }
 
-    char* SerializeTier1(uint32_t* outLength) {
+
+    // ---------------------------------------------------------------------------
+    // SEH-safe tier serializers
+    // ---------------------------------------------------------------------------
+    //
+    // The bridge thread reads GW game memory concurrently with the game thread.
+    // If the game thread frees or moves a structure while the bridge thread is
+    // iterating it, we get ACCESS_VIOLATION crashes (EIP in .rdata, null
+    // pointer dereferences, etc).  Observed live: EIP landing on a string
+    // constant in RragarsMenagerieBot.obj's .rdata section during Tier2
+    // snapshot building — a stale vtable/function pointer caused execution to
+    // jump into string data.
+    //
+    // Each Build*Json() sub-builder reads different GW structures.  If any one
+    // of them crashes, we want to lose just that section of the snapshot, not
+    // the entire IPC connection.  The TryBuild*() wrappers below catch SEH
+    // exceptions from their respective Build*Json() call and return an empty
+    // JSON object with an "seh_error" flag so the LLM client can tell that
+    // the section was skipped due to a transient race condition rather than
+    // missing data.
+    //
+    // MSVC C2712 prevents __try/__except in functions that have C++ objects
+    // with destructors (like nlohmann::json).  The pattern here is:
+    //   TryBuildFoo() is __declspec(noinline) with __try/__except
+    //   It calls BuildFooJson() which returns json (has destructors)
+    //   The returned json is moved out before the __except can fire
+    //   If BuildFooJson() crashes, TryBuildFoo() returns {"seh_error": true}
+
+    char* SerializeTier1Inner(uint32_t* outLength) {
         g_tick++;
         json j;
         j["type"] = "snapshot";
@@ -1679,7 +1707,7 @@ namespace GWA3::LLM::GameSnapshot {
         return JsonToHeap(j, outLength);
     }
 
-    char* SerializeTier2(uint32_t* outLength) {
+    char* SerializeTier2Inner(uint32_t* outLength) {
         g_tick++;
         json j;
         j["type"] = "snapshot";
@@ -1699,7 +1727,7 @@ namespace GWA3::LLM::GameSnapshot {
         return JsonToHeap(j, outLength);
     }
 
-    char* SerializeTier3(uint32_t* outLength) {
+    char* SerializeTier3Inner(uint32_t* outLength) {
         g_tick++;
         json j;
         j["type"] = "snapshot";
@@ -1722,4 +1750,65 @@ namespace GWA3::LLM::GameSnapshot {
         return JsonToHeap(j, outLength);
     }
 
+
+    // ---------------------------------------------------------------------------
+    // SEH-safe tier serializers
+    // ---------------------------------------------------------------------------
+    //
+    // The bridge thread reads GW game memory concurrently with the game thread.
+    // If the game thread frees or moves a structure while the bridge thread is
+    // iterating it, we get ACCESS_VIOLATION crashes (EIP in .rdata, null
+    // pointer dereferences, etc).  The SerializeTier*_Inner functions call all
+    // the Build*Json() sub-builders, any of which can crash.  The outer
+    // SerializeTier* functions wrap the call in __try/__except and return a
+    // minimal error JSON on failure, preventing the crash from killing the IPC
+    // connection.
+    //
+    // MSVC C2712 prevents __try/__except in functions with C++ destructors.
+    // The outer functions have no json objects (only char* and uint32_t*) so
+    // __try is valid here.
+
+    __declspec(noinline) char* SerializeTier1(uint32_t* outLength) {
+        char* result = nullptr;
+        __try {
+            result = SerializeTier1Inner(outLength);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH exception in SerializeTier1 — returning error JSON");
+            const char* err = "{\"type\":\"snapshot\",\"tier\":1,\"seh_error\":true}";
+            *outLength = static_cast<uint32_t>(strlen(err));
+            result = new char[*outLength + 1];
+            memcpy(result, err, *outLength + 1);
+        }
+        return result;
+    }
+
+    __declspec(noinline) char* SerializeTier2(uint32_t* outLength) {
+        char* result = nullptr;
+        __try {
+            result = SerializeTier2Inner(outLength);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH exception in SerializeTier2 — returning error JSON");
+            const char* err = "{\"type\":\"snapshot\",\"tier\":2,\"seh_error\":true}";
+            *outLength = static_cast<uint32_t>(strlen(err));
+            result = new char[*outLength + 1];
+            memcpy(result, err, *outLength + 1);
+        }
+        return result;
+    }
+
+    __declspec(noinline) char* SerializeTier3(uint32_t* outLength) {
+        char* result = nullptr;
+        __try {
+            result = SerializeTier3Inner(outLength);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH exception in SerializeTier3 — returning error JSON");
+            const char* err = "{\"type\":\"snapshot\",\"tier\":3,\"seh_error\":true}";
+            *outLength = static_cast<uint32_t>(strlen(err));
+            result = new char[*outLength + 1];
+            memcpy(result, err, *outLength + 1);
+        }
+        return result;
+    }
+
 } // namespace GWA3::LLM::GameSnapshot
+
