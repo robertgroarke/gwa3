@@ -54,6 +54,9 @@ add_library(gwa3_core OBJECT
     src/core/Offsets.cpp
     src/core/GameThread.cpp
     src/core/Memory.cpp
+    src/core/DialogHook.cpp
+    src/core/CrashDiag.cpp
+    src/core/HookMarker.cpp
     src/core/RenderHook.cpp
     src/core/TraderHook.cpp
     src/core/TradePartnerHook.cpp
@@ -87,6 +90,7 @@ add_library(gwa3_core OBJECT
     src/bot/BotModuleRegistry.cpp
     src/bot/BotModuleSelector.cpp
     src/bot/DungeonBundle.cpp
+    src/bot/DungeonBuiltinCombat.cpp
     src/bot/DungeonCombat.cpp
     src/bot/DungeonCombatRoutine.cpp
     src/bot/DungeonCheckpoint.cpp
@@ -95,6 +99,7 @@ add_library(gwa3_core OBJECT
     src/bot/DungeonInventory.cpp
     src/bot/DungeonItemActions.cpp
     src/bot/DungeonLoot.cpp
+    src/bot/DungeonOutpostSetup.cpp
     src/bot/DungeonQuest.cpp
     src/bot/DungeonQuestRuntime.cpp
     src/bot/DungeonSkill.cpp
@@ -145,7 +150,7 @@ target_compile_definitions(gwa3_core PUBLIC GWA3_PIPE_NAME="${GWA3_PIPE_NAME_ESC
 
 # gwa3_core needs MinHook headers (for GameThread.cpp), version.lib (for MemoryMgr),
 # and nlohmann_json (for LLM bridge serialization)
-target_link_libraries(gwa3_core PUBLIC minhook version nlohmann_json::nlohmann_json)
+target_link_libraries(gwa3_core PUBLIC minhook version Dbghelp.lib nlohmann_json::nlohmann_json)
 
 # --- gwa3.dll ---
 add_library(gwa3 SHARED
@@ -161,11 +166,12 @@ target_include_directories(gwa3 PUBLIC
 )
 
 target_compile_definitions(gwa3 PRIVATE CRASH_TEST=${CRASH_TEST})
-target_link_libraries(gwa3 PRIVATE minhook version)
+target_link_libraries(gwa3 PRIVATE minhook version Dbghelp.lib)
 
 set_target_properties(gwa3 PROPERTIES
     OUTPUT_NAME "${GWA3_DLL_NAME}"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    LINK_FLAGS "/MAP"
 )
 
 # --- gwa3_tests.exe ---
@@ -178,7 +184,7 @@ target_include_directories(gwa3_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(gwa3_tests PRIVATE minhook version)
+target_link_libraries(gwa3_tests PRIVATE minhook version Dbghelp.lib)
 
 set_target_properties(gwa3_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -187,10 +193,12 @@ set_target_properties(gwa3_tests PROPERTIES
 # --- gwa3_dungeon_tests.exe ---
 add_executable(gwa3_dungeon_tests
     tests/dungeon_tests_main.cpp
+    tests/dungeon_test_stubs_ext.cpp
     src/bot/ArachnisHaunt.cpp
     src/bot/ArachnisHauntBot.cpp
     src/bot/BotModuleRegistry.cpp
     src/bot/BotModuleSelector.cpp
+    src/bot/DungeonBuiltinCombat.cpp
     src/bot/DungeonBundle.cpp
     src/bot/DungeonCombat.cpp
     src/bot/DungeonCombatRoutine.cpp
@@ -199,7 +207,9 @@ add_executable(gwa3_dungeon_tests
     src/bot/DungeonInteractions.cpp
     src/bot/DungeonInventory.cpp
     src/bot/DungeonItemActions.cpp
+    src/bot/DungeonItemPolicy.cpp
     src/bot/DungeonLoot.cpp
+    src/bot/DungeonOutpostSetup.cpp
     src/bot/DungeonQuest.cpp
     src/bot/DungeonQuestRuntime.cpp
     src/bot/DungeonSkill.cpp
@@ -223,6 +233,7 @@ target_include_directories(gwa3_dungeon_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/refactor_staging
 )
 target_compile_definitions(gwa3_dungeon_tests PRIVATE GWA3_DUNGEON_TEST_BUILD=1)
+target_link_libraries(gwa3_dungeon_tests PRIVATE minhook version Dbghelp.lib)
 
 set_target_properties(gwa3_dungeon_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -254,3 +265,4 @@ add_custom_command(TARGET gwa3_tests POST_BUILD
     COMMAND $<TARGET_FILE:gwa3_tests>
     COMMENT "Running gwa3 offline tests..."
 )
+
