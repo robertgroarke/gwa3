@@ -628,26 +628,27 @@ LONG CALLBACK VectoredExceptionHandler(EXCEPTION_POINTERS* ep) {
 
     const DWORD code = ep->ExceptionRecord->ExceptionCode;
 
+    // Stack cookie / stack overflow: fatal, no SEH recovery possible.
+    // Log context but do NOT write minidumps from VEH (see below).
     if (ShouldLogStackCookie(code)) {
-        if (InterlockedCompareExchange(&s_loggedStackCookie, 1, 0) == 0) {
-            __try { HookMarker::DumpOnCrash(); } __except(EXCEPTION_EXECUTE_HANDLER) { GWA3::Log::Error("CrashDiag: DumpOnCrash itself crashed in VEH-cookie"); }
-            LogExceptionContext("VEH-cookie", ep);
-            WriteMiniDump("veh-cookie", ep);
-        }
+        __try { HookMarker::DumpOnCrash(); } __except(EXCEPTION_EXECUTE_HANDLER) { GWA3::Log::Error("CrashDiag: DumpOnCrash itself crashed in VEH-cookie"); }
+        LogExceptionContext("VEH-cookie", ep);
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
-    // Hard faults: capture the FIRST one per session. First-chance AVs
-    // can happen in normal operation when __try/__except is catching a
-    // recoverable condition, but the first hard fault is overwhelmingly
-    // the signal we want for a real crash ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â UEF doesn't fire if GW's
-    // own SEH catches it (and GW's crash dialog overrides UEF anyway).
+    // Hard faults: log every occurrence.  Recurring SEH-caught crashes
+    // (e.g. TradeMgr::ReadPtr race conditions on the bridge thread) are
+    // invisible if we only log the first one.  We do NOT call
+    // WriteMiniDump from VEH because MiniDumpWriteDump suspends all
+    // threads and modifies the exception context, which disrupts the
+    // SEH unwind chain and prevents our per-builder __try/__except
+    // handlers (GameSnapshot::TryWriteMerchantJson etc.) from firing.
+    // Minidumps are written from the UEF path instead, where the
+    // process is already terminating and SEH chain integrity no
+    // longer matters.
     if (IsHardFault(code)) {
-        if (InterlockedCompareExchange(&s_loggedHardFault, 1, 0) == 0) {
-            __try { HookMarker::DumpOnCrash(); } __except(EXCEPTION_EXECUTE_HANDLER) { GWA3::Log::Error("CrashDiag: DumpOnCrash itself crashed in VEH-hard"); }
-            LogExceptionContext("VEH-hard", ep);
-            WriteMiniDump("veh-hard", ep);
-        }
+        __try { HookMarker::DumpOnCrash(); } __except(EXCEPTION_EXECUTE_HANDLER) { GWA3::Log::Error("CrashDiag: DumpOnCrash itself crashed in VEH-hard"); }
+        LogExceptionContext("VEH-hard", ep);
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
