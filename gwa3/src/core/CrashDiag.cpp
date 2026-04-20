@@ -274,6 +274,13 @@ static const char* LookupRvaInMapEntries(uintptr_t rva) {
     }
     // lo is now one past the last entry with rva <= target
     if (lo == 0) return nullptr;
+
+    // Sanity check: if the nearest symbol is more than 64KB away,
+    // the target is likely in a data section (.rdata, .data) where
+    // there are no function symbols. Returning a distant .text symbol
+    // would produce a misleading name with a huge offset.
+    const uintptr_t kMaxMatchDistance = 0x10000;  // 64KB
+    if (rva - s_mapEntries[lo - 1].rva > kMaxMatchDistance) return nullptr;
     return s_mapEntries[lo - 1].name;
 }
 
