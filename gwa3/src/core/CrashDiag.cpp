@@ -1,4 +1,4 @@
-#include <gwa3/core/CrashDiag.h>
+﻿#include <gwa3/core/CrashDiag.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/core/HookMarker.h>
 
@@ -202,20 +202,33 @@ static void LoadMapFile() {
         if (sscanf(lStart, "%x:%x", &section, &sectionOffset) != 2) continue;
         if (section < 1 || section > 16) continue;
 
-        // Convert section:offset to RVA
-        // Section 1 (.text) starts at RVA 0x1000
-        uintptr_t rva = sectionOffset + (section == 1 ? 0x1000 : section * 0x1000);
-
-        // Find the function name: second whitespace-delimited field
+        // Parse all columns in one pass:
+        //   col1: section:offset  (e.g. "0001:0001B760")
+        //   col2: decorated name  (e.g. "?ReadPtr@TradeMgr@@...")
+        //   col3: virtual address (e.g. "1001C760")
+        //   col4: "f" or "i"
+        //   col5: object file     (e.g. "TradeMgr.obj")
+        // We compute RVA from the virtual address column (VA - preferredBase)
+        // rather than from section:offset, because the section-to-RVA mapping
+        // depends on the PE section layout and the simple formula
+        // sectionOffset + section*0x1000 is wrong for section 2+ (.rdata,
+        // .data, etc).  The VA column is always correct.
         const char* cursor = lStart;
-        // Skip section:offset
+
+        // Skip col1 (section:offset)
         while (*cursor && *cursor != ' ' && *cursor != '\t') cursor++;
         while (*cursor == ' ' || *cursor == '\t') cursor++;
+
+        // col2: decorated name
         const char* nameStart = cursor;
-        // Find end of name
         while (*cursor && *cursor != ' ' && *cursor != '\t') cursor++;
         size_t nameLen = static_cast<size_t>(cursor - nameStart);
         if (nameLen == 0) continue;
+
+        // col3: virtual address (hex, at preferred load address)
+        while (*cursor == ' ' || *cursor == '\t') cursor++;
+        uintptr_t va = strtoul(cursor, nullptr, 16);
+        uintptr_t rva = (va > s_dllBase) ? (va - s_dllBase) : 0;
 
         // Store the name in the arena
         if (s_nameArenaUsed + nameLen + 1 > s_nameArenaCap) continue;
@@ -271,7 +284,7 @@ bool ShouldLogStackCookie(DWORD code) {
            code == EXCEPTION_PRIV_INSTRUCTION;
 }
 
-// "Hard fault" exceptions Ã¢â‚¬â€ likely to be the actual process-killing
+// "Hard fault" exceptions ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â likely to be the actual process-killing
 // crash rather than something GW's internal __try/__except is
 // expected to catch. We gate these to once-per-session because first-
 // chance AVs can be frequent in normal operation (stack probes,
@@ -620,7 +633,7 @@ LONG CALLBACK VectoredExceptionHandler(EXCEPTION_POINTERS* ep) {
     // Hard faults: capture the FIRST one per session. First-chance AVs
     // can happen in normal operation when __try/__except is catching a
     // recoverable condition, but the first hard fault is overwhelmingly
-    // the signal we want for a real crash Ã¢â‚¬â€ UEF doesn't fire if GW's
+    // the signal we want for a real crash ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â UEF doesn't fire if GW's
     // own SEH catches it (and GW's crash dialog overrides UEF anyway).
     if (IsHardFault(code)) {
         if (InterlockedCompareExchange(&s_loggedHardFault, 1, 0) == 0) {
