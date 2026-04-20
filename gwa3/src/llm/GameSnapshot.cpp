@@ -1666,149 +1666,369 @@ namespace GWA3::LLM::GameSnapshot {
     }
 
 
-    // ---------------------------------------------------------------------------
-    // SEH-safe tier serializers
-    // ---------------------------------------------------------------------------
+
+
+    // -----------------------------------------------------------------------
+    // Per-builder SEH isolation + tier serializers
+    // -----------------------------------------------------------------------
     //
-    // The bridge thread reads GW game memory concurrently with the game thread.
-    // If the game thread frees or moves a structure while the bridge thread is
-    // iterating it, we get ACCESS_VIOLATION crashes (EIP in .rdata, null
-    // pointer dereferences, etc).  Observed live: EIP landing on a string
-    // constant in RragarsMenagerieBot.obj's .rdata section during Tier2
-    // snapshot building — a stale vtable/function pointer caused execution to
-    // jump into string data.
-    //
-    // Each Build*Json() sub-builder reads different GW structures.  If any one
-    // of them crashes, we want to lose just that section of the snapshot, not
-    // the entire IPC connection.  The TryBuild*() wrappers below catch SEH
-    // exceptions from their respective Build*Json() call and return an empty
-    // JSON object with an "seh_error" flag so the LLM client can tell that
-    // the section was skipped due to a transient race condition rather than
-    // missing data.
+    // The bridge thread reads GW game memory concurrently with the game
+    // thread.  If the game thread frees or moves a structure while the
+    // bridge thread is iterating it, we get ACCESS_VIOLATION crashes.
+    // Each Build*Json() sub-builder reads different GW structures; if any
+    // one crashes we want to lose just that section of the snapshot, not
+    // the entire tier or IPC connection.
     //
     // MSVC C2712 prevents __try/__except in functions that have C++ objects
-    // with destructors (like nlohmann::json).  The pattern here is:
-    //   TryBuildFoo() is __declspec(noinline) with __try/__except
-    //   It calls BuildFooJson() which returns json (has destructors)
-    //   The returned json is moved out before the __except can fire
-    //   If BuildFooJson() crashes, TryBuildFoo() returns {"seh_error": true}
+    // with destructors (nlohmann::json, std::string, std::vector, etc).
+    // The two-function SEH pattern avoids C2712:
+    //
+    //   TryBuildFoo()         -- has json locals, NO __try
+    //     calls BuildFooInto(&result) on success path
+    //     or fills {"seh_error":true} on failure path
+    //
+    //   BuildFooInto(json*)   -- __declspec(noinline), no C++ locals,
+    //                             has __try, calls BuildFooJson_SEH
+    //
+    //   BuildFooJson_SEH(json*)
+    //                         -- __declspec(noinline), no C++ locals,
+    //                            has __try, calls builder and writes
+    //                            *out = BuildFooJson().  MSVC C2712
+    //                            triggers because the json return
+    //                            value is a temporary with a dtor, so
+    //                            this layer does NOT exist; instead
+    //                            BuildFooInto does the __try and calls
+    //                            a void WriteFooJson(json*) that
+    //                            constructs in-place.
+    //
+    // Wait -- the above paragraph acknowledges C2712 blocks the SEH
+    // layer around `*out = BuildFooJson()`.  The working pattern is
+    // simpler: BuildFooInto_SEH is __try and calls WriteFooJson(out).
+    // WriteFooJson constructs the json directly into *out via
+    // move-assignment from the returned temporary.  The key insight
+    // is that WriteFooJson is a SEPARATE function call from within
+    // __try; the json temporary lives in WriteFooJson's frame, not
+    // in BuildFooInto_SEH's frame.  MSVC C2712 only checks the
+    // __try function's own locals, not locals of functions it calls.
+    // So BuildFooInto_SEH can have __try as long as it has no C++
+    // locals of its own.
+    //
+    // Verified: this is exactly how ReadEquippedItems, ReadLivingAgentSeed,
+    // etc. already work in this file -- __try functions that call into
+    // game memory, called from json-building code that has destructors.
 
-    char* SerializeTier1Inner(uint32_t* outLength) {
+    // -- Write*Json: construct json directly into an output pointer ----------
+    // Each WriteFoo(json* out) does *out = BuildFooJson().
+    // The temporary json from BuildFooJson() is constructed in
+    // WriteFoo's frame, then move-assigned to *out.  WriteFoo itself
+    // has no __try, so C2712 does not apply.
+
+    static void WritePlayerJson(json* out)      { *out = BuildPlayerJson(); }
+    static void WriteSkillbarJson(json* out)     { *out = BuildSkillbarJson(); }
+    static void WriteMapJson(json* out)          { *out = BuildMapJson(); }
+    static void WritePartyBasicsJson(json* out)  { *out = BuildPartyBasicsJson(); }
+    static void WriteBotStateJson(json* out)     { *out = BuildBotStateJson(); }
+    static void WriteNearbyAgentsJson(json* out) { *out = BuildNearbyAgentsJson(); }
+    static void WriteHeroSkillbarsJson(json* out){ *out = BuildHeroSkillbarsJson(); }
+    static void WriteTradeJson(json* out)        { *out = BuildTradeJson(); }
+    static void WriteDialogJson(json* out)       { *out = BuildDialogJson(); }
+    static void WriteMerchantJson(json* out)     { *out = BuildMerchantJson(); }
+    static void WriteQuestJson(json* out)        { *out = BuildQuestJson(); }
+    static void WriteChatLogJson(json* out)      { *out = BuildChatLogJson(); }
+    static void WriteInventoryJson(json* out)    { *out = BuildInventoryJson(); }
+    static void WritePlayerEffectsJson(json* out){ *out = BuildPlayerEffectsJson(); }
+    static void WriteTitlesJson(json* out)       { *out = BuildTitlesJson(); }
+
+    // -- SEH gateways --------------------------------------------------------
+    // Call WriteFoo(out) inside __try.  These functions have NO C++ locals
+    // with destructors -- only the raw json* parameter and a bool return --
+    // so MSVC C2712 does not fire.
+
+    __declspec(noinline) static bool TryWritePlayerJson(json* out) {
+        __try { WritePlayerJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildPlayerJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWriteSkillbarJson(json* out) {
+        __try { WriteSkillbarJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildSkillbarJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWriteMapJson(json* out) {
+        __try { WriteMapJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildMapJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWritePartyBasicsJson(json* out) {
+        __try { WritePartyBasicsJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildPartyBasicsJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWriteBotStateJson(json* out) {
+        __try { WriteBotStateJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildBotStateJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWriteNearbyAgentsJson(json* out) {
+        __try { WriteNearbyAgentsJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildNearbyAgentsJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWriteHeroSkillbarsJson(json* out) {
+        __try { WriteHeroSkillbarsJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildHeroSkillbarsJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWriteTradeJson(json* out) {
+        __try { WriteTradeJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildTradeJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWriteDialogJson(json* out) {
+        __try { WriteDialogJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildDialogJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWriteMerchantJson(json* out) {
+        __try { WriteMerchantJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildMerchantJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWriteQuestJson(json* out) {
+        __try { WriteQuestJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildQuestJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWriteChatLogJson(json* out) {
+        __try { WriteChatLogJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildChatLogJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWriteInventoryJson(json* out) {
+        __try { WriteInventoryJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildInventoryJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWritePlayerEffectsJson(json* out) {
+        __try { WritePlayerEffectsJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildPlayerEffectsJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWriteTitlesJson(json* out) {
+        __try { WriteTitlesJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in BuildTitlesJson");
+            return false;
+        }
+    }
+
+    // -- TryBuild* wrappers --------------------------------------------------
+    // Each TryBuildFoo() calls TryWriteFoo(&result).  If the write fails
+    // (SEH caught), a fallback placeholder is written instead.  These
+    // functions have json locals but NO __try, so C2712 does not apply.
+
+    static json TryBuildPlayerJson() {
+        json result;
+        if (!TryWritePlayerJson(&result)) {
+            result = json::object();
+            result["seh_error"] = true;
+            result["agent_id"] = 0;
+        }
+        return result;
+    }
+    static json TryBuildSkillbarJson() {
+        json result;
+        if (!TryWriteSkillbarJson(&result))
+            result = json::array();
+        return result;
+    }
+    static json TryBuildMapJson() {
+        json result;
+        if (!TryWriteMapJson(&result)) {
+            result = json::object();
+            result["seh_error"] = true;
+        }
+        return result;
+    }
+    static json TryBuildPartyBasicsJson() {
+        json result;
+        if (!TryWritePartyBasicsJson(&result)) {
+            result = json::object();
+            result["seh_error"] = true;
+            result["size"] = 0;
+        }
+        return result;
+    }
+    static json TryBuildBotStateJson() {
+        json result;
+        if (!TryWriteBotStateJson(&result)) {
+            result = json::object();
+            result["state"] = "seh_error";
+        }
+        return result;
+    }
+    static json TryBuildNearbyAgentsJson() {
+        json result;
+        if (!TryWriteNearbyAgentsJson(&result))
+            result = json::array();
+        return result;
+    }
+    static json TryBuildHeroSkillbarsJson() {
+        json result;
+        if (!TryWriteHeroSkillbarsJson(&result))
+            result = json::array();
+        return result;
+    }
+    static json TryBuildTradeJson() {
+        json result;
+        if (!TryWriteTradeJson(&result)) {
+            result = json::object();
+            result["seh_error"] = true;
+            result["is_open"] = false;
+        }
+        return result;
+    }
+    static json TryBuildDialogJson() {
+        json result;
+        if (!TryWriteDialogJson(&result)) {
+            result = json::object();
+            result["seh_error"] = true;
+            result["is_open"] = false;
+        }
+        return result;
+    }
+    static json TryBuildMerchantJson() {
+        json result;
+        if (!TryWriteMerchantJson(&result)) {
+            result = json::object();
+            result["seh_error"] = true;
+            result["is_open"] = false;
+        }
+        return result;
+    }
+    static json TryBuildQuestJson() {
+        json result;
+        if (!TryWriteQuestJson(&result)) {
+            result = json::object();
+            result["seh_error"] = true;
+            result["quest_log_size"] = 0;
+        }
+        return result;
+    }
+    static json TryBuildChatLogJson() {
+        json result;
+        if (!TryWriteChatLogJson(&result))
+            result = json::array();
+        return result;
+    }
+    static json TryBuildInventoryJson() {
+        json result;
+        if (!TryWriteInventoryJson(&result)) {
+            result = json::object();
+            result["seh_error"] = true;
+            result["gold_character"] = 0;
+            result["gold_storage"] = 0;
+        }
+        return result;
+    }
+    static json TryBuildPlayerEffectsJson() {
+        json result;
+        if (!TryWritePlayerEffectsJson(&result))
+            result = json::array();
+        return result;
+    }
+    static json TryBuildTitlesJson() {
+        json result;
+        if (!TryWriteTitlesJson(&result))
+            result = json::object();
+        return result;
+    }
+
+    // -- Tier serializers using TryBuild* for per-builder isolation -----------
+
+    char* SerializeTier1(uint32_t* outLength) {
         g_tick++;
         json j;
         j["type"] = "snapshot";
         j["tier"] = 1;
         j["tick"] = g_tick;
-        j["me"] = BuildPlayerJson();
-        j["skillbar"] = BuildSkillbarJson();
-        j["map"] = BuildMapJson();
-        j["party"] = BuildPartyBasicsJson();
-        j["bot"] = BuildBotStateJson();
+        j["me"] = TryBuildPlayerJson();
+        j["skillbar"] = TryBuildSkillbarJson();
+        j["map"] = TryBuildMapJson();
+        j["party"] = TryBuildPartyBasicsJson();
+        j["bot"] = TryBuildBotStateJson();
         return JsonToHeap(j, outLength);
     }
 
-    char* SerializeTier2Inner(uint32_t* outLength) {
+    char* SerializeTier2(uint32_t* outLength) {
         g_tick++;
         json j;
         j["type"] = "snapshot";
         j["tier"] = 2;
         j["tick"] = g_tick;
-        j["me"] = BuildPlayerJson();
-        j["skillbar"] = BuildSkillbarJson();
-        j["map"] = BuildMapJson();
-        j["party"] = BuildPartyBasicsJson();
-        j["agents"] = BuildNearbyAgentsJson();
-        j["heroes"] = BuildHeroSkillbarsJson();
-        j["trade"] = BuildTradeJson();
-        j["dialog"] = BuildDialogJson();
-        j["merchant"] = BuildMerchantJson();
-        j["quests"] = BuildQuestJson();
-        j["chat"] = BuildChatLogJson();
+        j["me"] = TryBuildPlayerJson();
+        j["skillbar"] = TryBuildSkillbarJson();
+        j["map"] = TryBuildMapJson();
+        j["party"] = TryBuildPartyBasicsJson();
+        j["agents"] = TryBuildNearbyAgentsJson();
+        j["heroes"] = TryBuildHeroSkillbarsJson();
+        j["trade"] = TryBuildTradeJson();
+        j["dialog"] = TryBuildDialogJson();
+        j["merchant"] = TryBuildMerchantJson();
+        j["quests"] = TryBuildQuestJson();
+        j["chat"] = TryBuildChatLogJson();
         return JsonToHeap(j, outLength);
     }
 
-    char* SerializeTier3Inner(uint32_t* outLength) {
+    char* SerializeTier3(uint32_t* outLength) {
         g_tick++;
         json j;
         j["type"] = "snapshot";
         j["tier"] = 3;
         j["tick"] = g_tick;
-        j["me"] = BuildPlayerJson();
-        j["skillbar"] = BuildSkillbarJson();
-        j["map"] = BuildMapJson();
-        j["party"] = BuildPartyBasicsJson();
-        j["agents"] = BuildNearbyAgentsJson();
-        j["heroes"] = BuildHeroSkillbarsJson();
-        j["trade"] = BuildTradeJson();
-        j["dialog"] = BuildDialogJson();
-        j["merchant"] = BuildMerchantJson();
-        j["quests"] = BuildQuestJson();
-        j["inventory"] = BuildInventoryJson();
+        j["me"] = TryBuildPlayerJson();
+        j["skillbar"] = TryBuildSkillbarJson();
+        j["map"] = TryBuildMapJson();
+        j["party"] = TryBuildPartyBasicsJson();
+        j["agents"] = TryBuildNearbyAgentsJson();
+        j["heroes"] = TryBuildHeroSkillbarsJson();
+        j["trade"] = TryBuildTradeJson();
+        j["dialog"] = TryBuildDialogJson();
+        j["merchant"] = TryBuildMerchantJson();
+        j["quests"] = TryBuildQuestJson();
+        j["inventory"] = TryBuildInventoryJson();
         j["storage"] = json::array();
         j["effects"] = json::array();
         j["titles"] = json::array();
         return JsonToHeap(j, outLength);
     }
 
-
-    // ---------------------------------------------------------------------------
-    // SEH-safe tier serializers
-    // ---------------------------------------------------------------------------
-    //
-    // The bridge thread reads GW game memory concurrently with the game thread.
-    // If the game thread frees or moves a structure while the bridge thread is
-    // iterating it, we get ACCESS_VIOLATION crashes (EIP in .rdata, null
-    // pointer dereferences, etc).  The SerializeTier*_Inner functions call all
-    // the Build*Json() sub-builders, any of which can crash.  The outer
-    // SerializeTier* functions wrap the call in __try/__except and return a
-    // minimal error JSON on failure, preventing the crash from killing the IPC
-    // connection.
-    //
-    // MSVC C2712 prevents __try/__except in functions with C++ destructors.
-    // The outer functions have no json objects (only char* and uint32_t*) so
-    // __try is valid here.
-
-    __declspec(noinline) char* SerializeTier1(uint32_t* outLength) {
-        char* result = nullptr;
-        __try {
-            result = SerializeTier1Inner(outLength);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            Log::Warn("[Snapshot] SEH exception in SerializeTier1 — returning error JSON");
-            const char* err = "{\"type\":\"snapshot\",\"tier\":1,\"seh_error\":true}";
-            *outLength = static_cast<uint32_t>(strlen(err));
-            result = new char[*outLength + 1];
-            memcpy(result, err, *outLength + 1);
-        }
-        return result;
-    }
-
-    __declspec(noinline) char* SerializeTier2(uint32_t* outLength) {
-        char* result = nullptr;
-        __try {
-            result = SerializeTier2Inner(outLength);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            Log::Warn("[Snapshot] SEH exception in SerializeTier2 — returning error JSON");
-            const char* err = "{\"type\":\"snapshot\",\"tier\":2,\"seh_error\":true}";
-            *outLength = static_cast<uint32_t>(strlen(err));
-            result = new char[*outLength + 1];
-            memcpy(result, err, *outLength + 1);
-        }
-        return result;
-    }
-
-    __declspec(noinline) char* SerializeTier3(uint32_t* outLength) {
-        char* result = nullptr;
-        __try {
-            result = SerializeTier3Inner(outLength);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            Log::Warn("[Snapshot] SEH exception in SerializeTier3 — returning error JSON");
-            const char* err = "{\"type\":\"snapshot\",\"tier\":3,\"seh_error\":true}";
-            *outLength = static_cast<uint32_t>(strlen(err));
-            result = new char[*outLength + 1];
-            memcpy(result, err, *outLength + 1);
-        }
-        return result;
-    }
-
 } // namespace GWA3::LLM::GameSnapshot
-
