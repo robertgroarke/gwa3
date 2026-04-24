@@ -54,6 +54,26 @@ void SendChat(const wchar_t* message, wchar_t channel) {
                      reinterpret_cast<uint32_t*>(buf)[3]);
 }
 
+bool SendWhisper(const wchar_t* recipient, const wchar_t* message) {
+    if (!recipient || !recipient[0] || !message || !message[0]) return false;
+
+    if (!(Offsets::SendChatFunc && Offsets::SendChatFunc > 0x10000)) {
+        Log::Warn("ChatMgr: SendWhisper unavailable because SendChatFunc is unresolved");
+        return false;
+    }
+
+    wchar_t buf[140] = {};
+    const int written = swprintf_s(buf, _countof(buf), L"\"%s,%s", recipient, message);
+    if (!(written > 0 && written < static_cast<int>(_countof(buf)))) {
+        Log::Warn("ChatMgr: SendWhisper failed to format recipient/message");
+        return false;
+    }
+
+    auto fn = reinterpret_cast<NativeSendChatFn>(Offsets::SendChatFunc);
+    fn(buf, 0);
+    return true;
+}
+
 // GWCA UIMessage::kWriteToChatLog = 0x1000007E
 static constexpr uint32_t kWriteToChatLog = 0x1000007Eu;
 

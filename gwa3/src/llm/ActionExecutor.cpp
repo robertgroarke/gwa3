@@ -12,6 +12,7 @@
 #include <gwa3/managers/QuestMgr.h>
 #include <gwa3/managers/ChatMgr.h>
 #include <gwa3/managers/TradeMgr.h>
+#include <gwa3/managers/MaintenanceMgr.h>
 #include <gwa3/managers/CameraMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
@@ -36,6 +37,12 @@ namespace GWA3::SmokeTest { bool MovePlayerNear(float x, float y, float threshol
 using json = nlohmann::json;
 
 namespace GWA3::LLM::ActionExecutor {
+
+    static constexpr uint32_t MODEL_SUPERIOR_ID_KIT = 5899u;
+    static constexpr uint32_t MODEL_CHEAP_SALVAGE_KIT = 2992u;
+    static constexpr uint32_t MODEL_EXPERT_SALVAGE_KIT = 2991u;
+    static constexpr uint32_t MODEL_RARE_SALVAGE_KIT = 2993u;
+    static constexpr uint32_t MODEL_FROGGY_SALVAGE_KIT = 5900u;
 
     // Rate limiter: max 50 actions per second (raised from 10 to support
     // bulk operations like material trader buys, which fire 100+ actions
@@ -147,6 +154,104 @@ namespace GWA3::LLM::ActionExecutor {
         std::thread([x, y, fightRange]() {
             Bot::Froggy::DebugAggroMoveTo(x, y, fightRange);
         }).detach();
+        return MakeOk();
+    }
+
+    static uint32_t CountFroggySalvageKitFamily() {
+        return MaintenanceMgr::CountItemByModel(MODEL_CHEAP_SALVAGE_KIT) +
+               MaintenanceMgr::CountItemByModel(MODEL_EXPERT_SALVAGE_KIT) +
+               MaintenanceMgr::CountItemByModel(MODEL_RARE_SALVAGE_KIT) +
+               MaintenanceMgr::CountItemByModel(MODEL_FROGGY_SALVAGE_KIT) +
+               MaintenanceMgr::CountItemByModel(243u);
+    }
+
+    static bool WaitForFroggyMaintenanceRestock(const MaintenanceMgr::Config& cfg, uint32_t timeoutMs) {
+        const DWORD start = GetTickCount();
+        while ((GetTickCount() - start) < timeoutMs) {
+            const uint32_t salvageKits = CountFroggySalvageKitFamily();
+            if (MaintenanceMgr::CountItemByModel(MODEL_SUPERIOR_ID_KIT) >= cfg.targetIdKits &&
+                salvageKits >= cfg.targetSalvageKits &&
+                salvageKits <= cfg.targetSalvageKits) {
+                return true;
+            }
+            Sleep(250);
+        }
+        const uint32_t salvageKits = CountFroggySalvageKitFamily();
+        return MaintenanceMgr::CountItemByModel(MODEL_SUPERIOR_ID_KIT) >= cfg.targetIdKits &&
+               salvageKits >= cfg.targetSalvageKits &&
+               salvageKits <= cfg.targetSalvageKits;
+    }
+
+    static ActionResult HandleFroggyRefreshCombatSkillbar(const json&) {
+        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
+        const bool ok = Bot::Froggy::RefreshCombatSkillbar();
+        return ok ? MakeOk() : MakeError("froggy_refresh_combat_skillbar_failed");
+    }
+
+    static ActionResult HandleFroggyRunSparkflyRouteToTekks(const json&) {
+        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
+        const bool ok = Bot::Froggy::DebugRunSparkflyRouteToTekks();
+        return ok ? MakeOk() : MakeError("froggy_sparkfly_route_to_tekks_failed");
+    }
+
+    static ActionResult HandleFroggyPrepareTekksDungeonEntry(const json&) {
+        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
+        const bool ok = Bot::Froggy::DebugPrepareTekksDungeonEntry();
+        return ok ? MakeOk() : MakeError("froggy_prepare_tekks_dungeon_entry_failed");
+    }
+
+    static ActionResult HandleFroggyRunDungeonLoop(const json&) {
+        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
+        Bot::Froggy::ResetDungeonLoopTelemetry();
+        const bool ok = Bot::Froggy::DebugRunDungeonLoopFromCurrentMap();
+        return ok ? MakeOk() : MakeError("froggy_dungeon_loop_failed");
+    }
+
+    static ActionResult HandleFroggyRunMaintenanceCycle(const json& p) {
+        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
+        const bool includeSalvage = p.value("include_salvage", true);
+        if (TradeMgr::GetMerchantItemCount() == 0) {
+            return MakeError("merchant_not_open_call_open_merchant_first");
+        }
+
+        const uint32_t freeBefore = MaintenanceMgr::CountFreeSlots();
+        const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
+        const uint32_t superiorBefore = MaintenanceMgr::CountItemByModel(MODEL_SUPERIOR_ID_KIT);
+        const uint32_t salvageBefore = CountFroggySalvageKitFamily();
+        Log::Info("[LLM-Action] froggy_run_maintenance_cycle: before free=%u gold=%u superiorId=%u salvage=%u",
+                  freeBefore, goldBefore, superiorBefore, salvageBefore);
+
+        const uint32_t identified = MaintenanceMgr::IdentifyAllItems();
+        uint32_t salvaged = 0;
+        if (includeSalvage) {
+            salvaged = MaintenanceMgr::SalvageJunkItems();
+        }
+        const uint32_t sold = MaintenanceMgr::SellJunkItems();
+
+        MaintenanceMgr::Config cfg = {};
+        cfg.targetIdKits = 3;
+        cfg.targetSalvageKits = 10;
+        MaintenanceMgr::BuyKitsToTarget(cfg);
+        const bool restocked = WaitForFroggyMaintenanceRestock(cfg, 6000u);
+        AgentMgr::CancelAction();
+        Sleep(500);
+
+        const uint32_t superiorAfter = MaintenanceMgr::CountItemByModel(MODEL_SUPERIOR_ID_KIT);
+        const uint32_t salvageAfter = CountFroggySalvageKitFamily();
+        Log::Info("[LLM-Action] froggy_run_maintenance_cycle: after free=%u gold=%u superiorId=%u salvage=%u identified=%u salvaged=%u sold=%u restocked=%d",
+                  MaintenanceMgr::CountFreeSlots(),
+                  ItemMgr::GetGoldCharacter(),
+                  superiorAfter,
+                  salvageAfter,
+                  identified,
+                  salvaged,
+                  sold,
+                  restocked ? 1 : 0);
+
+        if (!restocked || superiorAfter < cfg.targetIdKits ||
+            salvageAfter < cfg.targetSalvageKits || salvageAfter > cfg.targetSalvageKits) {
+            return MakeError("froggy_maintenance_restock_failed");
+        }
         return MakeOk();
     }
 
@@ -453,8 +558,11 @@ namespace GWA3::LLM::ActionExecutor {
             return MakeError("missing model_id or quantity");
         uint32_t modelId = p["model_id"].get<uint32_t>();
         uint32_t qty = p["quantity"].get<uint32_t>();
-        GWA3::GameThread::Enqueue([modelId, qty]() { ItemMgr::BuyMaterials(modelId, qty); });
-        return MakeOk();
+        if (TradeMgr::GetMerchantItemCount() == 0) {
+            return MakeError("merchant_not_open_call_open_merchant_first");
+        }
+        const bool ok = TradeMgr::BuyMaterials(modelId, qty);
+        return ok ? MakeOk() : MakeError("buy_materials_failed");
     }
 
     static ActionResult HandleRequestQuote(const json& p) {
@@ -1135,6 +1243,11 @@ namespace GWA3::LLM::ActionExecutor {
 
         // Skillbar
         g_dispatch["load_skillbar"] = HandleLoadSkillbar;
+        g_dispatch["froggy_refresh_combat_skillbar"] = HandleFroggyRefreshCombatSkillbar;
+        g_dispatch["froggy_run_sparkfly_route_to_tekks"] = HandleFroggyRunSparkflyRouteToTekks;
+        g_dispatch["froggy_prepare_tekks_dungeon_entry"] = HandleFroggyPrepareTekksDungeonEntry;
+        g_dispatch["froggy_run_dungeon_loop"] = HandleFroggyRunDungeonLoop;
+        g_dispatch["froggy_run_maintenance_cycle"] = HandleFroggyRunMaintenanceCycle;
 
         // Bot control (advisory mode)
         g_dispatch["set_bot_state"] = HandleSetBotState;

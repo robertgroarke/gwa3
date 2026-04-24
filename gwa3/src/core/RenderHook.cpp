@@ -1,6 +1,7 @@
 #include <gwa3/core/RenderHook.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/core/HookMarker.h>
 
 #include <Windows.h>
 
@@ -29,6 +30,16 @@ static uint8_t s_savedBytes[kPatchSize] = {};
 // process one queued command during pre-game, then replay the original
 // overwritten instructions before jumping back to Render+0xA.
 static volatile LONG s_savedESP = 0;
+static void (__stdcall *s_pHookMarkerEnterRenderDetour)() = nullptr;
+static void (__stdcall *s_pHookMarkerLeaveRenderDetour)() = nullptr;
+
+static void __stdcall HookMarkerEnterRenderDetourThunk() {
+    HookMarker::Enter(HookMarker::HookId::RenderDetour);
+}
+
+static void __stdcall HookMarkerLeaveRenderDetourThunk() {
+    HookMarker::Leave(static_cast<int>(HookMarker::HookId::None));
+}
 
 // Two-phase detour: full dispatch pre-game, minimal in-game.
 // On map load, SetMapLoaded(true) calls Shutdown() to remove the hook entirely —
@@ -36,6 +47,10 @@ static volatile LONG s_savedESP = 0;
 // CRASH_TEST=2 disables GameThread MinHook (for bisection testing).
 static __declspec(naked) void RenderDetourNaked() {
     __asm {
+        // Mark hook active for CrashDiag
+        call dword ptr [GetTickCount]
+        mov dword ptr [g_HookTick_RenderDetour], eax
+
         // After map load: minimal (just heartbeat + trampoline)
         cmp dword ptr [s_mapLoaded], 1
         jz ingame_minimal

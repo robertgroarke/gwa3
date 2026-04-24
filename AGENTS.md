@@ -96,6 +96,24 @@ Before reporting any test or bridge regression:
 
 If any of those checks were skipped, the result is not reliable.
 
+## Crash Evidence
+
+When the integration or Froggy watchdog detects a crash, hang, or visible crash dialog, it now writes a screenshot path to the log as:
+
+- `WATCHDOG_SCREENSHOT: C:\absolute\path\to\image.bmp`
+
+If you are reporting, summarizing, or handing off a crash investigation in the Codex app:
+
+- find that `WATCHDOG_SCREENSHOT:` line in the active run log
+- include the screenshot inline in the active chat window with Markdown image syntax using the absolute path
+- do not mention a crash without attaching the watchdog screenshot when one exists
+
+Example:
+
+```md
+![Crash screenshot](C:\absolute\path\to\image.bmp)
+```
+
 ## Default Agent Startup Checklist
 
 At the start of a task:

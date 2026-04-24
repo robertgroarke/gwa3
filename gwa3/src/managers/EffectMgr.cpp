@@ -9,24 +9,6 @@ namespace GWA3::EffectMgr {
 
 static bool s_initialized = false;
 
-// WorldContext resolution: *BasePointer -> +0x18 -> +0x2C = WorldContext*
-// party_effects at WorldContext + 0x508 (GWArray<AgentEffects>)
-static uintptr_t ResolveWorldContext() {
-    if (Offsets::BasePointer <= 0x10000) return 0;
-
-    __try {
-        uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
-        if (ctx <= 0x10000) return 0;
-        uintptr_t p1 = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
-        if (p1 <= 0x10000) return 0;
-        uintptr_t world = *reinterpret_cast<uintptr_t*>(p1 + 0x2C);
-        if (world <= 0x10000) return 0;
-        return world;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
-
 bool Initialize() {
     if (s_initialized) return true;
     s_initialized = true;
@@ -35,7 +17,7 @@ bool Initialize() {
 }
 
 GWArray<AgentEffects>* GetPartyEffectsArray() {
-    uintptr_t world = ResolveWorldContext();
+    uintptr_t world = Offsets::ResolveWorldContext();
     if (!world) return nullptr;
 
     __try {

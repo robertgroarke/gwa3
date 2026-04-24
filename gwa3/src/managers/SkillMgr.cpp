@@ -28,13 +28,16 @@ static bool s_loggedUseSkillRenderLane = false;
 static bool s_loggedUseSkillEngineLane = false;
 static bool s_loggedUseSkillSparkflySuppressed = false;
 static bool s_loggedUseSkillSparkflyOverride = false;
+static bool s_loggedUseSkillSettleSkip = false;
 static volatile LONG s_allowSparkflyPlayerUseSkill = 0;
 static volatile LONG s_sparkflyPlayerUseSkillCount = 0;
-// Ring buffer of shellcode slots to prevent overwrites during rapid command queuing
+static volatile LONG s_lastUnsafePlayerUseSkillTick = 0;
+// Ring buffer of shellcode slots to prevent overwrites during rapid command queuing.
 static constexpr int kShellcodeSlots = 16;
 static constexpr int kSlotSize = 32;
 static uintptr_t s_useSkillShellcodeBase = 0;
 static volatile LONG s_useSkillSlotIndex = 0;
+static constexpr DWORD kPlayerUseSkillSettleMs = 300u;
 
 static bool EnsureUseSkillShellcode() {
     if (s_useSkillShellcodeBase) return true;
@@ -132,8 +135,7 @@ __declspec(naked) void RenderUseSkillCommandStub() {
     }
 }
 
-// FPU save area for UseSkill — the native function uses floats and can
-// corrupt the x87 FPU stack, which crashes the calling code's epilogue.
+// The native function mutates x87 state, so preserve it around the call.
 static __declspec(align(16)) uint8_t s_useSkillFpuSave[108];
 
 void InvokeUseSkillRaw(uint32_t myId, uint32_t oneBasedSlot, uint32_t targetAgentId, uint32_t callTarget) {
@@ -141,7 +143,6 @@ void InvokeUseSkillRaw(uint32_t myId, uint32_t oneBasedSlot, uint32_t targetAgen
 
     uintptr_t fn = reinterpret_cast<uintptr_t>(s_useSkillFn);
     __asm {
-        // Save FPU state before the native call
         fsave [s_useSkillFpuSave]
 
         push eax
@@ -166,7 +167,6 @@ void InvokeUseSkillRaw(uint32_t myId, uint32_t oneBasedSlot, uint32_t targetAgen
         pop ecx
         pop eax
 
-        // Restore FPU state
         frstor [s_useSkillFpuSave]
     }
 }
@@ -194,9 +194,27 @@ void ResetSparkflyPlayerUseSkillCount() {
     InterlockedExchange(&s_sparkflyPlayerUseSkillCount, 0);
 }
 
+static bool CanInvokePlayerUseSkillNow(DWORD now) {
+    const auto* me = AgentMgr::GetMyAgent();
+    const bool queueIdle = CtoS::IsBotshubQueueIdle();
+    const bool moving = me && (me->move_x != 0.0f || me->move_y != 0.0f);
+
+    if (!queueIdle || moving) {
+        InterlockedExchange(&s_lastUnsafePlayerUseSkillTick, static_cast<LONG>(now));
+        return false;
+    }
+
+    const DWORD lastUnsafeTick = static_cast<DWORD>(
+        InterlockedCompareExchange(&s_lastUnsafePlayerUseSkillTick, 0, 0));
+    if (lastUnsafeTick != 0u && (now - lastUnsafeTick) < kPlayerUseSkillSettleMs) {
+        return false;
+    }
+
+    return true;
+}
+
 void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
     if (!s_useSkillFn) {
-        // No native function resolved — can't use skill
         Log::Warn("SkillMgr: UseSkill skipped (no native fn) slot=%u", slot);
         return;
     }
@@ -209,6 +227,18 @@ void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
     const uint32_t myId = AgentMgr::GetMyId();
     if (!myId) {
         Log::Warn("SkillMgr: UseSkill skipped (MyID=%u slot=%u)", myId, slot);
+        return;
+    }
+
+    Skillbar* bar = GetPlayerSkillbar();
+    if (!bar || slot > 8u) {
+        Log::Warn("SkillMgr: UseSkill skipped (skillbar unavailable slot=%u)", slot);
+        return;
+    }
+
+    const uint32_t skillId = bar->skills[slot - 1u].skill_id;
+    if (!skillId) {
+        Log::Warn("SkillMgr: UseSkill skipped (empty slot=%u)", slot);
         return;
     }
 
@@ -225,43 +255,32 @@ void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
         s_loggedUseSkillSparkflyOverride = true;
     }
 
-    // Guard: don't call native UseSkill while the character is moving OR
-    // while Move commands are still pending in the engine queue.  Upstream
-    // BotsHub stops the character and waits before casting.  Calling the
-    // native function during or shortly after movement corrupts the game's
-    // action state machine, causing a delayed crash.
-    {
-        const auto* me = AgentMgr::GetMyAgent();
-        if (me && (me->move_x != 0.0f || me->move_y != 0.0f)) {
-            return;  // moving — bot retries next tick
+    const DWORD now = GetTickCount();
+    if (!CanInvokePlayerUseSkillNow(now)) {
+        if (!s_loggedUseSkillSettleSkip) {
+            Log::Warn("SkillMgr: dropping UseSkill until movement/queue settle");
+            s_loggedUseSkillSettleSkip = true;
         }
-        if (!CtoS::IsBotshubQueueIdle()) {
-            return;  // pending Move commands — wait for them to drain
-        }
-    }
-
-    // Dispatch via GameThread::EnqueuePost — runs after the game's own
-    // render-frame callback, outside the engine tick's lock scope.
-    //
-    // Neither the sender-thread packet path nor the engine command lane
-    // is safe for UseSkill:
-    //   - Sender thread PacketSend: not thread-safe for combat packets
-    //   - Engine command lane: corrupts action state → delayed crash
-    // EnqueuePost fires after the game finishes its own processing,
-    // avoiding both conflicts.
-    if (GameThread::IsInitialized()) {
-        if (!s_loggedUseSkillEngineLane) {
-            Log::Info("SkillMgr: UseSkill using GameThread post-dispatch");
-            s_loggedUseSkillEngineLane = true;
-        }
-        if (sparkflyMap) {
-            InterlockedIncrement(&s_sparkflyPlayerUseSkillCount);
-        }
-        GameThread::EnqueuePost([myId, slot, targetAgentId, callTarget]() {
-            InvokeUseSkillRaw(myId, slot, targetAgentId, callTarget);
-        });
         return;
     }
+
+    if (!GameThread::IsInitialized()) {
+        return;
+    }
+
+    if (!s_loggedUseSkillEngineLane) {
+        Log::Info("SkillMgr: UseSkill using packet path");
+        s_loggedUseSkillEngineLane = true;
+    }
+    if (sparkflyMap) {
+        InterlockedIncrement(&s_sparkflyPlayerUseSkillCount);
+    }
+    Log::Info("SkillMgr: UseSkill packet slot=%u skillId=%u target=%u callTarget=%u",
+              slot,
+              skillId,
+              targetAgentId,
+              callTarget);
+    CtoS::UseSkill(skillId, targetAgentId, callTarget);
 }
 
 void UseHeroSkill(uint32_t heroIndex, uint32_t slot, uint32_t targetAgentId) {
@@ -317,7 +336,9 @@ Skillbar* GetPlayerSkillbar() {
         }
         if (!s_loggedSkillbarMiss) {
             s_loggedSkillbarMiss = true;
-            Log::Warn("SkillMgr: player skillbar not found for MyID=%u at base=0x%08X", myId, static_cast<unsigned>(base));
+            Log::Warn("SkillMgr: player skillbar not found for MyID=%u at base=0x%08X",
+                      myId,
+                      static_cast<unsigned>(base));
             for (size_t i = 0; i < 8; ++i) {
                 auto* bar = reinterpret_cast<Skillbar*>(base + i * sizeof(Skillbar));
                 Log::Warn("SkillMgr: skillbar[%u] ptr=0x%08X agent_id=%u disabled=0x%08X",

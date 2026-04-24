@@ -2,6 +2,8 @@
 
 #include <gwa3/core/CallbackRegistry.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/core/HookMarker.h>
+#include <gwa3/core/HookMarker.h>
 #include <gwa3/core/Offsets.h>
 
 #include <MinHook.h>
@@ -50,6 +52,7 @@ static bool EnsureMinHook() {
 }
 
 static void __cdecl UIMessageDetour(uint32_t messageId, void* wParam, void* lParam) {
+    HookMarker::HookScope _hookScope(HookMarker::HookId::UIMessageDetour);
     InterlockedExchange(&s_lastUiMessageId, static_cast<LONG>(messageId));
     const LONG writeCount = InterlockedIncrement(&s_recentUiWriteCount);
     s_recentUiMessages[(writeCount - 1) % kRecentUiTraceCapacity] = static_cast<LONG>(messageId);
@@ -64,6 +67,7 @@ static void __cdecl UIMessageDetour(uint32_t messageId, void* wParam, void* lPar
 }
 
 static void __cdecl NativeDialogDetour(uint32_t dialogId) {
+    HookMarker::HookScope _hookScope(HookMarker::HookId::SendDialogDetour);
     InterlockedExchange(&s_lastDialogId, static_cast<LONG>(dialogId));
     if (s_dialogOriginal) {
         s_dialogOriginal(dialogId);
@@ -71,6 +75,7 @@ static void __cdecl NativeDialogDetour(uint32_t dialogId) {
 }
 
 static void __cdecl NativeSignpostDialogDetour(uint32_t dialogId) {
+    HookMarker::HookScope _hookScope(HookMarker::HookId::SendSignpostDetour);
     InterlockedExchange(&s_lastDialogId, static_cast<LONG>(dialogId));
     if (s_signpostDialogOriginal) {
         s_signpostDialogOriginal(dialogId);
@@ -189,6 +194,10 @@ void SetNativeDialogFunctions(uintptr_t dialogFn, uintptr_t signpostDialogFn) {
                             "SendSignpostDialog");
 }
 
+void RecordDialogSend(uint32_t dialogId) {
+    InterlockedExchange(&s_lastDialogId, static_cast<LONG>(dialogId));
+}
+
 void StartUIHook(uint32_t messageId) {
     InterlockedExchange(&s_watchHitMessageId, 0);
     InterlockedExchange(&s_watchMessageId, static_cast<LONG>(messageId));
@@ -271,3 +280,5 @@ void Reset() {
 }
 
 } // namespace GWA3::DialogHook
+
+

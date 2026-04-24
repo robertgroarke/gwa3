@@ -1,6 +1,7 @@
 #include <Windows.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/core/CrashDiag.h>
+#include <gwa3/core/HookMarker.h>
 #include <gwa3/core/Scanner.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/GameThread.h>
@@ -260,6 +261,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     // post-dialog CaptureProcessState captures only the process state
     // while GW's crash dialog is already up — no exception data.
     GWA3::CrashDiag::Initialize();
+    GWA3::HookMarker::SelfTest();
 
     bool smokeTest = CheckFlag("GWA3_SMOKE_TEST", "gwa3_smoke_test.flag");
     bool botTest = CheckFlag("GWA3_TEST_BOT", "gwa3_test_bot.flag");
@@ -393,7 +395,15 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         GWA3::DialogMgr::Initialize();
         GWA3::ChatLogMgr::Initialize();
         GWA3::StringEncoding::Initialize();
-        GWA3::EncStringCache::Initialize();
+        // EncStringCache installs a passive MinHook detour on
+        // ValidateAsyncDecodeStr. That hook is currently unstable on the
+        // Reforged client and has been the direct cause of advisory/LLM
+        // runtime crashes during normal UI decode traffic. Nothing in the
+        // live bridge currently requires this cache to function, so keep it
+        // disabled by default until the hook path is repaired.
+        if (llmMode || llmAdvisory) {
+            GWA3::Log::Warn("EncStringCache disabled: ValidateAsyncDecodeStr hook is crash-prone on this client");
+        }
     }
 
     if (cmdTest) {
@@ -572,6 +582,8 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         // Start Froggy bot first
         GWA3::Bot::Froggy::Register();
         GWA3::Bot::Start();
+        GWA3::Bot::SetState(IsInGame() ? GWA3::Bot::BotState::InTown
+                                       : GWA3::Bot::BotState::CharSelect);
         // Then start LLM bridge alongside
         if (!GWA3::LLM::Initialize()) {
             GWA3::Log::Error("LLM bridge initialization failed — Froggy running solo");
@@ -613,18 +625,26 @@ DWORD WINAPI InitThread(LPVOID hModule) {
 
     GWA3::Bot::Froggy::Register();
     GWA3::Bot::Start();
+    GWA3::Bot::SetState(IsInGame() ? GWA3::Bot::BotState::InTown
+                                   : GWA3::Bot::BotState::CharSelect);
 
     GWA3::Log::Info("gwa3.dll initialization complete - bot started");
     return 0;
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
-    (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
         g_hModule = hModule;
         DisableThreadLibraryCalls(hModule);
         CreateThread(nullptr, 0, &InitThread, hModule, 0, nullptr);
     } else if (reason == DLL_PROCESS_DETACH) {
+        // During process termination, Windows may tear down CRT/static state
+        // while we are still under the loader lock. Running full hook/thread/
+        // STL cleanup here has been causing detach-time AVs inside gwa3.dll.
+        // Let the OS reclaim our process resources instead.
+        if (reserved != nullptr) {
+            return TRUE;
+        }
         GWA3::LLM::Shutdown();
         GWA3::Bot::Stop();
         GWA3::EncStringCache::Shutdown();

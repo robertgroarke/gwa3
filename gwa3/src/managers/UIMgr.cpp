@@ -4,6 +4,7 @@
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/core/Scanner.h>
+#include <gwa3/packets/CtoS.h>
 
 #include <Windows.h>
 #include <algorithm>
@@ -27,6 +28,39 @@ static bool s_initialized = false;
 static uintptr_t s_frameClickShellcode = 0;
 static uintptr_t s_frameClickAction = 0;
 static FrameArrayData* s_actionFrameCache = nullptr;
+static bool s_loggedPerformUiActionEngineLane = false;
+static constexpr uint32_t kPerformActionActivateFlag = 0x20u;
+static constexpr uint32_t kPerformActionTypeDefault = 0u;
+
+struct PerformActionCommand {
+    uintptr_t fn;
+    uint32_t action;
+    uint32_t flag;
+    uint32_t type;
+    uintptr_t action_base;
+};
+
+__declspec(naked) void BotshubActionCommandStub() {
+    __asm {
+        mov ecx, dword ptr [eax+16]
+        cmp dword ptr [eax+12], 0
+        jnz action_type_2
+action_type_1:
+        mov ecx, dword ptr [ecx+0Ch]
+        jmp action_common
+action_type_2:
+        mov ecx, dword ptr [ecx+4]
+action_common:
+        add ecx, 0A8h
+        push 0
+        lea eax, dword ptr [eax+4]
+        push eax
+        push dword ptr [eax+4]
+        xor edx, edx
+        call dword ptr [s_doActionFn]
+        jmp GWA3BotshubCommandReturnThunk
+    }
+}
 
 static void CallSendFrameUI(void* thisPtr, uint32_t msgid, void* wParam, void* lParam) {
     uintptr_t fn = s_sendFrameUIAddr;
@@ -141,23 +175,52 @@ static uint32_t MapControlActionMessageToFrameMessage(uint32_t msgid) {
 }
 
 static bool SendControlAction(uint32_t msgid, ControlAction action) {
-    const uintptr_t frame = GetActionFrame();
+    uintptr_t frame = 0;
+    __try {
+        frame = GetActionFrame();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("UIMgr: SendControlAction failed reading action frame msg=0x%X action=0x%X",
+                  msgid, static_cast<uint32_t>(action));
+        frame = 0;
+    }
     if (s_sendFrameUIAddr && frame >= 0x10000) {
         const uint32_t frameMsgId = MapControlActionMessageToFrameMessage(msgid);
         FrameKeyActionPacket packet{};
         packet.key = static_cast<uint32_t>(action);
-        CallSendFrameUI(reinterpret_cast<void*>(frame + 0xA8), frameMsgId, &packet, nullptr);
-        Log::Info("UIMgr: SendControlAction frame=0x%08X frameId=%u childOffset=%u msg=0x%X action=0x%X",
+        Log::Info("UIMgr: SendControlAction frame-dispatch begin frame=0x%08X frameId=%u childOffset=%u msg=0x%X action=0x%X",
                   static_cast<unsigned>(frame),
                   GetFrameId(frame),
                   GetChildOffsetId(frame),
                   frameMsgId,
                   static_cast<uint32_t>(action));
-        return true;
+        __try {
+            CallSendFrameUI(reinterpret_cast<void*>(frame + 0xA8), frameMsgId, &packet, nullptr);
+            Log::Info("UIMgr: SendControlAction frame-dispatch end frame=0x%08X frameId=%u childOffset=%u msg=0x%X action=0x%X",
+                      static_cast<unsigned>(frame),
+                      GetFrameId(frame),
+                      GetChildOffsetId(frame),
+                      frameMsgId,
+                      static_cast<uint32_t>(action));
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("UIMgr: SendControlAction frame-dispatch fault frame=0x%08X frameId=%u childOffset=%u msg=0x%X action=0x%X; attempting context fallback",
+                      static_cast<unsigned>(frame),
+                      GetFrameId(frame),
+                      GetChildOffsetId(frame),
+                      frameMsgId,
+                      static_cast<uint32_t>(action));
+        }
     }
 
     if (!s_doActionFn) return false;
-    const uintptr_t ctx = GetActionContext();
+    uintptr_t ctx = 0;
+    __try {
+        ctx = GetActionContext();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("UIMgr: SendControlAction failed reading action context msg=0x%X action=0x%X",
+                  msgid, static_cast<uint32_t>(action));
+        ctx = 0;
+    }
     if (ctx < 0x10000) {
         Log::Warn("UIMgr: SendControlAction missing action context msg=0x%X action=0x%X",
                   msgid, static_cast<uint32_t>(action));
@@ -165,10 +228,16 @@ static bool SendControlAction(uint32_t msgid, ControlAction action) {
     }
     ControlActionPacket packet{};
     packet.key = static_cast<uint32_t>(action);
-    s_doActionFn(reinterpret_cast<void*>(ctx), nullptr, msgid, &packet, nullptr);
-    Log::Info("UIMgr: SendControlAction ctx=0x%08X msg=0x%X action=0x%X",
-              static_cast<unsigned>(ctx), msgid, static_cast<uint32_t>(action));
-    return true;
+    __try {
+        s_doActionFn(reinterpret_cast<void*>(ctx), nullptr, msgid, &packet, nullptr);
+        Log::Info("UIMgr: SendControlAction ctx=0x%08X msg=0x%X action=0x%X",
+                  static_cast<unsigned>(ctx), msgid, static_cast<uint32_t>(action));
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("UIMgr: SendControlAction context dispatch fault ctx=0x%08X msg=0x%X action=0x%X",
+                  static_cast<unsigned>(ctx), msgid, static_cast<uint32_t>(action));
+        return false;
+    }
 }
 
 uintptr_t GetFrameByHash(uint32_t hash) {
@@ -195,7 +264,22 @@ uintptr_t GetFrameByHash(uint32_t hash) {
             uintptr_t frame = arr->buffer[i];
             if (frame < 0x10000) continue;
 
-            uint32_t frameHash = *reinterpret_cast<uint32_t*>(frame + 0x134);
+            uint32_t frameHash = 0u;
+            bool readable = true;
+            __try {
+                frameHash = *reinterpret_cast<uint32_t*>(frame + 0x134);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                readable = false;
+            }
+
+            if (!readable) {
+                if (!s_loggedScanAv) {
+                    Log::Warn("UIMgr: GetFrameByHash encountered volatile frame data during scan");
+                    s_loggedScanAv = true;
+                }
+                continue;
+            }
+
             if (frameHash == hash) return frame;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -574,8 +658,12 @@ struct ActionBaseDump {
     uintptr_t slots[16];
 };
 
+static bool IsPlausibleUserPointer(uintptr_t ptr) {
+    return ptr >= 0x10000 && ptr < 0x80000000;
+}
+
 static bool ReadSlotsAt(uintptr_t base, ActionBaseDump* out) {
-    if (base < 0x10000) return false;
+    if (!out || !IsPlausibleUserPointer(base)) return false;
     __try {
         for (uint32_t i = 0; i < 16; ++i) {
             out->slots[i] = *reinterpret_cast<uintptr_t*>(base + i * 4);
@@ -584,6 +672,16 @@ static bool ReadSlotsAt(uintptr_t base, ActionBaseDump* out) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+}
+
+static bool HasUsableActionBaseSlots(uintptr_t base, ActionBaseDump* out) {
+    ActionBaseDump local{};
+    ActionBaseDump* dump = out ? out : &local;
+    if (!ReadSlotsAt(base, dump)) return false;
+    for (uint32_t i = 0; i < 16; ++i) {
+        if (IsPlausibleUserPointer(dump->slots[i])) return true;
+    }
+    return false;
 }
 
 static bool SafeRead32(uintptr_t addr, uintptr_t* out) {
@@ -597,10 +695,10 @@ static bool SafeRead32(uintptr_t addr, uintptr_t* out) {
     }
 }
 
-// Resolve BotsHub's ActionBase — byte-pattern at offset -3 instead of our
-// Offsets::ActionBase which uses -4. That 1-byte shift changes which
-// imm32 we dereference, and BotsHub's choice is what their ASM
-// successfully uses to drive UI toggle actions.
+// Resolve BotsHub's shifted ActionBase candidate if it actually points at a
+// readable slot table in this GW build. In this repo/build the -3 scan can
+// sometimes land one byte into the embedded imm32 and produce garbage such as
+// 0x8D0169C4, so treat the shifted scan as optional rather than authoritative.
 static uintptr_t GetBotsHubActionBase() {
     static uintptr_t s_result = 0;
     static bool s_resolved = false;
@@ -618,12 +716,54 @@ static uintptr_t GetBotsHubActionBase() {
                   static_cast<unsigned>(scan));
         return 0;
     }
+    if (!IsPlausibleUserPointer(ptr)) {
+        Log::Warn("UIMgr: BotsHub ActionBase scan unusable scan=0x%08X ptr=0x%08X; falling back to Offsets::ActionBase=0x%08X",
+                  static_cast<unsigned>(scan),
+                  static_cast<unsigned>(ptr),
+                  static_cast<unsigned>(Offsets::ActionBase));
+        return 0;
+    }
+    ActionBaseDump dump{};
+    if (!HasUsableActionBaseSlots(ptr, &dump)) {
+        Log::Warn("UIMgr: BotsHub ActionBase scan unusable scan=0x%08X ptr=0x%08X; falling back to Offsets::ActionBase=0x%08X",
+                  static_cast<unsigned>(scan),
+                  static_cast<unsigned>(ptr),
+                  static_cast<unsigned>(Offsets::ActionBase));
+        return 0;
+    }
     s_result = ptr;
     Log::Info("UIMgr: BotsHub ActionBase scan=0x%08X ptr=0x%08X (gwa3 Offsets::ActionBase=0x%08X)",
               static_cast<unsigned>(scan),
               static_cast<unsigned>(ptr),
               static_cast<unsigned>(Offsets::ActionBase));
     return ptr;
+}
+
+static uintptr_t GetPreferredActionBase(ActionBaseDump* out, bool* usedBotsHubScan, bool allowBotsHubScan = true) {
+    if (usedBotsHubScan) *usedBotsHubScan = false;
+
+    ActionBaseDump local{};
+    ActionBaseDump* dump = out ? out : &local;
+
+    uintptr_t botshubBase = 0;
+    if (allowBotsHubScan) {
+        botshubBase = GetBotsHubActionBase();
+        if (HasUsableActionBaseSlots(botshubBase, dump)) {
+            if (usedBotsHubScan) *usedBotsHubScan = true;
+            return botshubBase;
+        }
+    }
+
+    if (HasUsableActionBaseSlots(Offsets::ActionBase, dump)) {
+        Log::Info("UIMgr: ActionBase fallback using Offsets::ActionBase=0x%08X",
+                  static_cast<unsigned>(Offsets::ActionBase));
+        return Offsets::ActionBase;
+    }
+
+    Log::Warn("UIMgr: no usable ActionBase (BotsHub=0x%08X, Offsets::ActionBase=0x%08X)",
+              static_cast<unsigned>(botshubBase),
+              static_cast<unsigned>(Offsets::ActionBase));
+    return 0;
 }
 
 static bool ReadActionBaseDump(ActionBaseDump* out) {
@@ -653,45 +793,78 @@ static uintptr_t GetUiActionContext() {
     return GetUiActionContextRaw(&t0, &t1);
 }
 
-bool PerformUiAction(uint32_t action) {
-    if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
-        GameThread::Enqueue([action]() { PerformUiAction(action); });
-        return true;
+static bool TryDispatchUiAction(uintptr_t ctx, uint32_t action, const char* modeLabel) {
+    if (!s_doActionFn || ctx < 0x10000) {
+        return false;
     }
+
+    uint32_t payload[3] = { action, kPerformActionActivateFlag, kPerformActionTypeDefault };
+    __try {
+        s_doActionFn(reinterpret_cast<void*>(ctx), nullptr,
+                     payload[1], payload, nullptr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("UIMgr: PerformUiAction %s dispatch fault ctx=0x%08X action=0x%X",
+                  modeLabel ? modeLabel : "unknown",
+                  static_cast<unsigned>(ctx),
+                  action);
+        return false;
+    }
+}
+
+static bool PerformUiActionImpl(uint32_t action, bool preferEngineLane) {
     if (!s_doActionFn) {
         Log::Warn("UIMgr: PerformUiAction no DoActionFn action=0x%X", action);
         return false;
     }
 
-    // Gwa3's existing SendControlAction uses GetActionContext() =
-    // `FrameArray[1] + 0xA0` as the context (proven to work for skill
-    // slots). BotsHub's ASM took a different path via ActionBase+0xC,
-    // which doesn't hold a pointer in this GW build. Use gwa3's proven
-    // context but with BotsHub's UI-action packet shape (flag = 0x20
-    // CONTROL_TYPE_ACTIVATE, single action dword + flag).
-    const uintptr_t ctx = GetActionContext();
-    if (ctx >= 0x10000) {
-        constexpr uint32_t kControlTypeActivate = 0x20;
-        uint32_t payload[2] = { action, kControlTypeActivate };
-        // arg order: msgid=flag, arg1=&action_dword, arg2=0
-        s_doActionFn(reinterpret_cast<void*>(ctx), nullptr,
-                     payload[1], &payload[0], nullptr);
-        Log::Info("UIMgr: PerformUiAction (frame-ctx) ctx=0x%08X flag=0x%X action=0x%X",
-                  static_cast<unsigned>(ctx), kControlTypeActivate, action);
+    if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
+        GameThread::EnqueuePost([action, preferEngineLane]() { PerformUiActionImpl(action, preferEngineLane); });
         return true;
     }
-    // BotsHub uses scan offset -3 (we use -4 for Offsets::ActionBase). That
-    // 1-byte shift means the two scans resolve different imm32 pointers
-    // pre-baked in GW's .text. Prefer the BotsHub base for UI toggle
-    // actions since that's the address their proven ASM dereferences.
-    const uintptr_t base = GetBotsHubActionBase();
-    ActionBaseDump dump{};
-    if (base < 0x10000 || !ReadSlotsAt(base, &dump)) {
-        // Fallback: use our existing Offsets::ActionBase.
-        if (!ReadActionBaseDump(&dump)) {
-            Log::Warn("UIMgr: PerformUiAction ReadActionBaseDump failed action=0x%X", action);
-            return false;
+
+    ActionBaseDump preferredDump{};
+    bool usedBotsHubScan = false;
+    const uintptr_t preferredActionBase =
+        GetPreferredActionBase(&preferredDump, &usedBotsHubScan, preferEngineLane);
+    const bool ctosReady = CtoS::Initialize();
+    const bool engineLaneAvailable = ctosReady && CtoS::IsBotshubCommandLaneAvailable();
+    if (preferEngineLane && ctosReady && engineLaneAvailable && preferredActionBase >= 0x10000) {
+        if (!s_loggedPerformUiActionEngineLane) {
+            Log::Info("UIMgr: PerformUiAction using engine command lane");
+            s_loggedPerformUiActionEngineLane = true;
         }
+        Log::Info("UIMgr: PerformUiAction engine lane action=0x%X base=0x%08X source=%s",
+                  action,
+                  static_cast<unsigned>(preferredActionBase),
+                  usedBotsHubScan ? "botshub-scan" : "offsets");
+        PerformActionCommand cmd{};
+        cmd.fn = reinterpret_cast<uintptr_t>(&BotshubActionCommandStub);
+        cmd.action = action;
+        cmd.flag = kPerformActionActivateFlag;
+        cmd.type = kPerformActionTypeDefault;
+        cmd.action_base = preferredActionBase;
+        if (CtoS::EnqueueBotshubCommand(&cmd, sizeof(cmd))) {
+            return true;
+        }
+        Log::Warn("UIMgr: PerformUiAction engine lane rejected action=0x%X", action);
+    } else if (preferEngineLane) {
+        Log::Warn("UIMgr: PerformUiAction engine lane unavailable action=0x%X ctosReady=%d laneAvailable=%d base=0x%08X",
+                  action,
+                  ctosReady ? 1 : 0,
+                  engineLaneAvailable ? 1 : 0,
+                  static_cast<unsigned>(preferredActionBase));
+    }
+
+    // BotsHub's Action command dereferences a pointer slot from ActionBase and
+    // then adds 0xA8 before calling Action(). In this GW build the usable slot
+    // is not consistently at +0xC, so pick the first plausible pointer from
+    // the preferred ActionBase dump and still honor the original +0xA8 offset.
+    ActionBaseDump dump{};
+    const uintptr_t base = GetPreferredActionBase(&dump, &usedBotsHubScan, preferEngineLane);
+    if (base < 0x10000) {
+        Log::Warn("UIMgr: PerformUiAction ReadActionBaseDump failed action=0x%X", action);
+        return false;
     }
     {
         char line[512] = {};
@@ -700,9 +873,9 @@ bool PerformUiAction(uint32_t action) {
             off += sprintf_s(line + off, sizeof(line) - off, "+%02X=%08X ",
                              i * 4, static_cast<unsigned>(dump.slots[i]));
         }
-        Log::Info("UIMgr: PerformUiAction dump base=0x%08X (BotsHub=%s)  %s",
-                  static_cast<unsigned>(base >= 0x10000 ? base : Offsets::ActionBase),
-                  base >= 0x10000 ? "yes" : "fallback",
+        Log::Info("UIMgr: PerformUiAction dump base=0x%08X (source=%s)  %s",
+                  static_cast<unsigned>(base),
+                  usedBotsHubScan ? "botshub-scan" : "offsets",
                   line);
     }
 
@@ -710,15 +883,15 @@ bool PerformUiAction(uint32_t action) {
     // Use slot +0xC (index 3) with the BotsHub base. Falls back to +0x4
     // (index 1) if that doesn't look like a heap pointer.
     uintptr_t p = dump.slots[3];
-    if (p < 0x10000 || p >= 0x80000000) p = dump.slots[1];
-    if (p < 0x10000 || p >= 0x80000000) {
+    if (!IsPlausibleUserPointer(p)) p = dump.slots[1];
+    if (!IsPlausibleUserPointer(p)) {
         // Last resort: first pointer-looking slot.
         for (uint32_t i = 0; i < 16; ++i) {
             uintptr_t q = dump.slots[i];
-            if (q >= 0x10000 && q < 0x80000000) { p = q; break; }
+            if (IsPlausibleUserPointer(q)) { p = q; break; }
         }
     }
-    if (p < 0x10000) {
+    if (!IsPlausibleUserPointer(p)) {
         Log::Warn("UIMgr: PerformUiAction no ActionBase context action=0x%X", action);
         return false;
     }
@@ -726,11 +899,29 @@ bool PerformUiAction(uint32_t action) {
     Log::Info("UIMgr: PerformUiAction (ActionBase-slot fallback) ptr=0x%08X ctx=0x%08X action=0x%X",
               static_cast<unsigned>(p),
               static_cast<unsigned>(fallbackCtx), action);
-    constexpr uint32_t kControlTypeActivate = 0x20;
-    uint32_t fallbackPayload[2] = { action, kControlTypeActivate };
-    s_doActionFn(reinterpret_cast<void*>(fallbackCtx), nullptr,
-                 fallbackPayload[1], &fallbackPayload[0], nullptr);
-    return true;
+    if (TryDispatchUiAction(fallbackCtx, action, "ActionBase-slot")) {
+        return true;
+    }
+
+    // Last resort: reuse the existing frame-action context if it is still
+    // present in this build.
+    const uintptr_t ctx = GetActionContext();
+    if (ctx >= 0x10000) {
+        if (TryDispatchUiAction(ctx, action, "frame-ctx")) {
+            Log::Info("UIMgr: PerformUiAction (frame-ctx) ctx=0x%08X flag=0x%X action=0x%X",
+                      static_cast<unsigned>(ctx), kPerformActionActivateFlag, action);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool PerformUiAction(uint32_t action) {
+    return PerformUiActionImpl(action, true);
+}
+
+bool PerformUiActionDirect(uint32_t action) {
+    return PerformUiActionImpl(action, false);
 }
 
 void SendUIMessage(uint32_t msgId, void* wParam, void* lParam) {

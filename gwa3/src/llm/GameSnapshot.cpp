@@ -336,6 +336,21 @@ namespace GWA3::LLM::GameSnapshot {
         if (!raw.empty()) dst[key] = std::move(raw);
     }
 
+    static void EmitCachedText(json& dst, const wchar_t* p, const char* key,
+                               const wchar_t* fallback = nullptr) {
+        if (p != nullptr) {
+            std::string dec = EncStringCache::Lookup(p);
+            if (!dec.empty()) {
+                dst[key] = std::move(dec);
+                return;
+            }
+        }
+        if (fallback != nullptr) {
+            std::string dec = EncStringCache::Lookup(fallback);
+            if (!dec.empty()) dst[key] = std::move(dec);
+        }
+    }
+
     // SEH-only helper: read agent->equip plus the 7 gear-slot item_ids
     // into a plain struct. Returns true if the equip pointer is
     // plausible; item_ids are zero-filled on per-slot fault so callers
@@ -1203,14 +1218,79 @@ namespace GWA3::LLM::GameSnapshot {
         }
     }
 
+    struct MerchantItemData {
+        uint32_t item_id = 0;
+        uint32_t model_id = 0;
+        uint32_t type = 0;
+        uint32_t value = 0;
+        uint32_t quantity = 0;
+        uint32_t interaction = 0;
+        wchar_t* name_enc = nullptr;
+        wchar_t* complete_name_enc = nullptr;
+        wchar_t* single_item_name = nullptr;
+        wchar_t* info_string = nullptr;
+    };
+
+    __declspec(noinline) static bool ReadMerchantItemData(const Item* item,
+                                                          MerchantItemData& out) {
+        if (item == nullptr) return false;
+        out = {};
+        __try {
+            out.item_id = item->item_id;
+            out.model_id = item->model_id;
+            out.type = item->type;
+            out.value = item->value;
+            out.quantity = item->quantity;
+            out.interaction = item->interaction;
+            out.name_enc = item->name_enc;
+            out.complete_name_enc = item->complete_name_enc;
+            out.single_item_name = item->single_item_name;
+            out.info_string = item->info_string;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            out = {};
+            return false;
+        }
+    }
+
     // Build merchant/trader window state
     static json BuildMerchantJson() {
         json m;
+        m["is_open"] = false;
+
+        if (!MapMgr::GetIsMapLoaded()) {
+            m["skipped"] = "map_not_loaded";
+            return m;
+        }
+
+        const auto* area = MapMgr::GetAreaInfo(MapMgr::GetMapId());
+        if (area && area->type == 2) {
+            // Merchant item arrays can stay populated with stale town-window
+            // pointers after zoning. Do not touch them in explorable maps.
+            m["skipped"] = "explorable";
+            return m;
+        }
+
         uint32_t itemCount = TradeMgr::GetMerchantItemCount();
-        m["is_open"] = (itemCount > 0);
         if (itemCount == 0) return m;
+        m["is_open"] = true;
 
         m["item_count"] = itemCount;
+
+        char merchantDetailFlag[8] = {};
+        const DWORD merchantDetailLen = GetEnvironmentVariableA(
+            "GWA3_SNAPSHOT_MERCHANT_DETAILS",
+            merchantDetailFlag,
+            static_cast<DWORD>(sizeof(merchantDetailFlag)));
+        const bool includeMerchantDetails =
+            merchantDetailLen > 0 &&
+            merchantDetailLen < sizeof(merchantDetailFlag) &&
+            merchantDetailFlag[0] == '1';
+        if (!includeMerchantDetails) {
+            m["items"] = json::array();
+            m["items_skipped"] = "set GWA3_SNAPSHOT_MERCHANT_DETAILS=1 for item details";
+            return m;
+        }
 
         // Last quote from TraderHook
         uint32_t quoteId = TraderHook::GetQuoteId();
@@ -1230,29 +1310,16 @@ namespace GWA3::LLM::GameSnapshot {
         // thread despite item_count being correct.
         // First gather item data into a plain struct array (SEH-safe),
         // then build JSON from the results.
-        struct MerchantItemData {
-            uint32_t item_id, model_id, type, value, quantity, interaction;
-            wchar_t* name_enc;
-            wchar_t* complete_name_enc;
-            wchar_t* single_item_name;
-            wchar_t* info_string;
-        };
         MerchantItemData itemData[256] = {};
         uint32_t readCount = 0;
         for (uint32_t pos = 1; pos <= itemCount && pos <= 256; ++pos) {
             auto* item = TradeMgr::GetMerchantItemByPosition(pos);
             if (!item) continue;
-            auto& d = itemData[readCount++];
-            d.item_id = item->item_id;
-            d.model_id = item->model_id;
-            d.type = item->type;
-            d.value = item->value;
-            d.quantity = item->quantity;
-            d.interaction = item->interaction;
-            d.name_enc = item->name_enc;
-            d.complete_name_enc = item->complete_name_enc;
-            d.single_item_name = item->single_item_name;
-            d.info_string = item->info_string;
+            if (!ReadMerchantItemData(item, itemData[readCount])) {
+                Log::Warn("[Snapshot] BuildMerchantJson: failed reading merchant item at pos=%u", pos);
+                continue;
+            }
+            ++readCount;
         }
 
         json items = json::array();
@@ -1264,10 +1331,10 @@ namespace GWA3::LLM::GameSnapshot {
             it["value"] = itemData[i].value;
             it["quantity"] = itemData[i].quantity;
             it["interaction"] = itemData[i].interaction;
-            EmitBestText(it, itemData[i].name_enc, "name",
-                         itemData[i].single_item_name);
-            EmitBestText(it, itemData[i].complete_name_enc, "full_name");
-            EmitBestText(it, itemData[i].info_string, "info_string");
+            EmitCachedText(it, itemData[i].name_enc, "name",
+                           itemData[i].single_item_name);
+            EmitCachedText(it, itemData[i].complete_name_enc, "full_name");
+            EmitCachedText(it, itemData[i].info_string, "info_string");
             items.push_back(it);
         }
         m["items"] = items;

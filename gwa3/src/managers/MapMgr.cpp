@@ -15,6 +15,46 @@ namespace GWA3::MapMgr {
 using EnterMissionFn = void(__cdecl*)();
 using SetDifficultyFn = void(__cdecl*)(uint32_t);
 
+namespace {
+
+struct PendingTravelRequest {
+    uint32_t mapId = 0;
+    uint32_t region = 0;
+    uint32_t district = 0;
+    uint32_t language = 0;
+    uint32_t originMapId = 0;
+    DWORD queuedAt = 0;
+    bool valid = false;
+};
+
+static PendingTravelRequest s_pendingTravel = {};
+
+static bool IsSameTravelRequest(const PendingTravelRequest& pending,
+                                uint32_t mapId,
+                                uint32_t region,
+                                uint32_t district,
+                                uint32_t language) {
+    return pending.valid &&
+           pending.mapId == mapId &&
+           pending.region == region &&
+           pending.district == district &&
+           pending.language == language;
+}
+
+static void RefreshPendingTravelState() {
+    if (!s_pendingTravel.valid) return;
+
+    const DWORD now = GetTickCount();
+    const uint32_t currentMapId = GetMapId();
+    if (currentMapId == s_pendingTravel.mapId ||
+        (currentMapId != 0 && currentMapId != s_pendingTravel.originMapId) ||
+        (now - s_pendingTravel.queuedAt) > 30000u) {
+        s_pendingTravel = {};
+    }
+}
+
+} // namespace
+
 static EnterMissionFn s_enterMissionFn = nullptr;
 static SetDifficultyFn s_setDifficultyFn = nullptr;
 static bool s_initialized = false;
@@ -30,14 +70,44 @@ bool Initialize() {
     return true;
 }
 
-void Travel(uint32_t mapId, uint32_t region, uint32_t district, uint32_t language) {
+bool Travel(uint32_t mapId, uint32_t region, uint32_t district, uint32_t language) {
     Log::Info("MapMgr: Travel request map=%u region=%u district=%u language=%u", mapId, region, district, language);
+    RefreshPendingTravelState();
     if (GameThread::IsOnGameThread()) {
+        s_pendingTravel = {};
         Log::Info("MapMgr: Travel using direct game-thread packet send");
         CtoS::MapTravel(mapId, region, district, language);
         Log::Info("MapMgr: Travel direct send returned");
-        return;
+        return true;
     }
+
+    if (IsSameTravelRequest(s_pendingTravel, mapId, region, district, language)) {
+        Log::Warn("MapMgr: Travel duplicate suppressed map=%u originMap=%u age=%lums",
+                  mapId,
+                  s_pendingTravel.originMapId,
+                  static_cast<unsigned long>(GetTickCount() - s_pendingTravel.queuedAt));
+        return true;
+    }
+
+    if (!GameThread::IsResponsive(5000u)) {
+        Log::Warn("MapMgr: Travel refused for map=%u because GameThread detour is not responsive", mapId);
+        return false;
+    }
+
+    const uint32_t pendingPreCount = GameThread::GetPendingPreCount();
+    if (pendingPreCount >= 240u) {
+        Log::Warn("MapMgr: Travel refused for map=%u because GameThread prequeue is saturated (%u pending)",
+                  mapId, pendingPreCount);
+        return false;
+    }
+
+    s_pendingTravel.mapId = mapId;
+    s_pendingTravel.region = region;
+    s_pendingTravel.district = district;
+    s_pendingTravel.language = language;
+    s_pendingTravel.originMapId = GetMapId();
+    s_pendingTravel.queuedAt = GetTickCount();
+    s_pendingTravel.valid = true;
 
     Log::Info("MapMgr: Travel enqueueing to GameThread");
     GameThread::Enqueue([mapId, region, district, language]() {
@@ -46,10 +116,43 @@ void Travel(uint32_t mapId, uint32_t region, uint32_t district, uint32_t languag
         Log::Info("MapMgr: Travel lambda returned");
     });
     Log::Info("MapMgr: Travel enqueue returned to caller");
+    return true;
 }
 
 void ReturnToOutpost() {
-    const uint32_t mapId = GetMapId();
+    uint32_t mapId = GetMapId();
+    if (mapId != 0 && !GetIsMapLoaded()) {
+        // Natural post-reward transitions out of Bogroot can leave the
+        // client in loaded=0 for 1-2 minutes. Give the server a generous
+        // window before falling through to the packet path — sending
+        // packets into the transition crashes Gw.exe.
+        constexpr uint32_t kBogrootLvl1 = 615;
+        constexpr uint32_t kBogrootLvl2 = 616;
+        const DWORD settleMs =
+            (mapId == kBogrootLvl1 || mapId == kBogrootLvl2) ? 180000u : 30000u;
+        Log::Info("MapMgr: ReturnToOutpost waiting for map load to settle map=%u budget=%lums",
+                  mapId, static_cast<unsigned long>(settleMs));
+        const DWORD start = GetTickCount();
+        while ((GetTickCount() - start) < settleMs) {
+            if (GetIsMapLoaded()) {
+                break;
+            }
+            Sleep(250);
+        }
+        mapId = GetMapId();
+        Log::Info("MapMgr: ReturnToOutpost settled map=%u loaded=%d myId=%u",
+                  mapId,
+                  GetIsMapLoaded() ? 1 : 0,
+                  AgentMgr::GetMyId());
+        // If the load never completed, the client is in a transition
+        // ghost state. Sending any map/return packet into that state
+        // reliably triggers a Gw.exe crash dialog — bail out instead.
+        if (!GetIsMapLoaded()) {
+            Log::Warn("MapMgr: ReturnToOutpost bailing — load did not complete within budget; skipping packet to avoid crash");
+            return;
+        }
+    }
+
     const AreaInfo* area = GetAreaInfo(mapId);
     const bool inExplorable = area && area->type == 2;
 

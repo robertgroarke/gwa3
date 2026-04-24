@@ -21,6 +21,7 @@ namespace GWA3::AgentMgr {
 
     // Movement
     void Move(float x, float y);
+    void ResetMoveState(const char* reason = nullptr);
 
     // Targeting
     void ChangeTarget(uint32_t agentId);

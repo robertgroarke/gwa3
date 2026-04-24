@@ -67,6 +67,7 @@ static_assert(P::ITEM_EQUIP                        == 0x30, "ITEM_EQUIP");
 static_assert(P::SWITCH_SET                        == 0x32, "SWITCH_SET");
 static_assert(P::SKILL_EQUIP                       == 0x3C, "SKILL_EQUIP");
 static_assert(P::UNEQUIP_ITEM                      == 0x4F, "UNEQUIP_ITEM");
+static_assert(P::INTERACT_GADGET                   == 0x50, "INTERACT_GADGET");
 static_assert(P::SIGNPOST_RUN                      == 0x51, "SIGNPOST_RUN");
 static_assert(P::EQUIP_VISIBILITY                  == 0x56, "EQUIP_VISIBILITY");
 static_assert(P::ITEM_DESTROY                      == 0x69, "ITEM_DESTROY");

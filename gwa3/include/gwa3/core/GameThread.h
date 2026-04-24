@@ -24,6 +24,11 @@ namespace GWA3::GameThread {
     // If already on game thread, executes immediately (fast path).
     void Enqueue(Callback task);
 
+    // Enqueue a task on a render-like pre-dispatch lane that runs at most one
+    // command per frame. This matches the old GWA2 command queue semantics more
+    // closely than the bulk-drained pre queue.
+    void EnqueueSerialPre(Callback task);
+
     // Enqueue a raw task without std::function overhead.
     // invoker: function called with data pointer. data: POD struct copied into queue.
     // Use this for game-thread operations that must avoid CRT heap allocation.
@@ -48,5 +53,11 @@ namespace GWA3::GameThread {
 
     // Returns true if the hook is installed and active.
     bool IsInitialized();
+
+    // Returns the number of pending tasks on the pre-dispatch queue.
+    uint32_t GetPendingPreCount();
+
+    // Returns true when the game-thread detour has executed recently.
+    bool IsResponsive(uint32_t maxIdleMs = 5000u);
 
 } // namespace GWA3::GameThread

@@ -4,6 +4,8 @@
 #include <gwa3/core/Scanner.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/core/HookMarker.h>
+#include <gwa3/core/HookMarker.h>
 
 #include <Windows.h>
 #include <map>
@@ -69,6 +71,7 @@ static uint32_t s_handlerCount = 0;
 
 // Our replacement handler dispatches to callbacks then calls original
 static bool __cdecl StoCDispatcher(PacketBase* packet) {
+    HookMarker::HookScope _hookScope(HookMarker::HookId::StoCDispatcher);
     if (!packet || !s_originalHandlers) return true;
 
     const uint32_t header = packet->header;
@@ -331,3 +334,5 @@ bool EmulatePacket(PacketBase* packet) {
 }
 
 } // namespace GWA3::StoC
+
+

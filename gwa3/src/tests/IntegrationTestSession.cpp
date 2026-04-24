@@ -16,6 +16,9 @@
 #include <gwa3/managers/QuestMgr.h>
 #include <gwa3/managers/TradeMgr.h>
 #include <gwa3/managers/AgentMgr.h>
+#include <gwa3/managers/MaintenanceMgr.h>
+#include <gwa3/managers/ChatMgr.h>
+#include <gwa3/managers/ChatLogMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
@@ -173,6 +176,21 @@ enum class ConsumableHarnessClickMode {
     RowChild1Only,
     RootOnly,
     Both,
+};
+
+enum class IdentifySalvageIsolationStage {
+    Full,
+    IdentifyOnly,
+    SalvageOpenOnly,
+    SingleSalvage,
+    NativeSalvage,
+    NativeSalvageEnter,
+    LegacyBotshubStartOnly,
+    LegacyBotshubSalvage,
+    LegacyBotshubSalvageEnter,
+    LegacyBotshubSalvageDone,
+    LegacyBotshubSalvageCancel,
+    LegacyBotshubTrackedChain,
 };
 
 bool CheckLocalFlagFile(const char* flagFile) {
@@ -949,17 +967,151 @@ struct HelperTradeContextView {
     Trader partner;
 };
 
+static std::string JsonEscapeUtf8(const char* text) {
+    std::string out;
+    if (!text) return out;
+    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(text); *p; ++p) {
+        switch (*p) {
+        case '\"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\b': out += "\\b"; break;
+        case '\f': out += "\\f"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (*p < 0x20) {
+                char buf[8] = {};
+                sprintf_s(buf, "\\u%04X", static_cast<unsigned>(*p));
+                out += buf;
+            } else {
+                out.push_back(static_cast<char>(*p));
+            }
+            break;
+        }
+    }
+    return out;
+}
+
+IdentifySalvageIsolationStage GetIdentifySalvageIsolationStage() {
+    if (CheckLocalFlagFile("gwa3_test_identsalvage_stage_identify_only.flag")) {
+        return IdentifySalvageIsolationStage::IdentifyOnly;
+    }
+    if (CheckLocalFlagFile("gwa3_test_identsalvage_stage_salvage_open_only.flag")) {
+        return IdentifySalvageIsolationStage::SalvageOpenOnly;
+    }
+    if (CheckLocalFlagFile("gwa3_test_identsalvage_stage_single_salvage.flag")) {
+        return IdentifySalvageIsolationStage::SingleSalvage;
+    }
+    if (CheckLocalFlagFile("gwa3_test_identsalvage_stage_native_salvage.flag")) {
+        return IdentifySalvageIsolationStage::NativeSalvage;
+    }
+    if (CheckLocalFlagFile("gwa3_test_identsalvage_stage_native_salvage_enter.flag")) {
+        return IdentifySalvageIsolationStage::NativeSalvageEnter;
+    }
+    if (CheckLocalFlagFile("gwa3_test_identsalvage_stage_legacy_botshub_start_only.flag")) {
+        return IdentifySalvageIsolationStage::LegacyBotshubStartOnly;
+    }
+    if (CheckLocalFlagFile("gwa3_test_identsalvage_stage_legacy_botshub_salvage.flag")) {
+        return IdentifySalvageIsolationStage::LegacyBotshubSalvage;
+    }
+    if (CheckLocalFlagFile("gwa3_test_identsalvage_stage_legacy_botshub_salvage_enter.flag")) {
+        return IdentifySalvageIsolationStage::LegacyBotshubSalvageEnter;
+    }
+    if (CheckLocalFlagFile("gwa3_test_identsalvage_stage_legacy_botshub_salvage_done.flag")) {
+        return IdentifySalvageIsolationStage::LegacyBotshubSalvageDone;
+    }
+    if (CheckLocalFlagFile("gwa3_test_identsalvage_stage_legacy_botshub_salvage_cancel.flag")) {
+        return IdentifySalvageIsolationStage::LegacyBotshubSalvageCancel;
+    }
+    if (CheckLocalFlagFile("gwa3_test_identsalvage_stage_legacy_botshub_tracked_chain.flag")) {
+        return IdentifySalvageIsolationStage::LegacyBotshubTrackedChain;
+    }
+    return IdentifySalvageIsolationStage::Full;
+}
+
+const char* DescribeIdentifySalvageIsolationStage(IdentifySalvageIsolationStage stage) {
+    switch (stage) {
+    case IdentifySalvageIsolationStage::Full: return "full";
+    case IdentifySalvageIsolationStage::IdentifyOnly: return "identify-only";
+    case IdentifySalvageIsolationStage::SalvageOpenOnly: return "salvage-open-only";
+    case IdentifySalvageIsolationStage::SingleSalvage: return "single-salvage";
+    case IdentifySalvageIsolationStage::NativeSalvage: return "native-salvage";
+    case IdentifySalvageIsolationStage::NativeSalvageEnter: return "native-salvage-enter";
+    case IdentifySalvageIsolationStage::LegacyBotshubStartOnly: return "legacy-botshub-start-only";
+    case IdentifySalvageIsolationStage::LegacyBotshubSalvage: return "legacy-botshub-salvage";
+    case IdentifySalvageIsolationStage::LegacyBotshubSalvageEnter: return "legacy-botshub-salvage-enter";
+    case IdentifySalvageIsolationStage::LegacyBotshubSalvageDone: return "legacy-botshub-salvage-done";
+    case IdentifySalvageIsolationStage::LegacyBotshubSalvageCancel: return "legacy-botshub-salvage-cancel";
+    case IdentifySalvageIsolationStage::LegacyBotshubTrackedChain: return "legacy-botshub-tracked-chain";
+    default: return "unknown";
+    }
+}
+
+static std::string WideToUtf8String(const wchar_t* text) {
+    if (!text || !text[0]) return {};
+    const int needed = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+    if (needed <= 1) return {};
+    std::string out(static_cast<size_t>(needed), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text, -1, out.data(), needed, nullptr, nullptr);
+    out.resize(static_cast<size_t>(needed - 1));
+    return out;
+}
+
+static std::string BuildRecentHelperChatJson(uint32_t maxEntries = 8u) {
+    const uint32_t total = ChatLogMgr::GetMessageCount();
+    if (total == 0) return "[]";
+
+    const ChatLogMgr::ChatEntry* entries[100] = {};
+    const uint32_t count = ChatLogMgr::GetMessagesSince(0, entries, _countof(entries));
+    if (count == 0) return "[]";
+
+    const uint32_t start = count > maxEntries ? (count - maxEntries) : 0u;
+    std::string out = "[";
+    for (uint32_t i = start; i < count; ++i) {
+        const auto* entry = entries[i];
+        if (!entry) continue;
+        if (out.size() > 1) out += ",";
+        std::string senderUtf8 = JsonEscapeUtf8(WideToUtf8String(entry->sender).c_str());
+        std::string messageUtf8 = JsonEscapeUtf8(WideToUtf8String(entry->message).c_str());
+        out += "{\"channel\":\"";
+        out += JsonEscapeUtf8(entry->channel_name);
+        out += "\",\"sender\":\"";
+        out += senderUtf8;
+        out += "\",\"message\":\"";
+        out += messageUtf8;
+        out += "\",\"timestamp\":";
+        out += std::to_string(entry->timestamp_ms);
+        out += ",\"sender_agent_id\":";
+        out += std::to_string(entry->sender_agent_id);
+        out += "}";
+    }
+    out += "]";
+    return out;
+}
+
 void WriteTradeHelperStatus(uint32_t mapId, uint32_t region, uint32_t district, uint32_t myId, float x, float y,
                             uint32_t tradeFlags, uint32_t tradeOpenCount, uint32_t lastOpenFlags,
                             uint32_t submitAttemptCount, uint32_t acceptAttemptCount,
+                            uint32_t chatSendAttemptCount, uint32_t whisperSendAttemptCount,
+                            uint32_t lastChatSendSeq, uint32_t lastWhisperSendSeq,
+                            uint32_t inventoryFreeSlotsTotal,
+                            uint32_t helperStackableOfferModelId, uint32_t helperStackableOfferQuantity,
+                            uint32_t helperStackableOfferTotalQuantity,
+                            uint32_t helperSafeSingletonOfferModelId,
+                            uint32_t helperSafeSingletonOfferTotalQuantity,
                             uint32_t playerGold, uint32_t partnerGold,
                             uint32_t playerItemCount, uint32_t partnerItemCount,
+                            uint32_t ctoSPacketTotal, uint32_t ctoSTradeSubmitCount,
+                            uint32_t ctoSTradeAcceptCount, uint32_t ctoSTradeCancelCount,
+                            uint32_t ctoSTradeAddItemCount,
                             uint32_t tradePartnerHookHits, uint32_t tradePartnerLastEax,
                             uint32_t tradePartnerLastEcx, uint32_t tradePartnerLastEdx,
                             uint32_t tradeUiPlayerUpdatedCount, uint32_t tradeUiSessionStartCount,
                             uint32_t tradeUiSessionUpdatedCount, uint32_t tradeUiLastSessionStartState,
                             uint32_t tradeUiLastSessionStartPlayerNumber,
-                            const char* partnerItemsJson = "[]") {
+                            const char* partnerItemsJson = "[]",
+                            const char* recentChatJson = "[]") {
     char path[MAX_PATH];
     HMODULE hSelf = nullptr;
     GetModuleHandleExA(
@@ -970,11 +1122,17 @@ void WriteTradeHelperStatus(uint32_t mapId, uint32_t region, uint32_t district, 
     if (slash) *(slash + 1) = '\0';
     strcat_s(path, "trade_helper_status.json");
 
-    char buf[2048];
+    char buf[16384];
     sprintf_s(buf,
-              "{\"map_id\":%u,\"region\":%u,\"district\":%u,\"my_id\":%u,\"x\":%.1f,\"y\":%.1f,\"trade_flags\":%u,\"trade_open_count\":%u,\"last_open_flags\":%u,\"submit_attempt_count\":%u,\"accept_attempt_count\":%u,\"player_gold\":%u,\"partner_gold\":%u,\"player_item_count\":%u,\"partner_item_count\":%u,\"partner_items\":%s,\"trade_partner_hook_hits\":%u,\"trade_partner_last_eax\":%u,\"trade_partner_last_ecx\":%u,\"trade_partner_last_edx\":%u,\"trade_ui_player_updated_count\":%u,\"trade_ui_session_start_count\":%u,\"trade_ui_session_updated_count\":%u,\"trade_ui_last_session_start_state\":%u,\"trade_ui_last_session_start_player_number\":%u}\n",
-              mapId, region, district, myId, x, y, tradeFlags, tradeOpenCount, lastOpenFlags, submitAttemptCount, acceptAttemptCount, playerGold, partnerGold, playerItemCount, partnerItemCount,
+              "{\"map_id\":%u,\"region\":%u,\"district\":%u,\"my_id\":%u,\"x\":%.1f,\"y\":%.1f,\"trade_flags\":%u,\"trade_open_count\":%u,\"last_open_flags\":%u,\"submit_attempt_count\":%u,\"accept_attempt_count\":%u,\"chat_send_attempt_count\":%u,\"whisper_send_attempt_count\":%u,\"last_chat_send_seq\":%u,\"last_whisper_send_seq\":%u,\"inventory_free_slots_total\":%u,\"helper_stackable_offer_model_id\":%u,\"helper_stackable_offer_quantity\":%u,\"helper_stackable_offer_total_quantity\":%u,\"helper_safe_singleton_offer_model_id\":%u,\"helper_safe_singleton_offer_total_quantity\":%u,\"player_gold\":%u,\"partner_gold\":%u,\"player_item_count\":%u,\"partner_item_count\":%u,\"ctos_total\":%u,\"ctos_submit\":%u,\"ctos_accept\":%u,\"ctos_cancel\":%u,\"ctos_add_item\":%u,\"partner_items\":%s,\"recent_chat\":%s,\"trade_partner_hook_hits\":%u,\"trade_partner_last_eax\":%u,\"trade_partner_last_ecx\":%u,\"trade_partner_last_edx\":%u,\"trade_ui_player_updated_count\":%u,\"trade_ui_session_start_count\":%u,\"trade_ui_session_updated_count\":%u,\"trade_ui_last_session_start_state\":%u,\"trade_ui_last_session_start_player_number\":%u}\n",
+              mapId, region, district, myId, x, y, tradeFlags, tradeOpenCount, lastOpenFlags, submitAttemptCount, acceptAttemptCount,
+              chatSendAttemptCount, whisperSendAttemptCount, lastChatSendSeq, lastWhisperSendSeq,
+              inventoryFreeSlotsTotal, helperStackableOfferModelId, helperStackableOfferQuantity, helperStackableOfferTotalQuantity,
+              helperSafeSingletonOfferModelId, helperSafeSingletonOfferTotalQuantity,
+              playerGold, partnerGold, playerItemCount, partnerItemCount,
+              ctoSPacketTotal, ctoSTradeSubmitCount, ctoSTradeAcceptCount, ctoSTradeCancelCount, ctoSTradeAddItemCount,
               partnerItemsJson ? partnerItemsJson : "[]",
+              recentChatJson ? recentChatJson : "[]",
               tradePartnerHookHits, tradePartnerLastEax, tradePartnerLastEcx, tradePartnerLastEdx,
               tradeUiPlayerUpdatedCount, tradeUiSessionStartCount, tradeUiSessionUpdatedCount,
               tradeUiLastSessionStartState, tradeUiLastSessionStartPlayerNumber);
@@ -1116,6 +1274,82 @@ static uint32_t FindHelperInventoryItemByModel(uint32_t modelId) {
     return 0;
 }
 
+static uint32_t CountHelperInventoryFreeSlots() {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    uint32_t totalFreeSlots = 0;
+    for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
+        Bag* bag = ItemMgr::GetBag(bagIdx);
+        if (!bag) continue;
+        const uint32_t capacity = bag->items.size;
+        const uint32_t used = bag->items_count;
+        totalFreeSlots += (capacity > used) ? (capacity - used) : 0;
+    }
+    return totalFreeSlots;
+}
+
+static uint32_t CountHelperInventoryModelQuantity(uint32_t modelId) {
+    if (modelId == 0) return 0;
+
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    uint32_t totalQuantity = 0;
+    for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
+        Bag* bag = ItemMgr::GetBag(bagIdx);
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t slot = 0; slot < bag->items.size; ++slot) {
+            Item* item = bag->items.buffer[slot];
+            if (!item || item->item_id == 0 || item->model_id != modelId) continue;
+            totalQuantity += item->quantity > 0 ? item->quantity : 1u;
+        }
+    }
+    return totalQuantity;
+}
+
+static bool FindHelperStackableInventoryCandidate(uint32_t* outModelId, uint32_t* outQuantity) {
+    if (outModelId) *outModelId = 0;
+    if (outQuantity) *outQuantity = 0;
+
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return false;
+
+    for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
+        Bag* bag = ItemMgr::GetBag(bagIdx);
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t slot = 0; slot < bag->items.size; ++slot) {
+            Item* item = bag->items.buffer[slot];
+            if (!item || item->item_id == 0 || item->model_id == 0 || item->quantity < 2) continue;
+            if (outModelId) *outModelId = item->model_id;
+            if (outQuantity) *outQuantity = item->quantity;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool FindHelperSafeSingletonInventoryCandidate(uint32_t* outModelId) {
+    if (outModelId) *outModelId = 0;
+
+    static const uint32_t safeModels[] = {
+        2992u, // ID kit
+        2993u, // Salvage kit
+        2991u, // Expert salvage kit
+    };
+
+    for (uint32_t i = 0; i < _countof(safeModels); ++i) {
+        const uint32_t modelId = safeModels[i];
+        const uint32_t itemId = FindHelperInventoryItemByModel(modelId);
+        if (itemId == 0) continue;
+        auto* item = ItemMgr::GetItemById(itemId);
+        if (!item || item->quantity != 1) continue;
+        if (outModelId) *outModelId = modelId;
+        return true;
+    }
+    return false;
+}
+
 static bool ReadTradeHelperConfigFile(char* buf, size_t bufSize) {
     if (!buf || bufSize < 2) return false;
     buf[0] = '\0';
@@ -1165,11 +1399,59 @@ static bool ReadTradeHelperAutoSubmitConfig() {
     return _strnicmp(colon, "true", 4) == 0 || *colon == '1';
 }
 
+static bool ReadTradeHelperAutoAcceptConfig() {
+    char buf[512] = {};
+    if (!ReadTradeHelperConfigFile(buf, sizeof(buf))) return false;
+
+    const char* key = strstr(buf, "\"auto_accept\"");
+    if (!key) return ReadTradeHelperAutoSubmitConfig();
+    const char* colon = strchr(key, ':');
+    if (!colon) return ReadTradeHelperAutoSubmitConfig();
+    while (*colon == ':' || *colon == ' ' || *colon == '\t') ++colon;
+    return _strnicmp(colon, "true", 4) == 0 || *colon == '1';
+}
+
 static uint32_t ReadTradeHelperOfferItemModelConfig() {
     char buf[512] = {};
     if (!ReadTradeHelperConfigFile(buf, sizeof(buf))) return 0;
 
     const char* key = strstr(buf, "\"offer_item_model_id\"");
+    if (!key) return 0;
+    const char* colon = strchr(key, ':');
+    if (!colon) return 0;
+    unsigned long value = strtoul(colon + 1, nullptr, 10);
+    return static_cast<uint32_t>(value);
+}
+
+static uint32_t ReadTradeHelperOfferItemQuantityConfig() {
+    char buf[512] = {};
+    if (!ReadTradeHelperConfigFile(buf, sizeof(buf))) return 0;
+
+    const char* key = strstr(buf, "\"offer_item_quantity\"");
+    if (!key) return 0;
+    const char* colon = strchr(key, ':');
+    if (!colon) return 0;
+    unsigned long value = strtoul(colon + 1, nullptr, 10);
+    return static_cast<uint32_t>(value);
+}
+
+static uint32_t ReadTradeHelperOfferItemModelConfig2() {
+    char buf[512] = {};
+    if (!ReadTradeHelperConfigFile(buf, sizeof(buf))) return 0;
+
+    const char* key = strstr(buf, "\"offer_item_model_id_2\"");
+    if (!key) return 0;
+    const char* colon = strchr(key, ':');
+    if (!colon) return 0;
+    unsigned long value = strtoul(colon + 1, nullptr, 10);
+    return static_cast<uint32_t>(value);
+}
+
+static uint32_t ReadTradeHelperOfferItemQuantityConfig2() {
+    char buf[512] = {};
+    if (!ReadTradeHelperConfigFile(buf, sizeof(buf))) return 0;
+
+    const char* key = strstr(buf, "\"offer_item_quantity_2\"");
     if (!key) return 0;
     const char* colon = strchr(key, ':');
     if (!colon) return 0;
@@ -1202,6 +1484,103 @@ static bool ReadTradeHelperMoveTargetConfig(float& outX, float& outY) {
     outX = static_cast<float>(strtod(xColon + 1, nullptr));
     outY = static_cast<float>(strtod(yColon + 1, nullptr));
     return true;
+}
+
+static bool ReadTradeHelperJsonStringConfig(const char* configKey, char* out, size_t outSize) {
+    if (!configKey || !out || outSize < 2) return false;
+    out[0] = '\0';
+
+    char buf[1024] = {};
+    if (!ReadTradeHelperConfigFile(buf, sizeof(buf))) return false;
+
+    char keyPattern[96] = {};
+    sprintf_s(keyPattern, "\"%s\"", configKey);
+    const char* key = strstr(buf, keyPattern);
+    if (!key) return false;
+    const char* colon = strchr(key, ':');
+    if (!colon) return false;
+    const char* p = colon + 1;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
+    if (*p != '\"') return false;
+    ++p;
+
+    size_t written = 0;
+    while (*p && *p != '\"' && written + 1 < outSize) {
+        if (*p == '\\') {
+            ++p;
+            if (!*p) break;
+            switch (*p) {
+            case '\"': out[written++] = '\"'; break;
+            case '\\': out[written++] = '\\'; break;
+            case '/': out[written++] = '/'; break;
+            case 'b': out[written++] = '\b'; break;
+            case 'f': out[written++] = '\f'; break;
+            case 'n': out[written++] = '\n'; break;
+            case 'r': out[written++] = '\r'; break;
+            case 't': out[written++] = '\t'; break;
+            case 'u':
+                if (written + 1 < outSize) out[written++] = '?';
+                for (int i = 0; i < 4 && p[1]; ++i) ++p;
+                break;
+            default:
+                out[written++] = *p;
+                break;
+            }
+        } else {
+            out[written++] = *p;
+        }
+        ++p;
+    }
+    out[written] = '\0';
+    return written > 0;
+}
+
+static uint32_t ReadTradeHelperChatSendSequenceConfig() {
+    char buf[512] = {};
+    if (!ReadTradeHelperConfigFile(buf, sizeof(buf))) return 0;
+
+    const char* key = strstr(buf, "\"chat_send_seq\"");
+    if (!key) return 0;
+    const char* colon = strchr(key, ':');
+    if (!colon) return 0;
+    unsigned long value = strtoul(colon + 1, nullptr, 10);
+    return static_cast<uint32_t>(value);
+}
+
+static bool ReadTradeHelperChatSendChannelConfig(char* out, size_t outSize) {
+    return ReadTradeHelperJsonStringConfig("chat_send_channel", out, outSize);
+}
+
+static bool ReadTradeHelperChatSendMessageConfig(char* out, size_t outSize) {
+    return ReadTradeHelperJsonStringConfig("chat_send_message", out, outSize);
+}
+
+static uint32_t ReadTradeHelperWhisperSendSequenceConfig() {
+    char buf[512] = {};
+    if (!ReadTradeHelperConfigFile(buf, sizeof(buf))) return 0;
+
+    const char* key = strstr(buf, "\"whisper_send_seq\"");
+    if (!key) return 0;
+    const char* colon = strchr(key, ':');
+    if (!colon) return 0;
+    unsigned long value = strtoul(colon + 1, nullptr, 10);
+    return static_cast<uint32_t>(value);
+}
+
+static bool ReadTradeHelperWhisperSendRecipientConfig(char* out, size_t outSize) {
+    return ReadTradeHelperJsonStringConfig("whisper_send_recipient", out, outSize);
+}
+
+static bool ReadTradeHelperWhisperSendMessageConfig(char* out, size_t outSize) {
+    return ReadTradeHelperJsonStringConfig("whisper_send_message", out, outSize);
+}
+
+static wchar_t MapTradeHelperChatChannelPrefix(const char* channelName) {
+    if (!channelName || !channelName[0]) return L'!';
+    if (_stricmp(channelName, "team") == 0 || _stricmp(channelName, "party") == 0) return L'#';
+    if (_stricmp(channelName, "guild") == 0) return L'@';
+    if (_stricmp(channelName, "trade") == 0) return L'$';
+    return L'!';
 }
 
 uintptr_t GetAgentPtrRaw(uint32_t agentId) {
@@ -1383,6 +1762,313 @@ uint32_t FindNearestNpcLikeAgentToCoords(float targetX, float targetY, float max
 uint32_t CountInventoryModelQuantity(uint32_t modelId) {
     return CountBagModelQuantity(modelId, 1u, 4u);
 }
+
+namespace {
+
+static constexpr uint32_t kModelCheapSalvageKit = 2992u;
+static constexpr uint32_t kModelSalvageKit = 5900u;
+static constexpr uint32_t kModelCheapIdKit = 2989u;
+static constexpr uint32_t kModelSupIdKit = 5899u;
+static constexpr uint32_t kModelAltIdKit = 235u;
+static constexpr uint32_t kModelAltSalvageKit = 243u;
+static constexpr uint32_t kModelExpertSalvageKit = 2991u;
+static constexpr uint32_t kModelRareSalvageKit = 2993u;
+static constexpr uint16_t kRarityGold = 2624u;
+
+struct IdentifySalvageCandidate {
+    uint32_t bagIndex = 0;
+    uint32_t slotIndex = 0;
+    uint32_t itemId = 0;
+    uint32_t modelId = 0;
+    uint8_t type = 0;
+    uint16_t rarity = 0;
+    uint16_t quantity = 0;
+    uint16_t requirement = 0;
+    uint16_t formula = 0;
+    uint8_t salvageable = 0;
+    uint32_t interaction = 0;
+    Bag* bagPtr = nullptr;
+    Item* trackedPtr = nullptr;
+};
+
+static uint16_t GetHarnessItemRarity(Item* item) {
+    if (!item) return 0;
+    wchar_t* nameStr = item->complete_name_enc;
+    if (!nameStr) nameStr = item->name_enc;
+    return nameStr ? static_cast<uint16_t>(nameStr[0]) : 0u;
+}
+
+static bool IsHarnessItemIdentified(Item* item) {
+    return item && (item->interaction & 0x1) != 0;
+}
+
+static bool IsHarnessWeapon(Item* item) {
+    if (!item) return false;
+    switch (item->type) {
+    case 2:  // axe
+    case 5:  // bow
+    case 12: // offhand
+    case 15: // hammer
+    case 22: // wand
+    case 24: // shield
+    case 26: // staff
+    case 27: // sword
+    case 32: // dagger
+    case 35: // scythe
+    case 36: // spear
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool IsHarnessKit(uint32_t modelId) {
+    return modelId == kModelSalvageKit ||
+           modelId == kModelCheapSalvageKit ||
+           modelId == kModelExpertSalvageKit ||
+           modelId == kModelRareSalvageKit ||
+           modelId == kModelSupIdKit ||
+           modelId == kModelAltIdKit ||
+           modelId == kModelAltSalvageKit ||
+           modelId == kModelCheapIdKit;
+}
+
+static Item* FindHarnessIdKit() {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return nullptr;
+    for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
+        Bag* bag = inv->bags[bagIdx];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t slot = 0; slot < bag->items.size; ++slot) {
+            Item* item = bag->items.buffer[slot];
+            if (!item) continue;
+            if (item->model_id == kModelSupIdKit ||
+                item->model_id == kModelCheapIdKit ||
+                item->model_id == kModelAltIdKit) {
+                return item;
+            }
+        }
+    }
+    return nullptr;
+}
+
+static Item* FindHarnessSalvageKit() {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (inv) {
+        static constexpr uint32_t kPreferredSalvageModels[] = {
+            kModelCheapSalvageKit,
+            kModelRareSalvageKit,
+            kModelAltSalvageKit,
+            kModelExpertSalvageKit,
+            kModelSalvageKit
+        };
+        for (uint32_t preferredModel : kPreferredSalvageModels) {
+            for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
+                Bag* bag = inv->bags[bagIdx];
+                if (!bag || !bag->items.buffer) continue;
+                for (uint32_t slot = 0; slot < bag->items.size; ++slot) {
+                    Item* item = bag->items.buffer[slot];
+                    if (item && item->model_id == preferredModel) {
+                        return item;
+                    }
+                }
+            }
+        }
+    }
+    return nullptr;
+}
+
+static uint32_t CountIdentifyCandidates() {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    uint32_t count = 0;
+    for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
+        Bag* bag = inv->bags[bagIdx];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t slot = 0; slot < bag->items.size; ++slot) {
+            Item* item = bag->items.buffer[slot];
+            if (!item || item->model_id == 0) continue;
+            if (IsHarnessItemIdentified(item)) continue;
+            if (IsHarnessKit(item->model_id)) continue;
+            if (MaintenanceMgr::IsRareSkin(item->model_id)) continue;
+            ++count;
+        }
+    }
+    return count;
+}
+
+static bool FindGoldSalvageCandidate(IdentifySalvageCandidate& out) {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return false;
+
+    for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
+        Bag* bag = inv->bags[bagIdx];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t slot = 0; slot < bag->items.size; ++slot) {
+            Item* item = bag->items.buffer[slot];
+            if (!item || item->model_id == 0) continue;
+            if (!IsHarnessItemIdentified(item)) continue;
+            if (IsHarnessKit(item->model_id) || MaintenanceMgr::IsRareSkin(item->model_id)) continue;
+            if (!MaintenanceMgr::ShouldSellItem(item)) continue;
+            if (!IsHarnessWeapon(item)) continue;
+            if (GetHarnessItemRarity(item) != kRarityGold) continue;
+            if (item->is_material_salvageable == 0) continue;
+
+            out.bagIndex = bagIdx;
+            out.slotIndex = slot;
+            out.itemId = item->item_id;
+            out.modelId = item->model_id;
+            out.type = item->type;
+            out.rarity = GetHarnessItemRarity(item);
+            out.quantity = item->quantity;
+            out.requirement = item->h0026;
+            out.formula = item->item_formula;
+            out.salvageable = item->is_material_salvageable;
+            out.interaction = item->interaction;
+            out.bagPtr = bag;
+            out.trackedPtr = item;
+            return true;
+        }
+    }
+    return false;
+}
+
+static uint32_t CollectGoldSalvageCandidates(IdentifySalvageCandidate* out, uint32_t maxCount) {
+    if (!out || maxCount == 0) return 0;
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    uint32_t count = 0;
+    for (uint32_t bagIdx = 1; bagIdx <= 4 && count < maxCount; ++bagIdx) {
+        Bag* bag = inv->bags[bagIdx];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t slot = 0; slot < bag->items.size && count < maxCount; ++slot) {
+            Item* item = bag->items.buffer[slot];
+            if (!item || item->model_id == 0) continue;
+            if (!IsHarnessItemIdentified(item)) continue;
+            if (IsHarnessKit(item->model_id) || MaintenanceMgr::IsRareSkin(item->model_id)) continue;
+            if (!MaintenanceMgr::ShouldSellItem(item)) continue;
+            if (!IsHarnessWeapon(item)) continue;
+            if (GetHarnessItemRarity(item) != kRarityGold) continue;
+            if (item->is_material_salvageable == 0) continue;
+
+            auto& candidate = out[count++];
+            candidate.bagIndex = bagIdx;
+            candidate.slotIndex = slot;
+            candidate.itemId = item->item_id;
+            candidate.modelId = item->model_id;
+            candidate.type = item->type;
+            candidate.rarity = GetHarnessItemRarity(item);
+            candidate.quantity = item->quantity;
+            candidate.requirement = item->h0026;
+            candidate.formula = item->item_formula;
+            candidate.salvageable = item->is_material_salvageable;
+            candidate.interaction = item->interaction;
+            candidate.bagPtr = bag;
+            candidate.trackedPtr = item;
+        }
+    }
+    return count;
+}
+
+static Item* ResolveCandidateItemFromCachedBag(const IdentifySalvageCandidate& candidate) {
+    if (!candidate.bagPtr || !candidate.bagPtr->items.buffer) return nullptr;
+    __try {
+        if (candidate.slotIndex >= candidate.bagPtr->items.size) {
+            return nullptr;
+        }
+        return candidate.bagPtr->items.buffer[candidate.slotIndex];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+static void ReportIdentifySalvageSummary(const char* label) {
+    Item* idKit = FindHarnessIdKit();
+    Item* salvageKit = FindHarnessSalvageKit();
+    uint32_t cheapSalv = 0;
+    uint32_t basicSalv = 0;
+    uint32_t expertSalv = 0;
+    uint32_t rareSalv = 0;
+    uint32_t altSalv = 0;
+    if (Inventory* inv = ItemMgr::GetInventory()) {
+        for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
+            Bag* bag = inv->bags[bagIdx];
+            if (!bag || !bag->items.buffer) continue;
+            for (uint32_t slot = 0; slot < bag->items.size; ++slot) {
+                Item* item = bag->items.buffer[slot];
+                if (!item) continue;
+                switch (item->model_id) {
+                case kModelCheapSalvageKit: ++cheapSalv; break;
+                case kModelSalvageKit: ++basicSalv; break;
+                case kModelExpertSalvageKit: ++expertSalv; break;
+                case kModelRareSalvageKit: ++rareSalv; break;
+                case kModelAltSalvageKit: ++altSalv; break;
+                default: break;
+                }
+            }
+        }
+    }
+
+    IntReport("  %s: map=%u freeSlots=%u charGold=%u storageGold=%u idKit=%u(idModel=%u) salvageKit=%u(sModel=%u) identifyCandidates=%u cheapSalv=%u basicSalv=%u expertSalv=%u rareSalv=%u altSalv=%u",
+              label,
+              ReadMapId(),
+              MaintenanceMgr::CountFreeSlots(),
+              ItemMgr::GetGoldCharacter(),
+              ItemMgr::GetGoldStorage(),
+              idKit ? idKit->item_id : 0u,
+              idKit ? idKit->model_id : 0u,
+              salvageKit ? salvageKit->item_id : 0u,
+              salvageKit ? salvageKit->model_id : 0u,
+              CountIdentifyCandidates(),
+              cheapSalv,
+              basicSalv,
+              expertSalv,
+              rareSalv,
+              altSalv);
+}
+
+static void ReportGoldSalvageCandidates(const char* label, uint32_t maxCount = 8u) {
+    Inventory* inv = ItemMgr::GetInventory();
+    IntReport("  %s:", label);
+    if (!inv) {
+        IntReport("    inventory unavailable");
+        return;
+    }
+
+    uint32_t shown = 0;
+    for (uint32_t bagIdx = 1; bagIdx <= 4 && shown < maxCount; ++bagIdx) {
+        Bag* bag = inv->bags[bagIdx];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t slot = 0; slot < bag->items.size && shown < maxCount; ++slot) {
+            Item* item = bag->items.buffer[slot];
+            if (!item || item->model_id == 0) continue;
+            if (IsHarnessKit(item->model_id) || MaintenanceMgr::IsRareSkin(item->model_id)) continue;
+            if (!IsHarnessWeapon(item)) continue;
+            if (GetHarnessItemRarity(item) != kRarityGold) continue;
+            IntReport("    bag=%u slot=%u item=%u model=%u type=%u qty=%u rarity=%u id=%u salvageable=%u shouldSell=%u req=%u formula=%u",
+                      bagIdx,
+                      slot,
+                      item->item_id,
+                      item->model_id,
+                      item->type,
+                      item->quantity,
+                      GetHarnessItemRarity(item),
+                      IsHarnessItemIdentified(item) ? 1u : 0u,
+                      item->is_material_salvageable,
+                      MaintenanceMgr::ShouldSellItem(item) ? 1u : 0u,
+                      item->h0026,
+                      item->item_formula);
+            ++shown;
+        }
+    }
+    if (shown == 0) {
+        IntReport("    no gold weapon candidates in bags 1-4");
+    }
+}
+
+} // namespace
 
 uint32_t FindMerchantItemPositionByModelId(uint32_t modelId) {
     const uint32_t merchantCount = TradeMgr::GetMerchantItemCount();
@@ -3792,8 +4478,10 @@ int RunTradeHelperMode() {
     DWORD tradeOpenedAt = 0;
     DWORD lastSubmitAttemptAt = 0;
     DWORD lastAcceptAttemptAt = 0;
+    DWORD tradeFlagsLastChangedAt = 0;
     uint32_t tradeOpenCount = 0;
     uint32_t lastOpenFlags = 0;
+    uint32_t lastObservedTradeFlags = 0;
     uint32_t submitAttemptCount = 0;
     uint32_t acceptAttemptCount = 0;
     uint32_t lastMoveSeq = 0;
@@ -3803,38 +4491,107 @@ int RunTradeHelperMode() {
     bool activeMovePending = false;
     bool submittedThisOpen = false;
     bool acceptedThisOpen = false;
-    bool offeredItemThisOpen = false;
+    bool offeredPrimaryItemThisOpen = false;
+    bool offeredSecondaryItemThisOpen = false;
+    bool staleCancelQueuedThisOpen = false;
     uint32_t submitGoldThisOpen = 0;
     uint32_t offerModelThisOpen = 0;
+    uint32_t offerQuantityThisOpen = 0;
+    uint32_t offerModelThisOpen2 = 0;
+    uint32_t offerQuantityThisOpen2 = 0;
+    DWORD lastOfferQueuedAt = 0;
+    uint32_t lastChatSendSeq = 0;
+    uint32_t lastWhisperSendSeq = 0;
+    uint32_t chatSendAttemptCount = 0;
+    uint32_t whisperSendAttemptCount = 0;
 
     while (GetTickCount() - start < 10 * 60 * 1000) {
         const DWORD now = GetTickCount();
         const uint32_t tradeFlags = ReadTradeFlagsForHelper();
         const bool tradeOpen = tradeFlags != 0;
+        const auto allConfiguredOffersHandled = [&]() -> bool {
+            return (offerModelThisOpen == 0 || offeredPrimaryItemThisOpen)
+                && (offerModelThisOpen2 == 0 || offeredSecondaryItemThisOpen);
+        };
+        const auto queueConfiguredOffer = [&](uint32_t slotIndex, uint32_t modelId, uint32_t requestedQuantity, bool* offeredFlag) {
+            if (!offeredFlag) return;
+            const uint32_t itemId = FindHelperInventoryItemByModel(modelId);
+            if (itemId > 0) {
+                uint32_t availableQuantity = 1;
+                if (auto* item = ItemMgr::GetItemById(itemId)) {
+                    availableQuantity = item->quantity;
+                }
+                uint32_t quantity = availableQuantity;
+                if (requestedQuantity > 0 && requestedQuantity < quantity) {
+                    quantity = requestedQuantity;
+                }
+                if (quantity == 0) {
+                    quantity = 1;
+                }
+                IntReport("  Helper auto-offering slot=%u item=%u model=%u qty=%u requested=%u available=%u mode=packet_offer (flags=%u)",
+                          slotIndex + 1u, itemId, modelId, quantity, requestedQuantity,
+                          availableQuantity, tradeFlags);
+                GameThread::Enqueue([itemId, quantity]() {
+                    TradeMgr::OfferItemPacket(itemId, quantity);
+                });
+            } else {
+                IntReport("  Helper offer_item_model_id[%u]=%u not found in inventory for requested qty=%u",
+                          slotIndex + 1u, modelId, requestedQuantity);
+            }
+            *offeredFlag = true;
+            lastOfferQueuedAt = now;
+        };
+
+        if (tradeFlags != lastObservedTradeFlags) {
+            tradeFlagsLastChangedAt = now;
+            lastObservedTradeFlags = tradeFlags;
+            IntReport("  Helper observed trade flags change -> %u (open=%u age=%u ms accepted=%u submitted=%u)",
+                      tradeFlags,
+                      tradeOpen ? 1u : 0u,
+                      tradeOpenedAt != 0 ? (now - tradeOpenedAt) : 0u,
+                      acceptedThisOpen ? 1u : 0u,
+                      submittedThisOpen ? 1u : 0u);
+        }
 
         if (tradeOpen && tradeOpenedAt == 0) {
             tradeOpenedAt = now;
             lastSubmitAttemptAt = 0;
             lastAcceptAttemptAt = 0;
+            tradeFlagsLastChangedAt = now;
             ++tradeOpenCount;
             lastOpenFlags = tradeFlags;
             submittedThisOpen = false;
             acceptedThisOpen = false;
-            offeredItemThisOpen = false;
+            offeredPrimaryItemThisOpen = false;
+            offeredSecondaryItemThisOpen = false;
+            staleCancelQueuedThisOpen = false;
             submitGoldThisOpen = ReadTradeHelperSubmitGoldConfig();
             offerModelThisOpen = ReadTradeHelperOfferItemModelConfig();
-            IntReport("  Helper observed player trade open (flags=%u offerModel=%u)", tradeFlags, offerModelThisOpen);
+            offerQuantityThisOpen = ReadTradeHelperOfferItemQuantityConfig();
+            offerModelThisOpen2 = ReadTradeHelperOfferItemModelConfig2();
+            offerQuantityThisOpen2 = ReadTradeHelperOfferItemQuantityConfig2();
+            lastOfferQueuedAt = 0;
+            IntReport("  Helper observed player trade open (flags=%u offerModel=%u offerQuantity=%u offerModel2=%u offerQuantity2=%u)",
+                      tradeFlags, offerModelThisOpen, offerQuantityThisOpen, offerModelThisOpen2, offerQuantityThisOpen2);
         }
 
         if (!tradeOpen) {
             tradeOpenedAt = 0;
             lastSubmitAttemptAt = 0;
             lastAcceptAttemptAt = 0;
+            tradeFlagsLastChangedAt = now;
+            lastObservedTradeFlags = 0;
             submittedThisOpen = false;
             acceptedThisOpen = false;
-            offeredItemThisOpen = false;
+            offeredPrimaryItemThisOpen = false;
+            offeredSecondaryItemThisOpen = false;
+            staleCancelQueuedThisOpen = false;
             submitGoldThisOpen = 0;
             offerModelThisOpen = 0;
+            offerQuantityThisOpen = 0;
+            offerModelThisOpen2 = 0;
+            offerQuantityThisOpen2 = 0;
+            lastOfferQueuedAt = 0;
         }
 
         const uint32_t moveSeq = ReadTradeHelperMoveSequenceConfig();
@@ -3853,23 +4610,70 @@ int RunTradeHelperMode() {
         }
 
         const bool autoSubmitEnabled = ReadTradeHelperAutoSubmitConfig();
-
-        // Auto-offer item if configured, before submitting.
-        if (tradeOpen && autoSubmitEnabled && !offeredItemThisOpen && offerModelThisOpen > 0
-            && tradeOpenedAt != 0 && now - tradeOpenedAt > 500) {
-            const uint32_t itemId = FindHelperInventoryItemByModel(offerModelThisOpen);
-            if (itemId > 0) {
-                IntReport("  Helper auto-offering item=%u model=%u (flags=%u)", itemId, offerModelThisOpen, tradeFlags);
-                GameThread::Enqueue([itemId]() { TradeMgr::OfferItemPromptMax(itemId); });
-                offeredItemThisOpen = true;
+        const bool autoAcceptEnabled = ReadTradeHelperAutoAcceptConfig();
+        const uint32_t chatSendSeq = ReadTradeHelperChatSendSequenceConfig();
+        if (chatSendSeq != 0 && chatSendSeq != lastChatSendSeq) {
+            char channelName[32] = {};
+            char messageUtf8[256] = {};
+            const bool haveChannel = ReadTradeHelperChatSendChannelConfig(channelName, sizeof(channelName));
+            const bool haveMessage = ReadTradeHelperChatSendMessageConfig(messageUtf8, sizeof(messageUtf8));
+            lastChatSendSeq = chatSendSeq;
+            if (haveChannel && haveMessage) {
+                wchar_t messageWide[256] = {};
+                MultiByteToWideChar(CP_UTF8, 0, messageUtf8, -1, messageWide, _countof(messageWide) - 1);
+                const wchar_t channelPrefix = MapTradeHelperChatChannelPrefix(channelName);
+                const std::wstring messageWideCopy(messageWide);
+                IntReport("  Helper sending chat seq=%u channel=%s message=%s",
+                          chatSendSeq, channelName, messageUtf8);
+                GameThread::Enqueue([messageWideCopy, channelPrefix]() {
+                    ChatMgr::SendChat(messageWideCopy.c_str(), channelPrefix);
+                });
+                ++chatSendAttemptCount;
             } else {
-                IntReport("  Helper offer_item_model_id=%u not found in inventory", offerModelThisOpen);
-                offeredItemThisOpen = true;
+                IntReport("  Helper chat send seq=%u ignored because channel/message config was incomplete",
+                          chatSendSeq);
+            }
+        }
+
+        const uint32_t whisperSendSeq = ReadTradeHelperWhisperSendSequenceConfig();
+        if (whisperSendSeq != 0 && whisperSendSeq != lastWhisperSendSeq) {
+            char recipientUtf8[128] = {};
+            char messageUtf8[256] = {};
+            const bool haveRecipient = ReadTradeHelperWhisperSendRecipientConfig(recipientUtf8, sizeof(recipientUtf8));
+            const bool haveMessage = ReadTradeHelperWhisperSendMessageConfig(messageUtf8, sizeof(messageUtf8));
+            lastWhisperSendSeq = whisperSendSeq;
+            if (haveRecipient && haveMessage) {
+                wchar_t recipientWide[128] = {};
+                wchar_t messageWide[256] = {};
+                MultiByteToWideChar(CP_UTF8, 0, recipientUtf8, -1, recipientWide, _countof(recipientWide) - 1);
+                MultiByteToWideChar(CP_UTF8, 0, messageUtf8, -1, messageWide, _countof(messageWide) - 1);
+                const std::wstring recipientWideCopy(recipientWide);
+                const std::wstring messageWideCopy(messageWide);
+                IntReport("  Helper sending whisper seq=%u recipient=%s message=%s",
+                          whisperSendSeq, recipientUtf8, messageUtf8);
+                GameThread::Enqueue([recipientWideCopy, messageWideCopy]() {
+                    ChatMgr::SendWhisper(recipientWideCopy.c_str(), messageWideCopy.c_str());
+                });
+                ++whisperSendAttemptCount;
+            } else {
+                IntReport("  Helper whisper send seq=%u ignored because recipient/message config was incomplete",
+                          whisperSendSeq);
+            }
+        }
+
+        // Auto-offer configured items one at a time before submitting.
+        if (tradeOpen && autoSubmitEnabled && tradeOpenedAt != 0 && now - tradeOpenedAt > 500
+            && (lastOfferQueuedAt == 0 || now - lastOfferQueuedAt >= 500)) {
+            if (offerModelThisOpen > 0 && !offeredPrimaryItemThisOpen) {
+                queueConfiguredOffer(0u, offerModelThisOpen, offerQuantityThisOpen, &offeredPrimaryItemThisOpen);
+            } else if (offerModelThisOpen2 > 0 && !offeredSecondaryItemThisOpen) {
+                queueConfiguredOffer(1u, offerModelThisOpen2, offerQuantityThisOpen2, &offeredSecondaryItemThisOpen);
             }
         }
 
         if (tradeOpen && autoSubmitEnabled && !submittedThisOpen && tradeOpenedAt != 0 && now - tradeOpenedAt > 750
-            && (offerModelThisOpen == 0 || offeredItemThisOpen)) {
+            && allConfiguredOffersHandled()
+            && (lastOfferQueuedAt == 0 || now - lastOfferQueuedAt >= 500)) {
             const uint32_t gold = submitGoldThisOpen;
             IntReport("  Helper auto-submitting offer gold=%u (flags=%u)", gold, tradeFlags);
             GameThread::Enqueue([gold]() { TradeMgr::SubmitOffer(gold); });
@@ -3878,20 +4682,32 @@ int RunTradeHelperMode() {
             lastSubmitAttemptAt = now;
         }
 
-        if (tradeOpen && autoSubmitEnabled && submittedThisOpen && tradeOpenedAt != 0 && now - tradeOpenedAt > 1500) {
-            if (!acceptedThisOpen || now - lastAcceptAttemptAt > 1500) {
-                IntReport("  Helper auto-accepting incoming trade (flags=%u)", tradeFlags);
-                GameThread::Enqueue([]() { TradeMgr::AcceptTrade(); });
-                ++acceptAttemptCount;
-                acceptedThisOpen = true;
-                lastAcceptAttemptAt = now;
-            }
+        const bool acceptReady = (tradeFlags & 0x2u) != 0u;
+        if (tradeOpen && autoAcceptEnabled && submittedThisOpen && !acceptedThisOpen
+            && tradeOpenedAt != 0 && now - tradeOpenedAt > 1500 && acceptReady) {
+            IntReport("  Helper auto-accepting incoming trade via TradeMgr::AcceptTrade after view+submit (flags=%u)", tradeFlags);
+            GameThread::Enqueue([]() { TradeMgr::AcceptTrade(); });
+            ++acceptAttemptCount;
+            acceptedThisOpen = true;
+            lastAcceptAttemptAt = now;
         }
 
-        if (tradeOpen && tradeOpenedAt != 0 && now - tradeOpenedAt > 20000) {
-            IntReport("  Helper auto-canceling stale trade after 20s (flags=%u)", tradeFlags);
-            GameThread::Enqueue([]() { TradeMgr::CancelTrade(); });
-            tradeOpenedAt = 0;
+        if (tradeOpen && acceptedThisOpen && !staleCancelQueuedThisOpen
+            && lastAcceptAttemptAt != 0 && now - lastAcceptAttemptAt > 4000) {
+            IntReport("  Helper forcing sender-thread trade cancel after accept stall %u ms (flags=%u unchanged=%u ms)",
+                      now - lastAcceptAttemptAt,
+                      tradeFlags,
+                      tradeFlagsLastChangedAt != 0 ? (now - tradeFlagsLastChangedAt) : 0u);
+            CtoS::TradeCancelThreaded();
+            staleCancelQueuedThisOpen = true;
+        }
+
+        if (tradeOpen && !staleCancelQueuedThisOpen && tradeOpenedAt != 0 && now - tradeOpenedAt > 20000) {
+            IntReport("  Helper forcing sender-thread cancel for stale trade after 20s (flags=%u unchanged=%u ms)",
+                      tradeFlags,
+                      tradeFlagsLastChangedAt != 0 ? (now - tradeFlagsLastChangedAt) : 0u);
+            CtoS::TradeCancelThreaded();
+            staleCancelQueuedThisOpen = true;
         }
 
         float x = 0.0f, y = 0.0f;
@@ -3947,12 +4763,41 @@ int RunTradeHelperMode() {
             *p++ = ']';
             *p = '\0';
         }
+        const auto ctosTap = CtoS::GetPacketTapSnapshot();
+        const auto findPacketCount = [&ctosTap](uint32_t header) -> uint32_t {
+            for (uint32_t i = 0; i < _countof(ctosTap.headers); ++i) {
+                if (ctosTap.headers[i] == header) {
+                    return ctosTap.counts[i];
+                }
+            }
+            return 0u;
+        };
+        const uint32_t inventoryFreeSlotsTotal = CountHelperInventoryFreeSlots();
+        uint32_t helperStackableOfferModelId = 0;
+        uint32_t helperStackableOfferQuantity = 0;
+        FindHelperStackableInventoryCandidate(&helperStackableOfferModelId, &helperStackableOfferQuantity);
+        const uint32_t helperStackableOfferTotalQuantity = CountHelperInventoryModelQuantity(helperStackableOfferModelId);
+        uint32_t helperSafeSingletonOfferModelId = 0;
+        FindHelperSafeSingletonInventoryCandidate(&helperSafeSingletonOfferModelId);
+        const uint32_t helperSafeSingletonOfferTotalQuantity = CountHelperInventoryModelQuantity(helperSafeSingletonOfferModelId);
+        const std::string recentChatJson = BuildRecentHelperChatJson();
         WriteTradeHelperStatus(mapId, region, district, ReadMyId(), x, y, tradeFlags, tradeOpenCount, lastOpenFlags,
-                             submitAttemptCount, acceptAttemptCount, playerGold, partnerGold, playerItemCount, partnerItemCount,
+                             submitAttemptCount, acceptAttemptCount,
+                             chatSendAttemptCount, whisperSendAttemptCount,
+                             lastChatSendSeq, lastWhisperSendSeq,
+                             inventoryFreeSlotsTotal,
+                             helperStackableOfferModelId, helperStackableOfferQuantity, helperStackableOfferTotalQuantity,
+                             helperSafeSingletonOfferModelId, helperSafeSingletonOfferTotalQuantity,
+                             playerGold, partnerGold, playerItemCount, partnerItemCount,
+                             ctosTap.total_packets,
+                             findPacketCount(Packets::TRADE_SUBMIT_OFFER),
+                             findPacketCount(Packets::TRADE_ACCEPT),
+                             findPacketCount(Packets::TRADE_CANCEL),
+                             findPacketCount(Packets::TRADE_ADD_ITEM),
                              tradePartnerHookHits, tradePartnerLastEax, tradePartnerLastEcx, tradePartnerLastEdx,
                              tradeUiPlayerUpdatedCount, tradeUiSessionStartCount, tradeUiSessionUpdatedCount,
                              tradeUiLastSessionStartState, tradeUiLastSessionStartPlayerNumber,
-                             partnerItemsJson);
+                             partnerItemsJson, recentChatJson.c_str());
 
         if (now - lastLog >= 3000) {
             IntReport("  Helper heartbeat: map=%u region=%u district=%u myId=%u pos=(%.1f, %.1f) tradeFlags=%u",
@@ -3971,6 +4816,388 @@ int RunTradeHelperMode() {
     TradePartnerHook::Shutdown();
     IntReport("  Helper timeout reached; exiting helper mode");
     return 0;
+}
+
+bool TestIdentifySalvageIsolation() {
+    IntReport("=== GWA3 Identify/Salvage Isolation Harness ===");
+
+    if (ReadMapId() == 0 || ReadMyId() == 0) {
+        IntSkip("Identify/salvage isolation", "Not in game");
+        IntReport("");
+        return false;
+    }
+
+    const IdentifySalvageIsolationStage stage = GetIdentifySalvageIsolationStage();
+    IntReport("  Identify/salvage stage: %s", DescribeIdentifySalvageIsolationStage(stage));
+    const bool useLegacyAutoItSalvageContext = false;
+    const bool forceAutoItSalvageEntry = false;
+    CtoS::SetIdentifySalvageRuntimeOverrides(useLegacyAutoItSalvageContext, forceAutoItSalvageEntry);
+    IntReport("  Identify/salvage runtime override: defer=%u autoItEntry=%u",
+              useLegacyAutoItSalvageContext ? 1u : 0u,
+              forceAutoItSalvageEntry ? 1u : 0u);
+
+    if (ReadMapId() != kMapGadds) {
+        IntReport("  Traveling to Gadd's Encampment (%u) for safe outpost salvage repro...", kMapGadds);
+        MapMgr::Travel(kMapGadds);
+        const bool atTargetMap = WaitFor("MapID changes to Gadd's", 60000, []() {
+            return ReadMapId() == kMapGadds;
+        });
+        IntCheck("Reached Gadd's Encampment", atTargetMap);
+        if (!atTargetMap) {
+            IntReport("");
+            return false;
+        }
+
+        const bool myIdReady = WaitFor("MyID valid after travel to Gadd's", 30000, []() {
+            return ReadMyId() > 0;
+        });
+        IntCheck("MyID valid after Gadd's travel", myIdReady);
+        if (!myIdReady) {
+            IntReport("");
+            return false;
+        }
+    }
+
+    if (!WaitForPlayerWorldReady(10000)) {
+        IntSkip("Identify/salvage isolation", "Player world state not ready");
+        IntReport("");
+        return false;
+    }
+
+    ReportIdentifySalvageSummary("Pre-run summary");
+    ReportGoldSalvageCandidates("Pre-run gold salvage candidates");
+
+    const uint32_t identifyCandidatesBefore = CountIdentifyCandidates();
+    if (stage == IdentifySalvageIsolationStage::IdentifyOnly) {
+        const Item* idKit = FindHarnessIdKit();
+        IntCheck("ID kit present", idKit != nullptr || identifyCandidatesBefore == 0);
+        const uint32_t identified = MaintenanceMgr::IdentifyAllItems();
+        IntReport("  Identify-only result: identified=%u candidatesBefore=%u candidatesAfter=%u",
+                  identified, identifyCandidatesBefore, CountIdentifyCandidates());
+        ReportIdentifySalvageSummary("Post-identify summary");
+        ReportGoldSalvageCandidates("Post-identify gold salvage candidates");
+        IntCheck("Identify-only run completed", true);
+        IntReport("");
+        return true;
+    }
+
+    if (stage == IdentifySalvageIsolationStage::Full) {
+        const uint32_t salvaged = MaintenanceMgr::IdentifyAndSalvageGoldItems();
+        IntReport("  Full identify/salvage result: salvaged=%u", salvaged);
+        ReportIdentifySalvageSummary("Post-full summary");
+        ReportGoldSalvageCandidates("Post-full gold salvage candidates");
+        IntCheck("Full identify/salvage run completed", true);
+        IntReport("");
+        return true;
+    }
+
+    const uint32_t identified = MaintenanceMgr::IdentifyAllItems();
+    IntReport("  Prep identify pass before manual salvage stage: identified=%u", identified);
+    ReportIdentifySalvageSummary("Post-prep-identify summary");
+    ReportGoldSalvageCandidates("Post-prep-identify gold salvage candidates");
+
+    const Item* salvageKit = FindHarnessSalvageKit();
+    IntCheck("Salvage kit present", salvageKit != nullptr);
+    if (!salvageKit) {
+        IntReport("");
+        return false;
+    }
+    const uint32_t salvageKitId = salvageKit->item_id;
+    const uint32_t salvageKitModel = salvageKit->model_id;
+
+    IdentifySalvageCandidate candidate{};
+    const bool foundCandidate = FindGoldSalvageCandidate(candidate);
+    IntCheck("Found salvageable gold candidate", foundCandidate);
+    if (!foundCandidate) {
+        IntSkip("Identify/salvage isolation", "No eligible gold salvage item found in bags 1-4");
+        IntReport("");
+        return false;
+    }
+
+    IntReport("  Selected salvage candidate: bag=%u slot=%u item=%u model=%u type=%u qty=%u rarity=%u id=%u salvageable=%u req=%u formula=%u kit=%u kitModel=%u",
+              candidate.bagIndex,
+              candidate.slotIndex,
+              candidate.itemId,
+              candidate.modelId,
+              candidate.type,
+              candidate.quantity,
+              candidate.rarity,
+              (candidate.interaction & 0x1u) ? 1u : 0u,
+              candidate.salvageable,
+              candidate.requirement,
+              candidate.formula,
+              salvageKitId,
+              salvageKitModel);
+
+    if (stage == IdentifySalvageIsolationStage::LegacyBotshubTrackedChain) {
+        auto readSalvageSessionId = []() -> uint32_t {
+            if (!Offsets::BasePointer) return 0u;
+            __try {
+                uintptr_t ctx = *reinterpret_cast<uintptr_t*>(Offsets::BasePointer);
+                if (!ctx) return 0u;
+                uintptr_t p1 = *reinterpret_cast<uintptr_t*>(ctx + 0x18);
+                if (!p1) return 0u;
+                uintptr_t p2 = *reinterpret_cast<uintptr_t*>(p1 + 0x2C);
+                if (!p2) return 0u;
+                return *reinterpret_cast<uint32_t*>(p2 + 0x690);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                return 0u;
+            }
+        };
+        auto readTrackedIdSafe = [](Item* item) -> uint32_t {
+            if (!item) return 0u;
+            __try {
+                return item->item_id;
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                return 0u;
+            }
+        };
+        const uint32_t initialSessionId = readSalvageSessionId();
+        IntReport("  Tracked-chain initial salvage session=%u", initialSessionId);
+        IntCheck("Tracked-chain initial salvage session valid", initialSessionId != 0u);
+        if (!initialSessionId) {
+            IntReport("");
+            return false;
+        }
+
+        IdentifySalvageCandidate chain[2] = {};
+        const uint32_t chainCount = CollectGoldSalvageCandidates(chain, 2u);
+        IntCheck("Found two salvageable gold candidates", chainCount >= 2u);
+        if (chainCount < 2u) {
+            IntSkip("Identify/salvage isolation", "Need two eligible gold salvage items for tracked chain stage");
+            IntReport("");
+            return false;
+        }
+
+        for (uint32_t i = 0; i < chainCount; ++i) {
+            IntReport("  Tracked-chain candidate [%u/%u]: bag=%u slot=%u item=%u model=%u type=%u tracked=0x%08X",
+                      i + 1u,
+                      chainCount,
+                      chain[i].bagIndex,
+                      chain[i].slotIndex,
+                      chain[i].itemId,
+                      chain[i].modelId,
+                      chain[i].type,
+                      static_cast<unsigned>(reinterpret_cast<uintptr_t>(chain[i].trackedPtr)));
+        }
+
+        IntReport("  Tracked-chain salvage [1/2]: SalvageItemLegacyBotshubTracked(kit=%u, item=%u, tracked=0x%08X)",
+                  salvageKitId,
+                  chain[0].itemId,
+                  static_cast<unsigned>(reinterpret_cast<uintptr_t>(chain[0].trackedPtr)));
+        const bool firstConsumed = MaintenanceMgr::SalvageItemLegacyBotshubTracked(
+            salvageKitId, chain[0].itemId, chain[0].trackedPtr, false, 0u);
+
+        uint32_t sessionAfterFirst = readSalvageSessionId();
+        DWORD sessionRestoreMs = 0u;
+        if (!sessionAfterFirst) {
+            const DWORD restoreStart = GetTickCount();
+            while ((GetTickCount() - restoreStart) < 5000u) {
+                Sleep(25);
+                sessionAfterFirst = readSalvageSessionId();
+                if (sessionAfterFirst != 0u) {
+                    sessionRestoreMs = GetTickCount() - restoreStart;
+                    break;
+                }
+            }
+        }
+        IntReport("  Tracked-chain session after [1/2]=%u restoredAfterMs=%u",
+                  sessionAfterFirst,
+                  sessionRestoreMs);
+
+        Item* secondTracked = ResolveCandidateItemFromCachedBag(chain[1]);
+        uint32_t secondItemId = chain[1].itemId;
+        const uint32_t secondTrackedId = readTrackedIdSafe(secondTracked);
+        if (secondTrackedId != 0u) {
+            secondItemId = secondTrackedId;
+        }
+        const uint32_t secondSessionId = sessionAfterFirst ? sessionAfterFirst : initialSessionId;
+        const bool allowZeroSessionSecond = (secondSessionId == 0u);
+        if (allowZeroSessionSecond) {
+            IntReport("  Tracked-chain salvage [2/2] will proceed with zero session id");
+        } else if (sessionAfterFirst == 0u) {
+            IntReport("  Tracked-chain salvage [2/2] reusing initial session id=%u after live session collapsed", secondSessionId);
+        }
+        IntReport("  Tracked-chain salvage [2/2]: SalvageItemLegacyBotshubTracked(kit=%u, item=%u, tracked=0x%08X fromBag=0x%08X)",
+                  salvageKitId,
+                  secondItemId,
+                  static_cast<unsigned>(reinterpret_cast<uintptr_t>(chain[1].trackedPtr)),
+                  static_cast<unsigned>(reinterpret_cast<uintptr_t>(secondTracked)));
+        const bool secondConsumed = MaintenanceMgr::SalvageItemLegacyBotshubTracked(
+            salvageKitId,
+            secondItemId,
+            secondTracked ? secondTracked : chain[1].trackedPtr,
+            false,
+            sessionAfterFirst ? 0u : secondSessionId,
+            allowZeroSessionSecond);
+
+        IntReport("  Tracked-chain result: consumed1=%u tracked1Now=%u consumed2=%u tracked2Now=%u",
+                  firstConsumed ? 1u : 0u,
+                  readTrackedIdSafe(chain[0].trackedPtr),
+                  secondConsumed ? 1u : 0u,
+                  readTrackedIdSafe(chain[1].trackedPtr));
+        ReportIdentifySalvageSummary("Post-legacy-botshub-tracked-chain summary");
+        ReportGoldSalvageCandidates("Post-legacy-botshub-tracked-chain gold salvage candidates");
+        IntCheck("Tracked-chain salvage consumed item 1", firstConsumed);
+        IntCheck("Tracked-chain salvage consumed item 2", secondConsumed);
+        IntReport("");
+        return firstConsumed && secondConsumed;
+    }
+
+    if (stage == IdentifySalvageIsolationStage::NativeSalvage) {
+        IntReport("  Native salvage: SalvageItemNative(kit=%u, item=%u)", salvageKitId, candidate.itemId);
+        const bool queued = MaintenanceMgr::SalvageItemNative(salvageKitId, candidate.itemId);
+        Sleep(1500);
+        Item* itemAfter = ItemMgr::GetItemById(candidate.itemId);
+        IntReport("  Native-salvage result: queued=%u itemStillPresent=%u freeSlots=%u charGold=%u storageGold=%u",
+                  queued ? 1u : 0u,
+                  itemAfter ? 1u : 0u,
+                  MaintenanceMgr::CountFreeSlots(),
+                  ItemMgr::GetGoldCharacter(),
+                  ItemMgr::GetGoldStorage());
+        ReportIdentifySalvageSummary("Post-native-salvage summary");
+        ReportGoldSalvageCandidates("Post-native-salvage gold salvage candidates");
+        IntCheck("Native-salvage command queued", queued);
+        IntReport("");
+        return queued;
+    }
+
+    if (stage == IdentifySalvageIsolationStage::NativeSalvageEnter) {
+        IntReport("  Native salvage + Enter confirm: SalvageItemNative(kit=%u, item=%u, confirmByEnter=1)",
+                  salvageKitId, candidate.itemId);
+        const bool queued = MaintenanceMgr::SalvageItemNative(salvageKitId, candidate.itemId, true);
+        Sleep(1500);
+        Item* itemAfter = ItemMgr::GetItemById(candidate.itemId);
+        IntReport("  Native-salvage-enter result: queued=%u itemStillPresent=%u freeSlots=%u charGold=%u storageGold=%u",
+                  queued ? 1u : 0u,
+                  itemAfter ? 1u : 0u,
+                  MaintenanceMgr::CountFreeSlots(),
+                  ItemMgr::GetGoldCharacter(),
+                  ItemMgr::GetGoldStorage());
+        ReportIdentifySalvageSummary("Post-native-salvage-enter summary");
+        ReportGoldSalvageCandidates("Post-native-salvage-enter gold salvage candidates");
+        IntCheck("Native-salvage-enter command queued", queued);
+        IntReport("");
+        return queued;
+    }
+
+    if (stage == IdentifySalvageIsolationStage::LegacyBotshubStartOnly) {
+        IntReport("  Legacy botshub start-only: SalvageItemLegacyBotshub(kit=%u, item=%u, sendMaterials=0)",
+                  salvageKitId, candidate.itemId);
+        const bool queued = MaintenanceMgr::SalvageItemLegacyBotshub(salvageKitId, candidate.itemId, 0u, false, false);
+        Sleep(1500);
+        Item* itemAfter = ItemMgr::GetItemById(candidate.itemId);
+        IntReport("  Legacy-botshub-start-only result: queued=%u itemStillPresent=%u freeSlots=%u charGold=%u storageGold=%u",
+                  queued ? 1u : 0u,
+                  itemAfter ? 1u : 0u,
+                  MaintenanceMgr::CountFreeSlots(),
+                  ItemMgr::GetGoldCharacter(),
+                  ItemMgr::GetGoldStorage());
+        ReportIdentifySalvageSummary("Post-legacy-botshub-start-only summary");
+        ReportGoldSalvageCandidates("Post-legacy-botshub-start-only gold salvage candidates");
+        IntCheck("Legacy-botshub-start-only command queued", queued);
+        IntReport("");
+        return queued;
+    }
+
+    if (stage == IdentifySalvageIsolationStage::LegacyBotshubSalvage) {
+        IntReport("  Legacy botshub salvage: SalvageItemLegacyBotshub(kit=%u, item=%u)",
+                  salvageKitId, candidate.itemId);
+        const bool queued = MaintenanceMgr::SalvageItemLegacyBotshub(salvageKitId, candidate.itemId);
+        Sleep(1500);
+        Item* itemAfter = ItemMgr::GetItemById(candidate.itemId);
+        IntReport("  Legacy-botshub-salvage result: queued=%u itemStillPresent=%u freeSlots=%u charGold=%u storageGold=%u",
+                  queued ? 1u : 0u,
+                  itemAfter ? 1u : 0u,
+                  MaintenanceMgr::CountFreeSlots(),
+                  ItemMgr::GetGoldCharacter(),
+                  ItemMgr::GetGoldStorage());
+        ReportIdentifySalvageSummary("Post-legacy-botshub-salvage summary");
+        ReportGoldSalvageCandidates("Post-legacy-botshub-salvage gold salvage candidates");
+        IntCheck("Legacy-botshub-salvage command queued", queued);
+        IntReport("");
+        return queued;
+    }
+
+    if (stage == IdentifySalvageIsolationStage::LegacyBotshubSalvageEnter) {
+        IntReport("  Legacy botshub salvage + Enter: SalvageItemLegacyBotshub(kit=%u, item=%u, postConsumeEnter=1)",
+                  salvageKitId, candidate.itemId);
+        const bool queued = MaintenanceMgr::SalvageItemLegacyBotshub(salvageKitId, candidate.itemId, 0u, false, true, true);
+        Sleep(1500);
+        Item* itemAfter = ItemMgr::GetItemById(candidate.itemId);
+        IntReport("  Legacy-botshub-salvage-enter result: queued=%u itemStillPresent=%u freeSlots=%u charGold=%u storageGold=%u",
+                  queued ? 1u : 0u,
+                  itemAfter ? 1u : 0u,
+                  MaintenanceMgr::CountFreeSlots(),
+                  ItemMgr::GetGoldCharacter(),
+                  ItemMgr::GetGoldStorage());
+        ReportIdentifySalvageSummary("Post-legacy-botshub-salvage-enter summary");
+        ReportGoldSalvageCandidates("Post-legacy-botshub-salvage-enter gold salvage candidates");
+        IntCheck("Legacy-botshub-salvage-enter command queued", queued);
+        IntReport("");
+        return queued;
+    }
+
+    if (stage == IdentifySalvageIsolationStage::LegacyBotshubSalvageDone ||
+        stage == IdentifySalvageIsolationStage::LegacyBotshubSalvageCancel) {
+        constexpr uint32_t kLegacyFroggySessionCancel = 0x77u;
+        constexpr uint32_t kLegacyFroggySessionDone = 0x78u;
+        const uint32_t followupHeader =
+            (stage == IdentifySalvageIsolationStage::LegacyBotshubSalvageDone)
+                ? kLegacyFroggySessionDone
+                : kLegacyFroggySessionCancel;
+        IntReport("  Legacy botshub salvage + followup: SalvageItemLegacyBotshub(kit=%u, item=%u, followup=0x%X)",
+                  salvageKitId, candidate.itemId, followupHeader);
+        const bool queued = MaintenanceMgr::SalvageItemLegacyBotshub(salvageKitId, candidate.itemId, followupHeader, true);
+        Sleep(1500);
+        Item* itemAfter = ItemMgr::GetItemById(candidate.itemId);
+        IntReport("  Legacy-botshub-salvage-followup result: queued=%u itemStillPresent=%u freeSlots=%u charGold=%u storageGold=%u",
+                  queued ? 1u : 0u,
+                  itemAfter ? 1u : 0u,
+                  MaintenanceMgr::CountFreeSlots(),
+                  ItemMgr::GetGoldCharacter(),
+                  ItemMgr::GetGoldStorage());
+        ReportIdentifySalvageSummary("Post-legacy-botshub-salvage-followup summary");
+        ReportGoldSalvageCandidates("Post-legacy-botshub-salvage-followup gold salvage candidates");
+        IntCheck("Legacy-botshub-salvage-followup command queued", queued);
+        IntReport("");
+        return queued;
+    }
+
+    IntReport("  Manual salvage: SalvageSessionOpen(kit=%u, item=%u)", salvageKitId, candidate.itemId);
+    ItemMgr::SalvageSessionOpen(salvageKitId, candidate.itemId);
+    Sleep(2000);
+
+    if (stage == IdentifySalvageIsolationStage::SalvageOpenOnly) {
+        IntCheck("Salvage session open survived", true);
+        ReportIdentifySalvageSummary("Post-salvage-open summary");
+        IntReport("");
+        return true;
+    }
+
+    IntReport("  Manual salvage: SalvageMaterials()");
+    ItemMgr::SalvageMaterials();
+    Sleep(800);
+    IntReport("  Manual salvage: SalvageSessionDone()");
+    ItemMgr::SalvageSessionDone();
+    Sleep(500);
+
+    Item* itemAfter = ItemMgr::GetItemById(candidate.itemId);
+    IntReport("  Single-salvage result: itemStillPresent=%u freeSlots=%u charGold=%u storageGold=%u",
+              itemAfter ? 1u : 0u,
+              MaintenanceMgr::CountFreeSlots(),
+              ItemMgr::GetGoldCharacter(),
+              ItemMgr::GetGoldStorage());
+    ReportGoldSalvageCandidates("Post-single-salvage gold salvage candidates");
+    IntCheck("Single-salvage sequence completed", true);
+    IntReport("");
+    return true;
+}
+
+int RunIdentifySalvageIsolationTest() {
+    int failures = 0;
+    if (!TestIdentifySalvageIsolation()) ++failures;
+    return failures;
 }
 
 int RunConsumableCraftingTest() {

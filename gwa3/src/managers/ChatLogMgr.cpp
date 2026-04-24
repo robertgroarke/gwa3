@@ -1,7 +1,11 @@
 #include <gwa3/managers/ChatLogMgr.h>
 #include <gwa3/managers/StoCMgr.h>
+#include <gwa3/core/Scanner.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/core/HookMarker.h>
+#include <gwa3/core/HookMarker.h>
 
+#include <MinHook.h>
 #include <Windows.h>
 #include <mutex>
 #include <cstring>
@@ -58,6 +62,10 @@ namespace GWA3::ChatLogMgr {
     static StoC::HookEntry g_hookNPC;
     static StoC::HookEntry g_hookGlobal;
     static StoC::HookEntry g_hookLocal;
+    typedef void(__cdecl* WriteWhisperFn)(uint32_t, wchar_t*, wchar_t*);
+    static WriteWhisperFn g_retWriteWhisper = nullptr;
+    static uintptr_t g_writeWhisperAddr = 0;
+    static bool g_whisperHookEnabled = false;
 
     static const char* ChannelToName(int ch) {
         switch (ch) {
@@ -76,15 +84,15 @@ namespace GWA3::ChatLogMgr {
         }
     }
 
-    static void CommitMessage(int channel, const wchar_t* sender, uint32_t senderAgentId) {
-        if (!g_hasPending) return;
+    static void PushMessage(int channel, const wchar_t* message, const wchar_t* sender, uint32_t senderAgentId) {
+        if (!message || !message[0]) return;
         std::lock_guard<std::mutex> lock(g_mutex);
 
         ChatEntry& entry = g_ring[g_writeIndex % RING_SIZE];
         entry.timestamp_ms = GetTickCount();
         entry.channel = channel;
         strncpy_s(entry.channel_name, ChannelToName(channel), sizeof(entry.channel_name) - 1);
-        wcsncpy_s(entry.message, g_pendingMessage, 255);
+        wcsncpy_s(entry.message, message, 255);
         if (sender) {
             wcsncpy_s(entry.sender, sender, 63);
         } else {
@@ -94,6 +102,11 @@ namespace GWA3::ChatLogMgr {
 
         g_writeIndex++;
         if (g_count < RING_SIZE) g_count++;
+    }
+
+    static void CommitMessage(int channel, const wchar_t* sender, uint32_t senderAgentId) {
+        if (!g_hasPending) return;
+        PushMessage(channel, g_pendingMessage, sender, senderAgentId);
         g_hasPending = false;
     }
 
@@ -128,6 +141,14 @@ namespace GWA3::ChatLogMgr {
         CommitMessage(static_cast<int>(p->channel), nameBuf, 0);
     }
 
+    static void __cdecl OnWriteWhisper(uint32_t unk, wchar_t* from, wchar_t* msg) {
+        HookMarker::HookScope _hookScope(HookMarker::HookId::WriteWhisperDetour);
+        PushMessage(static_cast<int>(Whisper), msg, from, 0);
+        if (g_retWriteWhisper) {
+            g_retWriteWhisper(unk, from, msg);
+        }
+    }
+
     bool Initialize() {
         bool ok = true;
         ok &= StoC::RegisterPostPacketCallback(&g_hookCore, SMSG_CHAT_MESSAGE_CORE, OnMessageCore);
@@ -136,8 +157,31 @@ namespace GWA3::ChatLogMgr {
         ok &= StoC::RegisterPostPacketCallback(&g_hookGlobal, SMSG_CHAT_MESSAGE_GLOBAL, OnMessageGlobal);
         ok &= StoC::RegisterPostPacketCallback(&g_hookLocal, SMSG_CHAT_MESSAGE_LOCAL, OnMessageLocal);
 
+        if (!g_whisperHookEnabled) {
+            g_writeWhisperAddr = Scanner::Find("\x83\xC4\x04\x8D\x58\x2E", "xxxxxx", -0x18);
+            if (g_writeWhisperAddr > 0x10000) {
+                const MH_STATUS createStatus = MH_CreateHook(
+                    reinterpret_cast<void*>(g_writeWhisperAddr),
+                    reinterpret_cast<void*>(&OnWriteWhisper),
+                    reinterpret_cast<void**>(&g_retWriteWhisper));
+                if (createStatus == MH_OK) {
+                    const MH_STATUS enableStatus = MH_EnableHook(reinterpret_cast<void*>(g_writeWhisperAddr));
+                    if (enableStatus == MH_OK) {
+                        g_whisperHookEnabled = true;
+                        GWA3::Log::Info("[ChatLogMgr] Whisper hook enabled at 0x%08X", static_cast<unsigned>(g_writeWhisperAddr));
+                    } else {
+                        GWA3::Log::Warn("[ChatLogMgr] MH_EnableHook(WriteWhisper) failed: %s", MH_StatusToString(enableStatus));
+                    }
+                } else {
+                    GWA3::Log::Warn("[ChatLogMgr] MH_CreateHook(WriteWhisper) failed: %s", MH_StatusToString(createStatus));
+                }
+            } else {
+                GWA3::Log::Warn("[ChatLogMgr] WriteWhisper scan failed");
+            }
+        }
+
         if (ok) {
-            GWA3::Log::Info("[ChatLogMgr] Initialized — capturing chat on 5 packet types");
+            GWA3::Log::Info("[ChatLogMgr] Initialized — capturing chat on 5 packet types plus whisper hook");
         } else {
             GWA3::Log::Warn("[ChatLogMgr] Some packet callbacks failed to register");
         }
@@ -150,6 +194,11 @@ namespace GWA3::ChatLogMgr {
         StoC::RemoveCallbacks(&g_hookNPC);
         StoC::RemoveCallbacks(&g_hookGlobal);
         StoC::RemoveCallbacks(&g_hookLocal);
+        if (g_whisperHookEnabled && g_writeWhisperAddr > 0x10000) {
+            MH_DisableHook(reinterpret_cast<void*>(g_writeWhisperAddr));
+            MH_RemoveHook(reinterpret_cast<void*>(g_writeWhisperAddr));
+            g_whisperHookEnabled = false;
+        }
         GWA3::Log::Info("[ChatLogMgr] Shutdown");
     }
 
@@ -171,3 +220,5 @@ namespace GWA3::ChatLogMgr {
     }
 
 } // namespace GWA3::ChatLogMgr
+
+

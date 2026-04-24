@@ -9,6 +9,7 @@
 #include <gwa3/game/Item.h>
 #include <gwa3/game/Agent.h>
 #include <gwa3/managers/AgentMgr.h>
+#include <gwa3/managers/ChatMgr.h>
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
@@ -21,7 +22,11 @@
 
 namespace GWA3::TradeMgr {
 
-static uintptr_t GetTradeWindowFromGameContext();
+static uintptr_t GetTradeWindowFromGameContext(bool logDiagnostic = false);
+static void OfferItemPromptQuantityAttempt(uint32_t itemId, uint32_t attemptsRemaining);
+static void QueueDisableTradeCartHookOnce();
+static void SubmitOfferImpl(uint32_t gold, uint32_t viewRetryCount);
+static void AcceptTradeImpl(uint32_t viewRetryCount);
 
 namespace {
 
@@ -33,6 +38,42 @@ void QueueDelayedOfferRetry(uint32_t itemId, uint32_t quantity, uint32_t attempt
         Sleep(150);
         GameThread::Enqueue([itemId, quantity, attemptsRemaining]() {
             OfferItem(itemId, quantity, attemptsRemaining - 1);
+        });
+    }).detach();
+}
+
+void QueueDelayedPromptOpenRetry(uint32_t itemId, uint32_t attemptsRemaining) {
+    if (attemptsRemaining == 0) {
+        return;
+    }
+    std::thread([itemId, attemptsRemaining]() {
+        Sleep(150);
+        GameThread::EnqueuePost([itemId, attemptsRemaining]() {
+            OfferItemPromptQuantityAttempt(itemId, attemptsRemaining - 1);
+        });
+    }).detach();
+}
+
+void QueueDelayedSubmitRetry(uint32_t gold, uint32_t viewRetryCount) {
+    if (viewRetryCount == 0) {
+        return;
+    }
+    std::thread([gold, viewRetryCount]() {
+        Sleep(150);
+        GameThread::Enqueue([gold, viewRetryCount]() {
+            SubmitOfferImpl(gold, viewRetryCount - 1u);
+        });
+    }).detach();
+}
+
+void QueueDelayedAcceptRetry(uint32_t viewRetryCount) {
+    if (viewRetryCount == 0) {
+        return;
+    }
+    std::thread([viewRetryCount]() {
+        Sleep(150);
+        GameThread::Enqueue([viewRetryCount]() {
+            AcceptTradeImpl(viewRetryCount - 1u);
         });
     }).detach();
 }
@@ -61,6 +102,8 @@ static constexpr uint32_t kTradeHookPatchSize = 5;
 static uintptr_t s_tradeCartTrampoline = 0;
 static uint8_t s_tradeCartSavedBytes[kTradeHookPatchSize] = {};
 static bool s_tradeCartHookEnabled = false;
+static volatile LONG s_tradeCartCaptureRequested = 0;
+static volatile LONG s_tradeCartDisableQueued = 0;
 static volatile LONG s_tradeWindowContext = 0;
 static volatile LONG s_lastTradeCartEax = 0;
 static volatile LONG s_tradeWindowFrame = 0;
@@ -98,6 +141,31 @@ static volatile LONG s_partyButtonCallbackLastThis = 0;
 static volatile LONG s_partyButtonCallbackLastArg = 0;
 static uintptr_t s_chooseQuantityPopupHookAddr = 0;
 static bool s_chooseQuantityPopupHookInstalled = false;
+enum class ChooseQuantityPopupHookSeam : uint32_t {
+    None = 0,
+    InventorySlot = 1,
+    MaxCountDeref = 2,
+    MaxCountDirect = 3,
+};
+static ChooseQuantityPopupHookSeam s_chooseQuantityPopupHookSeam = ChooseQuantityPopupHookSeam::None;
+static bool s_chooseQuantityPopupPassiveOnly = false;
+static void* s_chooseQuantityPopupOriginalRaw = nullptr;
+// The stronger maxCount seams are still under ABI investigation.
+// Keep them passive until the entry register/stack shape is confirmed live.
+static constexpr bool kPassiveOnlyChooseQuantityStrongSeams = true;
+static volatile LONG s_chooseQuantityPassiveEntryCount = 0;
+static volatile LONG s_chooseQuantityPassiveLastEax = 0;
+static volatile LONG s_chooseQuantityPassiveLastEcx = 0;
+static volatile LONG s_chooseQuantityPassiveLastEdx = 0;
+static volatile LONG s_chooseQuantityPassiveLastEbx = 0;
+static volatile LONG s_chooseQuantityPassiveLastEsi = 0;
+static volatile LONG s_chooseQuantityPassiveLastEdi = 0;
+static volatile LONG s_chooseQuantityPassiveLastEbp = 0;
+static volatile LONG s_chooseQuantityPassiveLastEsp = 0;
+static volatile LONG s_chooseQuantityPassiveLastStack0 = 0;
+static volatile LONG s_chooseQuantityPassiveLastStack4 = 0;
+static volatile LONG s_chooseQuantityPassiveLastStack8 = 0;
+static volatile LONG s_chooseQuantityPassiveLastStack12 = 0;
 enum class QuantityPromptAutomationMode : uint32_t {
     None = 0,
     DefaultOffer = 1,
@@ -106,6 +174,7 @@ enum class QuantityPromptAutomationMode : uint32_t {
 };
 static volatile LONG s_pendingQuantityPromptMode = static_cast<LONG>(QuantityPromptAutomationMode::None);
 static volatile LONG s_pendingQuantityPromptValue = 0;
+static volatile LONG s_pendingQuantityPromptItemId = 0;
 static QueuedFrameClick s_pendingQuantityPromptClicks[2] = {};
 static volatile LONG s_pendingQuantityPromptClickCount = 0;
 // Temporary isolation switch for player-trade crash debugging.
@@ -123,6 +192,10 @@ static constexpr uint32_t kTradeButtonActionSecondaryChildOffsetId = 122u;
 static constexpr uint32_t kTradeButtonAltHash = 1687064728u;
 static constexpr uint32_t kTradeButtonAltChildOffsetId = 126u;
 static constexpr uint32_t kTradeWindowFrameHash = 3198579276u;
+static constexpr uint32_t kTradeWindowSubmitButtonHash = 3026060733u;
+static constexpr uint32_t kTradeWindowCancelButtonHash = 784833442u;
+static constexpr uint32_t kTradeWindowAcceptButtonHash = 4162812990u;
+static constexpr uint32_t kTradeWindowViewButtonHash = 3032516301u;
 static constexpr uint32_t kTradeQuantityPromptChildOffsetId = 2u;
 static constexpr uint32_t kTradeQuantityPromptValueChildOffsetId = 1u;
 static constexpr uint32_t kTradeQuantityPromptAltValueChildOffsetId = 2u;
@@ -137,6 +210,20 @@ struct TradeSessionStartPayload {
 
 struct CrafterQuoteTask {
     uint32_t item_id;
+};
+
+struct TraderQuoteTask {
+    uint32_t item_id;
+};
+
+struct TraderTransactTask {
+    uint32_t item_id;
+    uint32_t cost;
+};
+
+struct TraderSellTask {
+    uint32_t item_id;
+    uint32_t value;
 };
 
 struct CrafterTransactionTask {
@@ -183,6 +270,45 @@ struct TradeWindowView {
     uint32_t items_count;
 };
 
+template <typename T>
+struct TradeArrayView {
+    T* buffer;
+    uint32_t capacity;
+    uint32_t size;
+    uint32_t param;
+};
+
+struct TradeContextItemView {
+    uint32_t item_id;
+    uint32_t quantity;
+};
+
+struct TradeContextTraderView {
+    uint32_t gold;
+    TradeArrayView<TradeContextItemView> items;
+};
+
+struct TradeContextView {
+    uint32_t flags;
+    uint32_t h0004[3];
+    TradeContextTraderView player;
+    TradeContextTraderView partner;
+};
+
+struct ResolvedTradeWindowView {
+    uintptr_t ctx = 0;
+    uintptr_t sourceValue = 0;
+    uintptr_t framePtr = 0;
+    const char* sourceLabel = "";
+    uint32_t sourceOffset = 0;
+    uint32_t derefCount = 0;
+    uint32_t state = 0;
+    uint32_t items_count = 0;
+    uint32_t items_max = 0;
+    uint32_t frame_id = 0;
+    uint32_t score = 0;
+};
+
 struct UiInteractionMessageView {
     uint32_t frame_id;
     uint32_t message_id;
@@ -195,7 +321,6 @@ using TradeDoActionNative = bool(__cdecl*)(uint32_t identifier);
 using TradeVoidNative = bool(__cdecl*)();
 using ChooseQuantityPopupNative = void(__cdecl*)(void* a1, void* a2, void* a3);
 static UpdateTradeCartNative s_updateTradeCartOriginal = nullptr;
-static ChooseQuantityPopupNative s_chooseQuantityPopupOriginal = nullptr;
 
 static __declspec(naked) void PartyWindowButtonDetourNaked() {
     __asm {
@@ -302,6 +427,29 @@ static bool GetMerchantItemsBaseAndSize(uintptr_t& base, uint32_t& size) {
     return base > 0x10000 && size > 0 && size < 4096;
 }
 
+static bool GetGlobalItemArrayBaseAndSize(uintptr_t& base, uint32_t& size) {
+    base = 0;
+    size = 0;
+
+    if (Offsets::BasePointer <= 0x10000) return false;
+
+    uintptr_t p0 = 0;
+    uintptr_t p1 = 0;
+    uintptr_t p2 = 0;
+    if (!ReadPtr(Offsets::BasePointer, p0)) return false;
+    if (!ReadPtr(p0 + 0x18, p1)) return false;
+    if (!ReadPtr(p1 + 0x40, p2)) return false;
+
+    uintptr_t itemBase = 0;
+    uint32_t itemSize = 0;
+    if (!ReadPtr(p2 + 0xB8, itemBase)) return false;
+    if (!ReadU32(p2 + 0xC0, itemSize)) return false;
+
+    base = itemBase;
+    size = itemSize;
+    return base > 0x10000 && size > 0 && size < 8192;
+}
+
 static Item* FindInventoryItemByModelIdWithQuantity(uint32_t modelId, uint32_t minQuantity) {
     Inventory* inv = ItemMgr::GetInventory();
     if (!inv || modelId == 0 || minQuantity == 0) return nullptr;
@@ -341,6 +489,70 @@ struct PromptValueAttempt {
     const char* mode = "";
     const char* label = "";
 };
+
+struct QuantityPromptChildSignature {
+    uint32_t childOffset = 0;
+    uint32_t hash = 0;
+    uint32_t state = 0;
+};
+
+static constexpr QuantityPromptChildSignature kTradeQuantityPromptSixChildSignature[] = {
+    {0u, 224642225u, 0x4104u},
+    {1u, 1559459829u, 0x4125u},
+    {2u, 384121219u, 0x4104u},
+    {3u, 4014954629u, 0x4104u},
+    {4u, 4008686776u, 0x4104u},
+    {5u, 784833442u, 0x4104u},
+};
+
+static constexpr QuantityPromptChildSignature kTradeQuantityPromptFiveChildSignature[] = {
+    {0u, 0u, 0x4B16u},
+    {1u, 0u, 0x4906u},
+    {2u, 0u, 0x4906u},
+    {3u, 0u, 0x4906u},
+    {4u, 0u, 0x4906u},
+};
+
+static bool MatchesTradeQuantityPromptSignature(
+    uintptr_t frame,
+    const QuantityPromptChildSignature* signature,
+    size_t count) {
+    if (frame < 0x10000 || !signature || count == 0) return false;
+    if (UIMgr::GetChildFrameCount(frame) != count) return false;
+
+    for (size_t i = 0; i < count; ++i) {
+        const auto& expected = signature[i];
+        const uintptr_t child = UIMgr::GetChildFrameByOffset(frame, expected.childOffset);
+        if (child < 0x10000) return false;
+        if (UIMgr::GetChildOffsetId(child) != expected.childOffset) return false;
+        if (UIMgr::GetFrameHash(child) != expected.hash) return false;
+        if (UIMgr::GetFrameState(child) != expected.state) return false;
+        if (UIMgr::GetChildFrameCount(child) != 0u) return false;
+        if (UIMgr::GetFrameContext(child) != frame) return false;
+    }
+
+    return true;
+}
+
+static bool IsLikelyTradeQuantityPromptFrame(uintptr_t frame) {
+    if (frame < 0x10000) return false;
+
+    const uint32_t childCount = UIMgr::GetChildFrameCount(frame);
+    if (childCount == _countof(kTradeQuantityPromptSixChildSignature)) {
+        return MatchesTradeQuantityPromptSignature(
+            frame,
+            kTradeQuantityPromptSixChildSignature,
+            _countof(kTradeQuantityPromptSixChildSignature));
+    }
+    if (childCount == _countof(kTradeQuantityPromptFiveChildSignature)) {
+        return MatchesTradeQuantityPromptSignature(
+            frame,
+            kTradeQuantityPromptFiveChildSignature,
+            _countof(kTradeQuantityPromptFiveChildSignature));
+    }
+
+    return false;
+}
 
 static size_t CollectPromptOkButtons(uintptr_t frame, uintptr_t* out, size_t capacity) {
     if (!out || capacity == 0 || frame < 0x10000) return 0;
@@ -428,23 +640,149 @@ static void DebugDumpTradeQuantityPromptTree(uintptr_t frame, const char* label)
         if (child < 0x10000) continue;
         uint32_t fieldBC = 0;
         uint32_t fieldC0 = 0;
+        uint32_t field1C4 = 0;
         __try {
             fieldBC = *reinterpret_cast<uint32_t*>(child + 0xBC);
             fieldC0 = *reinterpret_cast<uint32_t*>(child + 0xC0);
+            field1C4 = *reinterpret_cast<uint32_t*>(child + 0x1C4);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             fieldBC = 0;
             fieldC0 = 0;
+            field1C4 = 0;
         }
-        Log::Info("TradeMgr: Quantity prompt child offset=%u frame=0x%08X frameId=%u fieldBC=%u fieldC0=%u",
+        Log::Info("TradeMgr: Quantity prompt child offset=%u frame=0x%08X frameId=%u fieldBC=%u fieldC0=%u field1C4=0x%X",
                   offset,
                   static_cast<unsigned>(child),
                   UIMgr::GetFrameId(child),
                   fieldBC,
-                  fieldC0);
+                  fieldC0,
+                  field1C4);
         char childLabel[64] = {};
         sprintf_s(childLabel, "%s[%u]", label ? label : "trade-quantity-root", offset);
         UIMgr::DebugDumpChildFrames(child, childLabel, 12);
     }
+}
+
+static void DebugDumpTradeQuantityPromptCallbacks(uintptr_t frame, const char* label) {
+    if (frame < 0x10000) {
+        return;
+    }
+
+    __try {
+        const uintptr_t cbArrayData = *reinterpret_cast<uintptr_t*>(frame + 0xA8);
+        const uint32_t cbArraySize = *reinterpret_cast<uint32_t*>(frame + 0xAC);
+        Log::Info("TradeMgr: Quantity prompt callbacks label=%s frame=0x%08X frameId=%u cbArray=0x%08X count=%u hookAddr=0x%08X",
+                  label ? label : "",
+                  static_cast<unsigned>(frame),
+                  UIMgr::GetFrameId(frame),
+                  static_cast<unsigned>(cbArrayData),
+                  cbArraySize,
+                  static_cast<unsigned>(s_chooseQuantityPopupHookAddr));
+        if (cbArrayData < 0x10000 || cbArraySize == 0 || cbArraySize > 16u) {
+            return;
+        }
+
+        for (uint32_t ci = 0; ci < cbArraySize && ci < 8u; ++ci) {
+            const uintptr_t entryBase = cbArrayData + ci * 12u;
+            const uintptr_t callbackFn = *reinterpret_cast<uintptr_t*>(entryBase);
+            const uintptr_t uictlCtx = *reinterpret_cast<uintptr_t*>(entryBase + 4u);
+            const uint32_t entryArg = *reinterpret_cast<uint32_t*>(entryBase + 8u);
+            uint32_t currentCount = 0;
+            uint32_t maxCount = 0;
+
+            if (uictlCtx > 0x10000) {
+                __try {
+                    currentCount = *reinterpret_cast<uint32_t*>(uictlCtx + 0x04);
+                    maxCount = *reinterpret_cast<uint32_t*>(uictlCtx + 0x08);
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    currentCount = 0;
+                    maxCount = 0;
+                }
+            }
+
+            Log::Info("TradeMgr: Quantity prompt callback label=%s idx=%u fn=0x%08X ctx=0x%08X arg=0x%08X current=%u max=%u match=%u",
+                      label ? label : "",
+                      ci,
+                      static_cast<unsigned>(callbackFn),
+                      static_cast<unsigned>(uictlCtx),
+                      entryArg,
+                      currentCount,
+                      maxCount,
+                      callbackFn == s_chooseQuantityPopupHookAddr ? 1u : 0u);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("TradeMgr: Quantity prompt callback dump faulted label=%s frame=0x%08X",
+                  label ? label : "",
+                  static_cast<unsigned>(frame));
+    }
+}
+
+static bool TryWriteTradeQuantityPromptBackingCount(uintptr_t frame,
+                                                    uint32_t desiredQty,
+                                                    const char* label,
+                                                    uint32_t* outAppliedQty = nullptr) {
+    if (outAppliedQty) {
+        *outAppliedQty = 0;
+    }
+    if (frame < 0x10000 || desiredQty == 0 || s_chooseQuantityPopupHookAddr <= 0x10000) {
+        return false;
+    }
+
+    __try {
+        const uintptr_t cbArrayData = *reinterpret_cast<uintptr_t*>(frame + 0xA8);
+        const uint32_t cbArraySize = *reinterpret_cast<uint32_t*>(frame + 0xAC);
+        if (cbArrayData < 0x10000 || cbArraySize == 0 || cbArraySize > 16u) {
+            Log::Warn("TradeMgr: TryWriteTradeQuantityPromptBackingCount invalid callback array label=%s frame=0x%08X cbArray=0x%08X count=%u",
+                      label ? label : "",
+                      static_cast<unsigned>(frame),
+                      static_cast<unsigned>(cbArrayData),
+                      cbArraySize);
+            return false;
+        }
+
+        for (uint32_t ci = 0; ci < cbArraySize && ci < 8u; ++ci) {
+            const uintptr_t entryBase = cbArrayData + ci * 12u;
+            const uintptr_t callbackFn = *reinterpret_cast<uintptr_t*>(entryBase);
+            const uintptr_t uictlCtx = *reinterpret_cast<uintptr_t*>(entryBase + 4u);
+            if (callbackFn != s_chooseQuantityPopupHookAddr || uictlCtx <= 0x10000) {
+                continue;
+            }
+
+            const uint32_t currentCount = *reinterpret_cast<uint32_t*>(uictlCtx + 0x04);
+            const uint32_t maxCount = *reinterpret_cast<uint32_t*>(uictlCtx + 0x08);
+            const uint32_t appliedQty = (maxCount > 0 && desiredQty > maxCount) ? maxCount : desiredQty;
+            *reinterpret_cast<uint32_t*>(uictlCtx + 0x04) = appliedQty;
+            const uint32_t verifyCount = *reinterpret_cast<uint32_t*>(uictlCtx + 0x04);
+
+            if (outAppliedQty) {
+                *outAppliedQty = verifyCount;
+            }
+            Log::Info("TradeMgr: TryWriteTradeQuantityPromptBackingCount label=%s frame=0x%08X ctx=0x%08X idx=%u desired=%u current=%u max=%u applied=%u verified=%u",
+                      label ? label : "",
+                      static_cast<unsigned>(frame),
+                      static_cast<unsigned>(uictlCtx),
+                      ci,
+                      desiredQty,
+                      currentCount,
+                      maxCount,
+                      appliedQty,
+                      verifyCount);
+            return verifyCount == appliedQty;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("TradeMgr: TryWriteTradeQuantityPromptBackingCount faulted label=%s frame=0x%08X desired=%u",
+                  label ? label : "",
+                  static_cast<unsigned>(frame),
+                  desiredQty);
+        return false;
+    }
+
+    Log::Warn("TradeMgr: TryWriteTradeQuantityPromptBackingCount found no matching callback label=%s frame=0x%08X desired=%u hookAddr=0x%08X",
+              label ? label : "",
+              static_cast<unsigned>(frame),
+              desiredQty,
+              static_cast<unsigned>(s_chooseQuantityPopupHookAddr));
+    return false;
 }
 
 static bool EnterPromptQuantityByKeypress(uintptr_t valueFrame, uint32_t quantity) {
@@ -479,6 +817,43 @@ static bool EnterPromptQuantityByKeypress(uintptr_t valueFrame, uint32_t quantit
     return true;
 }
 
+static bool TryFinalizeTradeQuantityPromptByEnter(uintptr_t promptFrame, uintptr_t valueFrame, const char* label) {
+    const uintptr_t targets[] = {
+        valueFrame,
+        promptFrame,
+    };
+    const char* targetLabels[] = {
+        "value",
+        "prompt",
+    };
+
+    for (size_t i = 0; i < _countof(targets); ++i) {
+        const uintptr_t target = targets[i];
+        if (target < 0x10000) {
+            continue;
+        }
+        const bool sent = UIMgr::KeyPress(target, VK_RETURN);
+        Log::Info("TradeMgr: TryFinalizeTradeQuantityPromptByEnter label=%s target=%s frame=0x%08X frameId=%u sent=%u",
+                  label ? label : "",
+                  targetLabels[i],
+                  static_cast<unsigned>(target),
+                  UIMgr::GetFrameId(target),
+                  sent ? 1u : 0u);
+        if (!sent) {
+            continue;
+        }
+        Sleep(200);
+        if (!IsTradeQuantityPromptOpen()) {
+            Log::Info("TradeMgr: TryFinalizeTradeQuantityPromptByEnter closed prompt label=%s target=%s",
+                      label ? label : "",
+                      targetLabels[i]);
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static bool TryPromptMouseQuantityVariants(uintptr_t valueFrame, uint32_t quantity) {
     if (valueFrame < 0x10000) return false;
     struct MouseVariant {
@@ -508,6 +883,53 @@ static bool TryPromptMouseQuantityVariants(uintptr_t valueFrame, uint32_t quanti
         Sleep(80);
     }
     return true;
+}
+
+static bool ClickTradeQuantityPromptButton(uintptr_t frame, const char* buttonLabel) {
+    if (frame < 0x10000) {
+        return false;
+    }
+
+    struct ClickVariant {
+        const char* label;
+        bool (*invoke)(uintptr_t);
+    };
+    const ClickVariant variants[] = {
+        {"immediate_mouse_up", UIMgr::ButtonClickImmediate},
+        {"mouse_up", UIMgr::ButtonClick},
+        {"mouse_click", UIMgr::ButtonClickMouseClick},
+        {"immediate_full", UIMgr::ButtonClickImmediateFull},
+        {"full_mouse_click", UIMgr::ButtonClickFullMouseClick},
+        {"full_mouse_up", UIMgr::ButtonClickFull},
+    };
+
+    const uint32_t frameId = UIMgr::GetFrameId(frame);
+    const uint32_t childOffset = UIMgr::GetChildOffsetId(frame);
+    uint32_t field1c4 = 0;
+    __try {
+        field1c4 = *reinterpret_cast<uint32_t*>(frame + 0x1C4);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        field1c4 = 0;
+    }
+
+    for (const auto& variant : variants) {
+        const bool ok = variant.invoke(frame);
+        Log::Info("TradeMgr: ClickTradeQuantityPromptButton button=%s variant=%s frame=0x%08X frameId=%u childOffset=%u field1c4=0x%X ok=%u",
+                  buttonLabel ? buttonLabel : "",
+                  variant.label,
+                  static_cast<unsigned>(frame),
+                  frameId,
+                  childOffset,
+                  field1c4,
+                  ok ? 1u : 0u);
+        if (!ok) {
+            continue;
+        }
+        Sleep(120);
+        return true;
+    }
+
+    return false;
 }
 
 static bool TryPromptSpinnerAdjust(uintptr_t frame, uint32_t quantity) {
@@ -785,6 +1207,12 @@ static void CaptureTradeWindowContext(uintptr_t eaxValue) {
             if (w->items_max > 0 && w->items_max <= 64 && w->state == 0) {
                 s_tradeWindowContext = static_cast<LONG>(deref1);
                 s_tradeWindowFrame = static_cast<LONG>(w->frame_id);
+                if (InterlockedExchange(&s_tradeCartCaptureRequested, 0) == 1) {
+                    Log::Info("TradeMgr: CaptureTradeWindowContext settled ctx=0x%08X frame=0x%08X; scheduling hook disable",
+                              static_cast<unsigned>(deref1),
+                              static_cast<unsigned>(w->frame_id));
+                    QueueDisableTradeCartHookOnce();
+                }
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -894,6 +1322,101 @@ static void DisableTradeCartHookForOffer() {
         Log::Warn("TradeMgr: MH_DisableHook failed for UpdateTradeCart before offer: %s",
                   MH_StatusToString(mhStatus));
     }
+}
+
+static Item* FindTraderVirtualItemByModelId(uint32_t modelId) {
+    if (modelId == 0) return nullptr;
+
+    uintptr_t itemBase = 0;
+    uint32_t itemSize = 0;
+    if (!GetGlobalItemArrayBaseAndSize(itemBase, itemSize)) return nullptr;
+
+    __try {
+        for (uint32_t id = 1; id < itemSize; ++id) {
+            uintptr_t itemPtr = 0;
+            if (!ReadPtr(itemBase + static_cast<uintptr_t>(id) * 4u, itemPtr)) continue;
+
+            Item* item = reinterpret_cast<Item*>(itemPtr);
+            if (!item) continue;
+            if (item->bag != nullptr || item->agent_id != 0) continue;
+            if (item->model_id == modelId && item->item_id != 0) {
+                return item;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+
+    return nullptr;
+}
+
+static uint32_t ResolveTraderMaterialItemId(uint32_t modelId, uint32_t pack, uint32_t packs) {
+    uint32_t traderItemId = GetMerchantItemIdByModelId(modelId);
+    if (traderItemId) {
+        return traderItemId;
+    }
+
+    Item* virtualItem = FindTraderVirtualItemByModelId(modelId);
+    traderItemId = virtualItem ? virtualItem->item_id : 0u;
+    if (traderItemId) {
+        Log::Info("TradeMgr: BuyMaterials fallback-resolved virtual trader item model=%u item=%u pack=%u/%u",
+                  modelId, traderItemId, pack, packs);
+    }
+    return traderItemId;
+}
+
+static void LogMerchantMaterialSnapshot(uint32_t targetModelId) {
+    uintptr_t merchantBase = 0;
+    uint32_t merchantSize = 0;
+    if (!GetMerchantItemsBaseAndSize(merchantBase, merchantSize)) {
+        Log::Warn("TradeMgr: Merchant snapshot unavailable for target model=%u", targetModelId);
+        return;
+    }
+
+    Log::Warn("TradeMgr: Merchant snapshot targetModel=%u merchantItems=%u",
+              targetModelId, merchantSize);
+    __try {
+        for (uint32_t i = 0; i < merchantSize && i < 24u; ++i) {
+            const uint32_t itemId = *reinterpret_cast<uint32_t*>(merchantBase + i * 4);
+            if (!itemId) continue;
+
+            Item* item = ValidateMerchantItemPtr(GetMerchantItemPtrByItemId(itemId), itemId);
+            if (!item) {
+                Log::Warn("TradeMgr:   merchant[%u] item=%u ptr=invalid", i, itemId);
+                continue;
+            }
+
+            Log::Warn("TradeMgr:   merchant[%u] item=%u model=%u qty=%u bag=%p agent=%u",
+                      i,
+                      item->item_id,
+                      item->model_id,
+                      item->quantity,
+                      item->bag,
+                      item->agent_id);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("TradeMgr: Merchant snapshot faulted for target model=%u", targetModelId);
+    }
+}
+
+static void QueueDisableTradeCartHookOnce() {
+    if (InterlockedCompareExchange(&s_tradeCartDisableQueued, 1, 0) != 0) {
+        return;
+    }
+    GameThread::EnqueuePost([]() {
+        InterlockedExchange(&s_tradeCartDisableQueued, 0);
+        if (!s_tradeCartHookEnabled || Offsets::UpdateTradeCart <= 0x10000) {
+            return;
+        }
+        const MH_STATUS mhStatus = MH_DisableHook(reinterpret_cast<LPVOID>(Offsets::UpdateTradeCart));
+        if (mhStatus == MH_OK || mhStatus == MH_ERROR_DISABLED) {
+            s_tradeCartHookEnabled = false;
+            Log::Info("TradeMgr: UpdateTradeCart hook auto-disabled");
+            return;
+        }
+        Log::Warn("TradeMgr: MH_DisableHook failed for UpdateTradeCart auto-disable: %s",
+                  MH_StatusToString(mhStatus));
+    });
 }
 
 static void TransactionBuyNative(uint32_t quantity, uint32_t itemId, uint32_t totalValue) {
@@ -1250,18 +1773,216 @@ uint32_t GetTradeWindowUiContext() {
     return frame ? static_cast<uint32_t>(UIMgr::GetFrameContext(frame)) : 0u;
 }
 
+static uintptr_t FindTradeWindowRootChildByHash(uintptr_t uiFrame, uint32_t expectedHash) {
+    if (uiFrame < 0x10000 || expectedHash == 0) return 0;
+
+    const uint32_t childCount = UIMgr::GetChildFrameCount(uiFrame);
+    for (uint32_t i = 0; i < childCount; ++i) {
+        const uintptr_t child = UIMgr::GetChildFrameByIndex(uiFrame, i);
+        if (child < 0x10000) continue;
+        if (UIMgr::GetFrameHash(child) != expectedHash) continue;
+        return child;
+    }
+
+    const uintptr_t byHash = UIMgr::GetFrameByHash(expectedHash);
+    if (byHash > 0x10000) {
+        const uintptr_t context = UIMgr::GetFrameContext(byHash);
+        if (context == uiFrame) {
+            return byHash;
+        }
+    }
+    return 0;
+}
+
+static void LogTradeWindowRootChildren(uintptr_t uiFrame, const char* label) {
+    if (uiFrame < 0x10000) {
+        Log::Warn("TradeMgr: %s no trade window frame available", label ? label : "trade_window_root_children");
+        return;
+    }
+
+    const uint32_t childCount = UIMgr::GetChildFrameCount(uiFrame);
+    Log::Info("TradeMgr: %s uiFrame=0x%08X childCount=%u",
+              label ? label : "trade_window_root_children",
+              static_cast<unsigned>(uiFrame),
+              childCount);
+    for (uint32_t i = 0; i < childCount && i < 16u; ++i) {
+        const uintptr_t child = UIMgr::GetChildFrameByIndex(uiFrame, i);
+        if (child < 0x10000) continue;
+        Log::Info("TradeMgr:   root[%u] frame=0x%08X hash=%u state=0x%X frameId=%u childOffset=%u childCount=%u",
+                  i,
+                  static_cast<unsigned>(child),
+                  UIMgr::GetFrameHash(child),
+                  UIMgr::GetFrameState(child),
+                  UIMgr::GetFrameId(child),
+                  UIMgr::GetChildOffsetId(child),
+                  UIMgr::GetChildFrameCount(child));
+    }
+}
+
+static void __cdecl RequestTraderQuoteInvoker(void* storage) {
+    auto* task = reinterpret_cast<TraderQuoteTask*>(storage);
+    if (!task || !Offsets::RequestQuote || task->item_id == 0) return;
+
+    using RequestQuoteNative = void (__cdecl*)(uint32_t, uint32_t, MerchantQuoteInfo, MerchantQuoteInfo);
+    auto fn = reinterpret_cast<RequestQuoteNative>(Offsets::RequestQuote);
+
+    uint32_t recvItemId = task->item_id;
+    MerchantQuoteInfo give = {};
+    MerchantQuoteInfo recv = {};
+    recv.item_count = 1;
+    recv.item_ids = &recvItemId;
+    fn(0x0Cu, 0u, give, recv);
+}
+
+static void __cdecl RequestTraderSellQuoteInvoker(void* storage) {
+    auto* task = reinterpret_cast<TraderQuoteTask*>(storage);
+    if (!task || !Offsets::RequestQuote || task->item_id == 0) return;
+
+    using RequestQuoteNative = void (__cdecl*)(uint32_t, uint32_t, MerchantQuoteInfo, MerchantQuoteInfo);
+    auto fn = reinterpret_cast<RequestQuoteNative>(Offsets::RequestQuote);
+
+    uint32_t giveItemId = task->item_id;
+    MerchantQuoteInfo give = {};
+    MerchantQuoteInfo recv = {};
+    give.item_count = 1;
+    give.item_ids = &giveItemId;
+    fn(0x0Du, 0u, give, recv);
+}
+
+static void __cdecl TransactionTraderBuyInvoker(void* storage) {
+    auto* task = reinterpret_cast<TraderTransactTask*>(storage);
+    if (!task || !Offsets::Transaction || task->item_id == 0 || task->cost == 0) return;
+
+    using TransactionNative = void (__cdecl*)(uint32_t, uint32_t, MerchantTransactionInfo, uint32_t, MerchantTransactionInfo);
+    auto fn = reinterpret_cast<TransactionNative>(Offsets::Transaction);
+
+    uint32_t recvItemId = task->item_id;
+    uint32_t recvQty = 1;
+    MerchantTransactionInfo give = {};
+    MerchantTransactionInfo recv = {};
+    recv.item_count = 1;
+    recv.item_ids = &recvItemId;
+    recv.item_quantities = &recvQty;
+    fn(0x0Cu, task->cost, give, 0u, recv);
+}
+
+static void __cdecl TransactionTraderSellInvoker(void* storage) {
+    auto* task = reinterpret_cast<TraderSellTask*>(storage);
+    if (!task || !Offsets::Transaction || task->item_id == 0 || task->value == 0) return;
+
+    using TransactionNative = void (__cdecl*)(uint32_t, uint32_t, MerchantTransactionInfo, uint32_t, MerchantTransactionInfo);
+    auto fn = reinterpret_cast<TransactionNative>(Offsets::Transaction);
+
+    uint32_t giveItemId = task->item_id;
+    uint32_t giveQty = 1;
+    MerchantTransactionInfo give = {};
+    MerchantTransactionInfo recv = {};
+    give.item_count = 1;
+    give.item_ids = &giveItemId;
+    give.item_quantities = &giveQty;
+    fn(0x0Du, 0u, give, task->value, recv);
+}
+
+static bool ClickTradeWindowRootButton(uint32_t buttonHash, const char* buttonLabel) {
+    const uintptr_t uiFrame = static_cast<uintptr_t>(GetTradeWindowUiFrame());
+    const uintptr_t uiCtx = static_cast<uintptr_t>(GetTradeWindowUiContext());
+    const uint32_t uiState = GetTradeWindowUiState();
+
+    const uintptr_t button = FindTradeWindowRootChildByHash(uiFrame, buttonHash);
+    Log::Info("TradeMgr: ClickTradeWindowRootButton label=%s hash=%u uiFrame=0x%08X uiState=0x%X uiCtx=0x%08X button=0x%08X",
+              buttonLabel ? buttonLabel : "",
+              buttonHash,
+              static_cast<unsigned>(uiFrame),
+              uiState,
+              static_cast<unsigned>(uiCtx),
+              static_cast<unsigned>(button));
+    if (button < 0x10000) {
+        LogTradeWindowRootChildren(uiFrame, buttonLabel ? buttonLabel : "trade_window_button_probe");
+        return false;
+    }
+
+    struct ClickVariant {
+        const char* label;
+        bool (*invoke)(uintptr_t);
+    };
+    const ClickVariant variants[] = {
+        {"immediate_mouse_up", UIMgr::ButtonClickImmediate},
+        {"mouse_up", UIMgr::ButtonClick},
+        {"mouse_click", UIMgr::ButtonClickMouseClick},
+        {"immediate_full", UIMgr::ButtonClickImmediateFull},
+        {"full_mouse_click", UIMgr::ButtonClickFullMouseClick},
+        {"full_mouse_up", UIMgr::ButtonClickFull},
+    };
+
+    for (const auto& variant : variants) {
+        const bool ok = variant.invoke(button);
+        Log::Info("TradeMgr: ClickTradeWindowRootButton label=%s variant=%s frame=0x%08X frameId=%u childOffset=%u state=0x%X ok=%u",
+                  buttonLabel ? buttonLabel : "",
+                  variant.label,
+                  static_cast<unsigned>(button),
+                  UIMgr::GetFrameId(button),
+                  UIMgr::GetChildOffsetId(button),
+                  UIMgr::GetFrameState(button),
+                  ok ? 1u : 0u);
+        if (ok) {
+            return true;
+        }
+    }
+
+    LogTradeWindowRootChildren(uiFrame, buttonLabel ? buttonLabel : "trade_window_button_probe");
+    return false;
+}
+
+static bool ClickTradeWindowViewIfNeeded(const char* actionLabel, uint32_t viewRetryCount) {
+    const uintptr_t uiFrame = static_cast<uintptr_t>(GetTradeWindowUiFrame());
+    if (uiFrame < 0x10000) {
+        return false;
+    }
+
+    const uintptr_t viewButton = FindTradeWindowRootChildByHash(uiFrame, kTradeWindowViewButtonHash);
+    if (viewButton < 0x10000) {
+        return false;
+    }
+
+    Log::Info("TradeMgr: %s detected incoming trade view window uiFrame=0x%08X childCount=%u retries=%u",
+              actionLabel ? actionLabel : "",
+              static_cast<unsigned>(uiFrame),
+              UIMgr::GetChildFrameCount(uiFrame),
+              viewRetryCount);
+    LogTradeWindowRootChildren(uiFrame, actionLabel ? actionLabel : "trade_view_prompt");
+    return ClickTradeWindowRootButton(kTradeWindowViewButtonHash, actionLabel ? actionLabel : "trade_view");
+}
+
 static uintptr_t FindTradeQuantityPromptFrame() {
     const uintptr_t tradeWindowFrame = GetTradeWindowUiFrame();
-    uintptr_t frame = UIMgr::GetVisibleFrameByChildOffsetAndChildCount(
-        kTradeQuantityPromptChildOffsetId, 5, 5, tradeWindowFrame, 0);
-    if (frame > 0x10000) return frame;
+    uintptr_t excludedFrame = tradeWindowFrame;
 
-    frame = UIMgr::GetVisibleFrameByChildOffsetAndChildCount(
-        kTradeQuantityPromptChildOffsetId, 5, 8, tradeWindowFrame, 0);
-    if (frame > 0x10000) return frame;
+    for (;;) {
+        const uintptr_t frame = UIMgr::GetVisibleFrameByChildOffsetAndChildCount(
+            kTradeQuantityPromptChildOffsetId, 5, 5, excludedFrame, 0);
+        if (frame < 0x10000) {
+            break;
+        }
+        if (IsLikelyTradeQuantityPromptFrame(frame)) {
+            return frame;
+        }
+        excludedFrame = frame;
+    }
 
-    return UIMgr::GetVisibleFrameByChildOffsetAndChildCount(
-        kTradeQuantityPromptChildOffsetId, 1, 4, tradeWindowFrame, 0);
+    excludedFrame = tradeWindowFrame;
+    for (;;) {
+        const uintptr_t frame = UIMgr::GetVisibleFrameByChildOffsetAndChildCount(
+            kTradeQuantityPromptChildOffsetId, 5, 8, excludedFrame, 0);
+        if (frame < 0x10000) {
+            break;
+        }
+        if (IsLikelyTradeQuantityPromptFrame(frame)) {
+            return frame;
+        }
+        excludedFrame = frame;
+    }
+
+    return 0;
 }
 
 static uintptr_t WaitForTradeQuantityPromptFrame(uint32_t timeoutMs = 1500, uint32_t pollMs = 50) {
@@ -1276,9 +1997,222 @@ static uintptr_t WaitForTradeQuantityPromptFrame(uint32_t timeoutMs = 1500, uint
     return 0;
 }
 
+static uintptr_t ResolveTradeContext() {
+    const uintptr_t gc = Offsets::ResolveGameContext();
+    if (!gc) return 0;
+    __try {
+        const uintptr_t trade = *reinterpret_cast<uintptr_t*>(gc + 0x58);
+        return trade > 0x10000 ? trade : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static bool ReadTradePlayerOfferQuantity(uint32_t itemId, uint32_t* outQuantity) {
+    if (outQuantity) {
+        *outQuantity = 0;
+    }
+    if (itemId == 0) return false;
+
+    const uintptr_t tradePtr = ResolveTradeContext();
+    if (tradePtr < 0x10000) return false;
+
+    __try {
+        const auto* ctx = reinterpret_cast<const TradeContextView*>(tradePtr);
+        const auto* items = ctx->player.items.buffer;
+        const uint32_t count = ctx->player.items.size;
+        if (!items || count == 0 || count > 64u) {
+            return false;
+        }
+        for (uint32_t i = 0; i < count; ++i) {
+            if (items[i].item_id != itemId) {
+                continue;
+            }
+            if (outQuantity) {
+                *outQuantity = items[i].quantity;
+            }
+            return true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+
+    return false;
+}
+
+static bool WaitForPromptCallbackOfferResult(uint32_t itemId,
+                                             uint32_t expectedQuantity,
+                                             const char* actionLabel,
+                                             uint32_t timeoutMs = 2500,
+                                             uint32_t pollMs = 50) {
+    const DWORD start = GetTickCount();
+    while (GetTickCount() - start < timeoutMs) {
+        const uintptr_t frame = FindTradeQuantityPromptFrame();
+        if (frame < 0x10000) {
+            Log::Info("TradeMgr: %s callback path closed prompt item=%u quantity=%u",
+                      actionLabel ? actionLabel : "OfferItemPrompt",
+                      itemId,
+                      expectedQuantity);
+            return true;
+        }
+
+        const uint32_t childCount = UIMgr::GetChildFrameCount(frame);
+        if (s_chooseQuantityPopupHookSeam == ChooseQuantityPopupHookSeam::InventorySlot
+            && childCount == _countof(kTradeQuantityPromptFiveChildSignature)
+            && MatchesTradeQuantityPromptSignature(
+                frame,
+                kTradeQuantityPromptFiveChildSignature,
+                _countof(kTradeQuantityPromptFiveChildSignature))) {
+            Log::Info("TradeMgr: %s callback path reached residual 5-child prompt after inventorySlot automation item=%u quantity=%u frame=0x%08X; skipping manual fallback",
+                      actionLabel ? actionLabel : "OfferItemPrompt",
+                      itemId,
+                      expectedQuantity,
+                      static_cast<unsigned>(frame));
+            return true;
+        }
+
+        uint32_t observedQuantity = 0;
+        if (itemId != 0
+            && ReadTradePlayerOfferQuantity(itemId, &observedQuantity)
+            && observedQuantity >= expectedQuantity) {
+            Log::Info("TradeMgr: %s callback path already applied via trade cart item=%u expected=%u observed=%u promptFrame=0x%08X childCount=%u",
+                      actionLabel ? actionLabel : "OfferItemPrompt",
+                      itemId,
+                      expectedQuantity,
+                      observedQuantity,
+                      static_cast<unsigned>(frame),
+                      frame > 0x10000 ? UIMgr::GetChildFrameCount(frame) : 0u);
+            return true;
+        }
+
+        Sleep(pollMs);
+    }
+
+    return false;
+}
+
+static const char* ChooseQuantityPopupHookSeamToString(ChooseQuantityPopupHookSeam seam) {
+    switch (seam) {
+    case ChooseQuantityPopupHookSeam::InventorySlot:
+        return "inventorySlot";
+    case ChooseQuantityPopupHookSeam::MaxCountDeref:
+        return "maxCount-deref";
+    case ChooseQuantityPopupHookSeam::MaxCountDirect:
+        return "maxCount-direct";
+    default:
+        return "none";
+    }
+}
+
+static bool IsChooseQuantityPopupPassiveOnly() {
+    return s_chooseQuantityPopupPassiveOnly;
+}
+
+static ChooseQuantityPopupNative GetChooseQuantityPopupOriginal() {
+    return reinterpret_cast<ChooseQuantityPopupNative>(s_chooseQuantityPopupOriginalRaw);
+}
+
+static void LogChooseQuantityPopupPassiveProbe(const char* label, uintptr_t value) {
+    if (value <= 0x10000) {
+        return;
+    }
+    __try {
+        const uint32_t word0 = *reinterpret_cast<const uint32_t*>(value + 0x0);
+        const uint32_t word1 = *reinterpret_cast<const uint32_t*>(value + 0x4);
+        const uint32_t word2 = *reinterpret_cast<const uint32_t*>(value + 0x8);
+        Log::Info("TradeMgr: ChooseQuantityPopup passive probe %s=0x%08X dwords=[0x%08X,0x%08X,0x%08X]",
+                  label,
+                  static_cast<unsigned>(value),
+                  word0,
+                  word1,
+                  word2);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("TradeMgr: ChooseQuantityPopup passive probe %s=0x%08X faulted",
+                  label,
+                  static_cast<unsigned>(value));
+    }
+}
+
+static void __cdecl LogChooseQuantityPopupPassiveEntry() {
+    const LONG hitCount = InterlockedIncrement(&s_chooseQuantityPassiveEntryCount);
+    const auto mode = static_cast<QuantityPromptAutomationMode>(
+        InterlockedCompareExchange(&s_pendingQuantityPromptMode, 0, 0));
+    const bool shouldLog = mode != QuantityPromptAutomationMode::None || hitCount <= 6;
+    if (!shouldLog) {
+        return;
+    }
+
+    const uintptr_t eax = static_cast<uintptr_t>(InterlockedCompareExchange(&s_chooseQuantityPassiveLastEax, 0, 0));
+    const uintptr_t ecx = static_cast<uintptr_t>(InterlockedCompareExchange(&s_chooseQuantityPassiveLastEcx, 0, 0));
+    const uintptr_t edx = static_cast<uintptr_t>(InterlockedCompareExchange(&s_chooseQuantityPassiveLastEdx, 0, 0));
+    const uintptr_t ebx = static_cast<uintptr_t>(InterlockedCompareExchange(&s_chooseQuantityPassiveLastEbx, 0, 0));
+    const uintptr_t esi = static_cast<uintptr_t>(InterlockedCompareExchange(&s_chooseQuantityPassiveLastEsi, 0, 0));
+    const uintptr_t edi = static_cast<uintptr_t>(InterlockedCompareExchange(&s_chooseQuantityPassiveLastEdi, 0, 0));
+    const uintptr_t ebp = static_cast<uintptr_t>(InterlockedCompareExchange(&s_chooseQuantityPassiveLastEbp, 0, 0));
+    const uintptr_t esp = static_cast<uintptr_t>(InterlockedCompareExchange(&s_chooseQuantityPassiveLastEsp, 0, 0));
+    const uintptr_t stack0 = static_cast<uintptr_t>(InterlockedCompareExchange(&s_chooseQuantityPassiveLastStack0, 0, 0));
+    const uintptr_t stack4 = static_cast<uintptr_t>(InterlockedCompareExchange(&s_chooseQuantityPassiveLastStack4, 0, 0));
+    const uintptr_t stack8 = static_cast<uintptr_t>(InterlockedCompareExchange(&s_chooseQuantityPassiveLastStack8, 0, 0));
+    const uintptr_t stack12 = static_cast<uintptr_t>(InterlockedCompareExchange(&s_chooseQuantityPassiveLastStack12, 0, 0));
+
+    Log::Info("TradeMgr: ChooseQuantityPopup passive entry[%u] seam=%s mode=%u eax=0x%08X ecx=0x%08X edx=0x%08X ebx=0x%08X esi=0x%08X edi=0x%08X ebp=0x%08X esp=0x%08X [esp]=0x%08X [esp+4]=0x%08X [esp+8]=0x%08X [esp+12]=0x%08X",
+              static_cast<unsigned>(hitCount),
+              ChooseQuantityPopupHookSeamToString(s_chooseQuantityPopupHookSeam),
+              static_cast<uint32_t>(mode),
+              static_cast<unsigned>(eax),
+              static_cast<unsigned>(ecx),
+              static_cast<unsigned>(edx),
+              static_cast<unsigned>(ebx),
+              static_cast<unsigned>(esi),
+              static_cast<unsigned>(edi),
+              static_cast<unsigned>(ebp),
+              static_cast<unsigned>(esp),
+              static_cast<unsigned>(stack0),
+              static_cast<unsigned>(stack4),
+              static_cast<unsigned>(stack8),
+              static_cast<unsigned>(stack12));
+
+    LogChooseQuantityPopupPassiveProbe("eax", eax);
+    LogChooseQuantityPopupPassiveProbe("ecx", ecx);
+    LogChooseQuantityPopupPassiveProbe("edx", edx);
+    LogChooseQuantityPopupPassiveProbe("ebx", ebx);
+    LogChooseQuantityPopupPassiveProbe("esi", esi);
+    LogChooseQuantityPopupPassiveProbe("edi", edi);
+    LogChooseQuantityPopupPassiveProbe("stack4", stack4);
+    LogChooseQuantityPopupPassiveProbe("stack8", stack8);
+    LogChooseQuantityPopupPassiveProbe("stack12", stack12);
+}
+
+extern "C" __declspec(naked) void ChooseQuantityPopupPassiveDetourNaked() {
+    __asm {
+        mov dword ptr [s_chooseQuantityPassiveLastEax], eax
+        mov dword ptr [s_chooseQuantityPassiveLastEcx], ecx
+        mov dword ptr [s_chooseQuantityPassiveLastEdx], edx
+        mov dword ptr [s_chooseQuantityPassiveLastEbx], ebx
+        mov dword ptr [s_chooseQuantityPassiveLastEsi], esi
+        mov dword ptr [s_chooseQuantityPassiveLastEdi], edi
+        mov dword ptr [s_chooseQuantityPassiveLastEbp], ebp
+        mov dword ptr [s_chooseQuantityPassiveLastEsp], esp
+        mov eax, [esp]
+        mov dword ptr [s_chooseQuantityPassiveLastStack0], eax
+        mov eax, [esp+4]
+        mov dword ptr [s_chooseQuantityPassiveLastStack4], eax
+        mov eax, [esp+8]
+        mov dword ptr [s_chooseQuantityPassiveLastStack8], eax
+        mov eax, [esp+12]
+        mov dword ptr [s_chooseQuantityPassiveLastStack12], eax
+        pushfd
+        pushad
+        call LogChooseQuantityPopupPassiveEntry
+        popad
+        popfd
+        jmp [s_chooseQuantityPopupOriginalRaw]
+    }
+}
+
 static void __cdecl OnChooseQuantityPopupUIMessage(void* a1, void* a2, void* a3) {
-    if (s_chooseQuantityPopupOriginal) {
-        s_chooseQuantityPopupOriginal(a1, a2, a3);
+    if (const auto original = GetChooseQuantityPopupOriginal()) {
+        original(a1, a2, a3);
     }
 
     const auto mode = static_cast<QuantityPromptAutomationMode>(
@@ -1414,6 +2348,16 @@ static bool EnsureChooseQuantityPopupHook() {
     uintptr_t start = 0;
     const char* resolvedLabel = "none";
     const char* resolvedMsg = nullptr;
+    ChooseQuantityPopupHookSeam resolvedSeam = ChooseQuantityPopupHookSeam::None;
+    uintptr_t strongAddr = 0;
+    uintptr_t strongStart = 0;
+    const char* strongLabel = nullptr;
+    const char* strongMsg = nullptr;
+    ChooseQuantityPopupHookSeam strongSeam = ChooseQuantityPopupHookSeam::None;
+    uintptr_t inventoryAddr = 0;
+    uintptr_t inventoryStart = 0;
+    const char* inventoryLabel = nullptr;
+    const char* inventoryMsg = nullptr;
     auto recoverCanonicalFunctionStart = [](uintptr_t candidate, uintptr_t candidateStart) -> uintptr_t {
         const uintptr_t scanFloor = candidate > 0x180 ? candidate - 0x180 : 0;
         uintptr_t best = candidateStart;
@@ -1483,11 +2427,61 @@ static bool EnsureChooseQuantityPopupHook() {
                   static_cast<unsigned>(candidateStart));
 
         if (candidateStart > 0x10000) {
-            addr = candidate;
-            start = candidateStart;
-            resolvedLabel = kChooseQuantityAssertLabels[i];
-            resolvedMsg = kChooseQuantityAssertMsgs[i];
-            break;
+            const bool isInventorySlot = strcmp(kChooseQuantityAssertLabels[i], "inventorySlot-fallback") == 0;
+            if (isInventorySlot) {
+                if (inventoryStart <= 0x10000) {
+                    inventoryAddr = candidate;
+                    inventoryStart = candidateStart;
+                    inventoryLabel = kChooseQuantityAssertLabels[i];
+                    inventoryMsg = kChooseQuantityAssertMsgs[i];
+                }
+            } else if (strongStart <= 0x10000) {
+                strongAddr = candidate;
+                strongStart = candidateStart;
+                strongLabel = kChooseQuantityAssertLabels[i];
+                strongMsg = kChooseQuantityAssertMsgs[i];
+                strongSeam = strcmp(kChooseQuantityAssertLabels[i], "maxCount-deref") == 0
+                    ? ChooseQuantityPopupHookSeam::MaxCountDeref
+                    : ChooseQuantityPopupHookSeam::MaxCountDirect;
+            }
+
+            if (!kPassiveOnlyChooseQuantityStrongSeams) {
+                addr = candidate;
+                start = candidateStart;
+                resolvedLabel = kChooseQuantityAssertLabels[i];
+                resolvedMsg = kChooseQuantityAssertMsgs[i];
+                resolvedSeam = isInventorySlot
+                    ? ChooseQuantityPopupHookSeam::InventorySlot
+                    : strongSeam;
+                break;
+            }
+        }
+    }
+    if (addr <= 0x10000 || start <= 0x10000) {
+        if (kPassiveOnlyChooseQuantityStrongSeams && inventoryStart > 0x10000) {
+            addr = inventoryAddr;
+            start = inventoryStart;
+            resolvedLabel = inventoryLabel ? inventoryLabel : "inventorySlot-fallback";
+            resolvedMsg = inventoryMsg;
+            resolvedSeam = ChooseQuantityPopupHookSeam::InventorySlot;
+            if (strongStart > 0x10000) {
+                Log::Info("TradeMgr: ChooseQuantityPopup preferring inventorySlot active hook at 0x%08X over passive stronger seam %s at 0x%08X",
+                          static_cast<unsigned>(inventoryStart),
+                          strongLabel ? strongLabel : "none",
+                          static_cast<unsigned>(strongStart));
+            }
+        } else if (strongStart > 0x10000) {
+            addr = strongAddr;
+            start = strongStart;
+            resolvedLabel = strongLabel ? strongLabel : "none";
+            resolvedMsg = strongMsg;
+            resolvedSeam = strongSeam;
+        } else if (inventoryStart > 0x10000) {
+            addr = inventoryAddr;
+            start = inventoryStart;
+            resolvedLabel = inventoryLabel ? inventoryLabel : "inventorySlot-fallback";
+            resolvedMsg = inventoryMsg;
+            resolvedSeam = ChooseQuantityPopupHookSeam::InventorySlot;
         }
     }
     if (addr <= 0x10000 || start <= 0x10000) {
@@ -1504,20 +2498,31 @@ static bool EnsureChooseQuantityPopupHook() {
         Log::Warn("TradeMgr: ChooseQuantityPopup function-start scan failed from 0x%08X", static_cast<unsigned>(addr));
         return false;
     }
-    if (MH_CreateHook(reinterpret_cast<void*>(addr), &OnChooseQuantityPopupUIMessage,
-                      reinterpret_cast<void**>(&s_chooseQuantityPopupOriginal)) != MH_OK) {
+    const bool passiveOnly = kPassiveOnlyChooseQuantityStrongSeams
+        && resolvedSeam != ChooseQuantityPopupHookSeam::None
+        && resolvedSeam != ChooseQuantityPopupHookSeam::InventorySlot;
+    void* detour = passiveOnly
+        ? reinterpret_cast<void*>(&ChooseQuantityPopupPassiveDetourNaked)
+        : reinterpret_cast<void*>(&OnChooseQuantityPopupUIMessage);
+    if (MH_CreateHook(reinterpret_cast<void*>(addr), detour,
+                      reinterpret_cast<void**>(&s_chooseQuantityPopupOriginalRaw)) != MH_OK) {
         Log::Warn("TradeMgr: ChooseQuantityPopup hook creation failed at 0x%08X", static_cast<unsigned>(addr));
         return false;
     }
     if (MH_EnableHook(reinterpret_cast<void*>(addr)) != MH_OK) {
         Log::Warn("TradeMgr: ChooseQuantityPopup hook enable failed at 0x%08X", static_cast<unsigned>(addr));
         MH_RemoveHook(reinterpret_cast<void*>(addr));
-        s_chooseQuantityPopupOriginal = nullptr;
+        s_chooseQuantityPopupOriginalRaw = nullptr;
         return false;
     }
     s_chooseQuantityPopupHookAddr = addr;
     s_chooseQuantityPopupHookInstalled = true;
-    Log::Info("TradeMgr: ChooseQuantityPopup hook installed at 0x%08X", static_cast<unsigned>(addr));
+    s_chooseQuantityPopupHookSeam = resolvedSeam;
+    s_chooseQuantityPopupPassiveOnly = passiveOnly;
+    Log::Info("TradeMgr: ChooseQuantityPopup hook installed at 0x%08X seam=%s mode=%s",
+              static_cast<unsigned>(addr),
+              ChooseQuantityPopupHookSeamToString(resolvedSeam),
+              passiveOnly ? "passive" : "active");
     return true;
 }
 
@@ -1561,6 +2566,29 @@ static bool DrainQueuedPromptClicks(const QueuedFrameClick* clicks, size_t count
     return false;
 }
 
+static bool ObservePassiveTradeQuantityPrompt(const char* actionLabel, uint32_t itemId) {
+    const uintptr_t frame = WaitForTradeQuantityPromptFrame();
+    InterlockedExchange(&s_pendingQuantityPromptClickCount, 0);
+    InterlockedExchange(&s_pendingQuantityPromptValue, 0);
+    InterlockedExchange(&s_pendingQuantityPromptMode, static_cast<LONG>(QuantityPromptAutomationMode::None));
+    if (frame < 0x10000) {
+        Log::Warn("TradeMgr: %s passive seam observed no prompt frame item=%u seam=%s",
+                  actionLabel ? actionLabel : "OfferItemPrompt",
+                  itemId,
+                  ChooseQuantityPopupHookSeamToString(s_chooseQuantityPopupHookSeam));
+        return false;
+    }
+    Log::Info("TradeMgr: %s passive seam observed prompt item=%u seam=%s frame=0x%08X frameId=%u childCount=%u context=0x%08X",
+              actionLabel ? actionLabel : "OfferItemPrompt",
+              itemId,
+              ChooseQuantityPopupHookSeamToString(s_chooseQuantityPopupHookSeam),
+              static_cast<unsigned>(frame),
+              UIMgr::GetFrameId(frame),
+              UIMgr::GetChildFrameCount(frame),
+              static_cast<unsigned>(UIMgr::GetFrameContext(frame)));
+    return true;
+}
+
 uint32_t GetTradeQuantityPromptFrame() {
     return static_cast<uint32_t>(FindTradeQuantityPromptFrame());
 }
@@ -1584,9 +2612,38 @@ bool HasNativeRemoveItem() {
 }
 
 bool EnableTradeWindowCaptureForPlayerTrade() {
-    // UpdateTradeCart MinHook trampoline crashes GW after ~2-3 seconds.
-    // The deferred offer needs an alternative mechanism.
-    Log::Info("TradeMgr: UpdateTradeCart hook SKIPPED (trampoline crashes GW)");
+    InterlockedExchange(&s_tradeCartCaptureRequested, 1);
+    InterlockedExchange(&s_tradeCartDisableQueued, 0);
+
+    if (!s_updateTradeCartOriginal) {
+        const bool installed = InstallTradeCartHook();
+        if (installed) {
+            Log::Info("TradeMgr: UpdateTradeCart hook armed on demand for player trade");
+        } else {
+            Log::Warn("TradeMgr: Failed to arm UpdateTradeCart hook for player trade");
+        }
+        return installed;
+    }
+
+    if (s_tradeCartHookEnabled) {
+        Log::Info("TradeMgr: UpdateTradeCart hook already enabled; capture re-armed");
+        return true;
+    }
+
+    if (Offsets::UpdateTradeCart <= 0x10000) {
+        Log::Warn("TradeMgr: UpdateTradeCart offset not resolved for re-enable");
+        return false;
+    }
+
+    const MH_STATUS mhStatus = MH_EnableHook(reinterpret_cast<LPVOID>(Offsets::UpdateTradeCart));
+    if (mhStatus != MH_OK && mhStatus != MH_ERROR_ENABLED) {
+        Log::Warn("TradeMgr: MH_EnableHook failed for UpdateTradeCart re-enable: %s",
+                  MH_StatusToString(mhStatus));
+        return false;
+    }
+
+    s_tradeCartHookEnabled = true;
+    Log::Info("TradeMgr: UpdateTradeCart hook re-enabled for player trade capture");
     return true;
 }
 
@@ -1817,17 +2874,28 @@ void CancelTrade(uint32_t actionRowIndex, int32_t preferredChildIndex, uint32_t 
     CtoS::TradeCancel();
 }
 
-void AcceptTrade() {
+static void AcceptTradeImpl(uint32_t viewRetryCount) {
+    if (viewRetryCount > 0u && ClickTradeWindowViewIfNeeded("accept_trade_view", viewRetryCount)) {
+        Log::Info("TradeMgr: AcceptTrade clicked view button; scheduling retry retries=%u", viewRetryCount);
+        QueueDelayedAcceptRetry(viewRetryCount);
+        return;
+    }
     if (Offsets::TradeAcceptOffer > 0x10000) {
         TradeVoidNative fn = reinterpret_cast<TradeVoidNative>(Offsets::TradeAcceptOffer);
         Log::Info("TradeMgr: AcceptTrade native call fn=0x%08X", static_cast<unsigned>(Offsets::TradeAcceptOffer));
         fn();
+        Log::Info("TradeMgr: AcceptTrade native call returned");
         return;
     }
+    Log::Info("TradeMgr: AcceptTrade raw packet fallback");
     CtoS::TradeAccept();
 }
 
-static uintptr_t GetTradeWindowFromGameContext();
+void AcceptTrade() {
+    AcceptTradeImpl(3u);
+}
+
+static uintptr_t GetTradeWindowFromGameContext(bool logDiagnostic);
 
 void OfferItem(uint32_t itemId, uint32_t quantity, uint32_t attemptsRemaining) {
     if (quantity == 0) quantity = 1;
@@ -1883,28 +2951,291 @@ void OfferItemPacket(uint32_t itemId, uint32_t quantity) {
     CtoS::TradeOfferItem(itemId, quantity);
 }
 
-static uintptr_t GetTradeWindowFromGameContext() {
-    const uintptr_t gc = Offsets::ResolveGameContext();
-    if (!gc) return 0;
+static bool TryReadTradeWindowCandidate(uintptr_t candidate, ResolvedTradeWindowView* out) {
+    if (candidate <= 0x10000 || !out) {
+        return false;
+    }
     __try {
-        const uintptr_t trade = *reinterpret_cast<uintptr_t*>(gc + 0x58);
-        return trade > 0x10000 ? trade : 0;
+        auto* window = reinterpret_cast<TradeWindowView*>(candidate);
+        const uint32_t itemsMax = window->items_max;
+        const uint32_t itemsCount = window->items_count;
+        const uint32_t frameId = window->frame_id;
+        const uint32_t state = window->state;
+        if (itemsMax == 0 || itemsMax > 64) {
+            return false;
+        }
+        if (itemsCount > itemsMax) {
+            return false;
+        }
+        if (frameId == 0 || frameId > 5000) {
+            return false;
+        }
+        if (state != 0u && state != 0x1000u) {
+            return false;
+        }
+        out->ctx = candidate;
+        out->state = state;
+        out->items_count = itemsCount;
+        out->items_max = itemsMax;
+        out->frame_id = frameId;
+        out->framePtr = UIMgr::GetFrameById(frameId);
+        out->score = 7u;
+        if (state == 0u) {
+            out->score += 1u;
+        }
+        if (out->framePtr > 0x10000) {
+            out->score += 3u;
+        }
+        return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
+        return false;
+    }
+}
+
+static void PromoteTradeWindowCandidate(
+    uintptr_t candidate,
+    uintptr_t sourceValue,
+    const char* sourceLabel,
+    uint32_t sourceOffset,
+    uint32_t derefCount,
+    ResolvedTradeWindowView* best) {
+    if (!best) {
+        return;
+    }
+    ResolvedTradeWindowView resolved{};
+    if (!TryReadTradeWindowCandidate(candidate, &resolved)) {
+        return;
+    }
+    resolved.sourceValue = sourceValue;
+    resolved.sourceLabel = sourceLabel ? sourceLabel : "";
+    resolved.sourceOffset = sourceOffset;
+    resolved.derefCount = derefCount;
+    const bool isBetter =
+        resolved.score > best->score
+        || (resolved.score == best->score && resolved.derefCount < best->derefCount)
+        || (resolved.score == best->score && resolved.derefCount == best->derefCount && best->ctx <= 0x10000);
+    if (isBetter) {
+        *best = resolved;
+    }
+}
+
+static void ProbeTradeWindowSourceValue(
+    uintptr_t sourceValue,
+    const char* sourceLabel,
+    uint32_t sourceOffset,
+    ResolvedTradeWindowView* best) {
+    if (sourceValue <= 0x10000 || !best) {
+        return;
+    }
+
+    PromoteTradeWindowCandidate(sourceValue, sourceValue, sourceLabel, sourceOffset, 0u, best);
+
+    uintptr_t deref1 = 0;
+    __try {
+        deref1 = *reinterpret_cast<uintptr_t*>(sourceValue);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        deref1 = 0;
+    }
+    PromoteTradeWindowCandidate(deref1, sourceValue, sourceLabel, sourceOffset, 1u, best);
+
+    uintptr_t deref2 = 0;
+    if (deref1 > 0x10000) {
+        __try {
+            deref2 = *reinterpret_cast<uintptr_t*>(deref1);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            deref2 = 0;
+        }
+    }
+    PromoteTradeWindowCandidate(deref2, sourceValue, sourceLabel, sourceOffset, 2u, best);
+}
+
+static void ProbeTradeWindowPointerTable(
+    uintptr_t base,
+    uint32_t beginOffset,
+    uint32_t endOffset,
+    const char* sourceLabel,
+    ResolvedTradeWindowView* best) {
+    if (base <= 0x10000 || !best || beginOffset > endOffset) {
+        return;
+    }
+    for (uint32_t offset = beginOffset; offset <= endOffset; offset += sizeof(uintptr_t)) {
+        uintptr_t sourceValue = 0;
+        __try {
+            sourceValue = *reinterpret_cast<uintptr_t*>(base + offset);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            sourceValue = 0;
+        }
+        ProbeTradeWindowSourceValue(sourceValue, sourceLabel, offset, best);
+    }
+}
+
+static uintptr_t GetTradeWindowFromGameContext(bool logDiagnostic) {
+    const uintptr_t capturedCtx = static_cast<uintptr_t>(InterlockedCompareExchange(&s_tradeWindowContext, 0, 0));
+    const uintptr_t uiCtx = static_cast<uintptr_t>(GetTradeWindowUiContext());
+    const uintptr_t gc = Offsets::ResolveGameContext();
+    uintptr_t tradeCtx = 0;
+    if (gc > 0x10000) {
+        __try {
+            tradeCtx = *reinterpret_cast<uintptr_t*>(gc + 0x58);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            tradeCtx = 0;
+        }
+    }
+
+    ResolvedTradeWindowView best{};
+    PromoteTradeWindowCandidate(capturedCtx, capturedCtx, "captured", 0u, 0u, &best);
+    PromoteTradeWindowCandidate(uiCtx, uiCtx, "uiCtx", 0u, 0u, &best);
+    ProbeTradeWindowPointerTable(gc, 0x58u, 0x88u, "gc", &best);
+    ProbeTradeWindowPointerTable(tradeCtx, 0x00u, 0x80u, "tradeCtx", &best);
+
+    if (logDiagnostic) {
+        if (best.ctx > 0x10000) {
+            Log::Info("TradeMgr: ResolveTradeWindow best ctx=0x%08X source=%s+0x%X deref=%u slot=0x%08X state=0x%X items_count=%u items_max=%u frame=0x%08X framePtr=0x%08X score=%u captured=0x%08X uiCtx=0x%08X gc=0x%08X tradeCtx=0x%08X",
+                      static_cast<unsigned>(best.ctx),
+                      best.sourceLabel ? best.sourceLabel : "",
+                      best.sourceOffset,
+                      best.derefCount,
+                      static_cast<unsigned>(best.sourceValue),
+                      best.state,
+                      best.items_count,
+                      best.items_max,
+                      static_cast<unsigned>(best.frame_id),
+                      static_cast<unsigned>(best.framePtr),
+                      best.score,
+                      static_cast<unsigned>(capturedCtx),
+                      static_cast<unsigned>(uiCtx),
+                      static_cast<unsigned>(gc),
+                      static_cast<unsigned>(tradeCtx));
+        } else {
+            Log::Warn("TradeMgr: ResolveTradeWindow found no plausible candidate captured=0x%08X uiCtx=0x%08X gc=0x%08X tradeCtx=0x%08X",
+                      static_cast<unsigned>(capturedCtx),
+                      static_cast<unsigned>(uiCtx),
+                      static_cast<unsigned>(gc),
+                      static_cast<unsigned>(tradeCtx));
+            if (gc > 0x10000) {
+                for (uint32_t offset = 0x58u; offset <= 0x78u; offset += sizeof(uintptr_t)) {
+                    uintptr_t sourceValue = 0;
+                    __try {
+                        sourceValue = *reinterpret_cast<uintptr_t*>(gc + offset);
+                    } __except (EXCEPTION_EXECUTE_HANDLER) {
+                        sourceValue = 0;
+                    }
+                    Log::Info("TradeMgr: ResolveTradeWindow raw gc+0x%X=0x%08X",
+                              offset,
+                              static_cast<unsigned>(sourceValue));
+                }
+            }
+            if (tradeCtx > 0x10000) {
+                for (uint32_t offset = 0x00u; offset <= 0x30u; offset += sizeof(uintptr_t)) {
+                    uintptr_t sourceValue = 0;
+                    __try {
+                        sourceValue = *reinterpret_cast<uintptr_t*>(tradeCtx + offset);
+                    } __except (EXCEPTION_EXECUTE_HANDLER) {
+                        sourceValue = 0;
+                    }
+                    Log::Info("TradeMgr: ResolveTradeWindow raw tradeCtx+0x%X=0x%08X",
+                              offset,
+                              static_cast<unsigned>(sourceValue));
+                }
+            }
+        }
+    }
+
+    return best.ctx;
+}
+
+static void OfferItemPromptQuantityAttempt(uint32_t itemId, uint32_t attemptsRemaining) {
+    const bool logDiagnostic = attemptsRemaining >= 5u || attemptsRemaining == 0u;
+    const uintptr_t ctx = GetTradeWindowFromGameContext(logDiagnostic);
+    const uintptr_t capturedCtx = static_cast<uintptr_t>(InterlockedCompareExchange(&s_tradeWindowContext, 0, 0));
+    const uintptr_t uiFrame = static_cast<uintptr_t>(GetTradeWindowUiFrame());
+    const uintptr_t uiCtx = static_cast<uintptr_t>(GetTradeWindowUiContext());
+
+    Log::Info("TradeMgr: OfferItemPromptQuantity request item=%u ctx=0x%08X capturedCtx=0x%08X uiFrame=0x%08X uiCtx=0x%08X fn=0x%08X onGameThread=%u retries=%u",
+              itemId,
+              static_cast<unsigned>(ctx),
+              static_cast<unsigned>(capturedCtx),
+              static_cast<unsigned>(uiFrame),
+              static_cast<unsigned>(uiCtx),
+              static_cast<unsigned>(Offsets::OfferTradeItem),
+              GameThread::IsOnGameThread() ? 1u : 0u,
+              attemptsRemaining);
+    if (ctx <= 0x10000) {
+        if (attemptsRemaining > 0u) {
+            Log::Warn("TradeMgr: OfferItemPromptQuantity waiting for trade window context item=%u retries=%u",
+                      itemId,
+                      attemptsRemaining);
+            QueueDelayedPromptOpenRetry(itemId, attemptsRemaining);
+        } else {
+            Log::Warn("TradeMgr: OfferItemPromptQuantity native context unavailable after retries");
+            QueueDisableTradeCartHookOnce();
+        }
+        return;
+    }
+
+    auto* window = reinterpret_cast<TradeWindowView*>(ctx);
+    __try {
+        Log::Info("TradeMgr: OfferItemPromptQuantity precheck state=0x%X items_count=%u items_max=%u frame=0x%08X",
+                  window->state,
+                  window->items_count,
+                  window->items_max,
+                  static_cast<unsigned>(window->frame_id));
+        if (window->items_max == 0 || window->items_max > 64 || window->frame_id == 0) {
+            if (attemptsRemaining > 0u) {
+                Log::Warn("TradeMgr: OfferItemPromptQuantity implausible window ctx=0x%08X state=0x%X items_max=%u frame=0x%08X; retrying",
+                          static_cast<unsigned>(ctx),
+                          window->state,
+                          window->items_max,
+                          static_cast<unsigned>(window->frame_id));
+                QueueDelayedPromptOpenRetry(itemId, attemptsRemaining);
+            } else {
+                Log::Warn("TradeMgr: OfferItemPromptQuantity implausible window ctx=0x%08X state=0x%X items_max=%u frame=0x%08X",
+                          static_cast<unsigned>(ctx),
+                          window->state,
+                          window->items_max,
+                          static_cast<unsigned>(window->frame_id));
+                QueueDisableTradeCartHookOnce();
+            }
+            return;
+        }
+        if (window->state != 0) {
+            if (attemptsRemaining > 0u) {
+                Log::Warn("TradeMgr: OfferItemPromptQuantity blocked; trade window state=0x%X, retrying", window->state);
+                QueueDelayedPromptOpenRetry(itemId, attemptsRemaining);
+            } else {
+                Log::Warn("TradeMgr: OfferItemPromptQuantity blocked; trade window state=0x%X", window->state);
+                QueueDisableTradeCartHookOnce();
+            }
+            return;
+        }
+        OfferTradeItemNative fn = reinterpret_cast<OfferTradeItemNative>(Offsets::OfferTradeItem);
+        fn(window, nullptr, itemId, 0, 1);
+        Log::Info("TradeMgr: OfferItemPromptQuantity native call returned");
+        QueueDisableTradeCartHookOnce();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("TradeMgr: OfferItemPromptQuantity faulted");
+        QueueDisableTradeCartHookOnce();
     }
 }
 
 void OfferItemPromptQuantity(uint32_t itemId) {
-    // Use raw packet for the prompt-open (quantity=0).
-    // The native OfferTradeItem function crashes the game on the next
-    // frame regardless of context source (captured hook, GameContext,
-    // pre-dispatch, post-dispatch) — it requires game-internal state
-    // that isn't available during our hook's execution context.
-    // Arm deferred offer with quantity=0 (opens the quantity prompt popup)
-    Log::Info("TradeMgr: OfferItemPromptQuantity arming deferred offer item=%u quantity=0", itemId);
-    InterlockedExchange(&s_pendingOffer.itemId, static_cast<LONG>(itemId));
+    if (Offsets::OfferTradeItem <= 0x10000) {
+        Log::Warn("TradeMgr: OfferItemPromptQuantity native fn unavailable");
+        return;
+    }
+    if (!GameThread::IsInitialized()) {
+        Log::Warn("TradeMgr: OfferItemPromptQuantity GameThread not initialized");
+        return;
+    }
+
+    InterlockedExchange(&s_pendingOffer.itemId, 0);
     InterlockedExchange(&s_pendingOffer.quantity, 0);
-    InterlockedExchange(&s_pendingOffer.armed, 1);
+    InterlockedExchange(&s_pendingOffer.armed, 0);
+
+    Log::Info("TradeMgr: OfferItemPromptQuantity queueing post-dispatch native prompt-open item=%u", itemId);
+    GameThread::EnqueuePost([itemId]() {
+        OfferItemPromptQuantityAttempt(itemId, 5u);
+    });
 }
 
 // Forward declarations for functions defined later in this file
@@ -1918,15 +3249,24 @@ bool OfferItemPromptValue(uint32_t itemId, uint32_t quantity) {
     }
     if (!EnsureChooseQuantityPopupHook()) return false;
     InterlockedExchange(&s_pendingQuantityPromptClickCount, 0);
+    InterlockedExchange(&s_pendingQuantityPromptItemId, static_cast<LONG>(itemId));
     InterlockedExchange(&s_pendingQuantityPromptValue, static_cast<LONG>(quantity));
     InterlockedExchange(&s_pendingQuantityPromptMode, static_cast<LONG>(QuantityPromptAutomationMode::ValueOffer));
     OfferItemPromptQuantity(itemId);
+    if (IsChooseQuantityPopupPassiveOnly()) {
+        Log::Info("TradeMgr: OfferItemPromptValue passive seam active; observing prompt open only item=%u quantity=%u seam=%s",
+                  itemId,
+                  quantity,
+                  ChooseQuantityPopupHookSeamToString(s_chooseQuantityPopupHookSeam));
+        if (!ObservePassiveTradeQuantityPrompt("OfferItemPromptValue", itemId)) {
+            return false;
+        }
+        return ConfirmTradeQuantityPromptValue(quantity);
+    }
     const LONG count = InterlockedCompareExchange(&s_pendingQuantityPromptClickCount, 0, 0);
     if (count > 0) {
         const bool clicked = DrainQueuedPromptClicks(s_pendingQuantityPromptClicks, static_cast<size_t>(count));
-        Sleep(250);
-        if (clicked && !IsTradeQuantityPromptOpen()) {
-            Log::Info("TradeMgr: OfferItemPromptValue callback path succeeded item=%u quantity=%u", itemId, quantity);
+        if (clicked && WaitForPromptCallbackOfferResult(itemId, quantity, "OfferItemPromptValue")) {
             return true;
         }
     }
@@ -1942,28 +3282,55 @@ bool OfferItemPromptValue(uint32_t itemId, uint32_t quantity) {
 bool OfferItemPromptMax(uint32_t itemId) {
     if (!EnsureChooseQuantityPopupHook()) return false;
     InterlockedExchange(&s_pendingQuantityPromptClickCount, 0);
+    InterlockedExchange(&s_pendingQuantityPromptItemId, static_cast<LONG>(itemId));
     InterlockedExchange(&s_pendingQuantityPromptMode, static_cast<LONG>(QuantityPromptAutomationMode::MaxOffer));
     OfferItemPromptQuantity(itemId);
+    if (IsChooseQuantityPopupPassiveOnly()) {
+        Log::Info("TradeMgr: OfferItemPromptMax passive seam active; observing prompt open only item=%u seam=%s",
+                  itemId,
+                  ChooseQuantityPopupHookSeamToString(s_chooseQuantityPopupHookSeam));
+        if (!ObservePassiveTradeQuantityPrompt("OfferItemPromptMax", itemId)) {
+            return false;
+        }
+        Item* item = ItemMgr::GetItemById(itemId);
+        if (item && item->quantity > 1u) {
+            Log::Info("TradeMgr: OfferItemPromptMax passive seam rerouting to exact quantity confirmation item=%u quantity=%u",
+                      itemId,
+                      item->quantity);
+            return ConfirmTradeQuantityPromptValue(item->quantity);
+        }
+        return ConfirmTradeQuantityPromptMax();
+    }
     const LONG count = InterlockedCompareExchange(&s_pendingQuantityPromptClickCount, 0, 0);
     if (count <= 0) {
         Log::Warn("TradeMgr: OfferItemPromptMax no prompt clicks were captured");
         return false;
     }
     const bool clicked = DrainQueuedPromptClicks(s_pendingQuantityPromptClicks, static_cast<size_t>(count));
-    Sleep(250);
-    return clicked && !IsTradeQuantityPromptOpen();
+    Item* item = ItemMgr::GetItemById(itemId);
+    const uint32_t expectedQuantity = (item && item->quantity > 0u) ? item->quantity : 1u;
+    return clicked && WaitForPromptCallbackOfferResult(itemId, expectedQuantity, "OfferItemPromptMax");
 }
 
 bool OfferItemPromptDefault(uint32_t itemId) {
     if (!EnsureChooseQuantityPopupHook()) return false;
     InterlockedExchange(&s_pendingQuantityPromptClickCount, 0);
+    InterlockedExchange(&s_pendingQuantityPromptItemId, static_cast<LONG>(itemId));
     InterlockedExchange(&s_pendingQuantityPromptMode, static_cast<LONG>(QuantityPromptAutomationMode::DefaultOffer));
     OfferItemPromptQuantity(itemId);
+    if (IsChooseQuantityPopupPassiveOnly()) {
+        Log::Info("TradeMgr: OfferItemPromptDefault passive seam active; observing prompt open only item=%u seam=%s",
+                  itemId,
+                  ChooseQuantityPopupHookSeamToString(s_chooseQuantityPopupHookSeam));
+        if (!ObservePassiveTradeQuantityPrompt("OfferItemPromptDefault", itemId)) {
+            return false;
+        }
+        return ConfirmTradeQuantityPromptValue(1u);
+    }
     const LONG count = InterlockedCompareExchange(&s_pendingQuantityPromptClickCount, 0, 0);
     if (count > 0) {
         const bool clicked = DrainQueuedPromptClicks(s_pendingQuantityPromptClicks, static_cast<size_t>(count));
-        Sleep(250);
-        if (clicked && !IsTradeQuantityPromptOpen()) {
+        if (clicked && WaitForPromptCallbackOfferResult(itemId, 1u, "OfferItemPromptDefault")) {
             return true;
         }
     }
@@ -1983,6 +3350,14 @@ bool ConfirmTradeQuantityPromptMax() {
         Log::Warn("TradeMgr: ConfirmTradeQuantityPromptMax no prompt frame found");
         return false;
     }
+    DebugDumpTradeQuantityPromptTree(frame, "trade-quantity-max-visible");
+    Sleep(250);
+    frame = FindTradeQuantityPromptFrame();
+    if (frame < 0x10000) {
+        Log::Warn("TradeMgr: ConfirmTradeQuantityPromptMax prompt disappeared during post-visible wait");
+        return false;
+    }
+    DebugDumpTradeQuantityPromptTree(frame, "trade-quantity-max-ready");
     const uintptr_t maxCandidates[] = {
         ResolvePromptNestedChildByOffset(frame, kTradeQuantityPromptMaxChildOffsetId, 3u),
         ResolvePromptNestedChildByOffset(frame, kTradeQuantityPromptMaxChildOffsetId, 2u),
@@ -2005,21 +3380,18 @@ bool ConfirmTradeQuantityPromptMax() {
         const uintptr_t maxBtn = ChoosePromptClickFrame(&maxCandidates[maxIndex], 1);
         if (maxBtn < 0x10000) continue;
 
-        const QueuedFrameClick maxClick[] = {
-            {UIMgr::GetFrameId(maxBtn), GetTickCount()}
-        };
-        bool clickedMax = DrainQueuedPromptClicks(maxClick, _countof(maxClick));
-        if (!clickedMax) {
-            clickedMax = UIMgr::ButtonClick(maxBtn);
-        }
+        const bool clickedMax = ClickTradeQuantityPromptButton(maxBtn, "max");
         Log::Info("TradeMgr: ConfirmTradeQuantityPromptMax max candidate=%u frame=0x%08X frameId=%u clicked=%u",
                   static_cast<unsigned>(maxIndex),
                   static_cast<unsigned>(maxBtn),
-                  maxClick[0].frame_id,
+                  UIMgr::GetFrameId(maxBtn),
                   clickedMax ? 1u : 0u);
         if (!clickedMax) continue;
 
-        Sleep(120);
+        frame = FindTradeQuantityPromptFrame();
+        if (frame > 0x10000) {
+            DebugDumpTradeQuantityPromptTree(frame, "trade-quantity-max-after-max");
+        }
 
         for (size_t okIndex = 0; okIndex < _countof(okCandidates); ++okIndex) {
             frame = FindTradeQuantityPromptFrame();
@@ -2033,26 +3405,24 @@ bool ConfirmTradeQuantityPromptMax() {
             const uintptr_t okBtn = ChoosePromptClickFrame(&okCandidates[okIndex], 1);
             if (okBtn < 0x10000) continue;
 
-            const QueuedFrameClick okClick[] = {
-                {UIMgr::GetFrameId(okBtn), GetTickCount()}
-            };
-            bool clickedOk = DrainQueuedPromptClicks(okClick, _countof(okClick));
-            if (!clickedOk) {
-                clickedOk = UIMgr::ButtonClick(okBtn);
-            }
+            const bool clickedOk = ClickTradeQuantityPromptButton(okBtn, "ok");
             Log::Info("TradeMgr: ConfirmTradeQuantityPromptMax ok candidate=%u frame=0x%08X frameId=%u clicked=%u",
                       static_cast<unsigned>(okIndex),
                       static_cast<unsigned>(okBtn),
-                      okClick[0].frame_id,
+                      UIMgr::GetFrameId(okBtn),
                       clickedOk ? 1u : 0u);
             if (!clickedOk) continue;
 
-            Sleep(200);
             if (!IsTradeQuantityPromptOpen()) {
                 Log::Info("TradeMgr: ConfirmTradeQuantityPromptMax succeeded with max candidate=%u ok candidate=%u",
                           static_cast<unsigned>(maxIndex),
                           static_cast<unsigned>(okIndex));
                 return true;
+            }
+
+            frame = FindTradeQuantityPromptFrame();
+            if (frame > 0x10000) {
+                DebugDumpTradeQuantityPromptTree(frame, "trade-quantity-max-after-ok");
             }
         }
     }
@@ -2073,6 +3443,10 @@ bool ConfirmTradeQuantityPromptValue(uint32_t quantity) {
         return false;
     }
     DebugDumpTradeQuantityPromptTree(frame, "trade-quantity-value");
+    DebugDumpTradeQuantityPromptCallbacks(frame, "trade-quantity-value");
+
+    uint32_t backingQty = 0;
+    const bool wroteBackingCount = TryWriteTradeQuantityPromptBackingCount(frame, quantity, "initial", &backingQty);
 
     if (quantity > 1u && TryPromptSpinnerAdjust(frame, quantity)) {
         uintptr_t okButtons[4] = {};
@@ -2100,6 +3474,19 @@ bool ConfirmTradeQuantityPromptValue(uint32_t quantity) {
 
     const uintptr_t directValueFrame = UIMgr::GetChildFrameByOffset(frame, kTradeQuantityPromptValueChildOffsetId);
     if (directValueFrame > 0x10000 && EnterPromptQuantityByKeypress(directValueFrame, quantity)) {
+        frame = FindTradeQuantityPromptFrame();
+        if (frame < 0x10000) {
+            Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue prompt closed immediately after keypress quantity=%u", quantity);
+            return true;
+        }
+        if (frame > 0x10000) {
+            TryWriteTradeQuantityPromptBackingCount(frame, quantity, "keypress");
+        }
+        if (TryFinalizeTradeQuantityPromptByEnter(frame, directValueFrame, "keypress")) {
+            Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue Enter finalized keypress path quantity=%u", quantity);
+            return true;
+        }
+
         uintptr_t okButtons[4] = {};
         const size_t okButtonCount = CollectPromptOkButtons(frame, okButtons, _countof(okButtons));
         for (size_t okIndex = 0; okIndex < okButtonCount; ++okIndex) {
@@ -2123,6 +3510,22 @@ bool ConfirmTradeQuantityPromptValue(uint32_t quantity) {
                 Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue keypress path closed prompt quantity=%u", quantity);
                 return true;
             }
+        }
+    }
+
+    if (wroteBackingCount) {
+        frame = FindTradeQuantityPromptFrame();
+        if (frame < 0x10000) {
+            Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue prompt closed after backing-count write quantity=%u applied=%u",
+                      quantity,
+                      backingQty);
+            return true;
+        }
+        if (frame > 0x10000 && TryFinalizeTradeQuantityPromptByEnter(frame, directValueFrame, "backing-count")) {
+            Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue Enter finalized backing-count path quantity=%u applied=%u",
+                      quantity,
+                      backingQty);
+            return true;
         }
     }
 
@@ -2205,6 +3608,20 @@ bool ConfirmTradeQuantityPromptValue(uint32_t quantity) {
                       static_cast<unsigned>(attemptIndex), attempt.label, attempt.mode);
             continue;
         }
+        uint32_t candidateAppliedQty = 0;
+        const bool wroteCandidateBackingCount = TryWriteTradeQuantityPromptBackingCount(frame,
+                                                                                         quantity,
+                                                                                         attempt.label,
+                                                                                         &candidateAppliedQty);
+        if (TryFinalizeTradeQuantityPromptByEnter(frame, valueFrame, attempt.label)) {
+            Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue Enter finalized candidate %u label=%s mode=%s applied=%u wroteBacking=%u",
+                      static_cast<unsigned>(attemptIndex),
+                      attempt.label,
+                      attempt.mode,
+                      candidateAppliedQty,
+                      wroteCandidateBackingCount ? 1u : 0u);
+            return true;
+        }
 
         for (size_t okIndex = 0; okIndex < refreshedOkButtonCount; ++okIndex) {
             const uintptr_t okBtn = okButtons[okIndex];
@@ -2237,12 +3654,38 @@ bool ConfirmTradeQuantityPromptValue(uint32_t quantity) {
         }
     }
 
+    const uint32_t pendingItemId = static_cast<uint32_t>(InterlockedCompareExchange(&s_pendingQuantityPromptItemId, 0, 0));
+    uint32_t observedQuantity = 0;
+    if (pendingItemId != 0
+        && ReadTradePlayerOfferQuantity(pendingItemId, &observedQuantity)
+        && observedQuantity >= quantity) {
+        frame = FindTradeQuantityPromptFrame();
+        Log::Info("TradeMgr: ConfirmTradeQuantityPromptValue treating stale prompt as satisfied item=%u requested=%u observed=%u promptFrame=0x%08X childCount=%u",
+                  pendingItemId,
+                  quantity,
+                  observedQuantity,
+                  static_cast<unsigned>(frame),
+                  frame > 0x10000 ? UIMgr::GetChildFrameCount(frame) : 0u);
+        return true;
+    }
+
     Log::Warn("TradeMgr: ConfirmTradeQuantityPromptValue no candidate closed the prompt for quantity '%S'",
               quantityBuf);
     return false;
 }
 
-void SubmitOffer(uint32_t gold) {
+static void SubmitOfferImpl(uint32_t gold, uint32_t viewRetryCount) {
+    if (viewRetryCount > 0u && ClickTradeWindowViewIfNeeded("submit_trade_offer_view", viewRetryCount)) {
+        Log::Info("TradeMgr: SubmitOffer clicked view button; scheduling retry gold=%u retries=%u",
+                  gold,
+                  viewRetryCount);
+        QueueDelayedSubmitRetry(gold, viewRetryCount);
+        return;
+    }
+    if (gold == 0u && ClickTradeWindowRootButton(kTradeWindowSubmitButtonHash, "submit_trade_offer")) {
+        Log::Info("TradeMgr: SubmitOffer queued via trade-window submit button gold=%u", gold);
+        return;
+    }
     if (Offsets::TradeSendOffer > 0x10000) {
         TradeDoActionNative fn = reinterpret_cast<TradeDoActionNative>(Offsets::TradeSendOffer);
         Log::Info("TradeMgr: SubmitOffer native call fn=0x%08X gold=%u",
@@ -2253,6 +3696,10 @@ void SubmitOffer(uint32_t gold) {
     }
     Log::Info("TradeMgr: SubmitOffer raw packet fallback gold=%u", gold);
     CtoS::SendPacket(2, Packets::TRADE_SUBMIT_OFFER, gold);
+}
+
+void SubmitOffer(uint32_t gold) {
+    SubmitOfferImpl(gold, 3u);
 }
 
 void ChangeOffer() {
@@ -2279,8 +3726,166 @@ void RemoveItem(uint32_t slotOrItemId) {
     ChangeOffer();
 }
 
-void BuyMaterials(uint32_t modelId, uint32_t quantity) {
-    CtoS::SendPacket(3, Packets::BUY_MATERIALS, modelId, quantity);
+bool BuyMaterials(uint32_t modelId, uint32_t quantity) {
+    if (modelId == 0 || quantity == 0) return false;
+    if (!Offsets::RequestQuote || !Offsets::Transaction) return false;
+    if (!TraderHook::IsInitialized() && !TraderHook::Initialize()) return false;
+    if (!GameThread::IsInitialized() || GameThread::IsOnGameThread()) {
+        Log::Warn("TradeMgr: BuyMaterials requires caller off the game thread model=%u qty=%u gt_init=%u on_gt=%u",
+                  modelId, quantity, GameThread::IsInitialized() ? 1u : 0u, GameThread::IsOnGameThread() ? 1u : 0u);
+        return false;
+    }
+
+    const uint32_t merchantCount = GetMerchantItemCount();
+    if (merchantCount == 0) {
+        Log::Warn("TradeMgr: BuyMaterials called with no merchant inventory open model=%u qty=%u", modelId, quantity);
+        return false;
+    }
+
+    const uint32_t packs = (quantity + 9u) / 10u;
+    uint32_t boughtPacks = 0;
+    uint32_t traderItemId = 0;
+    for (uint32_t pack = 0; pack < packs; ++pack) {
+        if (!traderItemId) {
+            traderItemId = ResolveTraderMaterialItemId(modelId, pack + 1u, packs);
+        }
+        if (!traderItemId) {
+            Log::Warn("TradeMgr: BuyMaterials could not resolve merchant item for model=%u pack=%u/%u",
+                      modelId, pack + 1u, packs);
+            if (pack == 0) {
+                LogMerchantMaterialSnapshot(modelId);
+            }
+            break;
+        }
+
+        TraderHook::Reset();
+        const TraderQuoteTask quoteTask{traderItemId};
+        GameThread::EnqueueRaw(&RequestTraderQuoteInvoker, &quoteTask, sizeof(quoteTask));
+
+        const DWORD quoteStart = GetTickCount();
+        while ((GetTickCount() - quoteStart) < 5000u) {
+            const uint32_t quotedCost = TraderHook::GetCostValue();
+            if (quotedCost > 0 && quotedCost < 100000u) {
+                break;
+            }
+            Sleep(25);
+        }
+
+        const uint32_t quotedCost = TraderHook::GetCostValue();
+        const uint32_t quotedItemId = TraderHook::GetCostItemId();
+        if (quotedCost == 0 || quotedCost >= 100000u || quotedItemId == 0) {
+            traderItemId = 0;
+            Log::Warn("TradeMgr: BuyMaterials quote failed model=%u pack=%u/%u quotedItem=%u quotedCost=%u",
+                      modelId, pack + 1u, packs, quotedItemId, quotedCost);
+            break;
+        }
+
+        const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
+        const TraderTransactTask txTask{quotedItemId, quotedCost};
+        GameThread::EnqueueRaw(&TransactionTraderBuyInvoker, &txTask, sizeof(txTask));
+
+        const DWORD buyStart = GetTickCount();
+        bool buyObserved = false;
+        while ((GetTickCount() - buyStart) < 5000u) {
+            if (ItemMgr::GetGoldCharacter() < goldBefore) {
+                buyObserved = true;
+                break;
+            }
+            Sleep(25);
+        }
+        if (!buyObserved) {
+            traderItemId = 0;
+            Log::Warn("TradeMgr: BuyMaterials transact did not change gold model=%u pack=%u/%u item=%u cost=%u goldBefore=%u goldAfter=%u",
+                      modelId, pack + 1u, packs, quotedItemId, quotedCost,
+                      goldBefore, ItemMgr::GetGoldCharacter());
+            break;
+        }
+
+        ++boughtPacks;
+        Sleep(ChatMgr::GetPing() + 250);
+    }
+
+    Log::Info("TradeMgr: BuyMaterials native flow model=%u requestedQty=%u requestedPacks=%u boughtPacks=%u",
+              modelId, quantity, packs, boughtPacks);
+    return boughtPacks > 0;
+}
+
+bool SellMaterialsToTrader(uint32_t itemId, uint32_t transactions) {
+    if (itemId == 0 || transactions == 0) return false;
+    if (!Offsets::RequestQuote || !Offsets::Transaction) return false;
+    if (!TraderHook::IsInitialized() && !TraderHook::Initialize()) return false;
+    if (!GameThread::IsInitialized() || GameThread::IsOnGameThread()) {
+        Log::Warn("TradeMgr: SellMaterialsToTrader requires caller off the game thread item=%u tx=%u gt_init=%u on_gt=%u",
+                  itemId, transactions, GameThread::IsInitialized() ? 1u : 0u, GameThread::IsOnGameThread() ? 1u : 0u);
+        return false;
+    }
+    if (GetMerchantItemCount() == 0) {
+        Log::Warn("TradeMgr: SellMaterialsToTrader called with no trader inventory open item=%u tx=%u",
+                  itemId, transactions);
+        return false;
+    }
+
+    Item* inventoryItem = ItemMgr::GetItemById(itemId);
+    const uint32_t modelId = inventoryItem ? inventoryItem->model_id : 0u;
+    if (!inventoryItem || modelId == 0) {
+        Log::Warn("TradeMgr: SellMaterialsToTrader could not resolve inventory item=%u model=%u",
+                  itemId, modelId);
+        return false;
+    }
+
+    uint32_t soldCount = 0;
+    for (uint32_t tx = 0; tx < transactions; ++tx) {
+        TraderHook::Reset();
+        const uint32_t initialQuoteId = TraderHook::GetQuoteId();
+        const TraderQuoteTask quoteTask{itemId};
+        GameThread::EnqueueRaw(&RequestTraderSellQuoteInvoker, &quoteTask, sizeof(quoteTask));
+
+        const DWORD quoteStart = GetTickCount();
+        bool quoteObserved = false;
+        while ((GetTickCount() - quoteStart) < 5000u) {
+            if (TraderHook::GetQuoteId() != initialQuoteId) {
+                quoteObserved = true;
+                break;
+            }
+            Sleep(25);
+        }
+
+        const uint32_t quotedValue = TraderHook::GetCostValue();
+        const uint32_t quotedItemId = TraderHook::GetCostItemId();
+        if (!quoteObserved || quotedValue == 0 || quotedValue >= 100000u) {
+            Log::Warn("TradeMgr: SellMaterialsToTrader quote failed inventory=%u model=%u tx=%u/%u quoteObserved=%u quotedItem=%u quotedValue=%u",
+                      itemId, modelId, tx + 1u, transactions, quoteObserved ? 1u : 0u, quotedItemId, quotedValue);
+            LogMerchantMaterialSnapshot(modelId);
+            break;
+        }
+
+        const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
+        const TraderSellTask sellTask{itemId, quotedValue};
+        GameThread::EnqueueRaw(&TransactionTraderSellInvoker, &sellTask, sizeof(sellTask));
+
+        const DWORD sellStart = GetTickCount();
+        bool sellObserved = false;
+        while ((GetTickCount() - sellStart) < 5000u) {
+            if (ItemMgr::GetGoldCharacter() > goldBefore) {
+                sellObserved = true;
+                break;
+            }
+            Sleep(25);
+        }
+        if (!sellObserved) {
+            Log::Warn("TradeMgr: SellMaterialsToTrader transact did not change gold inventory=%u model=%u tx=%u/%u quotedItem=%u value=%u goldBefore=%u goldAfter=%u",
+                      itemId, modelId, tx + 1u, transactions, quotedItemId, quotedValue,
+                      goldBefore, ItemMgr::GetGoldCharacter());
+            break;
+        }
+
+        ++soldCount;
+        Sleep(ChatMgr::GetPing() + 250);
+    }
+
+    Log::Info("TradeMgr: SellMaterialsToTrader native flow item=%u requestedTx=%u soldTx=%u",
+              itemId, transactions, soldCount);
+    return soldCount > 0;
 }
 
 void RequestQuote(uint32_t itemId) {

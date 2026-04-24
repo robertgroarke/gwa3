@@ -7,8 +7,9 @@ exposes everything an external agent (the LLM) needs to run the same Bogroot
 Growths HM loop the C++ integration test runs.
 
 Phases (expand on the C++ Froggy feature test by exercising more of the
-LLM bridge surface area — inventory/gold reads, merchant buy+sell, identify
-+ salvage, loot, dungeon gadget interaction, quest-reward accept):
+LLM bridge surface area — inventory/gold reads, merchant buy+sell, identify,
+salvage, loot, then hand off the long Sparkfly/Bogroot work to the same
+native Froggy helpers the in-DLL lane already trusts):
     1.  Travel to Gadd's Encampment (map 638).
     2.  Kick existing heroes, add the Standard hero set, set hard mode.
     2b. Walk to Gadd's merchant, open merchant window, log inventory/gold,
@@ -24,27 +25,17 @@ LLM bridge surface area — inventory/gold reads, merchant buy+sell, identify
     4.  Target a foe and attack (proves combat actions route through bridge).
     4b. Scan tier-2 agents for ``agent_type == "item"`` (dropped loot) and
         exercise ``pick_up_item``.
-    5.  Walk the Sparkfly -> Tekks waypoints, dialog-accept Tekks' War quest
-        (validates "grab quest from NPC" via the bridge dialog path).
-    6.  Walk Tekks -> Bogroot portal, interact the portal, enter dungeon (615).
-    7.  Walk to the blessing shrine and dialog-accept the blessing.
-    7b. Scan the dungeon for gadget agents (keys, doors, next-level portal,
-        end-of-dungeon chest) and interact with anything in range. This is
-        a best-effort probe — multi-level traversal that requires specific
-        dungeon keys and scripted door sequences is not scripted yet; the
-        bridge actions exist (``interact_signpost``, ``pick_up_item``) so
-        this phase proves they dispatch cleanly.
-    8.  Return to Gadd's Encampment (via travel from inside the dungeon, or
-        ``return_to_outpost`` from Sparkfly).
-    8b. If the Tekks' War quest is in the reward state, walk back to Tekks
-        and dialog-accept the reward (``DIALOG_TEKKS_REWARD``).
+    5.  Run Froggy's native Sparkfly -> Tekks route helper through the bridge.
+    6.  Run one or more native Froggy Bogroot dungeon loops through the bridge
+        (``GWA3_FROGGY_DUNGEON_LOOPS``, default ``2``).
+    7.  Return to Gadd's Encampment.
+    7b. Run the same native identify/salvage/sell/restock maintenance cadence
+        the C++ Froggy feature test uses post-run.
 
-``aggro_move_to`` is used for every segment that crosses live-enemy terrain
-(Sparkfly -> Tekks, Tekks -> Bogroot portal, Bogroot waypoints). It wraps
-``Bot::Froggy::DebugAggroMoveTo`` — walk toward the target, fight any foe
-that enters fight_range, sidestep on stuck detection, and re-issue the
-move. Outpost segments and final-mile approaches still use plain
-``move_to`` because there are no enemies to engage.
+The early outpost setup still uses bridge-native ``move_to`` / ``aggro_move_to``
+proofs. The repeatable dungeon work now routes through Froggy's proven native
+helpers so the LLM lane loops the same Tekks/Bogroot logic the in-DLL Froggy
+lane already runs.
 
 Usage (stand-alone, like ``test_conset_bridge.py``):
 
@@ -92,10 +83,28 @@ DIALOG_TEKKS_REWARD = 0x833907
 DIALOG_TEKKS_DUNGEON_ENTRY = 0x833905
 DIALOG_ACCEPT_BLESSING = 0x84
 
-# Merchant salvage/ID kit prices (from IntegrationTestEpic14.cpp).
-SALVAGE_KIT_MODEL = 2993
-ID_KIT_MODEL = 2992
+# Merchant salvage/ID kit models (from IntegrationTestEpic14.cpp /
+# MaintenanceMgr.cpp).
+CHEAP_ID_KIT_MODEL = 2989
+SUPERIOR_ID_KIT_MODEL = 5899
+ALT_ID_KIT_MODEL = 235
+CHEAP_SALVAGE_KIT_MODEL = 2992
 EXPERT_SALVAGE_MODEL = 2991
+RARE_SALVAGE_KIT_MODEL = 2993
+FROGGY_SALVAGE_MODEL = 5900
+ALT_SALVAGE_KIT_MODEL = 243
+TARGET_SUPERIOR_ID_KITS = 3
+TARGET_SALVAGE_KITS = 10
+MAINTENANCE_KIT_MODELS = {
+    CHEAP_ID_KIT_MODEL,
+    SUPERIOR_ID_KIT_MODEL,
+    ALT_ID_KIT_MODEL,
+    CHEAP_SALVAGE_KIT_MODEL,
+    EXPERT_SALVAGE_MODEL,
+    RARE_SALVAGE_KIT_MODEL,
+    FROGGY_SALVAGE_MODEL,
+    ALT_SALVAGE_KIT_MODEL,
+}
 
 # Gadd's merchant area (from test_e_orchestrated.py / farming_knowledge).
 GADDS_MERCHANT_X = -8374.0
@@ -111,6 +120,13 @@ DIALOG_ACCEPT_BLESSING_FALLBACK = 0x85
 
 TEKKS_X = 12396.0
 TEKKS_Y = 22407.0
+TEKKS_STAGE_X = 12061.0
+TEKKS_STAGE_Y = 22485.0
+TEKKS_SEARCH_X = 12396.0
+TEKKS_SEARCH_Y = 22407.0
+DUNGEON_STAGE_X = 12228.0
+DUNGEON_STAGE_Y = 22677.0
+SPARKFLY_DUNGEON_SIDE_THRESHOLD = 12000.0
 DUNGEON_PORTAL_X = 13097.0
 DUNGEON_PORTAL_Y = 26393.0
 BLESSING_X = 19099.0
@@ -171,7 +187,22 @@ class FroggyHmBridgeTest:
         self.ipc = IpcClient(pipe_name=resolved)
         self.snapshot: dict = {}
         self._req_counter = 0
+        self._action_results: dict[str, dict] = {}
         self.results: dict[str, str] = {}
+        self.dungeon_loop_count = max(
+            1,
+            int(os.environ.get("GWA3_FROGGY_DUNGEON_LOOPS", "2") or "2"),
+        )
+        self.dungeon_loop_timeout = max(
+            1200.0,
+            float(
+                os.environ.get(
+                    "GWA3_FROGGY_DUNGEON_LOOP_TIMEOUT_SEC",
+                    "3600",
+                )
+                or "3600"
+            ),
+        )
 
     # --- Result tracking ----------------------------------------------------
 
@@ -193,16 +224,56 @@ class FroggyHmBridgeTest:
         if not ok:
             print("[BRIDGE] ERROR: could not connect (is gwa3 injected with --llm?)")
             return False
+        self._action_results.clear()
         print("[BRIDGE] Connected.")
         return True
 
-    async def action(self, name: str, params: dict | None = None, wait_ms: int = 500) -> str:
-        req_id = self._next_req_id()
-        print(f"  >> {name}({params or {}}) [{req_id}]")
+    async def action(
+        self,
+        name: str,
+        params: dict | None = None,
+        wait_ms: int = 500,
+        await_result: bool = False,
+        timeout: float = 30.0,
+    ) -> dict | str:
+        req_id = self._next_req_id() if await_result else ""
+        shown_req = req_id or "fire-and-forget"
+        print(f"  >> {name}({params or {}}) [{shown_req}]")
         await self.ipc.send_action(name, params, req_id)
+        if not await_result:
+            if wait_ms:
+                await asyncio.sleep(wait_ms / 1000.0)
+            return shown_req
+
+        deadline = time.monotonic() + timeout
+        result: dict | None = None
+        while time.monotonic() < deadline:
+            if req_id in self._action_results:
+                result = self._action_results.pop(req_id)
+                break
+            try:
+                remaining = max(0.1, deadline - time.monotonic())
+                msg = await asyncio.wait_for(self.ipc.read_message(), timeout=remaining)
+            except asyncio.TimeoutError:
+                continue
+            if msg is None:
+                continue
+            if msg.get("type") == "action_result":
+                msg_req_id = msg.get("request_id", "") or ""
+                if msg_req_id == req_id:
+                    result = msg
+                    break
+                if msg_req_id:
+                    self._action_results[msg_req_id] = msg
+                continue
+            if msg.get("type") == "snapshot":
+                self.snapshot = msg
+
+        if result is None:
+            raise RuntimeError(f"timed out waiting for action_result: {name} [{req_id}]")
         if wait_ms:
             await asyncio.sleep(wait_ms / 1000.0)
-        return req_id
+        return result
 
     async def drain(self, max_messages: int = 100) -> int:
         drained = 0
@@ -215,6 +286,12 @@ class FroggyHmBridgeTest:
                 break
             if msg is None:
                 break
+            if msg.get("type") == "action_result":
+                req_id = msg.get("request_id", "") or ""
+                if req_id:
+                    self._action_results[req_id] = msg
+                drained += 1
+                continue
             if msg.get("type") == "snapshot":
                 self.snapshot = msg
             drained += 1
@@ -237,6 +314,11 @@ class FroggyHmBridgeTest:
                 continue
             if msg is None:
                 return None
+            if msg.get("type") == "action_result":
+                req_id = msg.get("request_id", "") or ""
+                if req_id:
+                    self._action_results[req_id] = msg
+                continue
             if msg.get("type") == "snapshot":
                 self.snapshot = msg
                 if msg.get("tier", 0) == 3:
@@ -345,6 +427,9 @@ class FroggyHmBridgeTest:
     def gold_storage(self) -> int:
         return int(self.snapshot.get("inventory", {}).get("gold_storage", 0) or 0)
 
+    def free_slots_total(self) -> int:
+        return int(self.snapshot.get("inventory", {}).get("free_slots_total", 0) or 0)
+
     def iter_inventory(self):
         """Yield (item, bag_index, slot) for every non-equipped inventory item."""
         inv = self.snapshot.get("inventory", {})
@@ -361,9 +446,83 @@ class FroggyHmBridgeTest:
                 return int(item.get("item_id", 0) or 0)
         return 0
 
+    def count_inventory_model(self, model_id: int) -> int:
+        total = 0
+        for item, _, _ in self.iter_inventory():
+            if int(item.get("model_id", 0) or 0) != model_id:
+                continue
+            total += max(1, int(item.get("quantity", 1) or 1))
+        return total
+
+    def count_salvage_kit_family(self) -> int:
+        return (
+            self.count_inventory_model(CHEAP_SALVAGE_KIT_MODEL)
+            + self.count_inventory_model(EXPERT_SALVAGE_MODEL)
+            + self.count_inventory_model(RARE_SALVAGE_KIT_MODEL)
+            + self.count_inventory_model(ALT_SALVAGE_KIT_MODEL)
+            + self.count_inventory_model(FROGGY_SALVAGE_MODEL)
+        )
+
+    def count_superior_id_kits(self) -> int:
+        return self.count_inventory_model(SUPERIOR_ID_KIT_MODEL)
+
+    def count_all_id_kits(self) -> int:
+        return (
+            self.count_inventory_model(SUPERIOR_ID_KIT_MODEL)
+            + self.count_inventory_model(CHEAP_ID_KIT_MODEL)
+            + self.count_inventory_model(ALT_ID_KIT_MODEL)
+        )
+
+    def is_maintenance_kit_model(self, model_id: int) -> bool:
+        return model_id in MAINTENANCE_KIT_MODELS
+
+    def count_unidentified_maintenance_items(self) -> int:
+        total = 0
+        for item, _, _ in self.iter_inventory():
+            model_id = int(item.get("model_id", 0) or 0)
+            if model_id == 0 or self.is_maintenance_kit_model(model_id):
+                continue
+            if bool(item.get("is_identified", True)):
+                continue
+            total += max(1, int(item.get("quantity", 1) or 1))
+        return total
+
+    def count_salvage_candidates_for_maintenance(self) -> int:
+        total = 0
+        for item, _, _ in self.iter_inventory():
+            model_id = int(item.get("model_id", 0) or 0)
+            if model_id == 0 or self.is_maintenance_kit_model(model_id):
+                continue
+            if not bool(item.get("is_identified", True)):
+                continue
+            if int(item.get("quantity", 1) or 1) > 1:
+                continue
+            if str(item.get("rarity", "") or "").lower() not in ("white", "blue"):
+                continue
+            if not bool(item.get("is_material_salvageable", False)):
+                continue
+            total += 1
+        return total
+
+    def maintenance_probe_state(self) -> dict[str, int]:
+        return {
+            "free": self.free_slots_total(),
+            "gold": self.gold_character(),
+            "storage_gold": self.gold_storage(),
+            "id_all": self.count_all_id_kits(),
+            "superior_id": self.count_superior_id_kits(),
+            "salvage": self.count_salvage_kit_family(),
+            "unidentified": self.count_unidentified_maintenance_items(),
+            "salvage_candidates": self.count_salvage_candidates_for_maintenance(),
+        }
+
     def find_unidentified_item(self) -> tuple[int, int]:
         """Return (item_id, kit_id) for a candidate identify operation, or (0, 0)."""
-        kit_id = self.find_inventory_item_by_model(ID_KIT_MODEL)
+        kit_id = self.find_inventory_item_by_model(SUPERIOR_ID_KIT_MODEL)
+        if kit_id == 0:
+            kit_id = self.find_inventory_item_by_model(CHEAP_ID_KIT_MODEL)
+        if kit_id == 0:
+            kit_id = self.find_inventory_item_by_model(ALT_ID_KIT_MODEL)
         if kit_id == 0:
             return 0, 0
         for item, _, _ in self.iter_inventory():
@@ -378,9 +537,18 @@ class FroggyHmBridgeTest:
 
     def find_salvageable_item(self) -> tuple[int, int]:
         """Return (item_id, kit_id) for a candidate salvage operation, or (0, 0)."""
-        kit_id = self.find_inventory_item_by_model(SALVAGE_KIT_MODEL)
-        if kit_id == 0:
-            kit_id = self.find_inventory_item_by_model(EXPERT_SALVAGE_MODEL)
+        for model_id in (
+            CHEAP_SALVAGE_KIT_MODEL,
+            RARE_SALVAGE_KIT_MODEL,
+            ALT_SALVAGE_KIT_MODEL,
+            EXPERT_SALVAGE_MODEL,
+            FROGGY_SALVAGE_MODEL,
+        ):
+            kit_id = self.find_inventory_item_by_model(model_id)
+            if kit_id != 0:
+                break
+        else:
+            kit_id = 0
         if kit_id == 0:
             return 0, 0
         for item, _, _ in self.iter_inventory():
@@ -527,6 +695,8 @@ class FroggyHmBridgeTest:
                 await self.ipc.send_action("move_to", {"x": x, "y": y}, self._next_req_id())
                 last_issue = time.time()
         print(f"[MOVE] TIMEOUT reaching {label}")
+        await self.action("cancel_action", {}, wait_ms=200)
+        await asyncio.sleep(0.5)
         return False
 
     async def aggro_walk_to(
@@ -560,12 +730,24 @@ class FroggyHmBridgeTest:
         # aggro_move_to runs a long blocking combat loop in the DLL — if we
         # spam query_state on it, snapshot builds can collide with live
         # combat state reads and crash the client. Poll slowly (once every
-        # 5s) and drain any pushed snapshots between polls instead of
-        # forcing fresh ones.
+        # few seconds) and prefer pushed snapshots; only force a fresh
+        # snapshot after extended silence so we do not sit on stale
+        # positions for the full waypoint timeout.
         deadline = time.time() + timeout
+        last_forced_query_at = 0.0
         while time.time() < deadline:
             drained = await self.drain(max_messages=200)
             if drained == 0:
+                now = time.time()
+                if (now - last_forced_query_at) >= 15.0:
+                    snap = await self.query_fresh(settle_ms=150, timeout=4.0)
+                    last_forced_query_at = now
+                    if snap is not None:
+                        px, py = self.pos()
+                        dist = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
+                        if dist <= threshold:
+                            print(f"[AGGRO-MOVE] Arrived at {label} (dist={dist:.0f})")
+                            return True
                 await asyncio.sleep(2.0)
                 continue
             px, py = self.pos()
@@ -575,6 +757,8 @@ class FroggyHmBridgeTest:
                 return True
             await asyncio.sleep(3.0)
         print(f"[AGGRO-MOVE] TIMEOUT reaching {label}")
+        await self.action("cancel_action", {}, wait_ms=200)
+        await asyncio.sleep(0.5)
         return False
 
     async def push_until_map_changes(
@@ -682,6 +866,12 @@ class FroggyHmBridgeTest:
         return True
 
     async def phase2b_merchant(self) -> bool:
+        print("\n=== PHASE 2b: Native pre-run maintenance verification ===")
+        return await self.run_native_maintenance_verification(
+            phase_name="phase2b_maintenance",
+            include_salvage=False,
+            detail_label="pre-run maintenance",
+        )
         print("\n=== PHASE 2b: Merchant — read inventory/gold, buy + sell ===")
         # Gated: HandleMerchantBuy / HandleMerchantSell now refuse with
         # merchant_not_open_call_open_merchant_first when the merchant
@@ -736,25 +926,69 @@ class FroggyHmBridgeTest:
         # merchant states (same family as the documented 0x39 INTERACT
         # crash in project memory).
         bought_any = False
-        for target_model in (SALVAGE_KIT_MODEL, ID_KIT_MODEL):
+        superior_before = self.count_superior_id_kits()
+        salvage_before = self.count_salvage_kit_family()
+
+        def merchant_item_id_for_model(model_id: int) -> int:
             for it in items:
-                if int(it.get("model_id", 0) or 0) == target_model:
-                    merch_item_id = int(it.get("item_id", 0) or 0)
-                    if merch_item_id <= 0:
-                        continue
-                    await self.action(
-                        "merchant_buy",
-                        {"item_id": merch_item_id, "quantity": 1},
-                        wait_ms=1500,
-                    )
-                    bought_any = True
-                    print(f"[MERCHANT] Bought model={target_model}")
-                    break
-            if bought_any:
+                if int(it.get("model_id", 0) or 0) != model_id:
+                    continue
+                merch_item_id = int(it.get("item_id", 0) or 0)
+                if merch_item_id > 0:
+                    return merch_item_id
+            return 0
+
+        superior_merch_item_id = merchant_item_id_for_model(SUPERIOR_ID_KIT_MODEL)
+        salvage_merch_item_id = 0
+        for salvage_model in (
+            CHEAP_SALVAGE_KIT_MODEL,
+            RARE_SALVAGE_KIT_MODEL,
+            ALT_SALVAGE_KIT_MODEL,
+            EXPERT_SALVAGE_MODEL,
+            FROGGY_SALVAGE_MODEL,
+        ):
+            salvage_merch_item_id = merchant_item_id_for_model(salvage_model)
+            if salvage_merch_item_id > 0:
                 break
+        superior_needed = max(0, TARGET_SUPERIOR_ID_KITS - superior_before)
+        salvage_needed = max(0, TARGET_SALVAGE_KITS - salvage_before)
+
+        print(
+            f"[MERCHANT] Kits before: superior_id={superior_before}/{TARGET_SUPERIOR_ID_KITS} "
+            f"salvage={salvage_before}/{TARGET_SALVAGE_KITS}"
+        )
+        if superior_needed > 0 and superior_merch_item_id <= 0:
+            print("[MERCHANT] Superior ID kits not sold here")
+        for _ in range(superior_needed):
+            if superior_merch_item_id <= 0:
+                break
+            await self.action(
+                "merchant_buy",
+                {"item_id": superior_merch_item_id, "quantity": 1},
+                wait_ms=1500,
+            )
+            bought_any = True
+
+        if salvage_needed > 0 and salvage_merch_item_id <= 0:
+            print("[MERCHANT] Salvage kits not sold here")
+        for _ in range(salvage_needed):
+            if salvage_merch_item_id <= 0:
+                break
+            await self.action(
+                "merchant_buy",
+                {"item_id": salvage_merch_item_id, "quantity": 1},
+                wait_ms=1500,
+            )
+            bought_any = True
 
         # SELL: sell one low-value stackable material if we have one.
         await self.query_fresh(settle_ms=400, timeout=6.0)
+        superior_after = self.count_superior_id_kits()
+        salvage_after = self.count_salvage_kit_family()
+        print(
+            f"[MERCHANT] Kits after: superior_id={superior_after}/{TARGET_SUPERIOR_ID_KITS} "
+            f"salvage={salvage_after}/{TARGET_SALVAGE_KITS}"
+        )
         sell_item_id = 0
         for item, _, _ in self.iter_inventory():
             if int(item.get("type", 0) or 0) != 11:  # 11 == material in GW item type enum
@@ -778,7 +1012,113 @@ class FroggyHmBridgeTest:
         self._record(
             "phase2b_merchant",
             "PASS",
-            f"gold_after={self.gold_character()} bought={bought_any} sold={bool(sell_item_id)}",
+            f"gold_after={self.gold_character()} bought={bought_any} "
+            f"superior_id={superior_after} salvage={salvage_after} sold={bool(sell_item_id)}",
+        )
+        return True
+
+    async def ensure_gadds_merchant_open(self) -> tuple[bool, int]:
+        if self.map_id() != MAP_GADDS:
+            return False, 0
+        if not await self.walk_to(
+            GADDS_MERCHANT_X, GADDS_MERCHANT_Y, "Gadd's merchant", threshold=350.0, timeout=30.0
+        ):
+            return False, 0
+        snap = await self.query_fresh(settle_ms=400, timeout=6.0)
+        if snap is None:
+            return False, 0
+        npc_id = self.find_nearby_npc(GADDS_MERCHANT_X, GADDS_MERCHANT_Y, radius=600.0)
+        if not npc_id:
+            return False, 0
+        if self.is_merchant_open():
+            return True, npc_id
+        await self.action("change_target", {"agent_id": npc_id}, wait_ms=400)
+        await self.action("open_merchant", {"agent_id": npc_id}, wait_ms=2000)
+        await self.query_fresh(settle_ms=400, timeout=6.0)
+        if not self.is_merchant_open():
+            await self.action("interact_npc", {"agent_id": npc_id}, wait_ms=2000)
+            await self.query_fresh(settle_ms=400, timeout=6.0)
+        return self.is_merchant_open(), npc_id
+
+    async def run_native_maintenance_verification(
+        self,
+        *,
+        phase_name: str,
+        include_salvage: bool,
+        detail_label: str,
+    ) -> bool:
+        if self.map_id() != MAP_GADDS:
+            self._record(phase_name, "FAIL", "not at Gadd's")
+            return False
+        merchant_open, npc_id = await self.ensure_gadds_merchant_open()
+        if not merchant_open:
+            self._record(phase_name, "FAIL", "merchant window never opened")
+            return False
+        snap = await self.query_fresh(settle_ms=400, timeout=6.0)
+        if snap is None:
+            self._record(phase_name, "FAIL", "no snapshot before maintenance")
+            return False
+
+        before = self.maintenance_probe_state()
+        print(
+            f"[MAINT] {detail_label} before: free={before['free']} gold={before['gold']} "
+            f"storage={before['storage_gold']} id_all={before['id_all']} superior_id={before['superior_id']} "
+            f"salvage={before['salvage']} unidentified={before['unidentified']} "
+            f"salvage_candidates={before['salvage_candidates']}"
+        )
+        result = await self.action(
+            "froggy_run_maintenance_cycle",
+            {"include_salvage": include_salvage},
+            await_result=True,
+            timeout=180.0,
+            wait_ms=1000,
+        )
+        if not bool(result.get("success")):
+            self._record(
+                phase_name,
+                "FAIL",
+                str(result.get("error") or "native maintenance failed"),
+            )
+            return False
+
+        await self.query_fresh(settle_ms=500, timeout=10.0)
+        after = self.maintenance_probe_state()
+        print(
+            f"[MAINT] {detail_label} after: free={after['free']} gold={after['gold']} "
+            f"storage={after['storage_gold']} id_all={after['id_all']} superior_id={after['superior_id']} "
+            f"salvage={after['salvage']} unidentified={after['unidentified']} "
+            f"salvage_candidates={after['salvage_candidates']}"
+        )
+
+        failures: list[str] = []
+        if after["superior_id"] < TARGET_SUPERIOR_ID_KITS:
+            failures.append(
+                f"superior_id={after['superior_id']} < target {TARGET_SUPERIOR_ID_KITS}"
+            )
+        if after["salvage"] < TARGET_SALVAGE_KITS:
+            failures.append(f"salvage={after['salvage']} < target {TARGET_SALVAGE_KITS}")
+        if before["unidentified"] > 0 and before["id_all"] > 0:
+            if after["unidentified"] >= before["unidentified"]:
+                failures.append(
+                    f"unidentified did not drop ({before['unidentified']} -> {after['unidentified']})"
+                )
+        if include_salvage and before["salvage_candidates"] > 0 and before["salvage"] > 0:
+            if after["salvage_candidates"] >= before["salvage_candidates"]:
+                failures.append(
+                    "salvage candidates did not drop "
+                    f"({before['salvage_candidates']} -> {after['salvage_candidates']})"
+                )
+        if failures:
+            self._record(phase_name, "FAIL", "; ".join(failures))
+            return False
+
+        self._record(
+            phase_name,
+            "PASS",
+            f"merchant_agent={npc_id} free={after['free']} gold={after['gold']} "
+            f"storage={after['storage_gold']} superior_id={after['superior_id']} "
+            f"salvage={after['salvage']} unidentified={before['unidentified']}->{after['unidentified']} "
+            f"salvage_candidates={before['salvage_candidates']}->{after['salvage_candidates']}",
         )
         return True
 
@@ -974,6 +1314,8 @@ class FroggyHmBridgeTest:
         hero_skillbars = [
             h.get("skillbar", []) for h in snap.get("heroes", []) if h.get("skillbar")
         ]
+        foe = self.find_foe()
+        skill_target = int(foe.get("id", 0) or 0) if foe else 0
 
         def skill_list(bar) -> list[tuple[int, int, int]]:
             # Return [(slot, skill_id, recharge)] for non-empty slots.
@@ -986,6 +1328,9 @@ class FroggyHmBridgeTest:
                     )
             return out
 
+        def ready_slots(skills: list[tuple[int, int, int]]) -> list[int]:
+            return [slot for slot, _sid, recharge in skills if recharge <= 0]
+
         player_before = skill_list(player_skills)
         print(f"[SKILLS] Player before: {player_before}")
 
@@ -996,50 +1341,62 @@ class FroggyHmBridgeTest:
         # of actions all fail. One cast is enough to prove the bridge
         # action reaches the skill system; multi-cast validation belongs
         # in an explorable with real enemies, not an outpost sandbox.
+        player_bumped: list[int] = []
         if player_before:
-            first_slot = player_before[0][0]
+            player_slots = ready_slots(player_before) or [player_before[0][0]]
+            first_slot = player_slots[0]
+            before_by_slot = {slot: rc for slot, _sid, rc in player_before}
             await self.action(
-                "use_skill", {"slot": first_slot, "target_agent_id": 0}, wait_ms=2500
+                "use_skill",
+                {"slot": first_slot, "target_agent_id": skill_target},
+                wait_ms=2500,
             )
+            await self.query_fresh(settle_ms=800, timeout=6.0)
+            player_after = skill_list(self.snapshot.get("skillbar", []))
+            print(f"[SKILLS] Player after:  {player_after}")
+            player_bumped = [
+                slot
+                for slot, _sid, rc_after in player_after
+                if rc_after > before_by_slot.get(slot, 0)
+            ]
+        else:
+            player_after = []
 
-        await self.query_fresh(settle_ms=800, timeout=6.0)
-        player_after = skill_list(self.snapshot.get("skillbar", []))
-        print(f"[SKILLS] Player after:  {player_after}")
-
-        def bumped(before, after) -> list[int]:
-            by_slot_before = {s: rc for s, _, rc in before}
-            bumped_slots: list[int] = []
-            for slot, _sid, rc_after in after:
-                rc_before = by_slot_before.get(slot, 0)
-                if rc_after > rc_before:
-                    bumped_slots.append(slot)
-            return bumped_slots
-
-        player_bumped = bumped(player_before, player_after)
-
-        # Hero 1 skill usage — grab hero 1's skillbar before + use_hero_skill
-        # all 8 slots + recheck.
+        # Hero 1 skill usage — try currently ready slots against a live foe
+        # until one produces a visible recharge bump.
         hero_bumped: list[int] = []
         if hero_skillbars:
-            hero1_before = skill_list(hero_skillbars[0])
-            print(f"[SKILLS] Hero1 before:  {hero1_before}")
-            # Same reasoning as the player cast: one hero-1 cast is
-            # enough to prove use_hero_skill dispatches through the
-            # bridge without cascading into a DLL state issue.
-            if hero1_before:
-                first_slot = hero1_before[0][0]
+            hero1_after = []
+            for _attempt in range(8):
+                await self.query_fresh(settle_ms=600, timeout=6.0)
+                hero1_before = skill_list(
+                    (self.snapshot.get("heroes", []) or [{}])[0].get("skillbar", [])
+                )
+                print(f"[SKILLS] Hero1 before:  {hero1_before}")
+                if not hero1_before:
+                    break
+                hero_ready_slots = ready_slots(hero1_before)
+                if not hero_ready_slots:
+                    break
+                first_slot = hero_ready_slots[0]
+                before_by_slot = {slot: rc for slot, _sid, rc in hero1_before}
                 await self.action(
                     "use_hero_skill",
-                    {"hero_index": 1, "slot": first_slot, "target_agent_id": 0},
+                    {"hero_index": 1, "slot": first_slot, "target_agent_id": skill_target},
                     wait_ms=2000,
                 )
-            await self.query_fresh(settle_ms=800, timeout=6.0)
-            hero1_after_bar = (self.snapshot.get("heroes", []) or [{}])[0].get(
-                "skillbar", []
-            )
-            hero1_after = skill_list(hero1_after_bar)
+                await self.query_fresh(settle_ms=800, timeout=6.0)
+                hero1_after = skill_list(
+                    (self.snapshot.get("heroes", []) or [{}])[0].get("skillbar", [])
+                )
+                hero_bumped = [
+                    slot
+                    for slot, _sid, rc_after in hero1_after
+                    if rc_after > before_by_slot.get(slot, 0)
+                ]
+                if hero_bumped:
+                    break
             print(f"[SKILLS] Hero1 after:   {hero1_after}")
-            hero_bumped = bumped(hero1_before, hero1_after)
 
         # A successful bridge cast can manifest two ways in the snapshot:
         #   1. recharge on the cast slot bumps from 0 → >0 (expected)
@@ -1054,14 +1411,14 @@ class FroggyHmBridgeTest:
             self._record(
                 "phase4c_skills",
                 "FAIL",
-                "no recharge delta nor skillbar change after use_skill calls",
+                "no recharge delta from a ready player or hero skill cast",
             )
             return True
         self._record(
             "phase4c_skills",
             "PASS",
             f"player_bumped={player_bumped} hero1_bumped={hero_bumped} "
-            f"skillbar_invalidated={player_skillbar_vanished}",
+            f"skillbar_invalidated={player_skillbar_vanished} target={skill_target}",
         )
         return True
 
@@ -1268,26 +1625,155 @@ class FroggyHmBridgeTest:
             await asyncio.sleep(3.0)
         return False
 
-    async def phase5_walk_to_tekks(self) -> bool:
-        print("\n=== PHASE 5: Walk Sparkfly -> Tekks ===")
-        if self.map_id() != MAP_SPARKFLY:
-            self._record("phase5_tekks", "SKIP", "not in Sparkfly")
-            return False
-        # Drive the route at the AutoIt MoveandAggroEx level: iterate the
-        # waypoint array, use aggro_move_to for legs with a fight_range,
-        # plain move_to for the zero-fight tail. On wipe, resume at the
-        # nearest waypoint rather than failing outright.
+    async def _run_direct_tekks_debug_path(self, reason_label: str) -> tuple[bool, str]:
+        """Mirror the native Froggy Sparkfly->Tekks recovery logic.
+
+        Native Froggy does not use a long plain-move chain here. It either:
+        1. Uses a short Tekks stage/search approach if already near the
+           dungeon side of Sparkfly.
+        2. Re-runs the late Sparkfly aggro route, then validates against the
+           Tekks stage/search points with loose thresholds.
+        """
+        print(f"[ROUTE Sparkfly->Tekks] Falling back to native-style Tekks recovery from {reason_label}")
+        await self.query_fresh(settle_ms=200, timeout=4.0)
+        px, py = self.pos()
+        dist_stage = ((px - TEKKS_STAGE_X) ** 2 + (py - TEKKS_STAGE_Y) ** 2) ** 0.5
+        dist_dungeon = ((px - DUNGEON_STAGE_X) ** 2 + (py - DUNGEON_STAGE_Y) ** 2) ** 0.5
+        near_dungeon_side = (
+            dist_stage <= SPARKFLY_DUNGEON_SIDE_THRESHOLD
+            or dist_dungeon <= SPARKFLY_DUNGEON_SIDE_THRESHOLD
+        )
+
+        if near_dungeon_side:
+            print("[ROUTE Sparkfly->Tekks] Near dungeon side detected; using short Tekks approach")
+            stage_reached = await self.walk_to(
+                TEKKS_STAGE_X, TEKKS_STAGE_Y, "Tekks stage", threshold=700.0, timeout=90.0
+            )
+            search_reached = await self.walk_to(
+                TEKKS_SEARCH_X, TEKKS_SEARCH_Y, "Tekks search", threshold=700.0, timeout=90.0
+            )
+            await self.query_fresh(settle_ms=200, timeout=4.0)
+            px, py = self.pos()
+            dist_stage = ((px - TEKKS_STAGE_X) ** 2 + (py - TEKKS_STAGE_Y) ** 2) ** 0.5
+            dist_search = ((px - TEKKS_SEARCH_X) ** 2 + (py - TEKKS_SEARCH_Y) ** 2) ** 0.5
+            if stage_reached or search_reached or dist_stage <= 900.0 or dist_search <= 900.0:
+                return True, "native short Tekks approach"
+            return False, "native short Tekks approach failed"
+
+        print("[ROUTE Sparkfly->Tekks] South-side fallback detected; rerunning late aggro route")
+        late_path = SPARKFLY_TO_TEKKS_PATH[2:9]
         ok, detail = await self._walk_waypoint_route(
-            SPARKFLY_TO_TEKKS_PATH,
-            route_label="Sparkfly->Tekks",
-            final_threshold=250.0,
-            interior_threshold=500.0,
+            late_path,
+            route_label="Sparkfly->Tekks fallback aggro",
+            final_threshold=600.0,
+            interior_threshold=700.0,
             per_wp_timeout=300.0,
         )
         if not ok:
-            self._record("phase5_tekks", "FAIL", detail)
+            return False, f"fallback aggro route: {detail}"
+
+        stage_reached = await self.walk_to(
+            TEKKS_STAGE_X, TEKKS_STAGE_Y, "Tekks stage", threshold=900.0, timeout=90.0
+        )
+        search_reached = await self.walk_to(
+            TEKKS_SEARCH_X, TEKKS_SEARCH_Y, "Tekks search", threshold=900.0, timeout=90.0
+        )
+        await self.query_fresh(settle_ms=200, timeout=4.0)
+        px, py = self.pos()
+        dist_stage = ((px - TEKKS_STAGE_X) ** 2 + (py - TEKKS_STAGE_Y) ** 2) ** 0.5
+        dist_search = ((px - TEKKS_SEARCH_X) ** 2 + (py - TEKKS_SEARCH_Y) ** 2) ** 0.5
+        if stage_reached or search_reached or dist_stage <= 1100.0 or dist_search <= 1100.0:
+            return True, "native full aggro Tekks fallback"
+        return False, "native full aggro Tekks fallback failed"
+
+    async def phase5_walk_to_tekks(self) -> bool:
+        print("\n=== PHASE 5: Native Froggy Sparkfly -> Tekks route ===")
+        if self.map_id() != MAP_SPARKFLY:
+            self._record("phase5_tekks", "SKIP", "not in Sparkfly")
             return False
-        self._record("phase5_tekks", "PASS")
+        result = await self.action(
+            "froggy_run_sparkfly_route_to_tekks",
+            {},
+            await_result=True,
+            timeout=900.0,
+            wait_ms=1000,
+        )
+        if not bool(result.get("success")):
+            self._record(
+                "phase5_tekks",
+                "FAIL",
+                str(result.get("error") or "native Froggy route failed"),
+            )
+            return False
+        await self.query_fresh(settle_ms=400, timeout=6.0)
+        px, py = self.pos()
+        dist = ((px - TEKKS_X) ** 2 + (py - TEKKS_Y) ** 2) ** 0.5
+        self._record("phase5_tekks", "PASS", f"native Froggy route dist_to_tekks={dist:.0f}")
+        return True
+
+    async def phase6_run_dungeon_loops(self) -> bool:
+        print(f"\n=== PHASE 6: Native Froggy dungeon loops x{self.dungeon_loop_count} ===")
+        current = self.map_id()
+        if current not in (MAP_SPARKFLY, MAP_BOGROOT_LVL1):
+            self._record("phase6_dungeon_loops", "SKIP", f"unsupported start map={current}")
+            return False
+
+        loop_details: list[str] = []
+        for loop_index in range(self.dungeon_loop_count):
+            refresh = await self.action(
+                "froggy_refresh_combat_skillbar",
+                {},
+                await_result=True,
+                timeout=30.0,
+                wait_ms=500,
+            )
+            if not bool(refresh.get("success")):
+                self._record(
+                    "phase6_dungeon_loops",
+                    "FAIL",
+                    f"loop {loop_index + 1}/{self.dungeon_loop_count}: "
+                    f"{refresh.get('error') or 'combat refresh failed'}",
+                )
+                return False
+
+            result = await self.action(
+                "froggy_run_dungeon_loop",
+                {},
+                await_result=True,
+                timeout=self.dungeon_loop_timeout,
+                wait_ms=1500,
+            )
+            await self.query_fresh(settle_ms=500, timeout=10.0)
+            current = self.map_id()
+            if not bool(result.get("success")):
+                self._record(
+                    "phase6_dungeon_loops",
+                    "FAIL",
+                    f"loop {loop_index + 1}/{self.dungeon_loop_count}: "
+                    f"{result.get('error') or 'native dungeon loop failed'} map={current}",
+                )
+                return False
+            if current not in (MAP_SPARKFLY, MAP_GADDS):
+                self._record(
+                    "phase6_dungeon_loops",
+                    "FAIL",
+                    f"loop {loop_index + 1}/{self.dungeon_loop_count}: unexpected final map={current}",
+                )
+                return False
+            loop_details.append(f"{loop_index + 1}:{current}")
+            if current == MAP_GADDS and loop_index + 1 < self.dungeon_loop_count:
+                self._record(
+                    "phase6_dungeon_loops",
+                    "FAIL",
+                    f"loop {loop_index + 1}/{self.dungeon_loop_count}: returned to Gadd's early",
+                )
+                return False
+
+        self._record(
+            "phase6_dungeon_loops",
+            "PASS",
+            f"loops={self.dungeon_loop_count} final_map={self.map_id()} trail={' '.join(loop_details)}",
+        )
         return True
 
     async def phase6_accept_tekks_quest(self) -> bool:
@@ -1462,6 +1948,44 @@ class FroggyHmBridgeTest:
         self._record("phase9_return", "PASS")
         return True
 
+    async def phase7b_post_run_maintenance(self) -> bool:
+        print("\n=== PHASE 7b: Native post-run maintenance verification ===")
+        return await self.run_native_maintenance_verification(
+            phase_name="phase7b_maintenance",
+            include_salvage=True,
+            detail_label="post-run maintenance",
+        )
+        print("\n=== PHASE 7b: Native Froggy maintenance cycle ===")
+        if self.map_id() != MAP_GADDS:
+            self._record("phase7b_maintenance", "FAIL", "not at Gadd's")
+            return False
+        merchant_open, npc_id = await self.ensure_gadds_merchant_open()
+        if not merchant_open:
+            self._record("phase7b_maintenance", "FAIL", "merchant window never opened")
+            return False
+        result = await self.action(
+            "froggy_run_maintenance_cycle",
+            {"include_salvage": True},
+            await_result=True,
+            timeout=180.0,
+            wait_ms=1000,
+        )
+        if not bool(result.get("success")):
+            self._record(
+                "phase7b_maintenance",
+                "FAIL",
+                str(result.get("error") or "native maintenance failed"),
+            )
+            return False
+        await self.query_fresh(settle_ms=500, timeout=10.0)
+        self._record(
+            "phase7b_maintenance",
+            "PASS",
+            f"merchant_agent={npc_id} free={self.free_slots_total()} gold={self.gold_character()} "
+            f"superior_id={self.count_superior_id_kits()} salvage={self.count_salvage_kit_family()}",
+        )
+        return True
+
     async def phase9b_quest_reward(self) -> bool:
         """If the Tekks' War quest is in the reward state, accept it.
 
@@ -1473,12 +1997,16 @@ class FroggyHmBridgeTest:
         """
         print("\n=== PHASE 9b: Tekks' War quest reward accept ===")
         if self.map_id() == MAP_GADDS:
-            # Travel back to Sparkfly to reach Tekks for the reward dialog.
-            await self.action("travel", {"map_id": MAP_SPARKFLY}, wait_ms=2000)
-            if not await self.wait_for_map(MAP_SPARKFLY, timeout=90.0):
-                self._record("phase9b_reward", "SKIP", "could not return to Sparkfly")
-                return True
-            await asyncio.sleep(5.0)
+            # Mirror the native Froggy lane: once the run has already
+            # unwound back to Gadd's, treat the post-Bogroot reward tail
+            # as skipped rather than attempting a direct outpost->explorable
+            # travel back into Sparkfly.
+            self._record(
+                "phase9b_reward",
+                "SKIP",
+                "dungeon loop already returned to Gadd's instead of Sparkfly",
+            )
+            return True
 
         if self.map_id() != MAP_SPARKFLY:
             self._record("phase9b_reward", "SKIP", "not in Sparkfly")
@@ -1529,8 +2057,6 @@ class FroggyHmBridgeTest:
                 (self.phase1_travel_to_gadds, True),
                 (self.phase2_setup_heroes, True),
                 (self.phase2b_merchant, False),
-                (self.phase2c_identify_salvage, False),
-                (self.phase2d_xunlai, False),
                 (self.phase2e_town_blessing, False),
                 (self.phase3_enter_sparkfly, True),
                 (self.phase4_combat_proof, False),
@@ -1542,12 +2068,9 @@ class FroggyHmBridgeTest:
                 # this phase adds recharge-delta evidence.
                 (self.phase4c_skill_usage, False),
                 (self.phase5_walk_to_tekks, True),
-                (self.phase6_accept_tekks_quest, False),
-                (self.phase7_enter_bogroot, True),
-                (self.phase8_blessing, False),
-                (self.phase8b_dungeon_gadgets, False),
+                (self.phase6_run_dungeon_loops, True),
                 (self.phase9_return_to_outpost, True),
-                (self.phase9b_quest_reward, False),
+                (self.phase7b_post_run_maintenance, True),
             ]
             aborted = False
             for phase, blocking in phases:

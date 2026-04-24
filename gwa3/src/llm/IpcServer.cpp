@@ -27,6 +27,7 @@ namespace GWA3::LLM::IpcServer {
     };
     static std::mutex g_inboundMutex;
     static std::queue<InboundMsg> g_inboundQueue;
+    static std::mutex g_sendMutex;
 
     // Returns: 1 = bytes available, 0 = no bytes yet, -1 = pipe broken (client disconnected)
     static int PipeCheckState() {
@@ -230,6 +231,7 @@ namespace GWA3::LLM::IpcServer {
     }
 
     bool Send(const char* json, uint32_t length) {
+        std::lock_guard<std::mutex> lock(g_sendMutex);
         if (!g_clientConnected.load() || g_pipe == INVALID_HANDLE_VALUE) {
             return false;
         }

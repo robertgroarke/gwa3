@@ -40,6 +40,7 @@ struct TestRegistrar {
 };
 
 inline int RunAll() {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     printf("=== GWA3 Offline Tests ===\n");
 
     // Reverse the linked list so tests run in registration order

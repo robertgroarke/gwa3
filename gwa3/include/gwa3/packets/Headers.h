@@ -69,6 +69,7 @@ constexpr uint32_t ITEM_EQUIP                         = 0x30;  // Equips item fr
 constexpr uint32_t SWITCH_SET                         = 0x32;  // Switch weapon set
 constexpr uint32_t SKILL_EQUIP                        = 0x3C;  // Equip Skill from NPC Dialog
 constexpr uint32_t UNEQUIP_ITEM                       = 0x4F;  // Unequips an item
+constexpr uint32_t INTERACT_GADGET                    = 0x50;  // Interacts with a gadget/signpost
 constexpr uint32_t SIGNPOST_RUN                       = 0x51;  // Runs to signpost
 constexpr uint32_t EQUIP_VISIBILITY                   = 0x56;  // Toggles the visibility of equipped items
 constexpr uint32_t ITEM_DESTROY                       = 0x69;  // Destroys the item

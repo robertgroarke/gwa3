@@ -1,5 +1,6 @@
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/AgentMgr.h>
+#include <gwa3/managers/TradeMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
@@ -50,7 +51,7 @@ void SalvageSessionDone() {
 }
 
 void BuyMaterials(uint32_t itemModelId, uint32_t quantity) {
-    CtoS::SendPacket(3, Packets::BUY_MATERIALS, itemModelId, quantity);
+    TradeMgr::BuyMaterials(itemModelId, quantity);
 }
 
 void RequestQuote(uint32_t itemId) {

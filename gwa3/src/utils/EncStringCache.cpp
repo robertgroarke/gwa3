@@ -1,5 +1,7 @@
 #include <gwa3/utils/EncStringCache.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/core/HookMarker.h>
+#include <gwa3/core/HookMarker.h>
 #include <gwa3/core/Offsets.h>
 
 #include <atomic>
@@ -177,6 +179,7 @@ static void __cdecl WrappedDecodeCallback(void* param, wchar_t* decoded) {
 
 static void __cdecl HookedValidateAsyncDecodeStr(
         const wchar_t* enc, DecodeCallback cb, void* param) {
+    HookMarker::HookScope _hookScope(HookMarker::HookId::EncStringDecodeDetour);
     if (!s_hookTrampoline) return;
     // Wrap the callback to capture decoded output, then defer to the
     // game's original function. On any failure fall through so GW's
@@ -351,3 +354,5 @@ void Clear() {
 }
 
 } // namespace GWA3::EncStringCache
+
+

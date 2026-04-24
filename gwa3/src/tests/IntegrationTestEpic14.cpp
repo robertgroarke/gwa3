@@ -1162,6 +1162,7 @@ static bool WaitForMerchantContext(DWORD timeoutMs) {
     DWORD start = GetTickCount();
     while ((GetTickCount() - start) < timeoutMs) {
         if (TradeMgr::GetMerchantItemCount() > 0) return true;
+        if (UIMgr::GetFrameByHash(kMerchantRootHash) != 0) return true;
         if (UIMgr::IsFrameVisible(kMerchantRootHash)) return true;
         Sleep(100);
     }
@@ -2015,6 +2016,33 @@ static bool MoveToTekksForQuestDialog() {
     });
     IntCheck("Player combat idle before Tekks path", idleBeforeRoute);
 
+    const auto IsNearSparkflyDungeonSide = []() -> bool {
+        if (MapMgr::GetMapId() != MAP_SPARKFLY) return false;
+        auto* me = AgentMgr::GetMyAgent();
+        if (!me || me->hp <= 0.0f) return false;
+        const float distToTekksStage = AgentMgr::GetDistance(me->x, me->y, 12061.0f, 22485.0f);
+        const float distToDungeonStage = AgentMgr::GetDistance(me->x, me->y, 12228.0f, 22677.0f);
+        return distToTekksStage <= 12000.0f || distToDungeonStage <= 12000.0f;
+    };
+    const auto RunShortTekksReturnPath = [&]() -> bool {
+        auto* meBefore = AgentMgr::GetMyAgent();
+        IntReport("  Near-dungeon Sparkfly spawn detected: player=(%.0f, %.0f) distToTekks=%.0f distToDoor=%.0f",
+                  meBefore ? meBefore->x : 0.0f,
+                  meBefore ? meBefore->y : 0.0f,
+                  meBefore ? AgentMgr::GetDistance(meBefore->x, meBefore->y, 12061.0f, 22485.0f) : -1.0f,
+                  meBefore ? AgentMgr::GetDistance(meBefore->x, meBefore->y, 12228.0f, 22677.0f) : -1.0f);
+        bool reached = MovePlayerNear(12061.0f, 22485.0f, 700.0f, 45000);
+        if (!reached) {
+            reached = MovePlayerNear(12396.0f, 22407.0f, 700.0f, 30000);
+        }
+        IntCheck("Short Sparkfly return path to Tekks", reached);
+        return reached;
+    };
+
+    if (IsNearSparkflyDungeonSide()) {
+        return RunShortTekksReturnPath();
+    }
+
     if (!s_enableInvasiveSparkflyCombatProofs &&
         !s_preferDirectTekksStagingForDebug &&
         MapMgr::GetMapId() == MAP_SPARKFLY) {
@@ -2164,16 +2192,13 @@ static bool MoveToTekksForQuestDialog() {
             if (!s_preferDirectTekksStagingForDebug) {
                 const bool froggyFallbackReached = Bot::Froggy::DebugRunSparkflyRouteToTekks();
                 IntCheck("Fallback Froggy Sparkfly route", froggyFallbackReached);
-                if (froggyFallbackReached) {
-                    return true;
-                }
-                IntReport("  Froggy route recovery did not settle at Tekks; trying direct staging move");
+                return froggyFallbackReached;
             } else {
                 IntReport("  Direct Tekks debug staging is enabled; skipping Froggy route recovery");
             }
             const bool directFallbackReached = s_preferDirectTekksStagingForDebug
                 ? RunDirectTekksDebugTail(step.label)
-                : MovePlayerNear(12061.0f, 22485.0f, 500.0f, 60000);
+                : RunDirectTekksDebugPath(step.label);
             IntCheck("Fallback direct Tekks staging", directFallbackReached);
             return directFallbackReached;
         }
@@ -3724,8 +3749,23 @@ static bool OpenMerchantContextWithSessionHarnessBody(uint32_t npcId, float npcX
         return true;
     }
 
-    IntReport("    step 2: skipping raw GoNPC packet fallback on current client");
-    return WaitForMerchantContext(2500);
+    IntReport("    step 2: raw GoNPC packet fallback (consumables harness parity)");
+    for (int packetAttempt = 1; packetAttempt <= 3; ++packetAttempt) {
+        IntReport("      Raw GoNPC attempt %d", packetAttempt);
+        CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
+        Sleep(500);
+    }
+    Sleep(2500);
+    ReportDialogSnapshot("After Froggy harness-body raw-GoNPC dwell");
+    const uint32_t merchantCountAfterRaw = TradeMgr::GetMerchantItemCount();
+    const uintptr_t merchantFrameAfterRaw = UIMgr::GetFrameByHash(3613855137u);
+    IntReport("      Merchant probe after raw-GoNPC dwell: frame=0x%08X items=%u",
+              merchantFrameAfterRaw,
+              merchantCountAfterRaw);
+    if (merchantFrameAfterRaw != 0 || merchantCountAfterRaw > 0) {
+        return true;
+    }
+    return WaitForMerchantContext(1500);
 }
 
 static void RunExplorablePlayerEffectsProof() {
@@ -3819,7 +3859,7 @@ static bool EnsureGaddsMerchantOpen(uint32_t* outOpenedMerchantId = nullptr) {
 
     DumpMerchantNpcCandidates(kMerchX, kMerchY, 1500.0f, kGaddsMerchantPlayerNumber);
 
-    NpcCandidate merchantCandidates[1];
+    NpcCandidate merchantCandidates[8];
     size_t merchantCandidateCount = CollectMerchantNpcCandidates(
         kMerchX, kMerchY, 1500.0f, kGaddsMerchantPlayerNumber, merchantCandidates, _countof(merchantCandidates));
     if (!merchantCandidateCount) {
@@ -3835,43 +3875,55 @@ static bool EnsureGaddsMerchantOpen(uint32_t* outOpenedMerchantId = nullptr) {
     }
 
     bool merchantOpen = false;
+    bool reachedAnyNpc = false;
     uint32_t openedMerchantId = 0;
-    const auto& candidate = merchantCandidates[0];
-    const uint32_t resolvedAgentId = ResolveMerchantCandidateAgentId(candidate);
-    LivingAgentSnapshot npc;
-    const bool haveNpc = resolvedAgentId && TrySnapshotLivingAgent(resolvedAgentId, npc);
-    IntReport("  Using first merchant candidate: agent=%u allegiance=%u player_number=%u npc_id=%u at (%.0f, %.0f)",
-        resolvedAgentId ? resolvedAgentId : candidate.agentId,
-        haveNpc ? npc.allegiance : 0,
-        haveNpc ? npc.playerNumber : candidate.playerNumber,
-        haveNpc ? npc.npcId : 0,
-        haveNpc ? npc.x : 0.0f,
-        haveNpc ? npc.y : 0.0f);
+    for (size_t candidateIndex = 0; candidateIndex < merchantCandidateCount && !merchantOpen; ++candidateIndex) {
+        const auto& candidate = merchantCandidates[candidateIndex];
+        const uint32_t resolvedAgentId = ResolveMerchantCandidateAgentId(candidate);
+        LivingAgentSnapshot npc;
+        const bool haveNpc = resolvedAgentId && TrySnapshotLivingAgent(resolvedAgentId, npc);
+        IntReport("  Merchant candidate %u/%u: agent=%u allegiance=%u player_number=%u npc_id=%u at (%.0f, %.0f)",
+                  static_cast<unsigned>(candidateIndex + 1),
+                  static_cast<unsigned>(merchantCandidateCount),
+                  resolvedAgentId ? resolvedAgentId : candidate.agentId,
+                  haveNpc ? npc.allegiance : 0,
+                  haveNpc ? npc.playerNumber : candidate.playerNumber,
+                  haveNpc ? npc.npcId : 0,
+                  haveNpc ? npc.x : 0.0f,
+                  haveNpc ? npc.y : 0.0f);
 
-    bool reachedNpc = false;
-    float postApproachDistance = 0.0f;
-    if (haveNpc) {
-        reachedNpc = MovePlayerNearForMerchantHarnessBody(npc.x, npc.y, &postApproachDistance);
+        if (!haveNpc) {
+            IntReport("  WARN: Candidate %u could not be resolved to a readable living NPC", candidate.agentId);
+            continue;
+        }
+
+        float postApproachDistance = 0.0f;
+        const bool reachedNpc = MovePlayerNearForMerchantHarnessBody(npc.x, npc.y, &postApproachDistance);
+        reachedAnyNpc = reachedAnyNpc || reachedNpc;
+
         float px = 0.0f;
         float py = 0.0f;
         TryReadAgentPosition(ReadMyId(), px, py);
-        IntReport("  After direct merchant approach: pos=(%.0f,%.0f) reached=%d dist=%.0f",
-                  px, py, reachedNpc, postApproachDistance);
-    }
+        IntReport("  After merchant candidate approach: pos=(%.0f,%.0f) reached=%d dist=%.0f",
+                  px, py, reachedNpc ? 1 : 0, postApproachDistance);
 
-    if (reachedNpc && haveNpc) {
+        if (!reachedNpc) {
+            IntReport("  WARN: Could not reach merchant candidate %u", resolvedAgentId);
+            continue;
+        }
+
         ReportMerchantPreInteractState("Froggy pre-interact snapshot", resolvedAgentId, npc.x, npc.y);
         ReportMerchantRuntimeContext("Froggy runtime context");
         merchantOpen = OpenMerchantContextWithSessionHarnessBody(resolvedAgentId, npc.x, npc.y);
         if (merchantOpen) {
             openedMerchantId = resolvedAgentId;
+            break;
         }
-    } else {
-        IntReport("  WARN: Could not reach first merchant candidate %u",
-                  resolvedAgentId ? resolvedAgentId : candidate.agentId);
+
+        IntReport("  Candidate %u failed to open merchant context; trying next candidate", resolvedAgentId);
     }
 
-    IntCheck("Reached merchant area", reachedMerchantArea || reachedNpc);
+    IntCheck("Reached merchant area", reachedMerchantArea || reachedAnyNpc);
     IntCheck("Merchant window opened", merchantOpen);
     if (merchantOpen) {
         IntReport("  Merchant opened via candidate agent=%u", openedMerchantId);
@@ -4265,6 +4317,7 @@ phase4:
                 IntCheck("Fresh Sparkfly reset completed before Tekks path", readyForTekksPath);
             }
 
+            bool preserveSparkflyLoopState = false;
             const bool reachedTekks = readyForTekksPath && MoveToTekksForQuestDialog();
             if (reachedTekks) {
                 const bool tekksReadyForDungeon = RunTekksQuestAcceptProof();
@@ -4287,9 +4340,16 @@ phase4:
                         if (reachedTekksAfterReturn) {
                             RunTekksQuestAcceptProof();
                             ReportQuestSnapshot("Quest state after Tekks reaccept on Sparkfly return");
+                            const bool questPresentAfterReturn =
+                                QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr ||
+                                QuestMgr::GetActiveQuestId() == QUEST_TEKKS_WAR;
                             IntCheck("Tekks quest present after Sparkfly return loop",
-                                     QuestMgr::GetQuestById(QUEST_TEKKS_WAR) != nullptr ||
-                                     QuestMgr::GetActiveQuestId() == QUEST_TEKKS_WAR);
+                                     questPresentAfterReturn);
+                            preserveSparkflyLoopState =
+                                questPresentAfterReturn &&
+                                MapMgr::GetMapId() == MAP_SPARKFLY &&
+                                MapMgr::GetIsMapLoaded() &&
+                                AgentMgr::GetMyId() > 0;
                         } else {
                             IntSkip("Tekks reaccept after Bogroot return", "Could not reach Tekks after returning to Sparkfly");
                         }
@@ -4309,6 +4369,20 @@ phase4:
                 IntSkip("Tekks reaccept after Bogroot return", "Did not reach Tekks");
             }
 
+            if (preserveSparkflyLoopState) {
+                IntReport("=== PHASE 7: End State / Cleanup ===");
+                IntReport("  Preserving Sparkfly state after reward/reaccept; skipping outpost cleanup");
+                IntCheck("Loop state preserved in Sparkfly after reward/reaccept",
+                         MapMgr::GetMapId() == MAP_SPARKFLY &&
+                         MapMgr::GetIsMapLoaded() &&
+                         AgentMgr::GetMyId() > 0);
+                IntSkip("Returned to Gadd's Encampment",
+                        "Preserving Sparkfly state for real Froggy loop continuation");
+                IntSkip("PHASE 7B: Post-Run Identify Salvage Sell Restock",
+                        "Preserving Sparkfly state for real Froggy loop continuation");
+                goto froggy_done;
+            }
+
             // ===== PHASE 7: Return to Outpost =====
             IntReport("=== PHASE 7: Return to Outpost ===");
             const uint32_t currentMap = MapMgr::GetMapId();
@@ -4320,8 +4394,10 @@ phase4:
                 // In explorable (Sparkfly) — use resign flow
                 MapMgr::ReturnToOutpost();
             }
-            bool returned = WaitFor("MapID == Gadd's after return", 60000, []() {
-                return MapMgr::GetMapId() == MAP_GADDS;
+            bool returned = WaitFor("MapID == Gadd's after return", 120000, []() {
+                return MapMgr::GetMapId() == MAP_GADDS &&
+                       MapMgr::GetIsMapLoaded() &&
+                       AgentMgr::GetMyId() > 0;
             });
             IntCheck("Returned to Gadd's Encampment", returned);
             if (returned) {

@@ -1,7 +1,12 @@
 #include <gwa3/managers/DialogMgr.h>
+#include <gwa3/core/DialogHook.h>
+#include <gwa3/managers/AgentMgr.h>
+#include <gwa3/managers/QuestMgr.h>
 #include <gwa3/managers/StoCMgr.h>
 #include <gwa3/utils/StringEncoding.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/packets/CtoS.h>
+#include <gwa3/packets/Headers.h>
 
 #include <mutex>
 #include <vector>
@@ -9,10 +14,9 @@
 
 namespace GWA3::DialogMgr {
 
-    // StoC packet structures (match GWCA definitions)
     #pragma pack(push, 1)
     struct StoC_DialogButton {
-        uint32_t header;        // 0x007E
+        uint32_t header;
         uint32_t button_icon;
         wchar_t  message[128];
         uint32_t dialog_id;
@@ -20,12 +24,12 @@ namespace GWA3::DialogMgr {
     };
 
     struct StoC_DialogBody {
-        uint32_t header;        // 0x0080
+        uint32_t header;
         wchar_t  message[122];
     };
 
     struct StoC_DialogSender {
-        uint32_t header;        // 0x0081
+        uint32_t header;
         uint32_t agent_id;
     };
     #pragma pack(pop)
@@ -41,19 +45,17 @@ namespace GWA3::DialogMgr {
     static StoC::HookEntry g_hookButton;
     static StoC::HookEntry g_hookSender;
 
-    // Attempt to decode an encoded wchar string into a buffer.
-    // Returns true if decoding produced any output.
     static bool TryDecode(const wchar_t* encoded, wchar_t* outBuf, uint32_t outSize) {
         outBuf[0] = L'\0';
         if (!encoded || !encoded[0]) return false;
 
-        // Check if it's an encoded string (starts with word >= 0x100)
+        // Tekks/Bogroot flow only depends on sender/button ids, not decoded text.
+        // The current async GW decode path crashes when dialog body/button packets
+        // arrive, so skip decode for encoded strings here.
         if (StringEncoding::IsValidEncStr(encoded)) {
-            uint32_t chars = StringEncoding::DecodeStr(encoded, outBuf, outSize, 500);
-            if (chars > 0) return true;
+            return false;
         }
 
-        // Not encoded or decode failed — copy as-is
         wcsncpy_s(outBuf, outSize, encoded, outSize - 1);
         return true;
     }
@@ -75,8 +77,6 @@ namespace GWA3::DialogMgr {
         g_dialogOpen = true;
         g_buttons.clear();
         wcsncpy_s(g_bodyRaw, p->message, 255);
-
-        // Decode the body text
         TryDecode(p->message, g_bodyDecoded, 512);
 
         GWA3::Log::Info("[DialogMgr] Dialog body received (%u raw chars, decoded=%u chars)",
@@ -92,11 +92,8 @@ namespace GWA3::DialogMgr {
         btn.dialog_id = p->dialog_id;
         btn.button_icon = p->button_icon;
         btn.skill_id = p->skill_id;
-
-        // Store raw label, then try to decode
         wcsncpy_s(btn.label, p->message, 127);
 
-        // Attempt decode — overwrite label with decoded text if successful
         wchar_t decoded[128] = {};
         if (TryDecode(p->message, decoded, 128) && decoded[0]) {
             wcsncpy_s(btn.label, decoded, 127);
@@ -122,7 +119,7 @@ namespace GWA3::DialogMgr {
         ok &= StoC::RegisterPostPacketCallback(&g_hookSender, SMSG_DIALOG_SENDER, OnDialogSender);
 
         if (ok) {
-            GWA3::Log::Info("[DialogMgr] Initialized — listening for dialog packets");
+            GWA3::Log::Info("[DialogMgr] Initialized - listening for dialog packets");
         } else {
             GWA3::Log::Warn("[DialogMgr] Some packet callbacks failed to register");
         }
@@ -173,6 +170,70 @@ namespace GWA3::DialogMgr {
         g_bodyRaw[0] = L'\0';
         g_bodyDecoded[0] = L'\0';
         g_buttons.clear();
+    }
+
+    void StartUIHook(uint32_t messageId) {
+        DialogHook::StartUIHook(messageId);
+    }
+
+    bool EndUIHook(uint32_t messageId, uint32_t timeoutMs) {
+        return DialogHook::EndUIHook(messageId, timeoutMs);
+    }
+
+    bool WaitForUIMessage(uint32_t messageId, uint32_t timeoutMs) {
+        return DialogHook::WaitForUIMessage(messageId, timeoutMs);
+    }
+
+    bool WaitForDialogUIMessage(uint32_t timeoutMs) {
+        return DialogHook::WaitForDialogUIMessage(timeoutMs);
+    }
+
+    uint32_t GetLastUIMessageId() {
+        return DialogHook::GetLastUIMessageId();
+    }
+
+    uint32_t GetArmedUIMessageId() {
+        return DialogHook::GetArmedUIMessageId();
+    }
+
+    uint32_t GetObservedUIMessageId() {
+        return DialogHook::GetObservedUIMessageId();
+    }
+
+    uint32_t GetLastDialogId() {
+        return DialogHook::GetLastDialogId();
+    }
+
+    void ResetHookState() {
+        DialogHook::Reset();
+    }
+
+    void ResetRecentUITrace() {
+        DialogHook::ResetRecentUITrace();
+    }
+
+    uint32_t GetRecentUITrace(uint32_t* outMessages, uint32_t maxCount) {
+        return DialogHook::GetRecentUITrace(outMessages, maxCount);
+    }
+
+    void GoNPC(uint32_t agentId) {
+        CtoS::SendPacket(3, Packets::INTERACT_NPC, agentId, 0u);
+    }
+
+    bool NPCHook(uint32_t agentId, uint32_t timeoutMs) {
+        return NPCHookEx(agentId, AgentMgr::NpcInteractMode::NativePostCallTarget, timeoutMs);
+    }
+
+    bool NPCHookEx(uint32_t agentId, AgentMgr::NpcInteractMode mode, uint32_t timeoutMs) {
+        StartUIHook(DialogHook::UIMSG_DIALOG);
+        AgentMgr::InteractNPCEx(agentId, mode);
+        return EndUIHook(DialogHook::UIMSG_DIALOG, timeoutMs);
+    }
+
+    bool DialogHook(uint32_t dialogId, uint32_t timeoutMs) {
+        StartUIHook(DialogHook::UIMSG_DIALOG);
+        QuestMgr::Dialog(dialogId);
+        return EndUIHook(DialogHook::UIMSG_DIALOG, timeoutMs);
     }
 
 } // namespace GWA3::DialogMgr

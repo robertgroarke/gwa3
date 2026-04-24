@@ -1,0 +1,98 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base-vs2022",
+      "displayName": "Base Visual Studio 2022 Multi-Agent",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "Win32",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "GWA3_DLL_NAME": "gwa3",
+        "GWA3_PIPE_NAME": "\\\\.\\pipe\\gwa3_llm"
+      }
+    },
+    {
+      "name": "disco",
+      "displayName": "Disco Panic Agent Build",
+      "inherits": "base-vs2022",
+      "binaryDir": "${sourceDir}/build_disco",
+      "cacheVariables": {
+        "GWA3_DLL_NAME": "gwa3_disco",
+        "GWA3_PIPE_NAME": "\\\\.\\pipe\\gwa3_llm_disco"
+      }
+    },
+    {
+      "name": "beastrit",
+      "displayName": "BEASTRIT Agent Build",
+      "inherits": "base-vs2022",
+      "binaryDir": "${sourceDir}/build_beastrit",
+      "cacheVariables": {
+        "GWA3_DLL_NAME": "gwa3_beastrit",
+        "GWA3_PIPE_NAME": "\\\\.\\pipe\\gwa3_llm_beastrit"
+      }
+    },
+    {
+      "name": "trade",
+      "displayName": "Trade Harness Agent Build",
+      "inherits": "base-vs2022",
+      "binaryDir": "${sourceDir}/build_trade",
+      "cacheVariables": {
+        "GWA3_DLL_NAME": "gwa3_trade",
+        "GWA3_PIPE_NAME": "\\\\.\\pipe\\gwa3_llm_trade"
+      }
+    },
+    {
+      "name": "marvin",
+      "displayName": "MARVIN Agent Build",
+      "inherits": "base-vs2022",
+      "binaryDir": "${sourceDir}/build_marvin",
+      "cacheVariables": {
+        "GWA3_DLL_NAME": "gwa3_marvin",
+        "GWA3_PIPE_NAME": "\\\\.\\pipe\\gwa3_llm_marvin"
+      }
+    },
+    {
+      "name": "biscuit",
+      "displayName": "BISCUIT Agent Build",
+      "inherits": "base-vs2022",
+      "binaryDir": "${sourceDir}/build_biscuit",
+      "cacheVariables": {
+        "GWA3_DLL_NAME": "gwa3_biscuit",
+        "GWA3_PIPE_NAME": "\\\\.\\pipe\\gwa3_llm_biscuit"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "disco",
+      "configurePreset": "disco",
+      "configuration": "Release"
+    },
+    {
+      "name": "beastrit",
+      "configurePreset": "beastrit",
+      "configuration": "Release"
+    },
+    {
+      "name": "trade",
+      "configurePreset": "trade",
+      "configuration": "Release"
+    },
+    {
+      "name": "marvin",
+      "configurePreset": "marvin",
+      "configuration": "Release"
+    },
+    {
+      "name": "biscuit",
+      "configurePreset": "biscuit",
+      "configuration": "Release"
+    }
+  ]
+}

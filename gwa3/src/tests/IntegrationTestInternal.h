@@ -88,6 +88,7 @@ bool IsSkillCastMapType(uint32_t type);
 bool TryForceNearbyLootDrop();
 void DumpSkillbarForSkillTest();
 bool TryChooseSkillTestCandidate(SkillTestCandidate& out);
+bool TryChooseOffensiveSkillCandidate(uint32_t targetId, SkillTestCandidate& out);
 
 // Session, login, and trader/dialog flow (IntegrationTestSession.cpp).
 
@@ -171,9 +172,13 @@ bool TestCameraFOV();
 bool TestPersonalDir();
 bool TestExplorableCallTarget();
 int RunMerchantQuoteTest();
+int RunIdentifySalvageIsolationTest();
+int RunTradeHelperMode();
+int RunConsumableCraftingTest();
 
 // Watchdog (crash/disconnect detection)
 void StartWatchdog();
 void StopWatchdog(bool waitForThread = true);
+void SetWatchdogHungWindowKillEnabled(bool enabled);
 
 } // namespace GWA3::SmokeTest

@@ -13,7 +13,14 @@
 #include <gwa3/managers/SkillMgr.h>
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/MemoryMgr.h>
+#include <gwa3/bot/ArachnisHaunt.h>
+#include <gwa3/bot/ArachnisHauntBot.h>
 #include <gwa3/bot/FroggyHM.h>
+#include <gwa3/bot/RavensPoint.h>
+#include <gwa3/bot/RavensPointBot.h>
+#include <gwa3/bot/RragarsMenagerie.h>
+#include <gwa3/bot/RragarsMenagerieBot.h>
+#include <gwa3/managers/QuestMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include "IntegrationTestInternal.h"
 
@@ -1784,6 +1791,353 @@ int RunMerchantQuoteTest() {
     StopWatchdog();
     Log::Info("[INTG] Heartbeat at exit: %u, crashDetected=%d",
               RenderHook::GetHeartbeat(), s_crashDetected ? 1 : 0);
+    return s_intFailed;
+}
+
+int RunRavensPointFeatureTest() {
+    s_intPassed = 0;
+    s_intFailed = 0;
+    s_intSkipped = 0;
+    StartWatchdog();
+
+    s_intReport = OpenIntReport();
+
+    char timestamp[64];
+    time_t now = time(nullptr);
+    struct tm tm_buf;
+    localtime_s(&tm_buf, &now);
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tm_buf);
+
+    IntReport("=== RAVENS POINT FEATURE TEST ===");
+    IntReport("Timestamp: %s", timestamp);
+    IntReport("");
+
+    WaitForPlayerWorldReady(15000);
+    CtoS::Initialize();
+
+    GWA3::Bot::RavensPointBot::Register();
+    GWA3::Bot::Start();
+    const bool botStarted = GWA3::Bot::IsRunning();
+    IntCheck("Raven bot thread started", botStarted);
+    if (botStarted) {
+        GWA3::Bot::SetState(GWA3::Bot::BotState::InTown);
+    }
+
+    bool sawOlafstead = MapMgr::GetMapId() == GWA3::Bot::RavensPoint::MAP_OLAFSTEAD;
+    bool sawVarajar = MapMgr::GetMapId() == GWA3::Bot::RavensPoint::MAP_VARAJAR_FELLS_1;
+    bool sawLevel1 = MapMgr::GetMapId() == GWA3::Bot::RavensPoint::MAP_RAVENS_POINT_LVL1;
+    bool sawLevel2 = MapMgr::GetMapId() == GWA3::Bot::RavensPoint::MAP_RAVENS_POINT_LVL2 ||
+                     MapMgr::GetMapId() == GWA3::Bot::RavensPoint::MAP_RAVENS_POINT_LVL3;
+    bool sawErrorState = false;
+
+    uint32_t lastMapId = 0xFFFFFFFFu;
+    GWA3::Bot::BotState lastState = GWA3::Bot::BotState::Idle;
+    DWORD lastProgressLog = 0u;
+    const DWORD start = GetTickCount();
+
+    while (botStarted && (GetTickCount() - start) < 1800000u) {
+        const uint32_t mapId = MapMgr::GetMapId();
+        const GWA3::Bot::BotState state = GWA3::Bot::GetState();
+
+        sawOlafstead = sawOlafstead || mapId == GWA3::Bot::RavensPoint::MAP_OLAFSTEAD;
+        sawVarajar = sawVarajar || mapId == GWA3::Bot::RavensPoint::MAP_VARAJAR_FELLS_1;
+        sawLevel1 = sawLevel1 || mapId == GWA3::Bot::RavensPoint::MAP_RAVENS_POINT_LVL1;
+        sawLevel2 = sawLevel2 ||
+                    mapId == GWA3::Bot::RavensPoint::MAP_RAVENS_POINT_LVL2 ||
+                    mapId == GWA3::Bot::RavensPoint::MAP_RAVENS_POINT_LVL3;
+        sawErrorState = sawErrorState || state == GWA3::Bot::BotState::Error;
+
+        const DWORD nowTicks = GetTickCount();
+        if (mapId != lastMapId || state != lastState || (nowTicks - lastProgressLog) >= 10000u) {
+            const auto* ravenQuest = QuestMgr::GetQuestById(GWA3::Bot::RavensPoint::QUEST_RAVENS_POINT);
+            IntReport("  Progress: map=%u state=%d heroes=%u activeQuest=0x%X ravenPresent=%d ravenLogState=%u elapsed=%us",
+                      mapId,
+                      static_cast<int>(state),
+                      PartyMgr::CountPartyHeroes(),
+                      QuestMgr::GetActiveQuestId(),
+                      ravenQuest != nullptr ? 1 : 0,
+                      ravenQuest ? ravenQuest->log_state : 0u,
+                      static_cast<unsigned>((nowTicks - start) / 1000u));
+            lastMapId = mapId;
+            lastState = state;
+            lastProgressLog = nowTicks;
+        }
+
+        if (ShouldAbortForRuntimeFailure()) {
+            const char* reason = s_disconnectDetected ? "disconnect detected" : "crash detected";
+            IntReport("[FAIL] Raven feature test aborted: %s", reason);
+            ++s_intFailed;
+            break;
+        }
+        if (sawErrorState || sawLevel2) {
+            break;
+        }
+        Sleep(1000);
+    }
+
+    if (!sawLevel2 && !sawErrorState && !ShouldAbortForRuntimeFailure() &&
+        botStarted && (GetTickCount() - start) >= 1800000u) {
+        IntReport("[FAIL] Raven feature test timed out before reaching level 2");
+        ++s_intFailed;
+    }
+
+    IntCheck("Reached Olafstead", sawOlafstead);
+    IntCheck("Reached Varajar Fells", sawVarajar);
+    IntCheck("Entered Ravens Point level 1", sawLevel1);
+    IntCheck("Entered Ravens Point level 2", sawLevel2);
+    IntCheck("Bot avoided Error state", !sawErrorState);
+
+    if (GWA3::Bot::IsRunning()) {
+        GWA3::Bot::Stop();
+    }
+
+    IntReport("");
+    IntReport("=== RAVENS POINT FEATURE TEST COMPLETE ===");
+    IntReport("Passed: %d / Failed: %d / Skipped: %d",
+              s_intPassed, s_intFailed, s_intSkipped);
+
+    if (s_intReport) {
+        fclose(s_intReport);
+        s_intReport = nullptr;
+    }
+
+    StopWatchdog();
+    Log::Info("[INTG] Ravens Point feature complete: %d passed, %d failed, %d skipped",
+              s_intPassed, s_intFailed, s_intSkipped);
+    return s_intFailed;
+}
+
+int RunArachnisHauntFeatureTest() {
+    s_intPassed = 0;
+    s_intFailed = 0;
+    s_intSkipped = 0;
+    StartWatchdog();
+
+    s_intReport = OpenIntReport();
+
+    char timestamp[64];
+    time_t now = time(nullptr);
+    struct tm tm_buf;
+    localtime_s(&tm_buf, &now);
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tm_buf);
+
+    IntReport("=== ARACHNIS HAUNT FEATURE TEST ===");
+    IntReport("Timestamp: %s", timestamp);
+    IntReport("");
+
+    WaitForPlayerWorldReady(15000);
+    CtoS::Initialize();
+
+    GWA3::Bot::ArachnisHauntBot::Register();
+    GWA3::Bot::Start();
+    const bool botStarted = GWA3::Bot::IsRunning();
+    IntCheck("Arachnis bot thread started", botStarted);
+    if (botStarted) {
+        GWA3::Bot::SetState(GWA3::Bot::BotState::InTown);
+    }
+
+    bool sawMagusStones = MapMgr::GetMapId() == GWA3::Bot::ArachnisHaunt::MAP_MAGUS_STONES;
+    bool sawLevel1 = MapMgr::GetMapId() == GWA3::Bot::ArachnisHaunt::MAP_ARACHNIS_HAUNT_LVL1;
+    bool sawLevel2 = MapMgr::GetMapId() == GWA3::Bot::ArachnisHaunt::MAP_ARACHNIS_HAUNT_LVL2;
+    bool returnedToMagusAfterReward = false;
+    bool sawErrorState = false;
+    int level1EntryCount = 0;
+
+    uint32_t lastMapId = 0xFFFFFFFFu;
+    GWA3::Bot::BotState lastState = GWA3::Bot::BotState::Idle;
+    DWORD lastProgressLog = 0u;
+    const DWORD start = GetTickCount();
+
+    while (botStarted && (GetTickCount() - start) < 2700000u) {
+        const uint32_t mapId = MapMgr::GetMapId();
+        const GWA3::Bot::BotState state = GWA3::Bot::GetState();
+
+        sawMagusStones = sawMagusStones || mapId == GWA3::Bot::ArachnisHaunt::MAP_MAGUS_STONES;
+        sawLevel1 = sawLevel1 || mapId == GWA3::Bot::ArachnisHaunt::MAP_ARACHNIS_HAUNT_LVL1;
+        sawLevel2 = sawLevel2 || mapId == GWA3::Bot::ArachnisHaunt::MAP_ARACHNIS_HAUNT_LVL2;
+        if (lastMapId != mapId && mapId == GWA3::Bot::ArachnisHaunt::MAP_ARACHNIS_HAUNT_LVL1) {
+            ++level1EntryCount;
+        }
+        if (sawLevel2 && mapId == GWA3::Bot::ArachnisHaunt::MAP_MAGUS_STONES) {
+            returnedToMagusAfterReward = true;
+        }
+        sawErrorState = sawErrorState || state == GWA3::Bot::BotState::Error;
+
+        const DWORD nowTicks = GetTickCount();
+        if (mapId != lastMapId || state != lastState || (nowTicks - lastProgressLog) >= 10000u) {
+            IntReport("  Progress: map=%u state=%d heroes=%u lvl1Entries=%d elapsed=%us",
+                      mapId,
+                      static_cast<int>(state),
+                      PartyMgr::CountPartyHeroes(),
+                      level1EntryCount,
+                      static_cast<unsigned>((nowTicks - start) / 1000u));
+            lastMapId = mapId;
+            lastState = state;
+            lastProgressLog = nowTicks;
+        }
+
+        if (ShouldAbortForRuntimeFailure()) {
+            const char* reason = s_disconnectDetected ? "disconnect detected" : "crash detected";
+            IntReport("[FAIL] Arachnis feature test aborted: %s", reason);
+            ++s_intFailed;
+            break;
+        }
+        if (sawErrorState || returnedToMagusAfterReward) {
+            break;
+        }
+        Sleep(1000);
+    }
+
+    if (!returnedToMagusAfterReward && !sawErrorState && !ShouldAbortForRuntimeFailure() &&
+        botStarted && (GetTickCount() - start) >= 2700000u) {
+        IntReport("[FAIL] Arachnis feature test timed out before returning to Magus Stones");
+        ++s_intFailed;
+    }
+
+    IntCheck("Reached Magus Stones", sawMagusStones);
+    IntCheck("Entered Arachnis level 1", sawLevel1);
+    IntCheck("Entered Arachnis level 1 twice for reward bounce", level1EntryCount >= 2);
+    IntCheck("Entered Arachnis level 2", sawLevel2);
+    IntCheck("Returned to Magus Stones after reward hand-in", returnedToMagusAfterReward);
+    IntCheck("Bot avoided Error state", !sawErrorState);
+
+    if (GWA3::Bot::IsRunning()) {
+        GWA3::Bot::Stop();
+    }
+
+    IntReport("");
+    IntReport("=== ARACHNIS HAUNT FEATURE TEST COMPLETE ===");
+    IntReport("Passed: %d / Failed: %d / Skipped: %d",
+              s_intPassed, s_intFailed, s_intSkipped);
+
+    if (s_intReport) {
+        fclose(s_intReport);
+        s_intReport = nullptr;
+    }
+
+    StopWatchdog();
+    Log::Info("[INTG] Arachnis Haunt feature complete: %d passed, %d failed, %d skipped",
+              s_intPassed, s_intFailed, s_intSkipped);
+    return s_intFailed;
+}
+
+int RunRragarsMenagerieFeatureTest() {
+    s_intPassed = 0;
+    s_intFailed = 0;
+    s_intSkipped = 0;
+    StartWatchdog();
+
+    s_intReport = OpenIntReport();
+
+    char timestamp[64];
+    time_t now = time(nullptr);
+    struct tm tm_buf;
+    localtime_s(&tm_buf, &now);
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tm_buf);
+
+    IntReport("=== RRAGARS MENAGERIE FEATURE TEST ===");
+    IntReport("Timestamp: %s", timestamp);
+    IntReport("");
+
+    WaitForPlayerWorldReady(15000);
+    CtoS::Initialize();
+
+    GWA3::Bot::RragarsMenagerieBot::Register();
+    GWA3::Bot::Start();
+    const bool botStarted = GWA3::Bot::IsRunning();
+    IntCheck("Rragars bot thread started", botStarted);
+    if (botStarted) {
+        GWA3::Bot::SetState(GWA3::Bot::BotState::InTown);
+    }
+
+    bool sawDoomlore = MapMgr::GetMapId() == GWA3::Bot::RragarsMenagerie::MAP_DOOMLORE_SHRINE;
+    bool sawDalada = MapMgr::GetMapId() == GWA3::Bot::RragarsMenagerie::MAP_DALADA_UPLANDS;
+    bool sawGrothmar = MapMgr::GetMapId() == GWA3::Bot::RragarsMenagerie::MAP_GROTHMAR_WARDOWNS;
+    bool sawSacnoth = MapMgr::GetMapId() == GWA3::Bot::RragarsMenagerie::MAP_SACNOTH_VALLEY;
+    bool sawLevel1 = MapMgr::GetMapId() == GWA3::Bot::RragarsMenagerie::MAP_RRAGARS_MENAGERIE_LVL1;
+    bool sawLevel2 = MapMgr::GetMapId() == GWA3::Bot::RragarsMenagerie::MAP_RRAGARS_MENAGERIE_LVL2;
+    bool sawLevel3 = MapMgr::GetMapId() == GWA3::Bot::RragarsMenagerie::MAP_RRAGARS_MENAGERIE_LVL3;
+    bool returnedToDoomloreAfterReward = false;
+    bool sawErrorState = false;
+
+    uint32_t lastMapId = 0xFFFFFFFFu;
+    GWA3::Bot::BotState lastState = GWA3::Bot::BotState::Idle;
+    DWORD lastProgressLog = 0u;
+    const DWORD start = GetTickCount();
+
+    while (botStarted && (GetTickCount() - start) < 2700000u) {
+        const uint32_t mapId = MapMgr::GetMapId();
+        const GWA3::Bot::BotState state = GWA3::Bot::GetState();
+
+        sawDoomlore = sawDoomlore || mapId == GWA3::Bot::RragarsMenagerie::MAP_DOOMLORE_SHRINE;
+        sawDalada = sawDalada || mapId == GWA3::Bot::RragarsMenagerie::MAP_DALADA_UPLANDS;
+        sawGrothmar = sawGrothmar || mapId == GWA3::Bot::RragarsMenagerie::MAP_GROTHMAR_WARDOWNS;
+        sawSacnoth = sawSacnoth || mapId == GWA3::Bot::RragarsMenagerie::MAP_SACNOTH_VALLEY;
+        sawLevel1 = sawLevel1 || mapId == GWA3::Bot::RragarsMenagerie::MAP_RRAGARS_MENAGERIE_LVL1;
+        sawLevel2 = sawLevel2 || mapId == GWA3::Bot::RragarsMenagerie::MAP_RRAGARS_MENAGERIE_LVL2;
+        sawLevel3 = sawLevel3 || mapId == GWA3::Bot::RragarsMenagerie::MAP_RRAGARS_MENAGERIE_LVL3;
+        returnedToDoomloreAfterReward =
+            returnedToDoomloreAfterReward ||
+            (sawLevel3 && mapId == GWA3::Bot::RragarsMenagerie::MAP_DOOMLORE_SHRINE);
+        sawErrorState = sawErrorState || state == GWA3::Bot::BotState::Error;
+
+        const DWORD nowTicks = GetTickCount();
+        if (mapId != lastMapId || state != lastState || (nowTicks - lastProgressLog) >= 10000u) {
+            IntReport("  Progress: map=%u state=%d heroes=%u elapsed=%us",
+                      mapId,
+                      static_cast<int>(state),
+                      PartyMgr::CountPartyHeroes(),
+                      static_cast<unsigned>((nowTicks - start) / 1000u));
+            lastMapId = mapId;
+            lastState = state;
+            lastProgressLog = nowTicks;
+        }
+
+        if (ShouldAbortForRuntimeFailure()) {
+            const char* reason = s_disconnectDetected ? "disconnect detected" : "crash detected";
+            IntReport("[FAIL] Rragars feature test aborted: %s", reason);
+            ++s_intFailed;
+            break;
+        }
+        if (sawErrorState || returnedToDoomloreAfterReward) {
+            break;
+        }
+        Sleep(1000);
+    }
+
+    if (!returnedToDoomloreAfterReward && !sawErrorState && !ShouldAbortForRuntimeFailure() &&
+        botStarted && (GetTickCount() - start) >= 2700000u) {
+        IntReport("[FAIL] Rragars feature test timed out before returning to Doomlore");
+        ++s_intFailed;
+    }
+
+    IntCheck("Reached Doomlore Shrine", sawDoomlore);
+    IntCheck("Reached Dalada Uplands", sawDalada);
+    IntCheck("Reached Grothmar Wardowns", sawGrothmar);
+    IntCheck("Reached Sacnoth Valley", sawSacnoth);
+    IntCheck("Entered Rragars level 1", sawLevel1);
+    IntCheck("Entered Rragars level 2", sawLevel2);
+    IntCheck("Entered Rragars level 3", sawLevel3);
+    IntCheck("Returned to Doomlore after reward chest", returnedToDoomloreAfterReward);
+    IntCheck("Bot avoided Error state", !sawErrorState);
+
+    if (GWA3::Bot::IsRunning()) {
+        GWA3::Bot::Stop();
+    }
+
+    IntReport("");
+    IntReport("=== RRAGARS MENAGERIE FEATURE TEST COMPLETE ===");
+    IntReport("Passed: %d / Failed: %d / Skipped: %d",
+              s_intPassed, s_intFailed, s_intSkipped);
+
+    if (s_intReport) {
+        fclose(s_intReport);
+        s_intReport = nullptr;
+    }
+
+    StopWatchdog();
+    Log::Info("[INTG] Rragars Menagerie feature complete: %d passed, %d failed, %d skipped",
+              s_intPassed, s_intFailed, s_intSkipped);
     return s_intFailed;
 }
 

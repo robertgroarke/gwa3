@@ -1,7 +1,8 @@
 param(
     [int]$AccountIndex = 0,
     [int]$LaunchTimeoutSeconds = 60,
-    [int]$RunTimeoutSeconds = 180,
+    [int]$RunTimeoutSeconds = 600,
+    [switch]$SparkflyOnly,
     [string]$AccountsPath = "C:\Users\Robert\Documents\GWA Censured X BotsHub\GWA Censured\Accounts.json",
     [string]$BuildDir = $env:GWA3_BUILD_DIR,
     [string]$DllName = $env:GWA3_DLL_NAME
@@ -17,6 +18,7 @@ $script:InjectorPath = Join-Path $script:BinDir "injector.exe"
 $script:DllPath = Join-Path $script:BinDir $resolvedDllName
 $script:LogPath = Join-Path $script:BinDir "gwa3_log.txt"
 $script:FroggyFlagPath = Join-Path $script:BinDir "gwa3_test_froggy.flag"
+$script:FroggySparkflyFlagPath = Join-Path $script:BinDir "gwa3_test_froggy_sparkfly.flag"
 $script:ScreenshotDir = Join-Path $script:BinDir "screenshots"
 $script:CaptureScript = Join-Path $PSScriptRoot "capture_screen.ps1"
 
@@ -41,6 +43,7 @@ public static class GwWindowProbeFroggy {
 Add-Type -TypeDefinition $user32 | Out-Null
 
 function Get-GwCrashDialog {
+    param([uint32]$TargetPid = 0)
     $found = $false
     $callback = [GwWindowProbeFroggy+EnumWindowsProc]{
         param([IntPtr]$hWnd, [IntPtr]$lParam)
@@ -50,7 +53,11 @@ function Get-GwCrashDialog {
         $ttl = New-Object System.Text.StringBuilder 512
         [void][GwWindowProbeFroggy]::GetWindowText($hWnd, $ttl, $ttl.Capacity)
         if ($cls.ToString() -eq "#32770" -and $ttl.ToString() -eq "Gw.exe") {
-            $script:found = $true
+            $windowPid = 0
+            [void][GwWindowProbeFroggy]::GetWindowThreadProcessId($hWnd, [ref]$windowPid)
+            if ($TargetPid -eq 0 -or $windowPid -eq $TargetPid) {
+                $script:found = $true
+            }
         }
         return $true
     }
@@ -72,7 +79,7 @@ function Get-LatestFroggyBlock {
     try { $lines = Get-Content $script:LogPath -ErrorAction Stop } catch { return @() }
     $start = -1
     for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -match "FROGGY FEATURE TEST MODE") { $start = $i }
+        if ($lines[$i] -match "FROGGY FEATURE TEST MODE" -or $lines[$i] -match "FROGGY SPARKFLY ROUTE TEST MODE") { $start = $i }
     }
     if ($start -lt 0) { return @() }
     return $lines[$start..($lines.Count - 1)]
@@ -152,40 +159,125 @@ Exit 0
     return $gwPid
 }
 
-function Wait-ForGwReady {
-    param([int]$ProcessId, [int]$TimeoutSeconds)
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    while ((Get-Date) -lt $deadline) {
-        $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
-        if ($proc -and $proc.MainWindowHandle -ne 0) {
-            Write-Host "GW window ready for PID $ProcessId"
-            return $ProcessId
-        }
-        Start-Sleep -Seconds 1
+function Get-CharacterGwProcesses {
+    param([string]$CharacterName)
+    $rows = Get-CimInstance Win32_Process -Filter "name='Gw.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -match [regex]::Escape($CharacterName) }
+    if (-not $rows) { return @() }
+    return @($rows | Select-Object ProcessId, CommandLine)
+}
+
+function Stop-CharacterGwProcesses {
+    param([string]$CharacterName)
+    foreach ($row in (Get-CharacterGwProcesses -CharacterName $CharacterName)) {
+        $candidatePid = [int]$row.ProcessId
+        if ($candidatePid -le 0) { continue }
+        Stop-Process -Id $candidatePid -Force -ErrorAction SilentlyContinue
     }
-    throw "Timed out waiting for GW window (PID $ProcessId)"
+}
+
+function Get-PidMemoryKb {
+    param([int]$ProcessId)
+    if ($ProcessId -le 0) { return 0 }
+    $line = tasklist /FI "PID eq $ProcessId" /FO CSV /NH 2>$null
+    if (-not $line -or $line -match "No tasks are running") { return 0 }
+    $row = $line | ConvertFrom-Csv -Header ImageName,PID,SessionName,SessionNum,MemUsage | Select-Object -First 1
+    if (-not $row) { return 0 }
+    $mem = (($row.MemUsage -replace ',', '') -replace '\s*K', '') -replace '\s+', ''
+    $value = 0
+    [void][int]::TryParse($mem, [ref]$value)
+    return $value
+}
+
+function Resolve-LiveGwPid {
+    param(
+        [string]$CharacterName,
+        [int]$LauncherPidHint,
+        [int]$TimeoutSeconds
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $healthyThresholdKb = 100000
+    while ((Get-Date) -lt $deadline) {
+        $candidates = @()
+        foreach ($row in (Get-CharacterGwProcesses -CharacterName $CharacterName)) {
+            $candidatePid = [int]$row.ProcessId
+            if ($candidatePid -le 0) { continue }
+            $proc = Get-Process -Id $candidatePid -ErrorAction SilentlyContinue
+            if (-not $proc -or $proc.MainWindowHandle -eq 0) { continue }
+            $memKb = Get-PidMemoryKb -ProcessId $candidatePid
+            if ($memKb -lt $healthyThresholdKb) { continue }
+            $candidates += [pscustomobject]@{
+                ProcessId = $candidatePid
+                MemoryKb = $memKb
+            }
+        }
+        if ($candidates.Count -gt 0) {
+            $best = $candidates | Sort-Object MemoryKb, ProcessId | Select-Object -Last 1
+            Write-Host "Resolved live GW PID for ${CharacterName}: $($best.ProcessId) (launcher hint $LauncherPidHint, mem $($best.MemoryKb) KB)"
+            return [int]$best.ProcessId
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    throw "Timed out resolving live GW PID for $CharacterName (launcher hint $LauncherPidHint)"
+}
+
+function Dump-GwProcessSnapshot {
+    param([string]$Label)
+    Write-Host "GW_PROCESS_SNAPSHOT: $Label"
+    try {
+        $rows = Get-CimInstance Win32_Process -Filter "name='Gw.exe'" -ErrorAction Stop |
+            Select-Object ProcessId, CommandLine
+        if (-not $rows) {
+            Write-Host "GW_PROCESS_SNAPSHOT: none"
+            return
+        }
+        foreach ($row in $rows) {
+            Write-Host ("GW_PROCESS_SNAPSHOT: pid={0} cmd={1}" -f $row.ProcessId, $row.CommandLine)
+        }
+    } catch {
+        Write-Host ("GW_PROCESS_SNAPSHOT: failed to enumerate Gw.exe ({0})" -f $_.Exception.Message)
+    }
 }
 
 # === Main ===
 # Do NOT kill other GW processes — another agent may be running
 
-New-Item -ItemType File -Force -Path $script:FroggyFlagPath | Out-Null
+if ($SparkflyOnly) {
+    New-Item -ItemType File -Force -Path $script:FroggySparkflyFlagPath | Out-Null
+} else {
+    New-Item -ItemType File -Force -Path $script:FroggyFlagPath | Out-Null
+}
+
+# Only clean up the MARVIN character lane before launch; do not touch other agents.
+Stop-CharacterGwProcesses -CharacterName $script:CharacterNames[$AccountIndex]
+Start-Sleep -Seconds 2
 
 # Launch via GWLauncher (multiclient-safe, returns exact PID)
 $gwPid = Launch-GwViaGWLauncher
 
-# Wait for GW window to be ready before injection
-Write-Host "Waiting for GW window (PID $gwPid) to be ready..."
+# Resolve the actual live client PID before injection. GWLauncher can return
+# a short-lived bootstrap PID rather than the lasting windowed Gw.exe.
+Write-Host "Waiting for live GW process for $($script:CharacterNames[$AccountIndex])..."
 Start-Sleep -Seconds $LaunchTimeoutSeconds
-Wait-ForGwReady -ProcessId $gwPid -TimeoutSeconds 30
+$gwPid = Resolve-LiveGwPid -CharacterName $script:CharacterNames[$AccountIndex] -LauncherPidHint $gwPid -TimeoutSeconds 45
 
 # Update log path to PID-specific file (avoids contention with other agents)
 $script:LogPath = Join-Path $script:BinDir "gwa3_log_$gwPid.txt"
+if (Test-Path $script:LogPath) {
+    Remove-Item -LiteralPath $script:LogPath -Force -ErrorAction SilentlyContinue
+}
 Write-Host "Log path: $($script:LogPath)"
 
 $dllName = Split-Path $script:DllPath -Leaf
-Write-Host "Injecting froggy test into PID $gwPid (DLL: $dllName)..."
-& $script:InjectorPath --pid $gwPid --dll $dllName --test-froggy
+if ($SparkflyOnly) {
+    Write-Host "Injecting Froggy Sparkfly test into PID $gwPid (DLL: $dllName)..."
+    & $script:InjectorPath --pid $gwPid --dll $dllName --test-froggy-sparkfly
+} else {
+    Write-Host "Injecting froggy test into PID $gwPid (DLL: $dllName)..."
+    & $script:InjectorPath --pid $gwPid --dll $dllName --test-froggy
+}
 if ($LASTEXITCODE -ne 0) { throw "Injection failed." }
 
 $crashDialogSeen = $false
@@ -195,17 +287,26 @@ $failureLine = $null
 $summarySeenAt = $null
 $merchantShot = $null
 $startTime = Get-Date
+$loopExitReason = "timeout"
+$loopExitElapsed = 0
 
 while (((Get-Date) - $startTime).TotalSeconds -lt $RunTimeoutSeconds) {
-    if (Get-GwCrashDialog) {
+    if (Get-GwCrashDialog -TargetPid $gwPid) {
         $crashDialogSeen = $true
+        $loopExitReason = "visible-crash-dialog"
+        $loopExitElapsed = [int](((Get-Date) - $startTime).TotalSeconds)
         $shot = Capture-RunScreenshot -Tag "crash_dialog"
         Write-Host "CRASH_DIALOG_DETECTED: $shot"
         break
     }
     # Check if OUR GW process is still alive (don't check other agents' processes)
     $ourGw = Get-Process -Id $gwPid -ErrorAction SilentlyContinue
-    if (-not $ourGw -or $ourGw.HasExited) { break }
+    if (-not $ourGw -or $ourGw.HasExited) {
+        $loopExitReason = "gw-process-exited"
+        $loopExitElapsed = [int](((Get-Date) - $startTime).TotalSeconds)
+        Dump-GwProcessSnapshot -Label "tracked pid $gwPid exited"
+        break
+    }
 
     if (-not $merchantShot -and (Test-Path $script:LogPath)) {
         $merchantMarkerSeen = Select-String -Path $script:LogPath -Pattern "MERCHANT_SCREENSHOT_NOW" -Quiet -ErrorAction SilentlyContinue
@@ -218,20 +319,31 @@ while (((Get-Date) - $startTime).TotalSeconds -lt $RunTimeoutSeconds) {
     if (Test-Path $script:LogPath) {
         $froggyLines = Get-LatestFroggyBlock
         foreach ($line in $froggyLines) {
+            if ($line -match "\[WATCHDOG\].*CRASH DIALOG" -or $line -match "\[WATCHDOG\].*WINDOW NOT RESPONDING" -or $line -match "\[WATCHDOG\].*RENDER FROZEN") {
+                $crashDialogSeen = $true
+            }
             if ($line -match "FROGGY FEATURE TESTS COMPLETE") {
                 $summarySeen = $true
                 if (-not $summarySeenAt) { $summarySeenAt = Get-Date }
             }
-            if ($line -match "Froggy feature test complete: .* failures") {
+            if ($line -match "Froggy feature test complete: .* failures" -or $line -match "Froggy Sparkfly route test complete: .* failures") {
                 $failureLine = $line
             }
         }
         if ($summarySeen -and $failureLine -and $summarySeenAt -and (((Get-Date) - $summarySeenAt).TotalSeconds -ge 5)) {
+            $loopExitReason = "summary-observed"
+            $loopExitElapsed = [int](((Get-Date) - $startTime).TotalSeconds)
             break
         }
     }
     Start-Sleep -Seconds 1
 }
+
+if ($loopExitElapsed -eq 0) {
+    $loopExitElapsed = [int](((Get-Date) - $startTime).TotalSeconds)
+}
+
+Write-Host ("RUN_LOOP_EXIT: reason={0} elapsed={1}s pid={2}" -f $loopExitReason, $loopExitElapsed, $gwPid)
 
 $endShot = Capture-RunScreenshot -Tag "end"
 Write-Host "END_SCREENSHOT: $endShot"
@@ -246,7 +358,7 @@ for ($i = 0; $i -lt 5; $i++) {
 }
 
 if ($froggyBlock.Count -eq 0) {
-    Write-Host "No froggy block found in log."
+    Write-Host "No Froggy test block found in log."
     exit 2
 }
 
@@ -255,11 +367,24 @@ $froggyBlock | ForEach-Object { $_ }
 # Final parse after process shutdown. The run can complete and terminate GW
 # before the live polling loop observes the summary/failure lines.
 foreach ($line in $froggyBlock) {
-    if ($line -match "FROGGY FEATURE TESTS COMPLETE") {
+    if ($line -match "\[WATCHDOG\].*CRASH DIALOG" -or $line -match "\[WATCHDOG\].*WINDOW NOT RESPONDING" -or $line -match "\[WATCHDOG\].*RENDER FROZEN") {
+        $crashDialogSeen = $true
+    }
+    if ($line -match "FROGGY FEATURE TESTS COMPLETE" -or $line -match "FROGGY SPARKFLY TEST COMPLETE") {
         $summarySeen = $true
     }
-    if ($line -match "Froggy feature test complete: .* failures") {
+    if ($line -match "Froggy feature test complete: .* failures" -or $line -match "Froggy Sparkfly route test complete: .* failures") {
         $failureLine = $line
+    }
+}
+
+if (-not $crashDialogSeen) {
+    $latestBlock = Get-LatestFroggyBlock
+    foreach ($line in $latestBlock) {
+        if ($line -match "\[WATCHDOG\].*(CRASH DIALOG|WINDOW NOT RESPONDING|RENDER FROZEN)") {
+            $crashDialogSeen = $true
+            break
+        }
     }
 }
 
@@ -273,7 +398,7 @@ if (-not $summarySeen) {
     exit 12
 }
 
-if ($failureLine -and $failureLine -match "Froggy feature test complete: (\d+) failures") {
+if ($failureLine -and $failureLine -match "(?:Froggy feature test complete|Froggy Sparkfly route test complete): (\d+) failures") {
     $failures = [int]$Matches[1]
     exit $failures
 }

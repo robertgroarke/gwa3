@@ -38,6 +38,11 @@ uintptr_t Transaction = 0;
 uintptr_t BuyItemBase = 0;
 uintptr_t RequestQuote = 0;
 uintptr_t Salvage = 0;
+uintptr_t SalvageSessionOpen = 0;
+uintptr_t SalvageSessionCancel = 0;
+uintptr_t SalvageSessionDone = 0;
+uintptr_t SalvageMaterials = 0;
+uintptr_t SalvageUpgrade = 0;
 uintptr_t SalvageGlobal = 0;
 
 uintptr_t AgentBase = 0;
@@ -198,9 +203,26 @@ static const PatternDef s_patterns[] = {
     PAT("Transaction",    Transaction,    "\x85\xFF\x74\x1D\x8B\x4D\x14\xEB\x08", "xxxxxxxxx", -0x7F, Priority::P1, PatternType::Func),
     PAT("BuyItemBase",    BuyItemBase,    "\xD9\xEE\xD9\x58\x0C\xC7\x40\x04",   "xxxxxxxx", 0xE,    Priority::P1, PatternType::Ptr),
     PAT("RequestQuote",   RequestQuote,   "\x8B\x75\x20\x83\xFE\x10\x76\x14",   "xxxxxxxx", -0x35,  Priority::P1, PatternType::Func),
+    // Reforged split the old salvage open flow into a local-state init wrapper
+    // (header 0x66) plus separate packet wrappers for 0x77-0x7B.
     PAT("Salvage",        Salvage,
+        "\x33\xC5\x89\x45\xFC\x8B\x45\x08\x89\x45\xF0\x8B\x45\x0C\x89\x45\xF4\x8B\x45\x10\x89\x45\xF8\x8D\x45\xEC\x50\x6A\x10\xC7\x45\xEC\x66",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", -0xB, Priority::P1, PatternType::Func),
+    PAT("SalvageSessionOpen", SalvageSessionOpen,
         "\x33\xC5\x89\x45\xFC\x8B\x45\x08\x89\x45\xF0\x8B\x45\x0C\x89\x45\xF4\x8B\x45\x10\x89\x45\xF8\x8D\x45\xEC\x50\x6A\x10\xC7\x45\xEC\x77",
-        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", -0xB, Priority::P1, PatternType::Func),
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", -0xB, Priority::P2, PatternType::Func),
+    PAT("SalvageSessionCancel", SalvageSessionCancel,
+        "\x55\x8B\xEC\x51\x8D\x45\xFC\xC7\x45\xFC\x78\x00\x00\x00\x50\x6A\x04",
+        "xxxxxxxxxxxxxxxxx", 0x0, Priority::P2, PatternType::Func),
+    PAT("SalvageSessionDone", SalvageSessionDone,
+        "\x55\x8B\xEC\x51\x8D\x45\xFC\xC7\x45\xFC\x79\x00\x00\x00\x50\x6A\x04",
+        "xxxxxxxxxxxxxxxxx", 0x0, Priority::P2, PatternType::Func),
+    PAT("SalvageMaterials", SalvageMaterials,
+        "\x55\x8B\xEC\x51\x8D\x45\xFC\xC7\x45\xFC\x7A\x00\x00\x00\x50\x6A\x04",
+        "xxxxxxxxxxxxxxxxx", 0x0, Priority::P2, PatternType::Func),
+    PAT("SalvageUpgrade", SalvageUpgrade,
+        "\x55\x8B\xEC\x83\xEC\x08\x8B\x45\x08\x89\x45\xFC\x8D\x45\xF8\x50\x6A\x08\xC7\x45\xF8\x7B\x00\x00\x00",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx", 0x0, Priority::P2, PatternType::Func),
     PAT("SalvageGlobal",  SalvageGlobal,  "\x8B\x4A\x04\x53\x89\x45\xF4\x8B\x42\x08", "xxxxxxxxxx", 0x0, Priority::P1, PatternType::Ptr),
 
     // ===== Agents (P0) =====
@@ -336,6 +358,7 @@ static const PatternDef s_patterns[] = {
 static constexpr int PATTERN_COUNT = sizeof(s_patterns) / sizeof(s_patterns[0]);
 
 static void PostProcessOffsets(); // forward decl
+static uintptr_t Deref(uintptr_t addr);
 
 static bool s_resolved = false;
 static int s_resolvedCount = 0;
@@ -390,6 +413,21 @@ bool ResolveAll() {
 
     s_resolved = !criticalFail;
     return s_resolved;
+}
+
+bool RefreshBasePointer() {
+    if (BasePointerScanAddr < 0x10000) return false;
+    __try {
+        const uintptr_t refreshed = Deref(BasePointerScanAddr);
+        if (refreshed < 0x10000 || refreshed == BasePointer) return false;
+        Log::Info("Offsets: Refreshed BasePointer 0x%08X -> 0x%08X",
+                  static_cast<unsigned>(BasePointer),
+                  static_cast<unsigned>(refreshed));
+        BasePointer = refreshed;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 // Helper: read a uint32 at address (in-process, so just dereference)

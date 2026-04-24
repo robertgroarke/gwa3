@@ -11,6 +11,7 @@ void Shutdown();
 bool IsInitialized();
 
 void SetNativeDialogFunctions(uintptr_t dialogFn, uintptr_t signpostDialogFn);
+void RecordDialogSend(uint32_t dialogId);
 
 void StartUIHook(uint32_t messageId = UIMSG_DIALOG);
 bool EndUIHook(uint32_t messageId, uint32_t timeoutMs = 2000u);

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <gwa3/core/DialogHook.h>
+#include <gwa3/managers/AgentMgr.h>
+
 #include <cstdint>
 
 namespace GWA3::DialogMgr {
@@ -47,5 +50,24 @@ namespace GWA3::DialogMgr {
 
     // Clear the current dialog state (called when dialog closes).
     void ClearDialog();
+
+    // AutoIt-style live dialog hook helpers.
+    void StartUIHook(uint32_t messageId = DialogHook::UIMSG_DIALOG);
+    bool EndUIHook(uint32_t messageId, uint32_t timeoutMs = 2000u);
+    bool WaitForUIMessage(uint32_t messageId, uint32_t timeoutMs = 2000u);
+    bool WaitForDialogUIMessage(uint32_t timeoutMs = 2000u);
+    uint32_t GetLastUIMessageId();
+    uint32_t GetArmedUIMessageId();
+    uint32_t GetObservedUIMessageId();
+    uint32_t GetLastDialogId();
+    void ResetHookState();
+    void ResetRecentUITrace();
+    uint32_t GetRecentUITrace(uint32_t* outMessages, uint32_t maxCount);
+
+    // AutoIt-faithful dialog helpers.
+    void GoNPC(uint32_t agentId);
+    bool NPCHook(uint32_t agentId, uint32_t timeoutMs = 2000u);
+    bool NPCHookEx(uint32_t agentId, AgentMgr::NpcInteractMode mode, uint32_t timeoutMs = 2000u);
+    bool DialogHook(uint32_t dialogId, uint32_t timeoutMs = 2000u);
 
 } // namespace GWA3::DialogMgr

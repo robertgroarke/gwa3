@@ -114,6 +114,7 @@ namespace GWA3::UIMgr {
     // See BotsHub-latest/lib/GWA2_Assembly.au3 1320 + 1643 for the
     // reference implementation.
     bool PerformUiAction(uint32_t action);
+    bool PerformUiActionDirect(uint32_t action);
 
     // Mouse action testing
     bool TestMouseClickAction(uintptr_t frame, uint32_t currentState, uint32_t wparam, uint32_t lparam);

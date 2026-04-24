@@ -177,11 +177,15 @@ static void ClearTestModeFlags() {
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_quote.flag", dir);
     DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_identsalvage.flag", dir);
+    DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_shell.flag", dir);
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_trade_helper.flag", dir);
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_froggy_flagging.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_froggy_sparkfly.flag", dir);
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_variant_standard_ptr.flag", dir);
     DeleteFileA(path);
@@ -203,11 +207,37 @@ static void ClearTestModeFlags() {
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_merchant_stage_interact_only.flag", dir);
     DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_identsalvage_stage_identify_only.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_identsalvage_stage_salvage_open_only.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_identsalvage_stage_single_salvage.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_identsalvage_stage_native_salvage.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_identsalvage_stage_native_salvage_enter.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_identsalvage_stage_legacy_botshub_start_only.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_identsalvage_stage_legacy_botshub_salvage.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_identsalvage_stage_legacy_botshub_salvage_done.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_identsalvage_stage_legacy_botshub_salvage_cancel.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_identsalvage_stage_legacy_botshub_tracked_chain.flag", dir);
+    DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_advanced.flag", dir);
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_workflow.flag", dir);
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_test_froggy.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_rragars.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_arachnis.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_ravens.flag", dir);
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_llm_mode.flag", dir);
     DeleteFileA(path);
@@ -353,15 +383,21 @@ static void PrintUsage(const char* argv0) {
     printf("  --test-advanced Inject in advanced integration test mode\n");
     printf("  --test-workflow Inject in advanced workflow test mode\n");
     printf("  --test-froggy   Inject in Froggy feature test mode (Epic 14 tests)\n");
+    printf("  --test-rragars  Inject in Rragar's Menagerie feature test mode\n");
+    printf("  --test-arachnis Inject in Arachnis Haunt feature test mode\n");
+    printf("  --test-ravens   Inject in Raven's Point feature test mode\n");
     printf("  --test-froggy-flagging Inject in isolated Froggy explorable flagging mode\n");
+    printf("  --test-froggy-sparkfly Inject in narrowed Froggy Sparkfly route/combat mode\n");
     printf("  --test-npc      Inject in isolated NPC/dialog test mode\n");
     printf("  --test-merchant Inject in isolated merchant/trader quote test mode\n");
+    printf("  --test-identsalvage Inject in isolated identify/salvage repro mode\n");
     printf("  --test-merchant-shell Inject in dedicated merchant wrapper shell mode\n");
     printf("  --test-trade-helper Inject in player trade helper mode\n");
     printf("  --llm           Inject in LLM agent mode (named pipe bridge for Gemma 4)\n");
     printf("  --llm-advisory  Inject in advisory mode (Froggy bot + LLM bridge together)\n");
     printf("  --merchant-variant <standard-id|standard-ptr|legacy-id|legacy-ptr>\n");
     printf("  --merchant-stage <full|travel-only|approach-only|target-only|interact-single-packet-only|interact-agentmgr-only|interact-packet-only|interact-only>\n");
+    printf("  --identsalvage-stage <full|identify-only|salvage-open-only|single-salvage|native-salvage|native-salvage-enter|legacy-botshub-start-only|legacy-botshub-salvage|legacy-botshub-salvage-enter|legacy-botshub-salvage-done|legacy-botshub-salvage-cancel|legacy-botshub-tracked-chain>\n");
     printf("\nOptions:\n");
     printf("  --pid <N>       Target specific process ID\n");
     printf("  -h, --help      Show this help\n");
@@ -381,9 +417,14 @@ int main(int argc, char* argv[]) {
     bool doTestAdvanced = false;
     bool doTestWorkflow = false;
     bool doTestFroggy = false;
+    bool doTestRragars = false;
+    bool doTestArachnis = false;
+    bool doTestRavens = false;
     bool doTestFroggyFlagging = false;
+    bool doTestFroggySparkfly = false;
     bool doTestNpc = false;
     bool doTestMerchant = false;
+    bool doTestIdentifySalvage = false;
     bool doTestMerchantShell = false;
     bool doTestTradeHelper = false;
     bool doTestConsumables = false;
@@ -391,6 +432,7 @@ int main(int argc, char* argv[]) {
     bool doLlmAdvisory = false;
     const char* merchantVariantFlag = nullptr;
     const char* merchantStageFlag = nullptr;
+    const char* identifySalvageStageFlag = nullptr;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--pid") == 0 && i + 1 < argc) {
@@ -417,12 +459,22 @@ int main(int argc, char* argv[]) {
             doTestWorkflow = true;
         } else if (strcmp(argv[i], "--test-froggy") == 0) {
             doTestFroggy = true;
+        } else if (strcmp(argv[i], "--test-rragars") == 0) {
+            doTestRragars = true;
+        } else if (strcmp(argv[i], "--test-arachnis") == 0) {
+            doTestArachnis = true;
+        } else if (strcmp(argv[i], "--test-ravens") == 0) {
+            doTestRavens = true;
         } else if (strcmp(argv[i], "--test-froggy-flagging") == 0) {
             doTestFroggyFlagging = true;
+        } else if (strcmp(argv[i], "--test-froggy-sparkfly") == 0) {
+            doTestFroggySparkfly = true;
         } else if (strcmp(argv[i], "--test-npc") == 0) {
             doTestNpc = true;
         } else if (strcmp(argv[i], "--test-merchant") == 0) {
             doTestMerchant = true;
+        } else if (strcmp(argv[i], "--test-identsalvage") == 0) {
+            doTestIdentifySalvage = true;
         } else if (strcmp(argv[i], "--test-merchant-shell") == 0) {
             doTestMerchantShell = true;
         } else if (strcmp(argv[i], "--test-trade-helper") == 0) {
@@ -480,6 +532,37 @@ int main(int argc, char* argv[]) {
                 merchantStageFlag = "gwa3_test_merchant_stage_interact_only.flag";
             } else {
                 printf("[!] Unknown merchant stage: %s\n", stage);
+                PrintUsage(argv[0]);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--identsalvage-stage") == 0 && i + 1 < argc) {
+            const char* stage = argv[++i];
+            if (strcmp(stage, "full") == 0) {
+                identifySalvageStageFlag = nullptr;
+            } else if (strcmp(stage, "identify-only") == 0) {
+                identifySalvageStageFlag = "gwa3_test_identsalvage_stage_identify_only.flag";
+            } else if (strcmp(stage, "salvage-open-only") == 0) {
+                identifySalvageStageFlag = "gwa3_test_identsalvage_stage_salvage_open_only.flag";
+            } else if (strcmp(stage, "single-salvage") == 0) {
+                identifySalvageStageFlag = "gwa3_test_identsalvage_stage_single_salvage.flag";
+            } else if (strcmp(stage, "native-salvage") == 0) {
+                identifySalvageStageFlag = "gwa3_test_identsalvage_stage_native_salvage.flag";
+            } else if (strcmp(stage, "native-salvage-enter") == 0) {
+                identifySalvageStageFlag = "gwa3_test_identsalvage_stage_native_salvage_enter.flag";
+            } else if (strcmp(stage, "legacy-botshub-start-only") == 0) {
+                identifySalvageStageFlag = "gwa3_test_identsalvage_stage_legacy_botshub_start_only.flag";
+            } else if (strcmp(stage, "legacy-botshub-salvage") == 0) {
+                identifySalvageStageFlag = "gwa3_test_identsalvage_stage_legacy_botshub_salvage.flag";
+            } else if (strcmp(stage, "legacy-botshub-salvage-enter") == 0) {
+                identifySalvageStageFlag = "gwa3_test_identsalvage_stage_legacy_botshub_salvage_enter.flag";
+            } else if (strcmp(stage, "legacy-botshub-salvage-done") == 0) {
+                identifySalvageStageFlag = "gwa3_test_identsalvage_stage_legacy_botshub_salvage_done.flag";
+            } else if (strcmp(stage, "legacy-botshub-salvage-cancel") == 0) {
+                identifySalvageStageFlag = "gwa3_test_identsalvage_stage_legacy_botshub_salvage_cancel.flag";
+            } else if (strcmp(stage, "legacy-botshub-tracked-chain") == 0) {
+                identifySalvageStageFlag = "gwa3_test_identsalvage_stage_legacy_botshub_tracked_chain.flag";
+            } else {
+                printf("[!] Unknown identify/salvage stage: %s\n", stage);
                 PrintUsage(argv[0]);
                 return 1;
             }
@@ -554,14 +637,20 @@ int main(int argc, char* argv[]) {
     if (doTestAdvanced) SetTestModeFlag("gwa3_test_advanced.flag");
     if (doTestWorkflow) SetTestModeFlag("gwa3_test_workflow.flag");
     if (doTestFroggy) SetTestModeFlag("gwa3_test_froggy.flag");
+    if (doTestRragars) SetTestModeFlag("gwa3_test_rragars.flag");
+    if (doTestArachnis) SetTestModeFlag("gwa3_test_arachnis.flag");
+    if (doTestRavens) SetTestModeFlag("gwa3_test_ravens.flag");
     if (doTestFroggyFlagging) SetTestModeFlag("gwa3_test_froggy_flagging.flag");
+    if (doTestFroggySparkfly) SetTestModeFlag("gwa3_test_froggy_sparkfly.flag");
     if (doTestNpc) SetTestModeFlag("gwa3_test_npc_dialog.flag");
     if (doTestMerchant) SetTestModeFlag("gwa3_test_merchant_quote.flag");
+    if (doTestIdentifySalvage) SetTestModeFlag("gwa3_test_identsalvage.flag");
     if (doTestMerchantShell) SetTestModeFlag("gwa3_test_merchant_shell.flag");
     if (doTestTradeHelper) SetTestModeFlag("gwa3_test_trade_helper.flag");
     if (doTestConsumables) SetTestModeFlag("gwa3_test_consumables.flag");
     if (doTestMerchant && merchantVariantFlag) SetTestModeFlag(merchantVariantFlag);
     if (doTestMerchant && merchantStageFlag) SetTestModeFlag(merchantStageFlag);
+    if (doTestIdentifySalvage && identifySalvageStageFlag) SetTestModeFlag(identifySalvageStageFlag);
     if (doLlm) SetTestModeFlag("gwa3_llm_mode.flag");
     if (doLlmAdvisory) SetTestModeFlag("gwa3_llm_advisory.flag");
 

@@ -22,7 +22,7 @@ namespace GWA3::TradeMgr {
     void RemoveItem(uint32_t itemId);
 
     // NPC merchant
-    void BuyMaterials(uint32_t modelId, uint32_t quantity);
+    bool BuyMaterials(uint32_t modelId, uint32_t quantity);
     void RequestQuote(uint32_t itemId);
     void TransactItems(uint32_t type, uint32_t quantity, uint32_t itemId);
     uint32_t GetMerchantItemCount();
@@ -32,6 +32,7 @@ namespace GWA3::TradeMgr {
     bool BuyMerchantItemByPosition(uint32_t itemPosition, uint32_t quantity, uint32_t unitValue);
     bool BuyMerchantItem(uint32_t itemId, uint32_t quantity);
     bool RequestTraderQuoteByItemId(uint32_t itemId);
+    bool SellMaterialsToTrader(uint32_t itemId, uint32_t transactions = 1);
 
     // Trade quantity prompt
     uint32_t GetTradeQuantityPromptFrame();

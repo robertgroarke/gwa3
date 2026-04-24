@@ -13,6 +13,7 @@ namespace GWA3::Offsets {
     // Resolve all registered scan patterns via the Scanner.
     // Returns false if any P0 or P1 pattern fails.
     bool ResolveAll();
+    bool RefreshBasePointer();
 
     // Get count of resolved/failed patterns.
     int GetResolvedCount();
@@ -52,7 +53,12 @@ namespace GWA3::Offsets {
     extern uintptr_t Transaction;        // func
     extern uintptr_t BuyItemBase;
     extern uintptr_t RequestQuote;       // func
-    extern uintptr_t Salvage;            // func
+    extern uintptr_t Salvage;            // func - Reforged local salvage init (0x66 wrapper)
+    extern uintptr_t SalvageSessionOpen; // func - native 0x77 wrapper
+    extern uintptr_t SalvageSessionCancel; // func - native 0x78 wrapper
+    extern uintptr_t SalvageSessionDone; // func - native 0x79 wrapper
+    extern uintptr_t SalvageMaterials;   // func - native 0x7A wrapper
+    extern uintptr_t SalvageUpgrade;     // func - native 0x7B wrapper
     extern uintptr_t SalvageGlobal;
 
     // ===== Agents =====

@@ -8,7 +8,7 @@ namespace GWA3::MapMgr {
     bool Initialize();
 
     // Travel
-    void Travel(uint32_t mapId, uint32_t region = 0, uint32_t district = 0, uint32_t language = 0);
+    bool Travel(uint32_t mapId, uint32_t region = 0, uint32_t district = 0, uint32_t language = 0);
     void ReturnToOutpost();
     void EnterMission();
 

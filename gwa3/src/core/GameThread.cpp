@@ -1,12 +1,17 @@
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/Scanner.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/core/HookMarker.h>
+#include <gwa3/core/HookMarker.h>
 
 #include <MinHook.h>
+#include <intrin.h>
 #include <vector>
 #include <algorithm>
 
 namespace GWA3::GameThread {
+
+extern "C" volatile DWORD g_HookTick_GameThreadDetour;
 
 // The game's render/frame callback signature: void __cdecl (float elapsed, int unknown)
 using GameCallback = void(__cdecl*)(float, int);
@@ -38,6 +43,7 @@ static constexpr uint32_t kMaxQueue = 256;
 struct InlineTask {
     using Invoker = void(*)(void* storage);
     Invoker invoke;
+    uintptr_t origin = 0;
     alignas(8) char storage[96]; // 96 bytes: fits CrafterTransactionTask (80 bytes) and CtoS captures (60 bytes)
 
     void operator()() { if (invoke) invoke(storage); }
@@ -68,17 +74,16 @@ static std::vector<CallbackRecord> s_registry;
 // No heap allocation — InlineTask stores callable inline.
 static void __cdecl DrainQueuesOnGameThread(float, int) {
     EnterCriticalSection(&s_cs);
-    s_onGameThread = true;
-    s_gameThreadId = GetCurrentThreadId();
-
     while (s_queueTail != s_queueHead) {
         uint32_t idx = s_queueTail;
         s_queueTail = (s_queueTail + 1) % kMaxQueue;
-        Log::Info("GameThread: Drain pre[%u] invoke=0x%08X", idx,
-                  reinterpret_cast<uintptr_t>(s_preQueue[idx].invoke));
+        Log::Info("GameThread: Drain pre[%u] invoke=0x%08X origin=0x%08X", idx,
+                  reinterpret_cast<uintptr_t>(s_preQueue[idx].invoke),
+                  static_cast<unsigned>(s_preQueue[idx].origin));
         LeaveCriticalSection(&s_cs);
         s_preQueue[idx]();
         s_preQueue[idx].invoke = nullptr;
+        s_preQueue[idx].origin = 0;
         Log::Info("GameThread: Drain pre[%u] done", idx);
         EnterCriticalSection(&s_cs);
     }
@@ -88,17 +93,16 @@ static void __cdecl DrainQueuesOnGameThread(float, int) {
 
 static void __cdecl DrainSerialPreQueueOnGameThread(float, int) {
     EnterCriticalSection(&s_cs);
-    s_onGameThread = true;
-    s_gameThreadId = GetCurrentThreadId();
-
     if (s_serialPreTail != s_serialPreHead) {
         const uint32_t idx = s_serialPreTail;
         s_serialPreTail = (s_serialPreTail + 1) % kMaxQueue;
-        Log::Info("GameThread: Drain serial-pre[%u] invoke=0x%08X", idx,
-                  reinterpret_cast<uintptr_t>(s_serialPreQueue[idx].invoke));
+        Log::Info("GameThread: Drain serial-pre[%u] invoke=0x%08X origin=0x%08X", idx,
+                  reinterpret_cast<uintptr_t>(s_serialPreQueue[idx].invoke),
+                  static_cast<unsigned>(s_serialPreQueue[idx].origin));
         LeaveCriticalSection(&s_cs);
         s_serialPreQueue[idx]();
         s_serialPreQueue[idx].invoke = nullptr;
+        s_serialPreQueue[idx].origin = 0;
         Log::Info("GameThread: Drain serial-pre[%u] done", idx);
         EnterCriticalSection(&s_cs);
     }
@@ -115,21 +119,24 @@ static void __cdecl DrainPostQueuesOnGameThread(float, int) {
     if (s_postTail != s_postHead) {
         uint32_t idx = s_postTail;
         s_postTail = (s_postTail + 1) % kMaxQueue;
+        Log::Info("GameThread: Drain post[%u] invoke=0x%08X origin=0x%08X", idx,
+                  reinterpret_cast<uintptr_t>(s_postQueue_ring[idx].invoke),
+                  static_cast<unsigned>(s_postQueue_ring[idx].origin));
         LeaveCriticalSection(&s_cs);
         s_postQueue_ring[idx]();
         s_postQueue_ring[idx].invoke = nullptr;
+        s_postQueue_ring[idx].origin = 0;
+        Log::Info("GameThread: Drain post[%u] done", idx);
         EnterCriticalSection(&s_cs);
     }
 
-    s_onGameThread = false;
-    s_gameThreadId = 0;
     LeaveCriticalSection(&s_cs);
 }
 
 // Construct a Callback (std::function) directly into an InlineTask slot.
 // MUST be constructed in-place — returning InlineTask by value would bitwise-copy
 // the SBO, creating dangling self-references in the std::function.
-static void EmplaceCallback(InlineTask& slot, Callback&& task) {
+static void EmplaceCallback(InlineTask& slot, Callback&& task, uintptr_t origin) {
     static_assert(sizeof(Callback) <= sizeof(InlineTask::storage),
                   "Callback exceeds InlineTask storage");
     slot.invoke = [](void* storage) {
@@ -137,6 +144,7 @@ static void EmplaceCallback(InlineTask& slot, Callback&& task) {
         fn();
         fn.~Callback();
     };
+    slot.origin = origin;
     new (slot.storage) Callback(std::move(task));
 }
 
@@ -174,6 +182,13 @@ static GameCallback s_preDrain = reinterpret_cast<GameCallback>(&DrainQueuesOnGa
 static GameCallback s_postDrain = reinterpret_cast<GameCallback>(&DrainPostQueuesOnGameThread);
 
 static void __cdecl DetourCallback(float elapsed, int unknown) {
+    HookMarker::HookScope _hookScope(HookMarker::HookId::GameThreadDetour);
+    g_HookTick_GameThreadDetour = GetTickCount();
+    EnterCriticalSection(&s_cs);
+    s_onGameThread = true;
+    s_gameThreadId = GetCurrentThreadId();
+    LeaveCriticalSection(&s_cs);
+
     if (s_serialPreTail != s_serialPreHead) {
         Log::Info("GameThread: Detour serial-pre pending (head=%u tail=%u)",
                   s_serialPreHead, s_serialPreTail);
@@ -198,6 +213,11 @@ static void __cdecl DetourCallback(float elapsed, int unknown) {
     if (s_postTail != s_postHead) {
         s_postDrain(elapsed, unknown);
     }
+
+    EnterCriticalSection(&s_cs);
+    s_onGameThread = false;
+    s_gameThreadId = 0;
+    LeaveCriticalSection(&s_cs);
 }
 
 // --- Find hook target by walking backward from assertion site to function prologue ---
@@ -377,7 +397,10 @@ void Enqueue(Callback task) {
         Log::Warn("GameThread: Enqueue ring buffer full, dropping task");
         return;
     }
-    EmplaceCallback(s_preQueue[s_queueHead], std::move(task));
+    const auto origin = reinterpret_cast<uintptr_t>(_ReturnAddress());
+    EmplaceCallback(s_preQueue[s_queueHead], std::move(task), origin);
+    Log::Info("GameThread: Enqueue pre[%u] origin=0x%08X next=%u tail=%u",
+              s_queueHead, static_cast<unsigned>(origin), next, s_queueTail);
     s_queueHead = next;
     LeaveCriticalSection(&s_cs);
 }
@@ -399,7 +422,10 @@ void EnqueueSerialPre(Callback task) {
         Log::Warn("GameThread: EnqueueSerialPre ring buffer full, dropping task");
         return;
     }
-    EmplaceCallback(s_serialPreQueue[s_serialPreHead], std::move(task));
+    const auto origin = reinterpret_cast<uintptr_t>(_ReturnAddress());
+    EmplaceCallback(s_serialPreQueue[s_serialPreHead], std::move(task), origin);
+    Log::Info("GameThread: Enqueue serial-pre[%u] origin=0x%08X next=%u tail=%u",
+              s_serialPreHead, static_cast<unsigned>(origin), next, s_serialPreTail);
     s_serialPreHead = next;
     LeaveCriticalSection(&s_cs);
 }
@@ -423,11 +449,13 @@ void EnqueueRaw(InlineTask::Invoker invoker, const void* data, size_t dataSize) 
     }
     auto& slot = s_preQueue[s_queueHead];
     slot.invoke = invoker;
+    slot.origin = reinterpret_cast<uintptr_t>(_ReturnAddress());
     memcpy(slot.storage, data, dataSize);
     s_queueHead = next;
-    Log::Info("GameThread: EnqueueRaw OK (head=%u tail=%u invoke=0x%08X size=%u)",
+    Log::Info("GameThread: EnqueueRaw OK (head=%u tail=%u invoke=0x%08X origin=0x%08X size=%u)",
               s_queueHead, s_queueTail,
               reinterpret_cast<uintptr_t>(invoker),
+              static_cast<unsigned>(slot.origin),
               static_cast<uint32_t>(dataSize));
     LeaveCriticalSection(&s_cs);
 }
@@ -446,9 +474,10 @@ void EnqueuePostRaw(InlineTask::Invoker invoker, const void* data, size_t dataSi
     }
     auto& slot = s_postQueue_ring[s_postHead];
     slot.invoke = invoker;
+    slot.origin = reinterpret_cast<uintptr_t>(_ReturnAddress());
     memcpy(slot.storage, data, dataSize);
     s_postHead = next;
-    Log::Info("GameThread: EnqueuePostRaw OK (head=%u tail=%u)", s_postHead, s_postTail);
+    Log::Info("GameThread: EnqueuePostRaw OK (head=%u tail=%u origin=0x%08X)", s_postHead, s_postTail, static_cast<unsigned>(slot.origin));
     LeaveCriticalSection(&s_cs);
 }
 
@@ -470,7 +499,10 @@ void EnqueuePost(Callback task) {
         Log::Warn("GameThread: EnqueuePost ring buffer full, dropping task");
         return;
     }
-    EmplaceCallback(s_postQueue_ring[s_postHead], std::move(task));
+    const auto origin = reinterpret_cast<uintptr_t>(_ReturnAddress());
+    EmplaceCallback(s_postQueue_ring[s_postHead], std::move(task), origin);
+    Log::Info("GameThread: Enqueue post[%u] origin=0x%08X next=%u tail=%u",
+              s_postHead, static_cast<unsigned>(origin), next, s_postTail);
     s_postHead = next;
     LeaveCriticalSection(&s_cs);
 }
@@ -522,4 +554,22 @@ bool IsInitialized() {
     return s_initialized;
 }
 
+uint32_t GetPendingPreCount() {
+    if (!s_initialized) return 0;
+    EnterCriticalSection(&s_cs);
+    const uint32_t pending =
+        (s_queueHead + kMaxQueue - s_queueTail) % kMaxQueue;
+    LeaveCriticalSection(&s_cs);
+    return pending;
+}
+
+bool IsResponsive(uint32_t maxIdleMs) {
+    if (!s_initialized) return false;
+    const DWORD lastTick = g_HookTick_GameThreadDetour;
+    if (lastTick == 0) return false;
+    return (GetTickCount() - lastTick) <= maxIdleMs;
+}
+
 } // namespace GWA3::GameThread
+
+

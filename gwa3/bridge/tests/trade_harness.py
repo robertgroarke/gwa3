@@ -29,6 +29,8 @@ TRADE_TEST_DISTRICT = 99
 _helper_pid: int | None = None
 _disco_pid: int | None = None
 _MIN_HEALTHY_MEM_KB = 100_000
+_helper_chat_seq = 0
+_helper_whisper_seq = 0
 
 
 def _build_dir() -> Path:
@@ -156,23 +158,100 @@ def write_trade_helper_config(
     *,
     submit_gold: int = 0,
     auto_submit: bool = False,
+    auto_accept: bool | None = None,
     offer_item_model_id: int = 0,
+    offer_item_quantity: int = 0,
+    offer_item_model_id_2: int = 0,
+    offer_item_quantity_2: int = 0,
     move_x: float = 0.0,
     move_y: float = 0.0,
     move_seq: int = 0,
+    chat_send_seq: int = 0,
+    chat_send_channel: str = "",
+    chat_send_message: str = "",
+    whisper_send_seq: int = 0,
+    whisper_send_recipient: str = "",
+    whisper_send_message: str = "",
 ) -> None:
+    resolved_auto_accept = auto_submit if auto_accept is None else auto_accept
     path = _helper_config_path()
     path.write_text(
         json.dumps({
             "submit_gold": int(submit_gold),
             "auto_submit": bool(auto_submit),
+            "auto_accept": bool(resolved_auto_accept),
             "offer_item_model_id": int(offer_item_model_id),
+            "offer_item_quantity": int(offer_item_quantity),
+            "offer_item_model_id_2": int(offer_item_model_id_2),
+            "offer_item_quantity_2": int(offer_item_quantity_2),
             "move_x": float(move_x),
             "move_y": float(move_y),
             "move_seq": int(move_seq),
+            "chat_send_seq": int(chat_send_seq),
+            "chat_send_channel": str(chat_send_channel),
+            "chat_send_message": str(chat_send_message),
+            "whisper_send_seq": int(whisper_send_seq),
+            "whisper_send_recipient": str(whisper_send_recipient),
+            "whisper_send_message": str(whisper_send_message),
         }),
         encoding="utf-8",
     )
+
+
+def _read_trade_helper_config() -> dict:
+    path = _helper_config_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_trade_helper_config_merged(**overrides) -> None:
+    payload = _read_trade_helper_config()
+    payload.update(overrides)
+    write_trade_helper_config(
+        submit_gold=int(payload.get("submit_gold", 0) or 0),
+        auto_submit=bool(payload.get("auto_submit", False)),
+        auto_accept=(bool(payload.get("auto_accept")) if "auto_accept" in payload else None),
+        offer_item_model_id=int(payload.get("offer_item_model_id", 0) or 0),
+        offer_item_quantity=int(payload.get("offer_item_quantity", 0) or 0),
+        offer_item_model_id_2=int(payload.get("offer_item_model_id_2", 0) or 0),
+        offer_item_quantity_2=int(payload.get("offer_item_quantity_2", 0) or 0),
+        move_x=float(payload.get("move_x", 0.0) or 0.0),
+        move_y=float(payload.get("move_y", 0.0) or 0.0),
+        move_seq=int(payload.get("move_seq", 0) or 0),
+        chat_send_seq=int(payload.get("chat_send_seq", 0) or 0),
+        chat_send_channel=str(payload.get("chat_send_channel", "") or ""),
+        chat_send_message=str(payload.get("chat_send_message", "") or ""),
+        whisper_send_seq=int(payload.get("whisper_send_seq", 0) or 0),
+        whisper_send_recipient=str(payload.get("whisper_send_recipient", "") or ""),
+        whisper_send_message=str(payload.get("whisper_send_message", "") or ""),
+    )
+
+
+def request_helper_send_chat(*, channel: str, message: str) -> int:
+    global _helper_chat_seq
+    _helper_chat_seq += 1
+    _write_trade_helper_config_merged(
+        chat_send_seq=_helper_chat_seq,
+        chat_send_channel=str(channel),
+        chat_send_message=str(message),
+    )
+    return _helper_chat_seq
+
+
+def request_helper_send_whisper(*, recipient: str, message: str) -> int:
+    global _helper_whisper_seq
+    _helper_whisper_seq += 1
+    _write_trade_helper_config_merged(
+        whisper_send_seq=_helper_whisper_seq,
+        whisper_send_recipient=str(recipient),
+        whisper_send_message=str(message),
+    )
+    return _helper_whisper_seq
 
 
 def _list_character_gw_processes(character_name: str) -> list[dict]:

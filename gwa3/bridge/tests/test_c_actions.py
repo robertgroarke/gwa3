@@ -458,6 +458,26 @@ async def test_send_chat_success(tc: BridgeTestCase):
     tc.assert_action_success(result)
 
 
+async def test_send_whisper_missing(tc: BridgeTestCase):
+    result = await tc.send_action("send_whisper", {})
+    tc.assert_action_error(result, "missing recipient or message")
+
+
+async def test_send_whisper_empty_recipient(tc: BridgeTestCase):
+    result = await tc.send_action("send_whisper", {"recipient": "", "message": "bridge_test"})
+    tc.assert_action_error(result, "empty_recipient")
+
+
+async def test_send_whisper_empty_message(tc: BridgeTestCase):
+    result = await tc.send_action("send_whisper", {"recipient": "Test Recipient", "message": ""})
+    tc.assert_action_error(result, "empty_message")
+
+
+async def test_send_whisper_success(tc: BridgeTestCase):
+    result = await tc.send_action("send_whisper", {"recipient": "Test Recipient", "message": "bridge_test"})
+    tc.assert_action_success(result)
+
+
 async def test_wait_success(tc: BridgeTestCase):
     result = await tc.send_action("wait", {"milliseconds": 100})
     tc.assert_action_success(result)

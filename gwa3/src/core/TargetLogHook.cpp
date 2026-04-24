@@ -1,6 +1,7 @@
 #include <gwa3/core/TargetLogHook.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/core/HookMarker.h>
 
 #include <Windows.h>
 #include <cstring>
@@ -19,6 +20,9 @@ static volatile LONG s_storeCount = 0;
 
 static __declspec(naked) void TargetLogDetourNaked() {
     __asm {
+        // Mark hook active for CrashDiag
+        call dword ptr [GetTickCount]
+        mov dword ptr [g_HookTick_TargetLogDetour], eax
         inc dword ptr [s_callCount]
         cmp ecx, 4
         jz target_log_main

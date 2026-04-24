@@ -28,7 +28,9 @@ namespace GWA3::CtoS {
     typedef void (*GameCommandFn)(void* params);
     bool EnqueueGameCommand(GameCommandFn fn, const void* params, size_t paramSize);
     bool EnqueueBotshubCommand(const void* slot, size_t slotSize);
+    bool IsGameCommandQueueIdle();  // true when no pending game commands
     bool IsBotshubQueueIdle();  // true when no pending botshub commands
+    void DumpBotshubQueueState(const char* label);
     bool IsBotshubCommandLaneAvailable();
 
     // Temporarily unhook/rehook the engine inline hook.
@@ -40,11 +42,26 @@ namespace GWA3::CtoS {
     // header is the packet opcode, followed by up to 10 dword params.
     void SendPacket(uint32_t size, uint32_t header, ...);
 
+    // Botshub packet send: queues a raw packet onto the engine command lane,
+    // matching the legacy AutoIt transport more closely than the GameThread
+    // pre/post-dispatch paths.
+    bool SendPacketBotshub(uint32_t size, uint32_t header, ...);
+    bool SendPacketBotshubHooked(uint32_t size, uint32_t header, ...);
+    bool SendPacketGameCommandRaw(uint32_t size, uint32_t header, ...);
+    bool SalvageItemBotshub(uint32_t itemId, uint32_t kitId, uint32_t sessionId);
+    void SetIdentifySalvageRuntimeOverrides(bool disableBotshubDefer, bool forceAutoItSalvageEntry);
+
     // Direct packet send: calls PacketSend immediately on the CURRENT thread,
     // bypassing GameThread::Enqueue and the engine hook detour entirely.
     // Use for packets that crash through the engine hook (e.g. INTERACT_NPC 0x39).
     // The MinHook tap still fires for logging but no detour/trampoline is involved.
-    void SendPacketDirect(uint32_t size, uint32_t header, ...);
+void SendPacketDirect(uint32_t size, uint32_t header, ...);
+void SendPacketDirectRaw(uint32_t size, uint32_t header, ...);
+
+    // Sender-thread packet send: queues onto the dedicated packet sender thread
+    // instead of the GameThread pre/post queues. Use when the GameThread lane
+    // is wedged but PacketSend still needs to run between frames.
+    void SendPacketThreaded(uint32_t size, uint32_t header, ...);
 
     // --- Type-safe wrappers ---
 
@@ -76,12 +93,15 @@ namespace GWA3::CtoS {
     void QuestSetActive(uint32_t questId);
 
     // Skill
-    void UseSkill(uint32_t skillSlot, uint32_t targetAgentId, uint32_t callTarget = 0);
+    // Packet form uses the resolved skill id, not the skillbar slot.
+    void UseSkill(uint32_t skillId, uint32_t targetAgentId, uint32_t callTarget = 0);
 
     // Trade
     void TradeOfferItem(uint32_t itemId, uint32_t quantity);
     bool TradeOfferItemBotshub(uint32_t itemId, uint32_t quantity);
     void TradeCancel();
     void TradeAccept();
+    void TradeCancelThreaded();
+    void TradeAcceptThreaded();
 
 } // namespace GWA3::CtoS
