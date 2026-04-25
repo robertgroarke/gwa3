@@ -47,6 +47,28 @@ Use these sources to:
 
 Do not assume the current implementation is the only source of truth when this repo already contains a better historical or research reference.
 
+## GWA3 Public/Private Repo Structure
+
+`C:\Users\Robert\Documents\gwa3-private` is the full private source-of-truth for GWA3 development. Make normal implementation, refactor, test, harness, lane-script, and local documentation changes there first unless the user explicitly asks you to maintain the public export only.
+
+`C:\Users\Robert\Documents\gwa3-refactor` is the future-public export branch for `robertgroarke/gwa3`. Treat it as a filtered copy of the private repo, not as the primary development repo. It must contain only durable public source, public headers, bot/runtime code, bridge code, build metadata, small public tools, and user-facing documentation.
+
+Never merge or copy `gwa3-private` wholesale into the public repo. Export only the public-safe subset. Do not track `tests/`, `src/tests/`, `bridge/tests/`, private harnesses, character names, account-specific scripts, lane presets, local run logs, private docs, or agent execution guides in the public repo.
+
+The shared project layout is:
+
+- `include/gwa3/` and `src/gwa3/`: core GWA3 headers and implementation
+- `include/gwa3/dungeon/` and `src/gwa3/dungeon/`: reusable dungeon support library
+- `bots/`: concrete bot implementations built on GWA3 and dungeon support
+- `bridge/`: public Python LLM bridge client
+- `tools/`: public injector and small support utilities
+
+Private-only additions in `gwa3-private` include:
+
+- `bridge/tests/`, `src/tests/`, and `tests/`: live, integration, and local validation harnesses
+- `docs/`: private notes, plans, debug reports, and agent-facing records
+- private CMake presets/lists and lane scripts needed for local validation
+
 ## Non-Negotiable Rules
 
 - Always launch Guild Wars through the validated launcher path described in `GW_Launch_Method.md`.
