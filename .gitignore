@@ -1,11 +1,13 @@
 # === IDE / Editor ===
 .idea/
+.claude/
 *.swp
 *.swo
 *~
 
 # === Temp files ===
 temp_format_*.au3
+temp_*.txt
 *.tmp
 *.bak
 
@@ -83,6 +85,7 @@ tests/gsudo.zip
 # === Runtime / Debug output ===
 GWA Censured/Settings.ini
 GWA Censured/logs/
+GWA Censured/ipc/*/status.json
 GWA Censured/debug_scripts/*.txt
 GWA Censured/debug_scripts/*.log
 GWA Censured/debug_scripts/*.out
@@ -91,6 +94,9 @@ GWA Censured/debug_scripts/*.bmp
 GWA Censured/tests/*.txt
 GWA Censured/tests/*.png
 gwa3/*.log
+gwa3/tools/_*.png
+gwa3/tools/_*.bmp
+gwa3/tools/sweep/*.png
 runner_out*.txt
 runner_err*.txt
 
