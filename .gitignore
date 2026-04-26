@@ -6,6 +6,25 @@
 
 # === Temp files ===
 temp_format_*.au3
+*.tmp
+*.bak
+
+# === CMake / Visual Studio build output ===
+build/
+build_*/
+out/
+.vs/
+CMakeCache.txt
+CMakeFiles/
+gwa3/build/
+gwa3/build_*/
+gwa3/out/
+gwa3/.vs/
+
+# === Python cache output ===
+__pycache__/
+*.pyc
+*.pyo
 
 # === Archives ===
 *.zip
@@ -65,8 +84,15 @@ tests/gsudo.zip
 GWA Censured/Settings.ini
 GWA Censured/logs/
 GWA Censured/debug_scripts/*.txt
+GWA Censured/debug_scripts/*.log
+GWA Censured/debug_scripts/*.out
+GWA Censured/debug_scripts/*.png
+GWA Censured/debug_scripts/*.bmp
 GWA Censured/tests/*.txt
 GWA Censured/tests/*.png
+gwa3/*.log
+runner_out*.txt
+runner_err*.txt
 
 # === BotsHub-master specific ===
 BotsHub-master/logs/**
