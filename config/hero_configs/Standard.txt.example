@@ -1,0 +1,6 @@
+; Copy this file to Standard.txt and replace the sample values with real hero builds.
+; Format:
+; hero_id,template_code
+;
+; Example only:
+; 25,OwUTM0HD1ZxkAAAAgpAAACCAAA

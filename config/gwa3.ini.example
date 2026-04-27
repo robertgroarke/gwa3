@@ -1,0 +1,7 @@
+[Settings]
+; Default hero template file used when no character-specific entry matches.
+HeroConfig=Standard.txt
+
+[HeroConfigs]
+; Exact in-game character name = hero template file.
+; Your Character Name=Custom.txt
