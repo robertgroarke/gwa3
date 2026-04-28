@@ -16,9 +16,11 @@ static FroggyWaypointHandlerResult HandleFroggySpecialWaypoint(
     int& waypointIndex) {
     switch (ResolveWaypointBehavior(wps[waypointIndex].label)) {
     case WaypointBehavior::GrabBlessing:
-        MoveFroggyRouteWaypoint(wps[waypointIndex]);
+        DungeonNavigation::HandleBlessingWaypoint(
+            wps[waypointIndex],
+            &MoveFroggyRouteWaypointDefault,
+            &GrabDungeonBlessing);
         LogFroggyWaypointState("post-blessing-move", wps, count, waypointIndex);
-        GrabDungeonBlessing(wps[waypointIndex].x, wps[waypointIndex].y);
         return FroggyWaypointHandlerResult::ContinueRoute;
     case WaypointBehavior::LevelTransition:
         HandleFroggyLvl1ToLvl2Waypoint();
@@ -29,15 +31,20 @@ static FroggyWaypointHandlerResult HandleFroggySpecialWaypoint(
         const bool keyAcquired = AcquireBogrootBossKey();
         Log::Info("Froggy: Dungeon Key step acquired=%d", keyAcquired ? 1 : 0);
         if (!keyAcquired) {
-            Log::Warn("Froggy: Dungeon Key step failed to secure boss key");
+            Log::Warn("Froggy: Dungeon Key step failed to secure boss key; returning to outpost for maintenance/recovery");
+            MapMgr::ReturnToOutpost();
+            DungeonRuntime::WaitForMapReady(MapIds::GADDS_ENCAMPMENT, 60000u);
+            s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
             return FroggyWaypointHandlerResult::StopRoute;
         }
         return FroggyWaypointHandlerResult::ContinueRoute;
     }
     case WaypointBehavior::OpenDungeonDoor:
-        AggroMoveToEx(wps[waypointIndex].x, wps[waypointIndex].y, wps[waypointIndex].fight_range);
+        DungeonNavigation::HandleOpenDungeonDoorWaypoint(
+            wps[waypointIndex],
+            &AggroMoveToEx,
+            &OpenDungeonDoorAt);
         LogFroggyWaypointState("post-dungeon-door-move", wps, count, waypointIndex);
-        OpenDungeonDoorAt(wps[waypointIndex].x, wps[waypointIndex].y);
         return FroggyWaypointHandlerResult::ContinueRoute;
     case WaypointBehavior::ValidateDungeonDoorCheckpoint:
         return HandleFroggyDungeonDoorCheckpoint(wps, count, waypointIndex);

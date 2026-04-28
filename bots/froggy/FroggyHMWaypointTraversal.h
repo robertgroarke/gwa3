@@ -30,7 +30,7 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
         }
 
         if (useNearestProgressBacktrack) {
-            const int currentNearest = GetNearestWaypointIndex(wps, count);
+            const int currentNearest = DungeonNavigation::GetNearestWaypointIndex(wps, count);
             const auto progress = DungeonRoute::EvaluateWaypointProgress(currentNearest, progressState);
             if (progress.backtrack) {
                 LogBot("Waypoint stuck (nearest=%d unchanged 5x) - backtracking to %d",

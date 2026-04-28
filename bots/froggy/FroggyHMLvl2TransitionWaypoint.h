@@ -41,7 +41,7 @@ static void HandleFroggyLvl1ToLvl2Waypoint() {
                       lvl2Ready ? 1 : 0,
                       me ? me->x : 0.0f,
                       me ? me->y : 0.0f,
-                      GetNearestWaypointIndex(BOGROOT_LVL2, BOGROOT_LVL2_COUNT));
+                      DungeonNavigation::GetNearestWaypointIndex(BOGROOT_LVL2, BOGROOT_LVL2_COUNT));
             WaitForLocalPositionSettle(BOGROOT_LVL2_SPAWN_SETTLE_TIMEOUT_MS, BOGROOT_LVL2_SPAWN_SETTLE_DISTANCE);
             return;
         }

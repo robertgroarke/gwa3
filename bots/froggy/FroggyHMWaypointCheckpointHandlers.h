@@ -33,13 +33,18 @@ static FroggyWaypointHandlerResult HandleFroggyDungeonDoorCheckpoint(
         return recovery;
     }
 
-    const int nearest = GetNearestWaypointIndex(wps, count);
-    if (nearest < waypointIndex) {
-        LogBot("Failed dungeon door at wp %d; nearest=%d, backtracking", waypointIndex, nearest);
-        ReplayFroggyCheckpointBacktrack(wps, count, waypointIndex);
-        waypointIndex = GetNearestWaypointIndex(wps, count);
-    }
-    LogBot("Dungeon Door Checkpoint reached at wp %d nearest=%d", waypointIndex, nearest);
+    DungeonCheckpoint::LockedDoorCheckpointOptions options;
+    options.waypoints = wps;
+    options.waypoint_count = count;
+    options.current_index = waypointIndex;
+    options.backtrack_steps = 3;
+    options.move_before_check = false;
+    options.log_prefix = "Froggy";
+    options.checkpoint_name = "Dungeon Door Checkpoint";
+    options.move_waypoint = &MoveFroggyWaypointForCheckpointReplay;
+    options.get_nearest_waypoint = &DungeonNavigation::GetNearestWaypointIndex;
+    const auto checkpoint = DungeonCheckpoint::HandleLockedDoorCheckpoint(options);
+    waypointIndex = checkpoint.waypoint_index;
     return FroggyWaypointHandlerResult::ContinueRoute;
 }
 
@@ -75,7 +80,7 @@ static FroggyWaypointHandlerResult HandleFroggyQuestDoorCheckpoint(
 
     LogQuestDoorCheckpointDiagnostic(wps, waypointIndex);
 
-    const int nearest = GetNearestWaypointIndex(wps, count);
+    const int nearest = DungeonNavigation::GetNearestWaypointIndex(wps, count);
     if (nearest < waypointIndex) {
         LogBot("Failed first door at wp %d; nearest=%d, returning to Sparkfly for quest refresh",
                waypointIndex,

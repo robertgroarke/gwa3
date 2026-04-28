@@ -1,4 +1,5 @@
 #include <gwa3/dungeon/DungeonCheckpoint.h>
+#include <gwa3/core/Log.h>
 
 #include <Windows.h>
 
@@ -31,6 +32,24 @@ void WaitOrSleep(WaitFn waitFn, uint32_t ms) {
 
 bool IsDead(BoolFn isDeadFn) {
     return isDeadFn ? isDeadFn() : false;
+}
+
+const char* ContextName(WaypointWipeRecoveryContext context) {
+    switch (context) {
+    case WaypointWipeRecoveryContext::DungeonDoorCheckpoint:
+        return "Dungeon Door Checkpoint";
+    case WaypointWipeRecoveryContext::QuestDoorCheckpoint:
+        return "Quest Door Checkpoint";
+    default:
+        return "Waypoint";
+    }
+}
+
+int ResolveNearestWaypoint(
+    const DungeonRoute::Waypoint* waypoints,
+    int waypointCount,
+    NearestWaypointIndexFn getNearestWaypoint) {
+    return getNearestWaypoint ? getNearestWaypoint(waypoints, waypointCount) : 0;
 }
 
 } // namespace
@@ -194,6 +213,50 @@ WaypointWipeRecoveryResult RecoverWaypointWipe(
     return result;
 }
 
+RouteWipeRecoveryResult RecoverRouteWaypointWipe(
+    const RouteWipeRecoveryOptions& options) {
+    RouteWipeRecoveryResult result;
+    const auto contextName = ContextName(options.context);
+    const auto prefix = options.log_prefix ? options.log_prefix : "Dungeon";
+    const auto* currentWaypoint =
+        options.waypoints != nullptr &&
+        options.current_index >= 0 &&
+        options.current_index < options.waypoint_count
+            ? &options.waypoints[options.current_index]
+            : nullptr;
+    const char* label = currentWaypoint && currentWaypoint->label ? currentWaypoint->label : "";
+    Log::Info("%s: %s wipe detected at wp=%d(%s) nextWipe=%u",
+              prefix,
+              contextName,
+              options.current_index,
+              label,
+              options.recovery.wipe_count ? *options.recovery.wipe_count + 1u : 1u);
+
+    const auto recovery = RecoverWaypointWipe(options.recovery);
+    result.recovered = recovery.recovered;
+    result.returned_to_outpost = recovery.returned_to_outpost;
+    result.used_dp_removal = recovery.used_dp_removal;
+    result.restart_index = recovery.restart_index;
+    result.wipe_count = recovery.wipe_count;
+
+    if (recovery.returned_to_outpost) {
+        Log::Info("%s: %s party defeated - returning to outpost", prefix, contextName);
+        return result;
+    }
+    if (recovery.used_dp_removal) {
+        Log::Info("%s: %s multiple wipes (%u) - used DP removal",
+                  prefix,
+                  contextName,
+                  recovery.wipe_count);
+    }
+    Log::Info("%s: %s resuming from checkpoint %d after wipe (was at %d)",
+              prefix,
+              contextName,
+              recovery.restart_index,
+              options.current_index);
+    return result;
+}
+
 CheckpointBacktrackReplayResult ReplayCheckpointBacktrack(
     const CheckpointBacktrackReplayOptions& options) {
     CheckpointBacktrackReplayResult result;
@@ -220,6 +283,61 @@ CheckpointBacktrackReplayResult ReplayCheckpointBacktrack(
         ++result.visited_count;
     }
 
+    result.completed = true;
+    return result;
+}
+
+LockedDoorCheckpointResult HandleLockedDoorCheckpoint(
+    const LockedDoorCheckpointOptions& options) {
+    LockedDoorCheckpointResult result;
+    result.waypoint_index = options.current_index;
+    if (options.waypoints == nullptr ||
+        options.waypoint_count <= 0 ||
+        options.current_index < 0 ||
+        options.current_index >= options.waypoint_count ||
+        options.move_waypoint == nullptr) {
+        return result;
+    }
+
+    if (options.move_before_check) {
+        (void)options.move_waypoint(options.waypoints[options.current_index]);
+    }
+    int nearest = ResolveNearestWaypoint(
+        options.waypoints,
+        options.waypoint_count,
+        options.get_nearest_waypoint);
+    result.nearest_index = nearest;
+
+    const auto prefix = options.log_prefix ? options.log_prefix : "Dungeon";
+    const auto checkpointName = options.checkpoint_name ? options.checkpoint_name : "Dungeon Door Checkpoint";
+    if (nearest < options.current_index) {
+        Log::Info("%s: %s failed at wp=%d nearest=%d; backtracking",
+                  prefix,
+                  checkpointName,
+                  options.current_index,
+                  nearest);
+        CheckpointBacktrackReplayOptions replayOptions;
+        replayOptions.waypoints = options.waypoints;
+        replayOptions.waypoint_count = options.waypoint_count;
+        replayOptions.current_index = options.current_index;
+        replayOptions.backtrack_start = options.current_index - options.backtrack_steps;
+        replayOptions.move_waypoint = options.move_waypoint;
+        replayOptions.after_move_waypoint = options.after_backtrack_waypoint;
+        (void)ReplayCheckpointBacktrack(replayOptions);
+        nearest = ResolveNearestWaypoint(
+            options.waypoints,
+            options.waypoint_count,
+            options.get_nearest_waypoint);
+        result.nearest_index = nearest;
+        result.waypoint_index = nearest;
+        result.backtracked = true;
+    }
+
+    Log::Info("%s: %s reached at wp=%d nearest=%d",
+              prefix,
+              checkpointName,
+              result.waypoint_index,
+              result.nearest_index);
     result.completed = true;
     return result;
 }

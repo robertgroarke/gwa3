@@ -5,7 +5,7 @@ static bool IsBogrootRouteMap(uint32_t mapId) {
 }
 
 static int GetFroggyRouteStartIndex(const Waypoint* wps, int count, uint32_t mapId) {
-    const int nearestIdx = GetNearestWaypointIndex(wps, count);
+    const int nearestIdx = DungeonNavigation::GetNearestWaypointIndex(wps, count);
     float distanceFromLvl1Portal = -1.0f;
     if (mapId == MapIds::BOGROOT_GROWTHS_LVL2) {
         if (auto* me = AgentMgr::GetMyAgent()) {
@@ -28,30 +28,12 @@ static int GetFroggyRouteStartIndex(const Waypoint* wps, int count, uint32_t map
 }
 
 static void LogFroggyWaypointState(const char* stage, const Waypoint* wps, int count, int waypointIndex) {
-    auto* me = AgentMgr::GetMyAgent();
-    const float myX = me ? me->x : 0.0f;
-    const float myY = me ? me->y : 0.0f;
-    const float hp = me ? me->hp : 0.0f;
-    const float distToWaypoint = me
-        ? AgentMgr::GetDistance(myX, myY, wps[waypointIndex].x, wps[waypointIndex].y)
-        : -1.0f;
-    const float nearestEnemy = me ? DungeonCombat::GetNearestLivingEnemyDistance(TELEMETRY_NEAREST_ENEMY_RANGE) : -1.0f;
-    const uint32_t nearbyEnemies = me ? DungeonCombat::CountLivingEnemiesInRange(TELEMETRY_NEARBY_ENEMY_RANGE) : 0;
-    Log::Info("Froggy: Bogroot %s wp=%d(%s) map=%u loaded=%d alive=%d hp=%.3f pos=(%.0f, %.0f) distToWp=%.0f nearest=%d target=%u nearestEnemy=%.0f nearbyEnemies=%u",
-              stage,
-              waypointIndex,
-              wps[waypointIndex].label ? wps[waypointIndex].label : "",
-              MapMgr::GetMapId(),
-              MapMgr::GetIsMapLoaded() ? 1 : 0,
-              me && me->hp > 0.0f ? 1 : 0,
-              hp,
-              myX,
-              myY,
-              distToWaypoint,
-              GetNearestWaypointIndex(wps, count),
-              AgentMgr::GetTargetId(),
-              nearestEnemy,
-              nearbyEnemies);
+    DungeonNavigation::WaypointTelemetryOptions options;
+    options.log_prefix = "Froggy";
+    options.route_name = "Bogroot";
+    options.nearest_enemy_range = TELEMETRY_NEAREST_ENEMY_RANGE;
+    options.nearby_enemy_range = TELEMETRY_NEARBY_ENEMY_RANGE;
+    DungeonNavigation::LogWaypointState(stage, wps, count, waypointIndex, options);
 }
 
 static void MoveFroggyWaypoint(float x, float y, float threshold) {
@@ -71,19 +53,16 @@ static void MoveFroggyRouteWaypoint(const Waypoint& waypoint, float moveThreshol
         moveThreshold);
 }
 
-static void MoveFroggyRouteWaypointWithCombatLoot(const Waypoint& waypoint, int waypointIndex) {
-    if (waypoint.fight_range <= 0.0f || !IsMapLoaded()) {
-        MoveFroggyRouteWaypoint(waypoint);
-        return;
-    }
+static void MoveFroggyRouteWaypointDefault(const Waypoint& waypoint) {
+    MoveFroggyRouteWaypoint(waypoint);
+}
 
-    AggroMoveToEx(waypoint.x, waypoint.y, waypoint.fight_range);
-    const int picked = LootAfterCombatSweep(
-        waypoint.fight_range,
-        waypoint.label ? waypoint.label : "waypoint");
-    Log::Info("Froggy: Post-pack loot sweep wp=%d(%s) range=%.0f picked=%d",
-              waypointIndex,
-              waypoint.label ? waypoint.label : "",
-              DungeonLoot::ComputePostCombatLootRange(waypoint.fight_range),
-              picked);
+static void MoveFroggyRouteWaypointWithCombatLoot(const Waypoint& waypoint, int waypointIndex) {
+    DungeonNavigation::MoveRouteWaypointWithCombatLoot(
+        waypoint,
+        waypointIndex,
+        &MoveFroggyRouteWaypointDefault,
+        &IsMapLoaded,
+        &LootAfterCombatSweep,
+        "Froggy");
 }

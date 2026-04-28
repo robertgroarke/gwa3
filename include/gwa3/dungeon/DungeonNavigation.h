@@ -12,6 +12,10 @@ inline constexpr uint32_t MOVE_TO_POLL_MS = 1000u;
 
 using MoveIssuerFn = void(*)(float x, float y);
 using WaypointMoveFn = void(*)(float x, float y, float value);
+using RouteWaypointMoveFn = void(*)(const DungeonRoute::Waypoint& waypoint);
+using DoorOpenAtFn = bool(*)(float x, float y);
+using BlessingGrabFn = void(*)(float x, float y);
+using LootAfterCombatFn = int(*)(float aggroRange, const char* reason);
 using AgentResolverFn = uint32_t(*)(float x, float y, float radius);
 using IsMapLoadedFn = bool(*)();
 
@@ -58,6 +62,13 @@ struct StuckResolution {
     float recovery_y = 0.0f;
 };
 
+struct WaypointTelemetryOptions {
+    const char* log_prefix = "Dungeon";
+    const char* route_name = "route";
+    float nearest_enemy_range = 5000.0f;
+    float nearby_enemy_range = 1800.0f;
+};
+
 bool IsWithinDistance(float currentX, float currentY, float targetX, float targetY, float threshold);
 float RandomizedCoordinate(float center, float radius);
 StuckMonitor MakeStuckMonitor(float startX, float startY);
@@ -94,6 +105,27 @@ void MoveRouteWaypoint(
     WaypointMoveFn aggroMoveToPoint,
     IsMapLoadedFn isMapLoaded,
     float moveThreshold = 250.0f);
+void LogWaypointState(
+    const char* stage,
+    const DungeonRoute::Waypoint* waypoints,
+    int count,
+    int waypointIndex,
+    const WaypointTelemetryOptions& options = {});
+void MoveRouteWaypointWithCombatLoot(
+    const DungeonRoute::Waypoint& waypoint,
+    int waypointIndex,
+    RouteWaypointMoveFn moveRouteWaypoint,
+    IsMapLoadedFn isMapLoaded,
+    LootAfterCombatFn lootAfterCombat,
+    const char* logPrefix = "Dungeon");
+bool HandleBlessingWaypoint(
+    const DungeonRoute::Waypoint& waypoint,
+    RouteWaypointMoveFn moveRouteWaypoint,
+    BlessingGrabFn grabBlessing);
+bool HandleOpenDungeonDoorWaypoint(
+    const DungeonRoute::Waypoint& waypoint,
+    WaypointMoveFn aggroMoveToPoint,
+    DoorOpenAtFn openDoorAt);
 bool WaitForLocalPositionSettle(
     uint32_t timeoutMs,
     float maxDeltaPerSample = 20.0f,
@@ -123,6 +155,7 @@ RouteFollowResult FollowWaypoints(
     uint32_t mapId,
     const RouteFollowOptions& options = {},
     MoveIssuerFn moveIssuer = nullptr);
+int GetNearestWaypointIndex(const DungeonRoute::Waypoint* waypoints, int count);
 bool WaitForMapId(uint32_t targetMapId, uint32_t timeoutMs = 60000u);
 
 // ===== Aggro-move support =====

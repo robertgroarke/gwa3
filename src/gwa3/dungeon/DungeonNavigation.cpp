@@ -1,4 +1,7 @@
 #include <gwa3/dungeon/DungeonNavigation.h>
+#include <gwa3/dungeon/DungeonCombat.h>
+#include <gwa3/dungeon/DungeonLoot.h>
+#include <gwa3/core/Log.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/MapMgr.h>
 
@@ -190,6 +193,109 @@ void MoveRouteWaypoint(
     moveToPoint(waypoint.x, waypoint.y, moveThreshold);
 }
 
+void LogWaypointState(
+    const char* stage,
+    const DungeonRoute::Waypoint* waypoints,
+    int count,
+    int waypointIndex,
+    const WaypointTelemetryOptions& options) {
+    if (waypoints == nullptr || count <= 0 || waypointIndex < 0 || waypointIndex >= count) {
+        Log::Info("%s: %s waypoint state unavailable index=%d count=%d",
+                  options.log_prefix ? options.log_prefix : "Dungeon",
+                  stage ? stage : "unknown",
+                  waypointIndex,
+                  count);
+        return;
+    }
+
+    auto* me = AgentMgr::GetMyAgent();
+    const float myX = me ? me->x : 0.0f;
+    const float myY = me ? me->y : 0.0f;
+    const float hp = me ? me->hp : 0.0f;
+    const float distToWaypoint = me
+        ? AgentMgr::GetDistance(myX, myY, waypoints[waypointIndex].x, waypoints[waypointIndex].y)
+        : -1.0f;
+    const int nearest = me
+        ? DungeonRoute::FindNearestWaypointIndex(waypoints, count, myX, myY)
+        : 0;
+    const float nearestEnemy = me
+        ? DungeonCombat::GetNearestLivingEnemyDistance(options.nearest_enemy_range)
+        : -1.0f;
+    const uint32_t nearbyEnemies = me
+        ? DungeonCombat::CountLivingEnemiesInRange(options.nearby_enemy_range)
+        : 0u;
+    Log::Info("%s: %s %s wp=%d(%s) map=%u loaded=%d alive=%d hp=%.3f pos=(%.0f, %.0f) distToWp=%.0f nearest=%d target=%u nearestEnemy=%.0f nearbyEnemies=%u",
+              options.log_prefix ? options.log_prefix : "Dungeon",
+              options.route_name ? options.route_name : "route",
+              stage ? stage : "unknown",
+              waypointIndex,
+              waypoints[waypointIndex].label ? waypoints[waypointIndex].label : "",
+              MapMgr::GetMapId(),
+              MapMgr::GetIsMapLoaded() ? 1 : 0,
+              me && me->hp > 0.0f ? 1 : 0,
+              hp,
+              myX,
+              myY,
+              distToWaypoint,
+              nearest,
+              AgentMgr::GetTargetId(),
+              nearestEnemy,
+              nearbyEnemies);
+}
+
+void MoveRouteWaypointWithCombatLoot(
+    const DungeonRoute::Waypoint& waypoint,
+    int waypointIndex,
+    RouteWaypointMoveFn moveRouteWaypoint,
+    IsMapLoadedFn isMapLoaded,
+    LootAfterCombatFn lootAfterCombat,
+    const char* logPrefix) {
+    if (moveRouteWaypoint == nullptr) {
+        return;
+    }
+    if (waypoint.fight_range <= 0.0f || isMapLoaded == nullptr || !isMapLoaded()) {
+        moveRouteWaypoint(waypoint);
+        return;
+    }
+
+    moveRouteWaypoint(waypoint);
+    if (lootAfterCombat == nullptr) {
+        return;
+    }
+    const int picked = lootAfterCombat(
+        waypoint.fight_range,
+        waypoint.label ? waypoint.label : "waypoint");
+    Log::Info("%s: Post-pack loot sweep wp=%d(%s) range=%.0f picked=%d",
+              logPrefix ? logPrefix : "Dungeon",
+              waypointIndex,
+              waypoint.label ? waypoint.label : "",
+              DungeonLoot::ComputePostCombatLootRange(waypoint.fight_range),
+              picked);
+}
+
+bool HandleBlessingWaypoint(
+    const DungeonRoute::Waypoint& waypoint,
+    RouteWaypointMoveFn moveRouteWaypoint,
+    BlessingGrabFn grabBlessing) {
+    if (moveRouteWaypoint == nullptr || grabBlessing == nullptr) {
+        return false;
+    }
+    moveRouteWaypoint(waypoint);
+    grabBlessing(waypoint.x, waypoint.y);
+    return true;
+}
+
+bool HandleOpenDungeonDoorWaypoint(
+    const DungeonRoute::Waypoint& waypoint,
+    WaypointMoveFn aggroMoveToPoint,
+    DoorOpenAtFn openDoorAt) {
+    if (aggroMoveToPoint == nullptr || openDoorAt == nullptr) {
+        return false;
+    }
+    aggroMoveToPoint(waypoint.x, waypoint.y, waypoint.fight_range);
+    return openDoorAt(waypoint.x, waypoint.y);
+}
+
 bool WaitForLocalPositionSettle(
     uint32_t timeoutMs,
     float maxDeltaPerSample,
@@ -368,6 +474,14 @@ RouteFollowResult FollowWaypoints(
     result.completed = true;
     result.retries_used = retriesUsed;
     return result;
+}
+
+int GetNearestWaypointIndex(const DungeonRoute::Waypoint* waypoints, int count) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (me == nullptr) {
+        return 0;
+    }
+    return DungeonRoute::FindNearestWaypointIndex(waypoints, count, me->x, me->y);
 }
 
 bool WaitForMapId(uint32_t targetMapId, uint32_t timeoutMs) {

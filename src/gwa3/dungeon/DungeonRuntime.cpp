@@ -6,6 +6,7 @@
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/packets/CtoS.h>
+#include <gwa3/dungeon/DungeonCombat.h>
 
 #include <Windows.h>
 
@@ -103,6 +104,116 @@ bool WaitForTownRuntimeReady(uint32_t mapId, uint32_t timeoutMs) {
         if (!inv) return false;
         return inv->bags[1] != nullptr;
     });
+}
+
+bool WaitForLevelSpawnReady(
+    uint32_t targetMapId,
+    const TransitionAnchor& staleAnchor,
+    float staleAnchorClearance,
+    uint32_t timeoutMs,
+    uint32_t pollMs) {
+    return WaitForCondition(timeoutMs, [targetMapId, staleAnchor, staleAnchorClearance]() {
+        if (MapMgr::GetMapId() != targetMapId ||
+            !MapMgr::GetIsMapLoaded() ||
+            AgentMgr::GetMyId() == 0) {
+            return false;
+        }
+
+        auto* me = AgentMgr::GetMyAgent();
+        if (!me || me->hp <= 0.0f) {
+            return false;
+        }
+
+        if (staleAnchorClearance <= 0.0f) {
+            return true;
+        }
+        const float distFromStaleAnchor = AgentMgr::GetDistance(
+            me->x,
+            me->y,
+            staleAnchor.x,
+            staleAnchor.y);
+        return distFromStaleAnchor > staleAnchorClearance;
+    }, pollMs);
+}
+
+TransitionTelemetry CaptureLevelTransitionTelemetry(
+    const TransitionAnchor& exitAnchor,
+    uint32_t portalId,
+    float nearestEnemyRange,
+    float nearbyEnemyRange) {
+    TransitionTelemetry telemetry;
+    auto* me = AgentMgr::GetMyAgent();
+    telemetry.map_loaded = MapMgr::GetIsMapLoaded();
+    telemetry.player_alive = me != nullptr && me->hp > 0.0f;
+    telemetry.player_hp = me ? me->hp : 0.0f;
+    telemetry.player_x = me ? me->x : 0.0f;
+    telemetry.player_y = me ? me->y : 0.0f;
+    telemetry.target_id = AgentMgr::GetTargetId();
+    telemetry.dist_to_exit = me
+        ? AgentMgr::GetDistance(me->x, me->y, exitAnchor.x, exitAnchor.y)
+        : -1.0f;
+    telemetry.nearest_enemy_dist = me
+        ? DungeonCombat::GetNearestLivingEnemyDistance(nearestEnemyRange)
+        : -1.0f;
+    telemetry.nearby_enemy_count = me
+        ? DungeonCombat::CountLivingEnemiesInRange(nearbyEnemyRange)
+        : 0u;
+    telemetry.portal_id = portalId;
+
+    if (portalId != 0u) {
+        if (auto* portal = AgentMgr::GetAgentByID(portalId)) {
+            telemetry.portal_x = portal->x;
+            telemetry.portal_y = portal->y;
+            telemetry.portal_type = portal->type;
+            if (portal->type == 0x200) {
+                telemetry.portal_gadget = static_cast<AgentGadget*>(portal)->gadget_id;
+            }
+            if (me) {
+                telemetry.portal_dist = AgentMgr::GetDistance(me->x, me->y, portal->x, portal->y);
+            }
+        }
+    }
+
+    return telemetry;
+}
+
+void LogLevelTransitionTelemetry(
+    const char* logPrefix,
+    const char* transitionName,
+    const char* stage,
+    uint32_t portalId,
+    uint32_t elapsedMs,
+    uint32_t attempt,
+    const TransitionAnchor& exitAnchor,
+    float nearestEnemyRange,
+    float nearbyEnemyRange,
+    TransitionTelemetry* outTelemetry) {
+    const auto telemetry = CaptureLevelTransitionTelemetry(
+        exitAnchor,
+        portalId,
+        nearestEnemyRange,
+        nearbyEnemyRange);
+    if (outTelemetry) {
+        *outTelemetry = telemetry;
+    }
+    Log::Info("%s: %s [%s] attempt=%lu elapsed=%lums map=%u loaded=%d me=(%.0f, %.0f) distToExit=%.0f target=%u portal=%u type=0x%X gadget=%u portalPos=(%.0f, %.0f) portalDist=%.0f",
+              logPrefix ? logPrefix : "DungeonRuntime",
+              transitionName ? transitionName : "Level transition",
+              stage ? stage : "unknown",
+              static_cast<unsigned long>(attempt),
+              static_cast<unsigned long>(elapsedMs),
+              MapMgr::GetMapId(),
+              telemetry.map_loaded ? 1 : 0,
+              telemetry.player_x,
+              telemetry.player_y,
+              telemetry.dist_to_exit,
+              telemetry.target_id,
+              portalId,
+              telemetry.portal_type,
+              telemetry.portal_gadget,
+              telemetry.portal_x,
+              telemetry.portal_y,
+              telemetry.portal_dist);
 }
 
 bool EnsureOutpostReady(uint32_t outpostMapId, uint32_t timeoutMs, const char* context) {

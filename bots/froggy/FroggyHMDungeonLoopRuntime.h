@@ -86,7 +86,7 @@ static bool RunDungeonLoopFromCurrentMap() {
                       lvl2Ready ? 1 : 0,
                       me ? me->x : 0.0f,
                       me ? me->y : 0.0f,
-                      GetNearestWaypointIndex(BOGROOT_LVL2, BOGROOT_LVL2_COUNT));
+                      DungeonNavigation::GetNearestWaypointIndex(BOGROOT_LVL2, BOGROOT_LVL2_COUNT));
             WaitForLocalPositionSettle(1500, 24.0f);
             FollowWaypoints(BOGROOT_LVL2, BOGROOT_LVL2_COUNT, true);
             Log::Info("Froggy: Bogroot loop after lvl2 map=%u bossStarted=%d bossCompleted=%d",

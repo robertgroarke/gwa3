@@ -4,7 +4,7 @@ static DungeonCombat::LocalClearPolicy BuildFroggyLocalClearPolicy(
     const char* label,
     float fightRange,
     SparkflyTraversalCombatStats* stats) {
-    const auto profile = IsBogrootMap(MapMgr::GetMapId())
+    const auto profile = IsBogrootMapId(MapMgr::GetMapId())
         ? DungeonCombat::LocalClearProfile::ShortTraversal
         : DungeonCombat::LocalClearProfile::StandardTraversal;
     return DungeonCombat::BuildLocalClearPolicy(profile, label, fightRange, stats != nullptr);

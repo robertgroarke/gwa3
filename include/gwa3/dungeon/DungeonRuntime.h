@@ -11,6 +11,29 @@ using QueueMoveFn = void(*)(float x, float y);
 using GetMapIdFn = uint32_t(*)();
 using WaitMsFn = void(*)(uint32_t ms);
 
+struct TransitionAnchor {
+    float x = 0.0f;
+    float y = 0.0f;
+};
+
+struct TransitionTelemetry {
+    bool map_loaded = false;
+    bool player_alive = false;
+    float player_hp = 0.0f;
+    float player_x = 0.0f;
+    float player_y = 0.0f;
+    uint32_t target_id = 0u;
+    float dist_to_exit = -1.0f;
+    float nearest_enemy_dist = -1.0f;
+    uint32_t nearby_enemy_count = 0u;
+    uint32_t portal_id = 0u;
+    float portal_x = 0.0f;
+    float portal_y = 0.0f;
+    float portal_dist = -1.0f;
+    uint32_t portal_type = 0u;
+    uint32_t portal_gadget = 0u;
+};
+
 bool IsDead();
 bool IsMapLoaded();
 void WaitMs(uint32_t ms);
@@ -19,6 +42,28 @@ void SuspendTransitionSensitiveHooks(const char* context = nullptr);
 void ResumeTransitionSensitiveHooks(const char* context = nullptr);
 bool WaitForMapReady(uint32_t mapId, uint32_t timeoutMs);
 bool WaitForTownRuntimeReady(uint32_t mapId, uint32_t timeoutMs);
+bool WaitForLevelSpawnReady(
+    uint32_t targetMapId,
+    const TransitionAnchor& staleAnchor,
+    float staleAnchorClearance,
+    uint32_t timeoutMs,
+    uint32_t pollMs = 200u);
+TransitionTelemetry CaptureLevelTransitionTelemetry(
+    const TransitionAnchor& exitAnchor,
+    uint32_t portalId,
+    float nearestEnemyRange = 5000.0f,
+    float nearbyEnemyRange = 1800.0f);
+void LogLevelTransitionTelemetry(
+    const char* logPrefix,
+    const char* transitionName,
+    const char* stage,
+    uint32_t portalId,
+    uint32_t elapsedMs,
+    uint32_t attempt,
+    const TransitionAnchor& exitAnchor,
+    float nearestEnemyRange = 5000.0f,
+    float nearbyEnemyRange = 1800.0f,
+    TransitionTelemetry* outTelemetry = nullptr);
 bool EnsureOutpostReady(uint32_t outpostMapId, uint32_t timeoutMs, const char* context = nullptr);
 bool PushUntilMapReady(
     uint32_t targetMapId,
