@@ -48,6 +48,12 @@ using AggroRecordTargetFn = void(*)(void* userData, uint32_t targetId);
 using AggroRecordAutoAttackFn = void(*)(void* userData, uint32_t targetId, uint32_t actionStartMs);
 using AggroRecordActionFn = void(*)(void* userData, uint32_t actionStartMs);
 using AggroPostLootFn = void(*)(void* userData, float aggroRange, const char* reason);
+using LocalClearFightFn = void(*)(float clearRange,
+                                  bool careful,
+                                  void* userData,
+                                  bool waitForSkillCompletion,
+                                  uint32_t maxFightMs);
+using LocalClearPassFn = void(*)(void* userData, int pass, uint32_t targetId);
 enum class AggroWaypointPhase : uint8_t;
 using AggroWaypointHookFn = bool(*)(const DungeonRoute::Waypoint& waypoint,
                                     int waypointIndex,
@@ -72,6 +78,21 @@ struct LocalClearPolicy {
     int max_clear_passes = 0;
     const char* clear_label = "Route";
     const char* loot_reason = "local-clear";
+};
+
+struct HoldLocalClearCallbacks {
+    BoolFn is_dead = nullptr;
+    BoolFn is_map_loaded = nullptr;
+    WaitFn wait_ms = nullptr;
+    LocalClearFightFn fight_in_aggro = nullptr;
+    AggroPostLootFn post_loot = nullptr;
+    LocalClearPassFn on_clear_pass = nullptr;
+    void* user_data = nullptr;
+};
+
+struct HoldLocalClearOptions {
+    uint32_t target_id = 0u;
+    const char* log_prefix = "DungeonCombat";
 };
 
 struct CombatCallbacks {
@@ -185,6 +206,12 @@ bool WaitForEnemyClearDwell(float clearRange,
                             uint32_t timeoutMs,
                             const CombatCallbacks& callbacks = {},
                             uint32_t pollMs = 250u);
+bool HoldForLocalClear(float waypointX,
+                       float waypointY,
+                       float fightRange,
+                       const LocalClearPolicy& policy,
+                       const HoldLocalClearCallbacks& callbacks,
+                       const HoldLocalClearOptions& options = {});
 void FlagAllHeroes(float x, float y);
 void UnflagAllHeroes();
 bool ClearEnemiesInArea(float fightRange, const CombatCallbacks& callbacks,

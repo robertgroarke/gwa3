@@ -219,6 +219,131 @@ bool WaitForEnemyClearDwell(float clearRange,
   return CountLivingEnemiesInRange(clearRange) == 0u;
 }
 
+bool HoldForLocalClear(float waypointX,
+                       float waypointY,
+                       float fightRange,
+                       const LocalClearPolicy& policy,
+                       const HoldLocalClearCallbacks& callbacks,
+                       const HoldLocalClearOptions& options) {
+  if (callbacks.wait_ms == nullptr || callbacks.fight_in_aggro == nullptr) {
+    return false;
+  }
+
+  CombatCallbacks dwellCallbacks = {};
+  dwellCallbacks.is_dead = callbacks.is_dead;
+  dwellCallbacks.is_map_loaded = callbacks.is_map_loaded;
+  dwellCallbacks.wait_ms = callbacks.wait_ms;
+
+  const char* prefix = options.log_prefix ? options.log_prefix : "DungeonCombat";
+  const char* clearLabel = policy.clear_label ? policy.clear_label : "Route";
+  const char* lootReason = policy.loot_reason ? policy.loot_reason : "local-clear";
+  const uint32_t targetId = options.target_id;
+  const DWORD localClearStart = GetTickCount();
+  int clearPasses = 0;
+
+  while ((GetTickCount() - localClearStart) < policy.local_clear_budget_ms) {
+    if (CallBool(callbacks.is_dead, false) ||
+        !CallBool(callbacks.is_map_loaded, MapMgr::GetIsMapLoaded()) ||
+        PartyMgr::GetIsPartyDefeated()) {
+      return false;
+    }
+
+    const uint32_t nearbyBefore = CountLivingEnemiesInRange(policy.clear_range);
+    if (nearbyBefore == 0u &&
+        WaitForEnemyClearDwell(policy.clear_range,
+                               policy.quiet_dwell_ms,
+                               policy.initial_dwell_timeout_ms,
+                               dwellCallbacks,
+                               LOCAL_CLEAR_DWELL_POLL_MS)) {
+      if (callbacks.post_loot != nullptr) {
+        callbacks.post_loot(callbacks.user_data, policy.clear_range, lootReason);
+      }
+      return true;
+    }
+
+    ++clearPasses;
+    if (callbacks.on_clear_pass != nullptr) {
+      callbacks.on_clear_pass(callbacks.user_data, clearPasses, targetId);
+    }
+
+    Log::Info("%s: %s local clear pass=%d target=%u waypoint=(%.0f, %.0f) clearRange=%.0f nearbyBefore=%u",
+              prefix,
+              clearLabel,
+              clearPasses,
+              targetId,
+              waypointX,
+              waypointY,
+              policy.clear_range,
+              nearbyBefore);
+
+    AgentMgr::CancelAction();
+    CallWait(callbacks.wait_ms, LOCAL_CLEAR_PRE_FIGHT_CANCEL_DWELL_MS);
+    callbacks.fight_in_aggro(
+        policy.clear_range,
+        false,
+        callbacks.user_data,
+        true,
+        policy.fight_budget_ms);
+    AgentMgr::CancelAction();
+    CallWait(callbacks.wait_ms, LOCAL_CLEAR_POST_FIGHT_CANCEL_DWELL_MS);
+
+    const uint32_t nearbyAfter = CountLivingEnemiesInRange(policy.clear_range);
+    const float nearestAfter =
+        GetNearestLivingEnemyDistance(policy.clear_range + LOCAL_CLEAR_NEAREST_ENEMY_SCAN_PADDING);
+    Log::Info("%s: %s local clear result pass=%d target=%u nearbyAfter=%u nearestAfter=%.0f",
+              prefix,
+              clearLabel,
+              clearPasses,
+              targetId,
+              nearbyAfter,
+              nearestAfter);
+
+    if (nearbyAfter == 0u &&
+        nearestAfter > (policy.clear_range + LOCAL_CLEAR_EXIT_DISTANCE_PADDING)) {
+      if (callbacks.post_loot != nullptr) {
+        callbacks.post_loot(callbacks.user_data, policy.clear_range, lootReason);
+      }
+      return true;
+    }
+
+    if (WaitForEnemyClearDwell(policy.clear_range,
+                               policy.quiet_dwell_ms,
+                               policy.settle_dwell_timeout_ms,
+                               dwellCallbacks,
+                               LOCAL_CLEAR_DWELL_POLL_MS)) {
+      if (callbacks.post_loot != nullptr) {
+        callbacks.post_loot(callbacks.user_data, policy.clear_range, lootReason);
+      }
+      return true;
+    }
+
+    if (policy.single_pass && clearPasses >= policy.max_clear_passes) {
+      Log::Info("%s: %s local clear early-exit target=%u waypoint=(%.0f, %.0f) nearby=%u nearest=%.0f budget=%lums",
+                prefix,
+                clearLabel,
+                targetId,
+                waypointX,
+                waypointY,
+                CountLivingEnemiesInRange(policy.clear_range),
+                GetNearestLivingEnemyDistance(policy.clear_range + LOCAL_CLEAR_NEAREST_ENEMY_SCAN_PADDING),
+                static_cast<unsigned long>(GetTickCount() - localClearStart));
+      if (callbacks.post_loot != nullptr) {
+        callbacks.post_loot(callbacks.user_data, policy.clear_range, lootReason);
+      }
+      return true;
+    }
+  }
+
+  Log::Warn("%s: %s local clear timeout target=%u waypoint=(%.0f, %.0f) nearby=%u",
+            prefix,
+            clearLabel,
+            targetId,
+            waypointX,
+            waypointY,
+            CountLivingEnemiesInRange(ComputeLocalClearRange(fightRange)));
+  return false;
+}
+
 void FlagAllHeroes(float x, float y) {
   if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
     GameThread::EnqueuePost([x, y]() { PartyMgr::FlagAll(x, y); });
