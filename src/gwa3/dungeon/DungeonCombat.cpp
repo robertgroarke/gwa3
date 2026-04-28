@@ -3,9 +3,11 @@
 #include <gwa3/dungeon/DungeonNavigation.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/dungeon/DungeonSkill.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/PartyMgr.h>
+#include <gwa3/managers/SkillMgr.h>
 
 #include <Windows.h>
 #include <cmath>
@@ -414,6 +416,95 @@ bool AdvanceWithAggro(float x, float y, float fightRange,
   }
 
   return DistanceToPoint(x, y) <= options.arrival_threshold;
+}
+
+bool FightEnemiesInAggro(float aggroRange,
+                         const AggroFightCallbacks& callbacks,
+                         const AggroFightOptions& options) {
+  if (callbacks.use_skills == nullptr) {
+    return false;
+  }
+
+  const DWORD fightStart = GetTickCount();
+  const bool enableSkillOverride =
+      options.restricted_skill_override_map_id != 0u &&
+      MapMgr::GetMapId() == options.restricted_skill_override_map_id;
+  if (enableSkillOverride) {
+    SkillMgr::SetRestrictedMapPlayerUseSkillOverride(true);
+  }
+
+  bool ranPass = false;
+  while (GetNearestLivingEnemyDistance() <= aggroRange &&
+         !CallBool(callbacks.is_dead, false) &&
+         MapMgr::GetIsMapLoaded() &&
+         !PartyMgr::GetIsPartyDefeated() &&
+         (GetTickCount() - fightStart) < options.max_fight_ms) {
+    if (options.careful) {
+      AgentMgr::CancelAction();
+    }
+
+    const uint32_t bestTarget = DungeonSkill::GetBestBalledEnemy(aggroRange);
+    if (bestTarget == 0u) {
+      break;
+    }
+    if (callbacks.record_target != nullptr) {
+      callbacks.record_target(callbacks.user_data, bestTarget);
+    }
+
+    bool attacked = false;
+    if (DungeonSkill::CanBasicAttack()) {
+      AgentMgr::Attack(bestTarget);
+      attacked = true;
+    }
+    CallWait(callbacks.wait_ms, 100u);
+
+    if (options.careful) {
+      if (auto* target = AgentMgr::GetAgentByID(bestTarget)) {
+        AgentMgr::Move(target->x, target->y);
+      }
+      CallWait(callbacks.wait_ms, 300u);
+    }
+
+    const DWORD actionStart = GetTickCount();
+    const int usedSkills = callbacks.use_skills(
+        bestTarget,
+        aggroRange,
+        options.wait_for_skill_completion);
+    if (usedSkills <= 0 && attacked && callbacks.record_auto_attack != nullptr) {
+      callbacks.record_auto_attack(callbacks.user_data, bestTarget, actionStart);
+    }
+    if (callbacks.record_action != nullptr) {
+      callbacks.record_action(callbacks.user_data, actionStart);
+    }
+
+    ranPass = true;
+    CallWait(callbacks.wait_ms, 100u);
+  }
+
+  const DWORD elapsedFightMs = GetTickCount() - fightStart;
+  if (elapsedFightMs >= options.max_fight_ms &&
+      GetNearestLivingEnemyDistance() <= aggroRange &&
+      !CallBool(callbacks.is_dead, false) &&
+      MapMgr::GetIsMapLoaded()) {
+    auto* me = AgentMgr::GetMyAgent();
+    Log::Warn("%s: FightEnemiesInAggro budget hit elapsed=%lums aggroRange=%.0f player=(%.0f, %.0f) nearestEnemy=%.0f target=%u",
+              options.log_prefix ? options.log_prefix : "DungeonCombat",
+              static_cast<unsigned long>(elapsedFightMs),
+              aggroRange,
+              me ? me->x : 0.0f,
+              me ? me->y : 0.0f,
+              GetNearestLivingEnemyDistance(aggroRange + 500.0f),
+              AgentMgr::GetTargetId());
+  }
+
+  if (enableSkillOverride) {
+    SkillMgr::SetRestrictedMapPlayerUseSkillOverride(false);
+  }
+
+  if (callbacks.post_loot != nullptr) {
+    callbacks.post_loot(callbacks.user_data, aggroRange, options.loot_reason);
+  }
+  return ranPass;
 }
 
 DungeonNavigation::RouteFollowResult

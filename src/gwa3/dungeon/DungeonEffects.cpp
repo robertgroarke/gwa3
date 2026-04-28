@@ -1,5 +1,6 @@
 #include <gwa3/dungeon/DungeonEffects.h>
 
+#include <gwa3/core/Log.h>
 #include <gwa3/dungeon/DungeonDialog.h>
 #include <gwa3/dungeon/DungeonInteractions.h>
 #include <gwa3/game/SkillIds.h>
@@ -152,6 +153,109 @@ BlessingAcquireResult TryAcquireBlessingAt(
     }
 
     result.confirmed = HasBlessing();
+    result.final_title_id = PlayerMgr::GetActiveTitleId();
+    return result;
+}
+
+BlessingAcquireResult AcquireDungeonBlessingAt(
+    float shrineX,
+    float shrineY,
+    const DungeonBlessingAcquireOptions& options) {
+    BlessingAcquireResult result;
+    result.final_title_id = PlayerMgr::GetActiveTitleId();
+    const char* prefix = options.log_prefix != nullptr ? options.log_prefix : "Dungeon blessing";
+
+    if (HasAnyDungeonBlessing()) {
+        result.already_active = true;
+        result.confirmed = true;
+        Log::Info("%s: already active, skipping", prefix);
+        return result;
+    }
+
+    const auto titleResult = EnsureActiveTitle(
+        options.required_title_id,
+        options.title_settle_delay_ms,
+        options.wait_ms);
+    result.title_applied = titleResult.applied;
+    result.final_title_id = titleResult.final_title_id;
+    if (titleResult.applied) {
+        Log::Info("%s: setting title current=0x%X target=0x%X",
+                  prefix,
+                  titleResult.previous_title_id,
+                  options.required_title_id);
+    }
+
+    if (options.signpost_scan_log != nullptr) {
+        options.signpost_scan_log(
+            shrineX,
+            shrineY,
+            options.fallback_search_radius,
+            "Blessing signposts",
+            false);
+    }
+
+    DungeonInteractions::InteractCandidate interactCandidates[2] = {};
+    const size_t interactCandidateCount = DungeonInteractions::CollectNearestInteractCandidates(
+        shrineX,
+        shrineY,
+        options.primary_search_radius,
+        options.fallback_search_radius,
+        interactCandidates,
+        2u);
+    if (interactCandidateCount == 0u) {
+        Log::Warn("%s: found no interactable NPC or signpost near shrine=(%.0f, %.0f)",
+                  prefix,
+                  shrineX,
+                  shrineY);
+        return result;
+    }
+
+    result.npc_found = true;
+    for (size_t i = 0; i < interactCandidateCount; ++i) {
+        const auto& candidate = interactCandidates[i];
+        Log::Info("%s: candidate[%u] kind=%s agent=%u distToShrine=%.0f pos=(%.0f, %.0f)",
+                  prefix,
+                  static_cast<unsigned>(i),
+                  candidate.use_signpost ? "signpost" : "npc",
+                  candidate.agent_id,
+                  candidate.dist_to_anchor,
+                  candidate.x,
+                  candidate.y);
+        if (options.agent_log != nullptr) {
+            options.agent_log(candidate.use_signpost ? "Blessing signpost" : "Blessing NPC", candidate.agent_id);
+        }
+    }
+
+    for (size_t candidateIndex = 0u;
+         candidateIndex < interactCandidateCount && !HasAnyDungeonBlessing();
+         ++candidateIndex) {
+        const auto& candidate = interactCandidates[candidateIndex];
+        const float moveThreshold =
+            candidate.use_signpost ? options.signpost_move_threshold : options.npc_move_threshold;
+        if (options.move_to_point != nullptr) {
+            (void)options.move_to_point(candidate.x, candidate.y, moveThreshold);
+        }
+        if (options.wait_for_position_settle != nullptr) {
+            (void)options.wait_for_position_settle(options.settle_timeout_ms, options.settle_distance);
+        }
+
+        DungeonInteractions::CandidateDialogOptions dialogOptions;
+        dialogOptions.dialog_id = options.accept_dialog_id;
+        dialogOptions.candidate_index = candidateIndex;
+        dialogOptions.log_prefix = prefix;
+        dialogOptions.wait_ms = options.wait_ms;
+        dialogOptions.stop_condition = &DungeonEffects::HasBlessing;
+        const auto dialogResult = DungeonInteractions::InteractCandidateAndSendDialog(candidate, dialogOptions);
+        result.interacted = dialogResult.interacted || result.interacted;
+        result.dialog_sent = dialogResult.dialog_sent || result.dialog_sent;
+    }
+
+    result.confirmed = HasAnyDungeonBlessing();
+    if (result.confirmed) {
+        Log::Info("%s: confirmed active", prefix);
+    } else {
+        Log::Warn("%s: effect not detected after shrine interaction", prefix);
+    }
     result.final_title_id = PlayerMgr::GetActiveTitleId();
     return result;
 }

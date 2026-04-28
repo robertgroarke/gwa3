@@ -16,13 +16,39 @@ using RouteWaypointMoveFn = void(*)(const DungeonRoute::Waypoint& waypoint);
 using DoorOpenAtFn = bool(*)(float x, float y);
 using BlessingGrabFn = void(*)(float x, float y);
 using LootAfterCombatFn = int(*)(float aggroRange, const char* reason);
+using PickupNearbyLootFn = int(*)(float maxRange);
+using AggroFightFn = void(*)(float aggroRange,
+                             bool careful,
+                             void* stats,
+                             bool waitForSkillCompletion,
+                             uint32_t maxFightMs);
+using HoldLocalClearFn = void(*)(const char* label,
+                                 float x,
+                                 float y,
+                                 float fightRange,
+                                 uint32_t targetId,
+                                 void* stats);
+using HoldSpecialLocalClearFn = void(*)(float x,
+                                        float y,
+                                        float fightRange,
+                                        uint32_t targetId,
+                                        void* stats);
 using AgentResolverFn = uint32_t(*)(float x, float y, float radius);
 using IsMapLoadedFn = bool(*)();
+using BoolFn = bool(*)();
+using WaitFn = void(*)(uint32_t ms);
 
 struct MoveToResult {
     bool arrived = false;
     bool map_changed = false;
     bool timed_out = false;
+};
+
+struct LoggedMoveOptions {
+    const char* log_prefix = "Dungeon";
+    BoolFn is_dead = nullptr;
+    uint32_t timeout_ms = MOVE_TO_TIMEOUT_MS;
+    uint32_t poll_ms = MOVE_TO_POLL_MS;
 };
 
 struct AgentApproachResult {
@@ -99,6 +125,11 @@ MoveToResult MoveToAndWait(
     uint32_t expectedMapId,
     MoveIssuerFn moveIssuer);
 void MoveToPoint(float x, float y, float threshold);
+bool MoveToAndWaitLogged(
+    float x,
+    float y,
+    float threshold = MOVE_TO_DEFAULT_THRESHOLD,
+    const LoggedMoveOptions& options = {});
 void MoveRouteWaypoint(
     const DungeonRoute::Waypoint& waypoint,
     WaypointMoveFn moveToPoint,
@@ -172,6 +203,39 @@ struct AggroMoveState {
     int blockedCount = 0;
 };
 
+enum class AggroMoveProfile : uint8_t {
+    Standard,
+    Opportunistic,
+};
+
+struct AggroMoveCallbacks {
+    BoolFn is_dead = nullptr;
+    BoolFn is_map_loaded = nullptr;
+    WaitFn wait_ms = nullptr;
+    AggroFightFn fight_in_aggro = nullptr;
+    HoldLocalClearFn hold_local_clear = nullptr;
+    HoldSpecialLocalClearFn hold_special_local_clear = nullptr;
+    PickupNearbyLootFn pickup_nearby_loot = nullptr;
+    void* special_stats = nullptr;
+};
+
+struct AggroMoveOptions {
+    AggroMoveProfile profile = AggroMoveProfile::Standard;
+    bool exact_move_target = false;
+    bool use_local_clear_cooldown = false;
+    float arrival_threshold = 250.0f;
+    float move_random_radius = 100.0f;
+    float sidestep_random_radius = 500.0f;
+    float opportunistic_loot_radius = 3000.0f;
+    uint32_t opportunistic_fight_budget_ms = 4000u;
+    uint32_t move_budget_ms = 240000u;
+    uint32_t force_move_after_ms = 60000u;
+    uint32_t loop_poll_ms = 100u;
+    uint32_t blocked_sidestep_wait_ms = 350u;
+    int blocked_limit = 30;
+    const char* log_prefix = "Dungeon";
+};
+
 bool IssueAggroMove(
     AggroMoveState& state,
     float x,
@@ -203,5 +267,12 @@ void HandleBlockedMoveProgress(
     float blockedProgressDistance = 10.0f,
     int sidestepModulus = 1000,
     int sidestepHalfRange = 500);
+
+void AggroMoveTo(
+    float x,
+    float y,
+    float fightRange,
+    const AggroMoveCallbacks& callbacks,
+    const AggroMoveOptions& options = {});
 
 } // namespace GWA3::DungeonNavigation

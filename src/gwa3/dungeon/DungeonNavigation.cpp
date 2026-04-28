@@ -1,6 +1,7 @@
 #include <gwa3/dungeon/DungeonNavigation.h>
 #include <gwa3/dungeon/DungeonCombat.h>
 #include <gwa3/dungeon/DungeonLoot.h>
+#include <gwa3/dungeon/DungeonSkill.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/MapMgr.h>
@@ -173,6 +174,43 @@ MoveToResult MoveToAndWait(
 
 void MoveToPoint(float x, float y, float threshold) {
     (void)MoveToAndWait(x, y, threshold);
+}
+
+bool MoveToAndWaitLogged(
+    float x,
+    float y,
+    float threshold,
+    const LoggedMoveOptions& options) {
+    if (options.is_dead != nullptr && options.is_dead()) {
+        auto* me = AgentMgr::GetMyAgent();
+        Log::Warn("%s: MoveToAndWait abort dead target=(%.0f, %.0f) threshold=%.0f map=%u loaded=%d hp=%.3f",
+                  options.log_prefix ? options.log_prefix : "Dungeon",
+                  x,
+                  y,
+                  threshold,
+                  MapMgr::GetMapId(),
+                  MapMgr::GetIsMapLoaded() ? 1 : 0,
+                  me ? me->hp : 0.0f);
+        return false;
+    }
+
+    const auto result = MoveToAndWait(
+        x,
+        y,
+        threshold,
+        options.timeout_ms,
+        options.poll_ms);
+    if (!result.arrived) {
+        Log::Warn("%s: MoveToAndWait timeout target=(%.0f, %.0f) dist=%.0f threshold=%.0f map=%u loaded=%d",
+                  options.log_prefix ? options.log_prefix : "Dungeon",
+                  x,
+                  y,
+                  DungeonCombat::DistanceToPoint(x, y),
+                  threshold,
+                  MapMgr::GetMapId(),
+                  MapMgr::GetIsMapLoaded() ? 1 : 0);
+    }
+    return result.arrived;
 }
 
 void MoveRouteWaypoint(
@@ -599,6 +637,235 @@ void HandleBlockedMoveProgress(
     Sleep(sidestepWaitMs);
     state.moveTargetInitialized = false;
     IssueAggroMove(state, x, y, sparkflyMap, true);
+}
+
+namespace {
+
+bool CallBool(BoolFn fn, bool fallback) {
+    return fn ? fn() : fallback;
+}
+
+void CallWait(WaitFn fn, uint32_t ms) {
+    if (fn) {
+        fn(ms);
+    } else {
+        Sleep(ms);
+    }
+}
+
+void AggroMoveToOpportunistic(
+    float x,
+    float y,
+    float fightRange,
+    const AggroMoveCallbacks& callbacks,
+    const AggroMoveOptions& options) {
+    DWORD start = GetTickCount();
+    int blockedCount = 0;
+    float moveTargetX = x;
+    float moveTargetY = y;
+
+    auto issueMove = [&]() {
+        moveTargetX = RandomizedCoordinate(x, options.move_random_radius);
+        moveTargetY = RandomizedCoordinate(y, options.move_random_radius);
+        AgentMgr::Move(moveTargetX, moveTargetY);
+    };
+    auto issueSidestep = [&]() {
+        auto* me = AgentMgr::GetMyAgent();
+        if (!me) return;
+        AgentMgr::Move(RandomizedCoordinate(me->x, options.sidestep_random_radius),
+                       RandomizedCoordinate(me->y, options.sidestep_random_radius));
+    };
+
+    if (DungeonCombat::CanMoveWithEnemyRangeGate(fightRange, DungeonCombat::LONG_BOW_RANGE)) {
+        issueMove();
+    }
+
+    while (DungeonCombat::DistanceToPoint(x, y) > options.arrival_threshold &&
+           (GetTickCount() - start) < options.move_budget_ms) {
+        if (CallBool(callbacks.is_dead, false) ||
+            !CallBool(callbacks.is_map_loaded, MapMgr::GetIsMapLoaded())) {
+            return;
+        }
+
+        auto* meBefore = AgentMgr::GetMyAgent();
+        const float oldX = meBefore ? meBefore->x : 0.0f;
+        const float oldY = meBefore ? meBefore->y : 0.0f;
+
+        if (DungeonCombat::GetNearestLivingEnemyDistance() < fightRange &&
+            callbacks.fight_in_aggro != nullptr) {
+            callbacks.fight_in_aggro(
+                fightRange,
+                false,
+                nullptr,
+                true,
+                options.opportunistic_fight_budget_ms);
+        }
+
+        if (DungeonCombat::CanMoveWithEnemyRangeGate(fightRange, DungeonCombat::LONG_BOW_RANGE) ||
+            (GetTickCount() - start) > options.force_move_after_ms) {
+            issueMove();
+            if (callbacks.pickup_nearby_loot != nullptr) {
+                (void)callbacks.pickup_nearby_loot(options.opportunistic_loot_radius);
+            }
+            CallWait(callbacks.wait_ms, options.loop_poll_ms);
+
+            auto* meAfter = AgentMgr::GetMyAgent();
+            if (meAfter && meAfter->x == oldX && meAfter->y == oldY) {
+                ++blockedCount;
+                issueSidestep();
+                CallWait(callbacks.wait_ms, options.blocked_sidestep_wait_ms);
+                issueMove();
+            } else {
+                blockedCount = 0;
+            }
+        }
+
+        if (blockedCount > options.blocked_limit) {
+            Log::Warn("%s: AggroMove opportunistic blocked limit reached (%d) target=(%.0f, %.0f) remaining=%.0f",
+                      options.log_prefix ? options.log_prefix : "Dungeon",
+                      blockedCount,
+                      x,
+                      y,
+                      DungeonCombat::DistanceToPoint(x, y));
+            return;
+        }
+
+        CallWait(callbacks.wait_ms, options.loop_poll_ms);
+    }
+
+    Log::Info("%s: AggroMove opportunistic end target=(%.0f, %.0f) remaining=%.0f threshold=%.0f",
+              options.log_prefix ? options.log_prefix : "Dungeon",
+              x,
+              y,
+              DungeonCombat::DistanceToPoint(x, y),
+              options.arrival_threshold);
+}
+
+void AggroMoveToStandard(
+    float x,
+    float y,
+    float fightRange,
+    const AggroMoveCallbacks& callbacks,
+    const AggroMoveOptions& options) {
+    const float localClearRange = DungeonCombat::ComputeLocalClearRange(fightRange);
+    AggroMoveState moveState;
+    moveState.moveTargetX = x;
+    moveState.moveTargetY = y;
+    if (DungeonCombat::CanMoveWithEnemyRangeGate(fightRange, DungeonCombat::LONG_BOW_RANGE)) {
+        IssueAggroMove(moveState, x, y, options.exact_move_target, true);
+    }
+    DWORD start = GetTickCount();
+    while (DungeonCombat::DistanceToPoint(x, y) > options.arrival_threshold &&
+           (GetTickCount() - start) < options.move_budget_ms) {
+        if (CallBool(callbacks.is_dead, false) ||
+            !CallBool(callbacks.is_map_loaded, MapMgr::GetIsMapLoaded())) {
+            return;
+        }
+
+        auto* meLoop = AgentMgr::GetMyAgent();
+        const float oldX = meLoop ? meLoop->x : 0.0f;
+        const float oldY = meLoop ? meLoop->y : 0.0f;
+        const float nearestDistance = DungeonCombat::GetNearestLivingEnemyDistance();
+
+        if (nearestDistance < localClearRange) {
+            if (options.use_local_clear_cooldown && ShouldContinueLocalClearCooldown(moveState)) {
+                IssueAggroMove(moveState, x, y, options.exact_move_target, true);
+                CallWait(callbacks.wait_ms, DungeonCombat::AGGRO_STANDARD_COOLDOWN_MOVE_DELAY_MS);
+                continue;
+            }
+
+            moveState.blockedCount = 0;
+            const uint32_t bestId = DungeonSkill::GetBestBalledEnemy(localClearRange);
+            if (!bestId) {
+                CallWait(callbacks.wait_ms, DungeonCombat::AGGRO_STANDARD_NO_BALL_DELAY_MS);
+                continue;
+            }
+
+            if (callbacks.hold_special_local_clear != nullptr) {
+                Log::Info("%s: AggroMove holding special local clear foe=%u waypoint=(%.0f, %.0f) dist=%.0f",
+                          options.log_prefix ? options.log_prefix : "Dungeon",
+                          bestId,
+                          x,
+                          y,
+                          nearestDistance);
+                callbacks.hold_special_local_clear(
+                    x,
+                    y,
+                    fightRange,
+                    bestId,
+                    callbacks.special_stats);
+            } else if (callbacks.hold_local_clear != nullptr) {
+                Log::Info("%s: AggroMove holding local clear foe=%u waypoint=(%.0f, %.0f) dist=%.0f clearRange=%.0f",
+                          options.log_prefix ? options.log_prefix : "Dungeon",
+                          bestId,
+                          x,
+                          y,
+                          nearestDistance,
+                          localClearRange);
+                callbacks.hold_local_clear("Route", x, y, fightRange, bestId, nullptr);
+                if (options.use_local_clear_cooldown) {
+                    ArmLocalClearCooldown(moveState, x, y);
+                }
+            }
+
+            WaitForLocalPositionSettle(
+                DungeonCombat::AGGRO_STANDARD_LOCAL_CLEAR_SETTLE_TIMEOUT_MS,
+                DungeonCombat::AGGRO_STANDARD_LOCAL_CLEAR_SETTLE_DISTANCE);
+            IssueAggroMove(moveState, x, y, options.exact_move_target, true);
+            CallWait(callbacks.wait_ms, DungeonCombat::AGGRO_STANDARD_LOCAL_CLEAR_RESUME_DELAY_MS);
+            continue;
+        }
+
+        if (DungeonCombat::CanMoveWithEnemyRangeGate(fightRange, DungeonCombat::LONG_BOW_RANGE) ||
+            (GetTickCount() - start) > options.force_move_after_ms) {
+            IssueAggroMove(
+                moveState,
+                x,
+                y,
+                options.exact_move_target,
+                (GetTickCount() - start) > options.force_move_after_ms);
+            CallWait(callbacks.wait_ms, options.loop_poll_ms);
+            HandleBlockedMoveProgress(
+                moveState,
+                x,
+                y,
+                oldX,
+                oldY,
+                options.exact_move_target);
+        }
+
+        if (moveState.blockedCount > options.blocked_limit) {
+            Log::Warn("%s: AggroMove blocked limit reached (%d) target=(%.0f, %.0f) remaining=%.0f",
+                      options.log_prefix ? options.log_prefix : "Dungeon",
+                      moveState.blockedCount,
+                      x,
+                      y,
+                      DungeonCombat::DistanceToPoint(x, y));
+            return;
+        }
+        CallWait(callbacks.wait_ms, options.loop_poll_ms);
+    }
+    Log::Info("%s: AggroMove end target=(%.0f, %.0f) remaining=%.0f threshold=%.0f",
+              options.log_prefix ? options.log_prefix : "Dungeon",
+              x,
+              y,
+              DungeonCombat::DistanceToPoint(x, y),
+              options.arrival_threshold);
+}
+
+} // namespace
+
+void AggroMoveTo(
+    float x,
+    float y,
+    float fightRange,
+    const AggroMoveCallbacks& callbacks,
+    const AggroMoveOptions& options) {
+    if (options.profile == AggroMoveProfile::Opportunistic) {
+        AggroMoveToOpportunistic(x, y, fightRange, callbacks, options);
+        return;
+    }
+    AggroMoveToStandard(x, y, fightRange, callbacks, options);
 }
 
 } // namespace GWA3::DungeonNavigation

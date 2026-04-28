@@ -43,6 +43,11 @@ using MoveIssuerFn = void(*)(float x, float y);
 using FightTargetFn = void(*)(uint32_t targetId);
 using PickupLootFn = int(*)(float maxRange);
 using BoolFn = bool(*)();
+using AggroUseSkillsFn = int(*)(uint32_t targetId, float aggroRange, bool waitForCompletion);
+using AggroRecordTargetFn = void(*)(void* userData, uint32_t targetId);
+using AggroRecordAutoAttackFn = void(*)(void* userData, uint32_t targetId, uint32_t actionStartMs);
+using AggroRecordActionFn = void(*)(void* userData, uint32_t actionStartMs);
+using AggroPostLootFn = void(*)(void* userData, float aggroRange, const char* reason);
 enum class AggroWaypointPhase : uint8_t;
 using AggroWaypointHookFn = bool(*)(const DungeonRoute::Waypoint& waypoint,
                                     int waypointIndex,
@@ -125,6 +130,26 @@ struct AggroWaypointCallbacks {
     void* user_data = nullptr;
 };
 
+struct AggroFightCallbacks {
+    BoolFn is_dead = nullptr;
+    WaitFn wait_ms = nullptr;
+    AggroUseSkillsFn use_skills = nullptr;
+    AggroRecordTargetFn record_target = nullptr;
+    AggroRecordAutoAttackFn record_auto_attack = nullptr;
+    AggroRecordActionFn record_action = nullptr;
+    AggroPostLootFn post_loot = nullptr;
+    void* user_data = nullptr;
+};
+
+struct AggroFightOptions {
+    bool careful = false;
+    bool wait_for_skill_completion = true;
+    uint32_t max_fight_ms = 240000u;
+    uint32_t restricted_skill_override_map_id = 0u;
+    const char* log_prefix = "DungeonCombat";
+    const char* loot_reason = "combat-step";
+};
+
 inline float ComputeLocalClearRange(float fightRange) {
     const float clearRange = fightRange + LOCAL_CLEAR_RANGE_PADDING;
     return clearRange > LOCAL_CLEAR_MIN_RANGE ? clearRange : LOCAL_CLEAR_MIN_RANGE;
@@ -166,6 +191,9 @@ bool ClearEnemiesInArea(float fightRange, const CombatCallbacks& callbacks,
                         const ClearEnemiesOptions& options = {});
 bool AdvanceWithAggro(float x, float y, float fightRange, const CombatCallbacks& callbacks,
                       const AggroAdvanceOptions& options = {});
+bool FightEnemiesInAggro(float aggroRange,
+                         const AggroFightCallbacks& callbacks,
+                         const AggroFightOptions& options = {});
 DungeonNavigation::RouteFollowResult FollowWaypointsWithAggro(
     const DungeonRoute::Waypoint* waypoints,
     int count,
