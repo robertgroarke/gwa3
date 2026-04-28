@@ -3,6 +3,8 @@
 #include <gwa3/dungeon/DungeonEffects.h>
 #include <gwa3/dungeon/DungeonInventory.h>
 #include <gwa3/dungeon/DungeonItemPolicy.h>
+#include <gwa3/core/Log.h>
+#include <gwa3/core/Offsets.h>
 #include <gwa3/game/ItemModelIds.h>
 #include <gwa3/managers/EffectMgr.h>
 #include <gwa3/managers/ItemMgr.h>
@@ -201,6 +203,38 @@ ConsetUseAttemptResult UseConsetsForAgentIfEnabled(
 
     result.attempted = true;
     result.consets = UseFullConsetIfNeeded(agent_id, wait_ms, options);
+    return result;
+}
+
+ConsetUseAttemptResult UseConsetsForCurrentPlayerIfEnabled(
+    bool enabled,
+    WaitFn wait_ms,
+    const ConsetUseOptions& options,
+    const char* log_prefix) {
+    ConsetUseAttemptResult result;
+    if (!enabled) return result;
+    if (Offsets::MyID <= 0x10000u) return result;
+
+    const uint32_t my_id = *reinterpret_cast<uint32_t*>(Offsets::MyID);
+    result = UseConsetsForAgentIfEnabled(true, my_id, wait_ms, options);
+    if (!result.attempted) return result;
+
+    const char* prefix = log_prefix ? log_prefix : "DungeonItemActions";
+    if (result.consets.used_armor) {
+        Log::Info("%s: Using Armor of Salvation", prefix);
+    }
+    if (result.consets.used_essence) {
+        Log::Info("%s: Using Essence of Celerity", prefix);
+    }
+    if (result.consets.used_grail) {
+        Log::Info("%s: Using Grail of Might", prefix);
+    }
+
+    if (result.consets.full_active) {
+        Log::Info("%s: All consets active", prefix);
+    } else {
+        Log::Info("%s: Some consets missing - may need to craft/buy", prefix);
+    }
     return result;
 }
 

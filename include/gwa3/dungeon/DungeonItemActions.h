@@ -93,6 +93,11 @@ ConsetUseAttemptResult UseConsetsForAgentIfEnabled(
     uint32_t agent_id,
     WaitFn wait_ms = nullptr,
     const ConsetUseOptions& options = {});
+ConsetUseAttemptResult UseConsetsForCurrentPlayerIfEnabled(
+    bool enabled,
+    WaitFn wait_ms = nullptr,
+    const ConsetUseOptions& options = {},
+    const char* log_prefix = nullptr);
 uint32_t UseFirstItemByModel(const uint32_t* model_ids, std::size_t model_count,
                              WaitFn wait_ms = nullptr, const UseItemOptions& options = {});
 DpRemovalUseResult UseDpRemovalSweetIfNeeded(uint32_t* wipe_count,

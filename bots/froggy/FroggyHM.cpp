@@ -116,14 +116,103 @@ static bool OpenDungeonDoorAt(float doorX, float doorY);       // forward decl
 
 #include "FroggyHMBlessing.h"
 
-#include "FroggyHMMaintenance.h"
+static DungeonVendor::MaintenanceLocation MakeFroggyMaintenanceLocation() {
+    DungeonVendor::MaintenanceLocation location = {};
+    location.outpost_map_id = MapIds::GADDS_ENCAMPMENT;
+    location.merchant_x = GADDS_MERCHANT.x;
+    location.merchant_y = GADDS_MERCHANT.y;
+    location.merchant_move_threshold = 350.0f;
+    location.merchant_search_radius = 2500.0f;
+    location.merchant_player_number = GADDS_MERCHANT_PLAYER_NUMBER;
+    location.xunlai_chest_x = GADDS_XUNLAI.x;
+    location.xunlai_chest_y = GADDS_XUNLAI.y;
+    location.material_trader_x = GADDS_MATERIAL_TRADER.x;
+    location.material_trader_y = GADDS_MATERIAL_TRADER.y;
+    location.material_trader_player_number = GADDS_MATERIAL_TRADER_PLAYER_NUMBER;
+    return location;
+}
+
+static MaintenanceMgr::Config MakeFroggyMaintenanceConfig(uint32_t outpostMapId) {
+    return DungeonVendor::BuildMaintenanceConfig(outpostMapId, MakeFroggyMaintenanceLocation());
+}
+
+static DungeonVendor::MaintenanceStateOptions MakeFroggyMaintenanceStateOptions() {
+    DungeonVendor::MaintenanceStateOptions options = {};
+    options.fallback_outpost_map_id = MapIds::GADDS_ENCAMPMENT;
+    options.log_prefix = "Froggy";
+    options.move_to_point = &MoveToAndWait;
+    options.wait_ms = &DungeonRuntime::WaitMs;
+    return options;
+}
+
+static void UseConsumables(const BotConfig& cfg) {
+    (void)DungeonItemActions::UseConsetsForCurrentPlayerIfEnabled(
+        cfg.use_consets,
+        &DungeonRuntime::WaitMs,
+        {},
+        "Froggy");
+}
+
+static void UseDpRemovalIfNeeded() {
+    DungeonItemActions::UseItemOptions options;
+    options.delay_ms = 5000u;
+    const auto result =
+        DungeonItemActions::UseDpRemovalSweetIfNeeded(&s_wipeCount, &DungeonRuntime::WaitMs, options);
+    if (result.used_model_id != 0u) {
+        Log::Info("Froggy: Using DP removal sweet (model=%u) after %u wipes",
+                  result.used_model_id,
+                  result.previous_wipe_count);
+    }
+}
 
 #include "FroggyHMDungeonLoopRuntime.h"
 
 #include "FroggyHMTownStates.h"
 #include "FroggyHMDungeonState.h"
-#include "FroggyHMMerchantStates.h"
 #include "FroggyHMErrorState.h"
+
+BotState HandleLoot(BotConfig& cfg) {
+    (void)cfg;
+    LogBot("State: Loot collection");
+    WaitMs(2000);
+    return BotState::Merchant;
+}
+
+BotState HandleMerchant(BotConfig& cfg) {
+    const auto result = DungeonVendor::RunMerchantMaintenanceState(
+        cfg.outpost_map_id,
+        MakeFroggyMaintenanceLocation(),
+        MakeFroggyMaintenanceStateOptions());
+    switch (result) {
+    case DungeonVendor::MaintenanceStateResult::Done:
+        return BotState::InTown;
+    case DungeonVendor::MaintenanceStateResult::NeedsMaintenance:
+        return BotState::Maintenance;
+    case DungeonVendor::MaintenanceStateResult::Retry:
+        return BotState::Merchant;
+    case DungeonVendor::MaintenanceStateResult::Stop:
+    default:
+        return BotState::Stopping;
+    }
+}
+
+BotState HandleMaintenance(BotConfig& cfg) {
+    const auto result = DungeonVendor::RunFullMaintenanceState(
+        cfg.outpost_map_id,
+        &s_wipeCount,
+        MakeFroggyMaintenanceLocation(),
+        MakeFroggyMaintenanceStateOptions());
+    switch (result) {
+    case DungeonVendor::MaintenanceStateResult::Done:
+        return BotState::Traveling;
+    case DungeonVendor::MaintenanceStateResult::Retry:
+        return BotState::Maintenance;
+    case DungeonVendor::MaintenanceStateResult::NeedsMaintenance:
+    case DungeonVendor::MaintenanceStateResult::Stop:
+    default:
+        return BotState::Stopping;
+    }
+}
 
 // ===== Registration =====
 

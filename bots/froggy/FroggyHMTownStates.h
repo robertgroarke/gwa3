@@ -20,7 +20,16 @@ BotState HandleTownSetup(BotConfig& cfg) {
         return MoveToAndWait(x, y, threshold);
     };
     options.open_merchant = [](float x, float y, float searchRadius) {
-        return OpenMerchantContextNearCoords(x, y, searchRadius);
+        DungeonVendor::MerchantContextNearCoordsOptions vendorOptions;
+        vendorOptions.preferred_player_number = GADDS_MERCHANT_PLAYER_NUMBER;
+        vendorOptions.log_prefix = "Froggy";
+        return DungeonVendor::OpenMerchantContextNearCoords(
+            x,
+            y,
+            searchRadius,
+            &MoveToAndWait,
+            &DungeonRuntime::WaitMs,
+            vendorOptions);
     };
     options.refresh_skill_cache = []() {
         (void)DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(s_combatSession, "Froggy");
