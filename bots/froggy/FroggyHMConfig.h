@@ -140,6 +140,13 @@ inline constexpr DungeonQuest::TravelPoint BOGROOT_RETURN_TO_SPARKFLY_PUSH = {14
 inline constexpr DungeonQuest::TravelPoint GADDS_MERCHANT = {-8374.0f, -22491.0f};
 inline constexpr DungeonQuest::TravelPoint GADDS_XUNLAI = {-10481.0f, -22787.0f};
 inline constexpr DungeonQuest::TravelPoint GADDS_MATERIAL_TRADER = {-9097.0f, -23353.0f};
+inline constexpr DungeonQuest::TravelPoint GADDS_TO_SPARKFLY_PATH[] = {
+    {-10018.0f, -21892.0f},
+    {-9550.0f, -20400.0f},
+};
+inline constexpr int GADDS_TO_SPARKFLY_PATH_COUNT = static_cast<int>(
+    sizeof(GADDS_TO_SPARKFLY_PATH) / sizeof(GADDS_TO_SPARKFLY_PATH[0]));
+inline constexpr DungeonQuest::TravelPoint GADDS_TO_SPARKFLY_ZONE = {-9451.0f, -19766.0f};
 inline constexpr uint16_t GADDS_MERCHANT_PLAYER_NUMBER = 6060u;
 inline constexpr uint16_t GADDS_MATERIAL_TRADER_PLAYER_NUMBER = 6763u;
 

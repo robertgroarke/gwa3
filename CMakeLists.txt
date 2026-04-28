@@ -87,6 +87,7 @@ add_library(gwa3_core OBJECT
     src/gwa3/utils/EncStrCodec.cpp
     src/gwa3/utils/EncStringCache.cpp
     bots/common/BotFramework.cpp
+    bots/common/DungeonBotStates.cpp
     bots/arachnis_haunt/ArachnisHaunt.cpp
     bots/arachnis_haunt/ArachnisHauntBot.cpp
     bots/common/BotModuleRegistry.cpp

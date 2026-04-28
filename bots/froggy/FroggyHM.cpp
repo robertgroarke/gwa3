@@ -3,6 +3,7 @@
 #include <bots/froggy/FroggyHMRoutePolicy.h>
 #include <bots/froggy/FroggyHMRoutes.h>
 #include <bots/common/BotFramework.h>
+#include <bots/common/DungeonBotStates.h>
 #include <gwa3/dungeon/DungeonBundle.h>
 #include <gwa3/dungeon/DungeonCheckpoint.h>
 #include <gwa3/dungeon/DungeonCombat.h>
