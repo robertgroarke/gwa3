@@ -653,6 +653,11 @@ void CallWait(WaitFn fn, uint32_t ms) {
     }
 }
 
+bool IsAggroMoveWorldReady(const AggroMoveCallbacks& callbacks) {
+    return !CallBool(callbacks.is_dead, false) &&
+           CallBool(callbacks.is_map_loaded, MapMgr::GetIsMapLoaded());
+}
+
 void AggroMoveToOpportunistic(
     float x,
     float y,
@@ -682,8 +687,7 @@ void AggroMoveToOpportunistic(
 
     while (DungeonCombat::DistanceToPoint(x, y) > options.arrival_threshold &&
            (GetTickCount() - start) < options.move_budget_ms) {
-        if (CallBool(callbacks.is_dead, false) ||
-            !CallBool(callbacks.is_map_loaded, MapMgr::GetIsMapLoaded())) {
+        if (!IsAggroMoveWorldReady(callbacks)) {
             return;
         }
 
@@ -706,8 +710,14 @@ void AggroMoveToOpportunistic(
             issueMove();
             if (callbacks.pickup_nearby_loot != nullptr) {
                 (void)callbacks.pickup_nearby_loot(options.opportunistic_loot_radius);
+                if (!IsAggroMoveWorldReady(callbacks)) {
+                    return;
+                }
             }
             CallWait(callbacks.wait_ms, options.loop_poll_ms);
+            if (!IsAggroMoveWorldReady(callbacks)) {
+                return;
+            }
 
             auto* meAfter = AgentMgr::GetMyAgent();
             if (meAfter && meAfter->x == oldX && meAfter->y == oldY) {
@@ -757,8 +767,7 @@ void AggroMoveToStandard(
     DWORD start = GetTickCount();
     while (DungeonCombat::DistanceToPoint(x, y) > options.arrival_threshold &&
            (GetTickCount() - start) < options.move_budget_ms) {
-        if (CallBool(callbacks.is_dead, false) ||
-            !CallBool(callbacks.is_map_loaded, MapMgr::GetIsMapLoaded())) {
+        if (!IsAggroMoveWorldReady(callbacks)) {
             return;
         }
 
@@ -808,11 +817,20 @@ void AggroMoveToStandard(
                 }
             }
 
+            if (!IsAggroMoveWorldReady(callbacks)) {
+                return;
+            }
             WaitForLocalPositionSettle(
                 DungeonCombat::AGGRO_STANDARD_LOCAL_CLEAR_SETTLE_TIMEOUT_MS,
                 DungeonCombat::AGGRO_STANDARD_LOCAL_CLEAR_SETTLE_DISTANCE);
+            if (!IsAggroMoveWorldReady(callbacks)) {
+                return;
+            }
             IssueAggroMove(moveState, x, y, options.exact_move_target, true);
             CallWait(callbacks.wait_ms, DungeonCombat::AGGRO_STANDARD_LOCAL_CLEAR_RESUME_DELAY_MS);
+            if (!IsAggroMoveWorldReady(callbacks)) {
+                return;
+            }
             continue;
         }
 
@@ -825,6 +843,9 @@ void AggroMoveToStandard(
                 options.exact_move_target,
                 (GetTickCount() - start) > options.force_move_after_ms);
             CallWait(callbacks.wait_ms, options.loop_poll_ms);
+            if (!IsAggroMoveWorldReady(callbacks)) {
+                return;
+            }
             HandleBlockedMoveProgress(
                 moveState,
                 x,
