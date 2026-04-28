@@ -1,12 +1,18 @@
 // Froggy combat debug entrypoints. Included by FroggyHM.cpp.
 
 static void RecordAutoAttackCombatStep(uint32_t targetId) {
-    BeginAutoAttackCombatStep("auto_attack target=%u", targetId, DungeonSkill::ROLE_ATTACK | DungeonSkill::ROLE_OFFENSIVE);
-    FinishAutoAttackCombatStep();
+    DungeonCombatRoutine::BeginAutoAttackAction(
+        s_combatSession,
+        "auto_attack target=%u",
+        targetId,
+        DungeonSkill::ROLE_ATTACK | DungeonSkill::ROLE_OFFENSIVE);
+    DungeonCombatRoutine::FinishLastAction(s_combatSession);
 }
 
 static void PrepareDebugCombatTarget(uint32_t targetId) {
-    if (!s_combatSession.skills_cached) RefreshFroggySkillCache();
+    if (!s_combatSession.skills_cached) {
+        DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(s_combatSession, "Froggy");
+    }
     DungeonCombatRoutine::ResetUsedSkills(s_combatSession);
     AgentMgr::ChangeTarget(targetId);
 }
@@ -17,7 +23,18 @@ static bool TryUseFirstSparkflyFoeTargetSkill(uint32_t targetId) {
         if (c.skill_id == 0) continue;
         if (c.target_type != 5) continue;
         if (!CanUseSkill(c, targetId, DungeonCombat::LONG_BOW_RANGE)) continue;
-        if (TryUseSkillIndex(i, targetId, true, DungeonCombat::LONG_BOW_RANGE)) {
+        DungeonCombatRoutine::TrackedSkillUseOptions options;
+        options.wait_for_completion = true;
+        options.aggro_range = DungeonCombat::LONG_BOW_RANGE;
+        options.timing = DungeonCombatRoutine::MakeSkillCastTimingOptions("Froggy", 3.0f);
+        options.log_prefix = "Froggy";
+        if (DungeonCombatRoutine::TryUseSkillSlotTracked(
+                s_combatSession,
+                i,
+                targetId,
+                &DungeonRuntime::WaitMs,
+                &IsDead,
+                options)) {
             return true;
         }
     }
@@ -32,7 +49,17 @@ static void ExecuteQuickDebugCombatStep(uint32_t targetId) {
         attacked = true;
     }
     SkillMgr::SetRestrictedMapPlayerUseSkillOverride(true);
-    const int usedSkills = UseSkillsInSlotOrder(targetId, DungeonCombat::LONG_BOW_RANGE, false);
+    DungeonCombatRoutine::SlotOrderUseOptions options;
+    options.wait_for_completion = false;
+    options.aggro_range = DungeonCombat::LONG_BOW_RANGE;
+    options.skill_use.timing = DungeonCombatRoutine::MakeSkillCastTimingOptions("Froggy", 3.0f);
+    options.skill_use.log_prefix = "Froggy";
+    const int usedSkills = DungeonCombatRoutine::UseSkillsInSlotOrderTracked(
+        s_combatSession,
+        targetId,
+        &DungeonRuntime::WaitMs,
+        &IsDead,
+        options);
     SkillMgr::SetRestrictedMapPlayerUseSkillOverride(false);
     if (usedSkills <= 0 && attacked) {
         RecordAutoAttackCombatStep(targetId);
@@ -51,7 +78,17 @@ static void ExecuteSparkflyDebugCombatStep(uint32_t targetId) {
             AgentMgr::Attack(targetId);
             attacked = true;
         }
-        const int usedSkills = UseSkillsInSlotOrder(targetId, DungeonCombat::LONG_BOW_RANGE, true);
+        DungeonCombatRoutine::SlotOrderUseOptions options;
+        options.wait_for_completion = true;
+        options.aggro_range = DungeonCombat::LONG_BOW_RANGE;
+        options.skill_use.timing = DungeonCombatRoutine::MakeSkillCastTimingOptions("Froggy", 3.0f);
+        options.skill_use.log_prefix = "Froggy";
+        const int usedSkills = DungeonCombatRoutine::UseSkillsInSlotOrderTracked(
+            s_combatSession,
+            targetId,
+            &DungeonRuntime::WaitMs,
+            &IsDead,
+            options);
         if (usedSkills <= 0 && attacked) {
             RecordAutoAttackCombatStep(targetId);
         }
@@ -68,9 +105,9 @@ bool ExecuteBuiltinCombatStep(uint32_t targetId, bool quickStep) {
     auto& cfg = Bot::GetConfig();
     const CombatMode originalMode = cfg.combat_mode;
     cfg.combat_mode = CombatMode::Builtin;
-    SetLastCombatStepDescription("uninitialized");
-    ResetLastCombatStepInfo();
-    ResetCombatDebugTrace();
+    DungeonCombatRoutine::SetLastActionDescription(s_combatSession, "uninitialized");
+    DungeonCombatRoutine::ResetLastAction(s_combatSession);
+    DungeonCombatRoutine::ResetDebugTrace(s_combatSession);
     s_combatSession.debug_logging = true;
     const bool sparkflyMap = MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP;
 
@@ -79,7 +116,18 @@ bool ExecuteBuiltinCombatStep(uint32_t targetId, bool quickStep) {
     } else if (sparkflyMap) {
         ExecuteSparkflyDebugCombatStep(targetId);
     } else {
-        FightTarget(targetId);
+        DungeonCombatRoutine::TargetFightOptions options;
+        options.llm_combat = false;
+        options.aggro_range = DungeonCombat::LONG_BOW_RANGE;
+        options.auto_attack = &AgentMgr::Attack;
+        options.log_prefix = "Froggy";
+        options.timing = DungeonCombatRoutine::MakeSkillCastTimingOptions("Froggy", IsBogrootMapId(MapMgr::GetMapId()) ? 1.5f : 3.0f);
+        DungeonCombatRoutine::FightTarget(
+            s_combatSession,
+            targetId,
+            &DungeonRuntime::WaitMs,
+            &IsDead,
+            options);
     }
 
     s_combatSession.debug_logging = false;
@@ -96,7 +144,7 @@ LastCombatStepInfo GetLastCombatStepInfo() {
 }
 
 void ResetSparkflyTraversalCombatStats() {
-    ResetSparkflyTraversalCombatStatsState();
+    s_sparkflyTraversalCombatStats = {};
 }
 
 SparkflyTraversalCombatStats GetSparkflyTraversalCombatStats() {
@@ -115,7 +163,7 @@ bool DebugResolveSyntheticSkillTarget(uint32_t roleMask, uint8_t targetType,
 bool DebugResolveUsableSkillTargetForSlot(uint32_t slot, uint32_t defaultFoeId,
                                           uint32_t& outSkillId, uint32_t& outTargetId, uint8_t& outTargetType) {
     if (!s_combatSession.skills_cached) {
-        RefreshFroggySkillCache();
+        DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(s_combatSession, "Froggy");
     }
     outSkillId = 0;
     outTargetId = 0;
@@ -151,7 +199,7 @@ uint32_t DebugGetMeleeRangeEnemy() {
 
 bool RefreshCombatSkillbar() {
     s_combatSession.skills_cached = false;
-    RefreshFroggySkillCache();
+    DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(s_combatSession, "Froggy");
     if (!s_combatSession.skills_cached) return false;
 
     bool hasNonZero = false;

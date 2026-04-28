@@ -11,6 +11,8 @@ using WaitFn = void(*)(uint32_t ms);
 using BoolFn = bool(*)();
 using AutoAttackFn = void(*)(uint32_t targetId);
 
+inline constexpr float DEFAULT_SKILL_AGGRO_RANGE = 1320.0f;
+
 struct SkillExecutionContext {
     DungeonSkill::CachedSkill* skill_cache = nullptr;
     bool* skill_used_this_step = nullptr;
@@ -94,6 +96,29 @@ struct SkillSlotUseResult {
     uint32_t event_before = 0u;
 };
 
+struct TrackedSkillUseOptions {
+    bool wait_for_completion = true;
+    float aggro_range = DEFAULT_SKILL_AGGRO_RANGE;
+    bool change_target = true;
+    SkillCastTimingOptions timing = {};
+    const char* log_prefix = nullptr;
+};
+
+struct SlotOrderUseOptions {
+    bool wait_for_completion = true;
+    float aggro_range = DEFAULT_SKILL_AGGRO_RANGE;
+    bool stop_when_enemy_out_of_range = true;
+    TrackedSkillUseOptions skill_use = {};
+};
+
+struct TargetFightOptions {
+    bool llm_combat = false;
+    float aggro_range = DEFAULT_SKILL_AGGRO_RANGE;
+    AutoAttackFn auto_attack = nullptr;
+    const char* log_prefix = nullptr;
+    SkillCastTimingOptions timing = {};
+};
+
 struct SkillCandidateInspection {
     bool available = false;
     bool role_match = false;
@@ -124,11 +149,18 @@ SkillExecutionContext MakeSkillExecutionContext(
 void ResetUsedSkills(CombatSessionState& session);
 bool RefreshSkillCache(CombatSessionState& session,
                        const DungeonSkill::SkillCacheLogCallbacks* logCallbacks = nullptr);
+bool RefreshSkillCacheWithDebugLog(CombatSessionState& session, const char* logPrefix = nullptr);
 void SetLastActionDescription(CombatSessionState& session, const char* fmt, ...);
 void ResetLastAction(CombatSessionState& session);
 void ApplyLastAction(CombatSessionState& session, const SkillActionResult& action);
+void BeginAutoAttackAction(CombatSessionState& session,
+                           const char* descriptionFormat,
+                           uint32_t targetId,
+                           uint32_t roleMask = 0u);
+void FinishLastAction(CombatSessionState& session);
 void ResetDebugTrace(CombatSessionState& session);
 void AddDebugTraceLine(CombatSessionState& session, const char* fmt, ...);
+void DebugLog(CombatSessionState& session, const char* logPrefix, const char* fmt, ...);
 int GetDebugTraceCount(const CombatSessionState& session);
 const char* GetDebugTraceLine(const CombatSessionState& session, int index);
 void ResetDecisionDump(CombatSessionState& session);
@@ -180,6 +212,14 @@ bool TryUseSkillSlot(
     const SkillSlotUseOptions& options,
     SkillSlotUseResult& outResult);
 
+bool TryUseSkillSlotTracked(
+    CombatSessionState& session,
+    int slotIndex,
+    uint32_t targetId,
+    WaitFn waitMs = nullptr,
+    BoolFn isDead = nullptr,
+    const TrackedSkillUseOptions& options = {});
+
 SkillCastTiming BuildSkillCastTiming(
     int slotIndex,
     const DungeonSkill::CachedSkill& skill,
@@ -206,6 +246,20 @@ int UseSkillsInSlotOrder(
     uint32_t targetId,
     SkillExecutionContext& context,
     SkillActionResult* outLastAction = nullptr);
+
+int UseSkillsInSlotOrderTracked(
+    CombatSessionState& session,
+    uint32_t targetId,
+    WaitFn waitMs = nullptr,
+    BoolFn isDead = nullptr,
+    const SlotOrderUseOptions& options = {});
+
+void FightTarget(
+    CombatSessionState& session,
+    uint32_t targetId,
+    WaitFn waitMs = nullptr,
+    BoolFn isDead = nullptr,
+    const TargetFightOptions& options = {});
 
 bool ExecuteBuiltinPriorityStep(
     uint32_t targetId,

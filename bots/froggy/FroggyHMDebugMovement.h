@@ -9,10 +9,12 @@ bool DebugAggroMoveTo(float x, float y, float fightRange) {
     // Populate the player skillbar cache up front. The bot's normal
     // state machine caches in HandleOutpost, but LLM-bridge callers
     // enter Froggy via this debug function without going through that
-    // path - without the cache, every TryUseSkillIndex / TryUseSkillWith
+    // path - without the cache, every TryUseSkillSlot / TryUseSkillWith
     // Role lookup returns false and the PLAYER never casts (heroes
     // still fight, and the LLM sees attack/call but no skill bumps).
-    if (!s_combatSession.skills_cached) RefreshFroggySkillCache();
+    if (!s_combatSession.skills_cached) {
+        DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(s_combatSession, "Froggy");
+    }
 
     LogBot("DebugAggroMoveTo request target=(%.0f, %.0f) fightRange=%.0f", x, y, fightRange);
     AggroMoveToEx(x, y, fightRange);

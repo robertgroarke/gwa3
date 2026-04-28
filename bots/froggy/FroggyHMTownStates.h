@@ -23,7 +23,7 @@ BotState HandleTownSetup(BotConfig& cfg) {
         return OpenMerchantContextNearCoords(x, y, searchRadius);
     };
     options.refresh_skill_cache = []() {
-        (void)RefreshFroggySkillCache();
+        (void)DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(s_combatSession, "Froggy");
     };
     options.use_consumables = [](const BotConfig& botCfg) {
         UseConsumables(botCfg);

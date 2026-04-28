@@ -64,6 +64,10 @@ using DungeonDiagnostics::LogNearbySignposts;
 using DungeonDiagnostics::NearbyNpcCandidate;
 
 using Waypoint = DungeonRoute::Waypoint;
+using CachedSkill = DungeonSkill::CachedSkill;
+using DungeonSkill::CanUseSkill;
+using DungeonSkill::ExplainCanUseSkillFailure;
+using DungeonSkill::ResolveSkillTarget;
 
 // ===== Run Statistics =====
 static uint32_t s_runCount = 0;
@@ -73,6 +77,8 @@ static DWORD s_runStartTime = 0;
 static DWORD s_totalStartTime = 0;
 static DWORD s_bestRunTime = 0xFFFFFFFF;
 static int s_tekksQuestEntryFailureCount = 0;
+static DungeonCombatRoutine::CombatSessionState s_combatSession = {};
+static SparkflyTraversalCombatStats s_sparkflyTraversalCombatStats = {};
 static DungeonLoopTelemetry s_dungeonLoopTelemetry = {};
 
 using DungeonRuntime::IsDead;
@@ -89,10 +95,6 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
 static bool RefreshTekksQuestReadyForDungeonEntry(
     const char* label,
     uint32_t refreshDelayMs = TEKKS_QUEST_REFRESH_DELAY_MS);
-
-#include "FroggyHMCombatState.h"
-#include "FroggyHMCombatTrace.h"
-#include "FroggyHMCombatSkillUse.h"
 
 #include "FroggyHMMovementCombatRuntime.h"
 #include "FroggyHMAggroCombatRuntime.h"
