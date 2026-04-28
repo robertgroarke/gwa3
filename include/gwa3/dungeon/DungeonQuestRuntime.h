@@ -11,6 +11,8 @@ class OpenedChestTracker;
 
 namespace GWA3::DungeonQuestRuntime {
 
+using BoolFn = bool(*)();
+
 struct DialogExecutionOptions {
     uint32_t change_target_delay_ms = 250u;
     uint32_t interact_delay_ms = 1000u;
@@ -94,6 +96,35 @@ struct RewardClaimResult {
     uint32_t npc_id = 0u;
 };
 
+struct RewardNpcStageOptions {
+    float move_threshold = 250.0f;
+    uint32_t settle_timeout_ms = 1000u;
+    float settle_distance = 15.0f;
+    const char* log_prefix = nullptr;
+    BoolFn is_dead = nullptr;
+};
+
+struct RewardNpcStageResult {
+    bool reached = false;
+    float player_x = 0.0f;
+    float player_y = 0.0f;
+    float distance_to_anchor = -1.0f;
+    uint32_t map_id = 0u;
+    bool map_loaded = false;
+};
+
+struct RewardNpcResolveOptions {
+    float local_search_radius = 3500.0f;
+    const char* log_prefix = nullptr;
+    const char* label = nullptr;
+};
+
+struct RewardNpcResolveResult {
+    uint32_t npc_id = 0u;
+    bool found_at_anchor = false;
+    bool found_near_player = false;
+};
+
 struct BossRewardOptions {
     uint32_t current_map_id = 0u;
     float chest_x = 0.0f;
@@ -125,6 +156,12 @@ RewardClaimResult TryClaimReward(
     const DungeonQuest::QuestNpcAnchor& npc,
     const DungeonQuest::DialogPlan& plan,
     const RewardClaimOptions& options = {});
+RewardNpcStageResult StageRewardNpcInteraction(
+    const DungeonQuest::QuestNpcAnchor& rewardNpc,
+    const RewardNpcStageOptions& options = {});
+RewardNpcResolveResult ResolveRewardNpc(
+    const DungeonQuest::QuestNpcAnchor& rewardNpc,
+    const RewardNpcResolveOptions& options = {});
 BossRewardResult ExecuteBossRewardSequence(
     DungeonInteractions::OpenedChestTracker& tracker,
     const DungeonQuest::QuestNpcAnchor& rewardNpc,

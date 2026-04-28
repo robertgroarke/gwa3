@@ -1,6 +1,7 @@
 #include <gwa3/dungeon/DungeonQuestRuntime.h>
 
 #include <gwa3/dungeon/DungeonBundle.h>
+#include <gwa3/dungeon/DungeonDiagnostics.h>
 #include <gwa3/dungeon/DungeonDialog.h>
 #include <gwa3/dungeon/DungeonInteractions.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
@@ -273,6 +274,110 @@ RewardClaimResult TryClaimReward(
 
     if (options.allow_dialog_without_npc) {
         result.dialog_sent = SendDialogPlan(plan, options.execution);
+    }
+    return result;
+}
+
+RewardNpcStageResult StageRewardNpcInteraction(
+    const DungeonQuest::QuestNpcAnchor& rewardNpc,
+    const RewardNpcStageOptions& options) {
+    RewardNpcStageResult result = {};
+    const char* prefix = options.log_prefix != nullptr ? options.log_prefix : "DungeonQuestRuntime";
+    DungeonNavigation::LoggedMoveOptions moveOptions;
+    moveOptions.log_prefix = prefix;
+    moveOptions.is_dead = options.is_dead;
+    result.reached = DungeonNavigation::MoveToAndWaitLogged(
+        rewardNpc.x,
+        rewardNpc.y,
+        options.move_threshold,
+        moveOptions);
+    if (!result.reached) {
+        Log::Warn("%s: Boss reward staging failed to reach target before reward interaction", prefix);
+        return result;
+    }
+
+    DungeonNavigation::WaitForLocalPositionSettle(
+        options.settle_timeout_ms,
+        options.settle_distance);
+    auto* me = AgentMgr::GetMyAgent();
+    result.player_x = me ? me->x : 0.0f;
+    result.player_y = me ? me->y : 0.0f;
+    result.distance_to_anchor = me
+        ? AgentMgr::GetDistance(me->x, me->y, rewardNpc.x, rewardNpc.y)
+        : -1.0f;
+    result.map_id = MapMgr::GetMapId();
+    result.map_loaded = MapMgr::GetIsMapLoaded();
+
+    Log::Info("%s: Boss reward staging player=(%.0f, %.0f) target=(%.0f, %.0f) dist=%.0f map=%u loaded=%d",
+              prefix,
+              result.player_x,
+              result.player_y,
+              rewardNpc.x,
+              rewardNpc.y,
+              result.distance_to_anchor,
+              result.map_id,
+              result.map_loaded ? 1 : 0);
+    return result;
+}
+
+RewardNpcResolveResult ResolveRewardNpc(
+    const DungeonQuest::QuestNpcAnchor& rewardNpc,
+    const RewardNpcResolveOptions& options) {
+    RewardNpcResolveResult result = {};
+    const char* label = options.label != nullptr ? options.label : "Boss reward";
+
+    DungeonDiagnostics::NearbyNpcCandidate rewardCandidates[8] = {};
+    const std::size_t rewardCandidateCount = DungeonDiagnostics::CollectNearbyNpcCandidates(
+        rewardNpc.x,
+        rewardNpc.y,
+        rewardNpc.search_radius,
+        rewardCandidates,
+        sizeof(rewardCandidates) / sizeof(rewardCandidates[0]));
+    DungeonDiagnostics::LogNearbyNpcCandidates(
+        label,
+        rewardNpc.x,
+        rewardNpc.y,
+        rewardNpc.search_radius,
+        rewardCandidates,
+        rewardCandidateCount);
+
+    if (rewardCandidateCount > 0u) {
+        result.npc_id = rewardCandidates[0].agentId;
+        result.found_at_anchor = true;
+        return result;
+    }
+
+    result.npc_id = DungeonInteractions::FindNearestNpc(
+        rewardNpc.x,
+        rewardNpc.y,
+        rewardNpc.search_radius);
+    if (result.npc_id != 0u) {
+        result.found_at_anchor = true;
+        return result;
+    }
+
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me || options.local_search_radius <= 0.0f) {
+        return result;
+    }
+
+    DungeonDiagnostics::NearbyNpcCandidate localCandidates[8] = {};
+    const std::size_t localCandidateCount = DungeonDiagnostics::CollectNearbyNpcCandidates(
+        me->x,
+        me->y,
+        options.local_search_radius,
+        localCandidates,
+        sizeof(localCandidates) / sizeof(localCandidates[0]));
+    DungeonDiagnostics::LogNearbyNpcCandidates(
+        "Boss reward local",
+        me->x,
+        me->y,
+        options.local_search_radius,
+        localCandidates,
+        localCandidateCount);
+    if (localCandidateCount > 0u) {
+        result.npc_id = localCandidates[0].agentId;
+        result.found_near_player = true;
     }
     return result;
 }

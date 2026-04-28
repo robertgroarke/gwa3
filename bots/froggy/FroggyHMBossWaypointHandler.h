@@ -1,6 +1,5 @@
 // Froggy Bogroot boss waypoint handler. Included by FroggyHM.cpp before waypoint traversal.
 
-#include "FroggyHMBossChestSupport.h"
 #include "FroggyHMBossDialogHelpers.h"
 #include "FroggyHMBossDialogSupport.h"
 #include "FroggyHMBossPostRewardSupport.h"
@@ -12,15 +11,45 @@ static void HandleBossWaypoint(const Waypoint& wp) {
     PickupNearbyLoot(BOSS_WAYPOINT_LOOT_RADIUS);
 
     // AutoIt does GetNearestSignpostToCoords + GoToSignpost twice here.
-    if (!HandleBossChestLoot()) {
+    DungeonLoot::BossChestLootOptions chestOptions;
+    chestOptions.log_prefix = "Froggy";
+    chestOptions.first_loot_delay_ms = BOSS_CHEST_FIRST_LOOT_DELAY_MS;
+    chestOptions.retry_loot_delay_ms = BOSS_CHEST_RETRY_LOOT_DELAY_MS;
+    const auto chestResult = DungeonLoot::OpenBossChestAndLoot(
+        BOSS_CHEST_X,
+        BOSS_CHEST_Y,
+        BOSS_CHEST_OPEN_RADIUS,
+        BOSS_CHEST_LOOT_RADIUS,
+        &MoveToAndWait,
+        &OpenChestAt,
+        &PickupNearbyLoot,
+        &DungeonRuntime::WaitMs,
+        chestOptions);
+    s_dungeonLoopTelemetry.chest_attempts += chestResult.open_attempts;
+    s_dungeonLoopTelemetry.chest_successes += chestResult.open_successes;
+    if (!chestResult.completed) {
         return;
     }
 
-    if (!StageBossRewardInteraction()) {
+    DungeonQuestRuntime::RewardNpcStageOptions stageOptions;
+    stageOptions.log_prefix = "Froggy";
+    stageOptions.settle_timeout_ms = BOSS_REWARD_SETTLE_TIMEOUT_MS;
+    stageOptions.settle_distance = BOSS_REWARD_SETTLE_DISTANCE;
+    stageOptions.is_dead = &IsDead;
+    const auto stageResult = DungeonQuestRuntime::StageRewardNpcInteraction(
+        GetRewardNpcAnchor(),
+        stageOptions);
+    if (!stageResult.reached) {
         return;
     }
+    s_dungeonLoopTelemetry.reward_attempted = true;
 
-    const uint32_t tekksId = FindBossRewardNpc();
+    DungeonQuestRuntime::RewardNpcResolveOptions resolveOptions;
+    resolveOptions.local_search_radius = BOSS_REWARD_LOCAL_NPC_SEARCH_RADIUS;
+    resolveOptions.log_prefix = "Froggy";
+    const uint32_t tekksId = DungeonQuestRuntime::ResolveRewardNpc(
+        GetRewardNpcAnchor(),
+        resolveOptions).npc_id;
     if (tekksId) {
         AcceptBossRewardFromNpc(tekksId);
     } else {
