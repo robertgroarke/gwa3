@@ -641,6 +641,11 @@ bool AcquireBossKey(const BossKeyAcquireOptions& options) {
               nearbyKeys,
               meX,
               meY);
+    const uint32_t finalFreeSlots = DungeonInventory::CountFreeSlots();
+    if (nearbyKeys > 0u && finalFreeSlots == 0u) {
+        Log::Warn("%s: AcquireBossKey failed because inventory is full; refusing door-open validation", prefix);
+        return false;
+    }
     if (nearbyKeys > 0u && options.open_door_at) {
         Log::Info("%s: AcquireBossKey attempting door-open validation despite persistent key agent", prefix);
         if (options.open_door_at(options.boss_door_x, options.boss_door_y)) {
@@ -854,6 +859,56 @@ bool OpenChestAt(float chestX,
         wait_ms,
         is_dead,
         options.resolved);
+}
+
+BossChestLootResult OpenBossChestAndLoot(
+    float chestX,
+    float chestY,
+    float searchRadius,
+    float lootRadius,
+    MoveToPointResultFn move_to_point,
+    OpenChestAtFn open_chest_at,
+    PickupNearbyLootFn pickup_nearby_loot,
+    WaitFn wait_ms,
+    const BossChestLootOptions& options) {
+    BossChestLootResult result = {};
+    const char* prefix = options.log_prefix != nullptr ? options.log_prefix : "DungeonLoot";
+    if (move_to_point == nullptr || open_chest_at == nullptr || pickup_nearby_loot == nullptr) {
+        Log::Warn("%s: Boss chest loot missing required callbacks", prefix);
+        return result;
+    }
+
+    result.staged = move_to_point(chestX, chestY, options.stage_move_threshold);
+    if (!result.staged) {
+        Log::Warn("%s: Boss chest staging failed target=(%.0f, %.0f)", prefix, chestX, chestY);
+        return result;
+    }
+
+    const int attempts = options.open_attempts > 0 ? options.open_attempts : 1;
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        ++result.open_attempts;
+        if (open_chest_at(chestX, chestY, searchRadius)) {
+            ++result.open_successes;
+        }
+
+        const uint32_t delayMs = attempt == 0
+            ? options.first_loot_delay_ms
+            : options.retry_loot_delay_ms;
+        if (wait_ms != nullptr && delayMs > 0u) {
+            wait_ms(delayMs);
+        }
+        result.picked_loot_count += pickup_nearby_loot(lootRadius);
+    }
+
+    result.completed = true;
+    Log::Info("%s: Boss chest loot completed target=(%.0f, %.0f) attempts=%u successes=%u picked=%d",
+              prefix,
+              chestX,
+              chestY,
+              result.open_attempts,
+              result.open_successes,
+              result.picked_loot_count);
+    return result;
 }
 
 } // namespace GWA3::DungeonLoot

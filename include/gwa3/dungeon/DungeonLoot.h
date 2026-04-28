@@ -25,9 +25,11 @@ inline constexpr uint8_t TYPE_BUNDLE = 6u;
 using WaitFn = void(*)(uint32_t ms);
 using BoolFn = bool(*)();
 using MoveToPointFn = void(*)(float x, float y, float threshold);
+using MoveToPointResultFn = bool(*)(float x, float y, float threshold);
 using CombatMoveToFn = void(*)(float x, float y, float fightRange);
 using PickupNearbyLootFn = int(*)(float maxRange);
 using OpenDoorAtFn = bool(*)(float x, float y);
+using OpenChestAtFn = bool(*)(float x, float y, float searchRadius);
 using ChestBundleOpenFn = bool(*)(float chestX, float chestY, float searchRadius);
 using SignpostScanLogFn = void(*)(float x, float y, float maxDist, const char* label, bool chestOnly);
 using BossKeyItemPredicateFn = bool(*)(const Item* item);
@@ -72,6 +74,22 @@ struct ChestAtOpenOptions {
     SignpostScanLogFn signpost_scan_log = nullptr;
     ChestOpenOptions nearby = {};
     ResolvedChestOpenOptions resolved = {};
+};
+
+struct BossChestLootOptions {
+    float stage_move_threshold = 250.0f;
+    int open_attempts = 2;
+    uint32_t first_loot_delay_ms = 2000u;
+    uint32_t retry_loot_delay_ms = 1000u;
+    const char* log_prefix = nullptr;
+};
+
+struct BossChestLootResult {
+    bool staged = false;
+    bool completed = false;
+    uint32_t open_attempts = 0u;
+    uint32_t open_successes = 0u;
+    int picked_loot_count = 0;
 };
 
 struct BossKeyPickupOptions {
@@ -176,5 +194,15 @@ bool OpenChestAt(float chestX,
                  WaitFn wait_ms = nullptr,
                  BoolFn is_dead = nullptr,
                  const ChestAtOpenOptions& options = {});
+BossChestLootResult OpenBossChestAndLoot(
+    float chestX,
+    float chestY,
+    float searchRadius,
+    float lootRadius,
+    MoveToPointResultFn move_to_point,
+    OpenChestAtFn open_chest_at,
+    PickupNearbyLootFn pickup_nearby_loot,
+    WaitFn wait_ms = nullptr,
+    const BossChestLootOptions& options = {});
 
 } // namespace GWA3::DungeonLoot

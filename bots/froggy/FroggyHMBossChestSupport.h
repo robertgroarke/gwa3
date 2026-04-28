@@ -1,25 +1,23 @@
 // Froggy boss chest staging and reward NPC discovery helpers. Included by FroggyHMBossWaypointHandler.h.
 
 static bool HandleBossChestLoot() {
-    const bool chestStageReached = MoveToAndWait(BOSS_CHEST_X, BOSS_CHEST_Y);
-    if (!chestStageReached) {
-        Log::Warn("Froggy: Boss chest staging failed to reach target before chest interaction");
-        return false;
-    }
-    ++s_dungeonLoopTelemetry.chest_attempts;
-    if (OpenChestAt(BOSS_CHEST_X, BOSS_CHEST_Y, BOSS_CHEST_OPEN_RADIUS)) {
-        ++s_dungeonLoopTelemetry.chest_successes;
-    }
-    WaitMs(BOSS_CHEST_FIRST_LOOT_DELAY_MS);
-    PickupNearbyLoot(BOSS_CHEST_LOOT_RADIUS);
-
-    ++s_dungeonLoopTelemetry.chest_attempts;
-    if (OpenChestAt(BOSS_CHEST_X, BOSS_CHEST_Y, BOSS_CHEST_OPEN_RADIUS)) {
-        ++s_dungeonLoopTelemetry.chest_successes;
-    }
-    WaitMs(BOSS_CHEST_RETRY_LOOT_DELAY_MS);
-    PickupNearbyLoot(BOSS_CHEST_LOOT_RADIUS);
-    return true;
+    DungeonLoot::BossChestLootOptions options;
+    options.log_prefix = "Froggy";
+    options.first_loot_delay_ms = BOSS_CHEST_FIRST_LOOT_DELAY_MS;
+    options.retry_loot_delay_ms = BOSS_CHEST_RETRY_LOOT_DELAY_MS;
+    const auto result = DungeonLoot::OpenBossChestAndLoot(
+        BOSS_CHEST_X,
+        BOSS_CHEST_Y,
+        BOSS_CHEST_OPEN_RADIUS,
+        BOSS_CHEST_LOOT_RADIUS,
+        &MoveToAndWait,
+        &OpenChestAt,
+        &PickupNearbyLoot,
+        &DungeonRuntime::WaitMs,
+        options);
+    s_dungeonLoopTelemetry.chest_attempts += result.open_attempts;
+    s_dungeonLoopTelemetry.chest_successes += result.open_successes;
+    return result.completed;
 }
 
 static bool StageBossRewardInteraction() {
