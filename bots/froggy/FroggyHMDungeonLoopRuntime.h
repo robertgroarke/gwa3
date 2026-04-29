@@ -13,105 +13,110 @@ DungeonLoopTelemetry GetDungeonLoopTelemetry() {
     return s_dungeonLoopTelemetry;
 }
 
-static bool RunDungeonLoopFromCurrentMap() {
-    ResetDungeonLoopTelemetry();
+static bool PrepareTekksDungeonEntryForLoop(const char*) {
+    return PrepareTekksDungeonEntry();
+}
 
-    // Level 1 can occasionally bounce back to Sparkfly at the quest-door
-    // checkpoint before the route reaches level 2. Treat that as a refreshable
-    // entry failure for a few passes instead of terminating the loop
-    // immediately on the second return-to-Sparkfly observation.
-    constexpr int kMaxSparkflyRefreshRetriesBeforeLvl2 = 3;
-    int refreshRetries = 0;
-    while (true) {
-        const uint32_t mapId = MapMgr::GetMapId();
-        Log::Info("Froggy: Bogroot loop iteration map=%u refreshRetries=%d enteredLvl2=%d finalMap=%u",
-                  mapId,
-                  refreshRetries,
-                  s_dungeonLoopTelemetry.entered_lvl2 ? 1 : 0,
-                  s_dungeonLoopTelemetry.final_map_id);
-        if (mapId == MapIds::BOGROOT_GROWTHS_LVL1) {
-            s_dungeonLoopTelemetry.started_in_lvl1 = true;
-            FollowWaypoints(BOGROOT_LVL1, BOGROOT_LVL1_COUNT, true);
-            Log::Info("Froggy: Bogroot loop after lvl1 map=%u lastWp=%u(%s) returnedToSparkfly=%d",
-                      MapMgr::GetMapId(),
-                      s_dungeonLoopTelemetry.last_waypoint_index,
-                      s_dungeonLoopTelemetry.last_waypoint_label,
-                      s_dungeonLoopTelemetry.returned_to_sparkfly ? 1 : 0);
-        } else if (mapId == MapIds::BOGROOT_GROWTHS_LVL2) {
-            s_dungeonLoopTelemetry.started_in_lvl2 = true;
-        } else if (mapId == MapIds::SPARKFLY_SWAMP &&
-                   !s_dungeonLoopTelemetry.entered_lvl2 &&
-                   refreshRetries < kMaxSparkflyRefreshRetriesBeforeLvl2) {
-            ++refreshRetries;
-            Log::Info("Froggy: Bogroot loop refreshing via Sparkfly retry=%d", refreshRetries);
-            if (!PrepareTekksDungeonEntry()) {
-                Log::Info("Froggy: Bogroot loop refresh aborted because PrepareTekksDungeonEntry failed");
-                (void)RecordTekksQuestEntryFailureAndMaybeResetDialog("bogroot-loop-refresh");
-                s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
-                s_dungeonLoopTelemetry.returned_to_sparkfly =
-                    s_dungeonLoopTelemetry.final_map_id == MapIds::SPARKFLY_SWAMP;
-                return false;
-            }
-            ResetTekksQuestEntryFailures("bogroot-loop-refresh-prepared");
-            if (!EnterBogrootFromSparkfly()) {
-                Log::Info("Froggy: Bogroot loop refresh aborted because EnterBogrootFromSparkfly failed");
-                s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
-                s_dungeonLoopTelemetry.returned_to_sparkfly =
-                    s_dungeonLoopTelemetry.final_map_id == MapIds::SPARKFLY_SWAMP;
-                return false;
-            }
-            continue;
-        } else if (mapId == MapIds::SPARKFLY_SWAMP && !s_dungeonLoopTelemetry.entered_lvl2) {
-            s_dungeonLoopTelemetry.final_map_id = mapId;
-            s_dungeonLoopTelemetry.returned_to_sparkfly = true;
-            Log::Info("Froggy: Bogroot loop exhausted Sparkfly refresh retries before level 2 retryLimit=%d",
-                      kMaxSparkflyRefreshRetriesBeforeLvl2);
-            return false;
-        } else if (mapId == MapIds::SPARKFLY_SWAMP && s_dungeonLoopTelemetry.entered_lvl2) {
-            s_dungeonLoopTelemetry.final_map_id = mapId;
-            s_dungeonLoopTelemetry.returned_to_sparkfly = true;
-            Log::Info("Froggy: Bogroot loop completed with Sparkfly return after level 2");
-            return true;
-        } else {
-            s_dungeonLoopTelemetry.final_map_id = mapId;
-            Log::Info("Froggy: Bogroot loop exiting on unsupported map=%u", mapId);
-            return false;
-        }
+static bool EnterBogrootFromSparkflyForLoop(const char*) {
+    return EnterBogrootFromSparkfly();
+}
 
-        if (MapMgr::GetMapId() == MapIds::BOGROOT_GROWTHS_LVL2) {
-            s_dungeonLoopTelemetry.started_in_lvl2 = true;
-            const bool lvl2Ready = WaitForBogrootLvl2SpawnReady(10000);
-            auto* me = AgentMgr::GetMyAgent();
-            Log::Info("Froggy: Bogroot lvl2 route gate ready=%d player=(%.0f, %.0f) nearestLvl2Wp=%d",
-                      lvl2Ready ? 1 : 0,
-                      me ? me->x : 0.0f,
-                      me ? me->y : 0.0f,
-                      DungeonNavigation::GetNearestWaypointIndex(BOGROOT_LVL2, BOGROOT_LVL2_COUNT));
-            WaitForLocalPositionSettle(1500, 24.0f);
-            FollowWaypoints(BOGROOT_LVL2, BOGROOT_LVL2_COUNT, true);
-            Log::Info("Froggy: Bogroot loop after lvl2 map=%u bossStarted=%d bossCompleted=%d",
-                      MapMgr::GetMapId(),
-                      s_dungeonLoopTelemetry.boss_started ? 1 : 0,
-                      s_dungeonLoopTelemetry.boss_completed ? 1 : 0);
-        }
+static bool RecordTekksQuestEntryFailureForLoop(const char* context) {
+    return RecordTekksQuestEntryFailureAndMaybeResetDialog(context);
+}
 
-        if (MapMgr::GetMapId() != MapIds::SPARKFLY_SWAMP) {
-            if (MapMgr::GetMapId() == MapIds::GADDS_ENCAMPMENT &&
-                s_dungeonLoopTelemetry.entered_lvl2 &&
-                s_dungeonLoopTelemetry.boss_completed) {
-                Log::Info("Froggy: Bogroot loop completed with Gadd's return after level 2");
-                s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
-                return true;
-            }
-            Log::Info("Froggy: Bogroot loop terminating because map=%u (expected Sparkfly for successful return)",
-                      MapMgr::GetMapId());
-            break;
-        }
+static bool ResetTekksQuestEntryFailuresForLoop(const char* context) {
+    ResetTekksQuestEntryFailures(context);
+    return true;
+}
+
+static bool HasReachedBogrootLvl2ForLoop() {
+    return s_dungeonLoopTelemetry.entered_lvl2;
+}
+
+static bool HasCompletedBogrootObjectiveForLoop() {
+    return s_dungeonLoopTelemetry.boss_completed;
+}
+
+static void MarkBogrootLevelStartedForLoop(int levelIndex) {
+    if (levelIndex == 0) {
+        s_dungeonLoopTelemetry.started_in_lvl1 = true;
+    } else if (levelIndex == 1) {
+        s_dungeonLoopTelemetry.started_in_lvl2 = true;
     }
+}
 
-    s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
+static void MarkBogrootProgressLevelReachedForLoop(int levelIndex) {
+    if (levelIndex >= 1) {
+        s_dungeonLoopTelemetry.entered_lvl2 = true;
+    }
+}
+
+static void LogBogrootLevelRouteResultForLoop(
+    int levelIndex,
+    const DungeonRouteRunner::RouteRunResult&) {
+    if (levelIndex == 0) {
+        Log::Info("Froggy: Bogroot loop after lvl1 map=%u lastWp=%u(%s) returnedToSparkfly=%d",
+                  MapMgr::GetMapId(),
+                  s_dungeonLoopTelemetry.last_waypoint_index,
+                  s_dungeonLoopTelemetry.last_waypoint_label,
+                  s_dungeonLoopTelemetry.returned_to_sparkfly ? 1 : 0);
+    } else if (levelIndex == 1) {
+        Log::Info("Froggy: Bogroot loop after lvl2 map=%u bossStarted=%d bossCompleted=%d",
+                  MapMgr::GetMapId(),
+                  s_dungeonLoopTelemetry.boss_started ? 1 : 0,
+                  s_dungeonLoopTelemetry.boss_completed ? 1 : 0);
+    }
+}
+
+static bool RunDungeonLoopFromCurrentMap() {
+    DungeonRouteRunner::DungeonLoopLevel levels[2] = {};
+    levels[0].map_id = MapIds::BOGROOT_GROWTHS_LVL1;
+    levels[0].waypoints = BOGROOT_LVL1;
+    levels[0].waypoint_count = BOGROOT_LVL1_COUNT;
+    levels[0].name = "Bogroot Level 1";
+    levels[1].map_id = MapIds::BOGROOT_GROWTHS_LVL2;
+    levels[1].waypoints = BOGROOT_LVL2;
+    levels[1].waypoint_count = BOGROOT_LVL2_COUNT;
+    levels[1].name = "Bogroot Level 2";
+    levels[1].spawn_stale_anchor = {BOGROOT_LVL1_TO_LVL2_PORTAL.x, BOGROOT_LVL1_TO_LVL2_PORTAL.y};
+    levels[1].spawn_stale_anchor_clearance = BOGROOT_LVL1_TO_LVL2_HANDOFF_CLEARANCE;
+    levels[1].spawn_ready_timeout_ms = 10000u;
+    levels[1].spawn_ready_poll_ms = 200u;
+    levels[1].spawn_settle_timeout_ms = 1500u;
+    levels[1].spawn_settle_distance = 24.0f;
+
+    DungeonRouteRunner::DungeonLoopCallbacks callbacks = {};
+    callbacks.get_map_id = &MapMgr::GetMapId;
+    callbacks.follow_waypoints = &FollowWaypoints;
+    callbacks.is_loop_objective_completed = &HasCompletedBogrootObjectiveForLoop;
+    callbacks.is_progress_level_reached = &HasReachedBogrootLvl2ForLoop;
+    callbacks.reset_loop_state = &ResetDungeonLoopTelemetry;
+    callbacks.prepare_entry = &PrepareTekksDungeonEntryForLoop;
+    callbacks.enter_dungeon = &EnterBogrootFromSparkflyForLoop;
+    callbacks.record_entry_failure = &RecordTekksQuestEntryFailureForLoop;
+    callbacks.reset_entry_failures = &ResetTekksQuestEntryFailuresForLoop;
+    callbacks.on_level_started = &MarkBogrootLevelStartedForLoop;
+    callbacks.on_progress_level_reached = &MarkBogrootProgressLevelReachedForLoop;
+    callbacks.after_level_route = &LogBogrootLevelRouteResultForLoop;
+
+    DungeonRouteRunner::DungeonLoopOptions options = {};
+    options.levels = levels;
+    options.level_count = static_cast<int>(sizeof(levels) / sizeof(levels[0]));
+    options.progress_level_index = 1;
+    options.entry_map_id = MapIds::SPARKFLY_SWAMP;
+    options.fallback_completion_map_id = MapIds::GADDS_ENCAMPMENT;
+    options.max_entry_refresh_retries_before_progress = 3;
+    options.ignore_bot_running_for_routes = true;
+    options.log_prefix = "Froggy";
+    options.loop_name = "Bogroot";
+    options.entry_refresh_context = "bogroot-loop-refresh";
+
+    const auto result = DungeonRouteRunner::RunDungeonLoop(callbacks, options);
+    s_dungeonLoopTelemetry.final_map_id = result.final_map_id;
     s_dungeonLoopTelemetry.last_dialog_id = DialogMgr::GetLastDialogId();
     s_dungeonLoopTelemetry.returned_to_sparkfly =
+        result.returned_to_entry_map &&
         s_dungeonLoopTelemetry.final_map_id == MapIds::SPARKFLY_SWAMP;
-    return s_dungeonLoopTelemetry.returned_to_sparkfly && s_dungeonLoopTelemetry.entered_lvl2;
+    return result.completed;
 }

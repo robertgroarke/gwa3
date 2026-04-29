@@ -2,6 +2,8 @@
 
 #include <gwa3/core/Log.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
+#include <gwa3/dungeon/DungeonRuntime.h>
+#include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/MapMgr.h>
 
 #include <cstring>
@@ -24,6 +26,73 @@ bool IsDead(const RouteRunCallbacks& callbacks) {
 
 bool IsRouteMap(uint32_t map_id, const RouteRunCallbacks& callbacks) {
     return callbacks.is_route_map ? callbacks.is_route_map(map_id) : false;
+}
+
+uint32_t CurrentLoopMapId(const DungeonLoopCallbacks& callbacks) {
+    return callbacks.get_map_id ? callbacks.get_map_id() : MapMgr::GetMapId();
+}
+
+const char* LoopPrefix(const DungeonLoopOptions& options) {
+    return options.log_prefix ? options.log_prefix : "Dungeon";
+}
+
+const char* LoopName(const DungeonLoopOptions& options) {
+    return options.loop_name ? options.loop_name : "Dungeon";
+}
+
+int FindLoopLevelIndex(uint32_t map_id, const DungeonLoopOptions& options) {
+    if (options.levels == nullptr || options.level_count <= 0) return -1;
+    for (int i = 0; i < options.level_count; ++i) {
+        if (options.levels[i].map_id == map_id) return i;
+    }
+    return -1;
+}
+
+bool HasReachedProgressLevel(const DungeonLoopCallbacks& callbacks, const DungeonLoopResult& result) {
+    return result.reached_progress_level ||
+           (callbacks.is_progress_level_reached && callbacks.is_progress_level_reached());
+}
+
+bool IsLoopObjectiveCompleted(const DungeonLoopCallbacks& callbacks) {
+    return callbacks.is_loop_objective_completed && callbacks.is_loop_objective_completed();
+}
+
+void MarkProgressLevelReached(
+    int level_index,
+    const DungeonLoopCallbacks& callbacks,
+    DungeonLoopResult& result,
+    const DungeonLoopOptions& options) {
+    if (level_index < options.progress_level_index || result.reached_progress_level) return;
+    result.reached_progress_level = true;
+    if (callbacks.on_progress_level_reached) {
+        callbacks.on_progress_level_reached(level_index);
+    }
+}
+
+void WaitForLoopLevelSpawnGate(
+    int level_index,
+    const DungeonLoopLevel& level,
+    const DungeonLoopOptions& options) {
+    if (level.spawn_ready_timeout_ms == 0u) return;
+    const bool ready = DungeonRuntime::WaitForLevelSpawnReady(
+        level.map_id,
+        level.spawn_stale_anchor,
+        level.spawn_stale_anchor_clearance,
+        level.spawn_ready_timeout_ms,
+        level.spawn_ready_poll_ms);
+    auto* me = AgentMgr::GetMyAgent();
+    Log::Info("%s: %s level %d spawn gate ready=%d player=(%.0f, %.0f)",
+              LoopPrefix(options),
+              LoopName(options),
+              level_index,
+              ready ? 1 : 0,
+              me ? me->x : 0.0f,
+              me ? me->y : 0.0f);
+    if (level.spawn_settle_timeout_ms > 0u && level.spawn_settle_distance > 0.0f) {
+        DungeonNavigation::WaitForLocalPositionSettle(
+            level.spawn_settle_timeout_ms,
+            level.spawn_settle_distance);
+    }
 }
 
 int ResolveStartIndex(const DungeonRoute::Waypoint* waypoints,
@@ -163,6 +232,161 @@ RouteRunResult RunWaypointRoute(
 
     result.completed = true;
     return result;
+}
+
+DungeonLoopResult RunDungeonLoop(
+    const DungeonLoopCallbacks& callbacks,
+    const DungeonLoopOptions& options) {
+    DungeonLoopResult result;
+    if (options.levels == nullptr || options.level_count <= 0 ||
+        options.entry_map_id == 0u || callbacks.follow_waypoints == nullptr) {
+        result.final_map_id = CurrentLoopMapId(callbacks);
+        result.unsupported_map = true;
+        return result;
+    }
+
+    if (callbacks.reset_loop_state) {
+        callbacks.reset_loop_state();
+    }
+
+    int refresh_retries = 0;
+    while (true) {
+        const uint32_t map_id = CurrentLoopMapId(callbacks);
+        result.final_map_id = map_id;
+        result.entry_refresh_retries = refresh_retries;
+        result.objective_completed = IsLoopObjectiveCompleted(callbacks);
+        const int level_index = FindLoopLevelIndex(map_id, options);
+        if (level_index >= 0) {
+            result.last_level_index = level_index;
+            if (callbacks.on_level_started) {
+                callbacks.on_level_started(level_index);
+            }
+            MarkProgressLevelReached(level_index, callbacks, result, options);
+        }
+
+        Log::Info("%s: %s loop iteration map=%u refreshRetries=%d reachedProgress=%d finalMap=%u",
+                  LoopPrefix(options),
+                  LoopName(options),
+                  map_id,
+                  refresh_retries,
+                  HasReachedProgressLevel(callbacks, result) ? 1 : 0,
+                  result.final_map_id);
+
+        if (level_index >= 0) {
+            const auto& level = options.levels[level_index];
+            WaitForLoopLevelSpawnGate(level_index, level, options);
+            callbacks.follow_waypoints(
+                level.waypoints,
+                level.waypoint_count,
+                options.ignore_bot_running_for_routes);
+            result.final_map_id = CurrentLoopMapId(callbacks);
+            result.objective_completed = IsLoopObjectiveCompleted(callbacks);
+            MarkProgressLevelReached(FindLoopLevelIndex(result.final_map_id, options), callbacks, result, options);
+
+            if (callbacks.after_level_route) {
+                RouteRunResult route_result = {};
+                route_result.final_index = level.waypoint_count > 0 ? level.waypoint_count - 1 : -1;
+                route_result.completed = result.final_map_id == map_id;
+                route_result.map_changed = result.final_map_id != map_id;
+                route_result.stopped = !route_result.completed;
+                callbacks.after_level_route(level_index, route_result);
+            }
+        } else if (map_id == options.entry_map_id && !HasReachedProgressLevel(callbacks, result)) {
+            if (refresh_retries < options.max_entry_refresh_retries_before_progress) {
+                ++refresh_retries;
+                Log::Info("%s: %s loop refreshing via entry map retry=%d",
+                          LoopPrefix(options),
+                          LoopName(options),
+                          refresh_retries);
+                const char* context = options.entry_refresh_context
+                    ? options.entry_refresh_context
+                    : "dungeon-loop-refresh";
+                if (!callbacks.prepare_entry || !callbacks.prepare_entry(context)) {
+                    Log::Info("%s: %s loop refresh aborted because prepare_entry failed",
+                              LoopPrefix(options),
+                              LoopName(options));
+                    if (callbacks.record_entry_failure) {
+                        (void)callbacks.record_entry_failure(context);
+                    }
+                    result.final_map_id = CurrentLoopMapId(callbacks);
+                    result.returned_to_entry_map = result.final_map_id == options.entry_map_id;
+                    return result;
+                }
+                if (callbacks.reset_entry_failures) {
+                    (void)callbacks.reset_entry_failures(context);
+                }
+                if (!callbacks.enter_dungeon || !callbacks.enter_dungeon(context)) {
+                    Log::Info("%s: %s loop refresh aborted because enter_dungeon failed",
+                              LoopPrefix(options),
+                              LoopName(options));
+                    result.final_map_id = CurrentLoopMapId(callbacks);
+                    result.returned_to_entry_map = result.final_map_id == options.entry_map_id;
+                    return result;
+                }
+                continue;
+            }
+
+            result.entry_refresh_exhausted = true;
+            result.returned_to_entry_map = true;
+            result.final_map_id = map_id;
+            Log::Info("%s: %s loop exhausted entry refresh retries before progress retryLimit=%d",
+                      LoopPrefix(options),
+                      LoopName(options),
+                      options.max_entry_refresh_retries_before_progress);
+            return result;
+        } else if (map_id == options.entry_map_id && HasReachedProgressLevel(callbacks, result)) {
+            result.completed = true;
+            result.returned_to_entry_map = true;
+            result.final_map_id = map_id;
+            Log::Info("%s: %s loop completed with entry-map return after progress", LoopPrefix(options), LoopName(options));
+            return result;
+        } else {
+            result.unsupported_map = true;
+            Log::Info("%s: %s loop exiting on unsupported map=%u", LoopPrefix(options), LoopName(options), map_id);
+            return result;
+        }
+
+        result.final_map_id = CurrentLoopMapId(callbacks);
+        result.objective_completed = IsLoopObjectiveCompleted(callbacks);
+        const int next_level_index = FindLoopLevelIndex(result.final_map_id, options);
+        if (next_level_index >= 0) {
+            MarkProgressLevelReached(next_level_index, callbacks, result, options);
+            continue;
+        }
+
+        if (result.final_map_id == options.entry_map_id) {
+            result.returned_to_entry_map = true;
+            result.completed = HasReachedProgressLevel(callbacks, result);
+            if (result.completed) {
+                Log::Info("%s: %s loop completed with entry-map return after progress",
+                          LoopPrefix(options),
+                          LoopName(options));
+                return result;
+            }
+            continue;
+        }
+
+        if (options.fallback_completion_map_id != 0u &&
+            result.final_map_id == options.fallback_completion_map_id &&
+            HasReachedProgressLevel(callbacks, result) &&
+            result.objective_completed) {
+            result.completed = true;
+            result.completed_via_fallback_map = true;
+            Log::Info("%s: %s loop completed with fallback map=%u after progress",
+                      LoopPrefix(options),
+                      LoopName(options),
+                      result.final_map_id);
+            return result;
+        }
+
+        Log::Info("%s: %s loop terminating because map=%u (expected entry map=%u)",
+                  LoopPrefix(options),
+                  LoopName(options),
+                  result.final_map_id,
+                  options.entry_map_id);
+        result.unsupported_map = true;
+        return result;
+    }
 }
 
 } // namespace GWA3::DungeonRouteRunner
