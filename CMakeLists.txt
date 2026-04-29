@@ -108,6 +108,7 @@ add_library(gwa3_core OBJECT
     src/gwa3/dungeon/DungeonOutpostSetup.cpp
     src/gwa3/dungeon/DungeonQuest.cpp
     src/gwa3/dungeon/DungeonQuestRuntime.cpp
+    src/gwa3/dungeon/DungeonRouteRunner.cpp
     src/gwa3/dungeon/DungeonRuntime.cpp
     src/gwa3/dungeon/DungeonSkill.cpp
     src/gwa3/dungeon/DungeonVendor.cpp

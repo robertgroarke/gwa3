@@ -20,6 +20,7 @@
 #include <gwa3/dungeon/DungeonOutpostSetup.h>
 #include <gwa3/dungeon/DungeonQuestRuntime.h>
 #include <gwa3/dungeon/DungeonRoute.h>
+#include <gwa3/dungeon/DungeonRouteRunner.h>
 #include <gwa3/dungeon/DungeonRuntime.h>
 #include <gwa3/dungeon/DungeonSkill.h>
 #include <gwa3/dungeon/DungeonVendor.h>
@@ -108,7 +109,66 @@ static bool RefreshTekksQuestReadyForDungeonEntry(
 static void GrabDungeonBlessing(float shrineX, float shrineY); // forward decl
 static bool OpenDungeonDoorAt(float doorX, float doorY);       // forward decl
 #include "FroggyHMBossWaypointHandler.h"
-#include "FroggyHMWaypointTraversal.h"
+#include "FroggyHMWaypointSupport.h"
+#include "FroggyHMCheckpointReplay.h"
+#include "FroggyHMLvl2TransitionWaypoint.h"
+#include "FroggyHMWaypointLabelHandlers.h"
+
+static bool RecoverFromStandardWaypointWipe(const Waypoint* wps, int count, int currentIndex, int& outRestartIndex) {
+    return RecoverFromWaypointWipe(wps, count, currentIndex, WipeRecoveryContext::Standard, outRestartIndex);
+}
+
+static DungeonRouteRunner::WaypointHandlerResult HandleFroggySpecialWaypointForRouteRunner(
+    const Waypoint* wps,
+    int count,
+    int& waypointIndex) {
+    switch (HandleFroggySpecialWaypoint(wps, count, waypointIndex)) {
+    case FroggyWaypointHandlerResult::ContinueRoute:
+        return DungeonRouteRunner::WaypointHandlerResult::ContinueRoute;
+    case FroggyWaypointHandlerResult::StopRoute:
+        return DungeonRouteRunner::WaypointHandlerResult::StopRoute;
+    case FroggyWaypointHandlerResult::NotHandled:
+    default:
+        return DungeonRouteRunner::WaypointHandlerResult::NotHandled;
+    }
+}
+
+static void UpdateFroggyRouteTelemetry(int waypointIndex, const Waypoint& waypoint) {
+    s_dungeonLoopTelemetry.last_waypoint_index = static_cast<uint32_t>(waypointIndex);
+    s_dungeonLoopTelemetry.waypoint_iterations++;
+    strncpy_s(s_dungeonLoopTelemetry.last_waypoint_label,
+              waypoint.label ? waypoint.label : "",
+              _TRUNCATE);
+}
+
+static void LogFroggyRouteWaypoint(int waypointIndex, const Waypoint& waypoint) {
+    LogBot("Moving to waypoint %d: %s (%.0f, %.0f)",
+           waypointIndex,
+           waypoint.label ? waypoint.label : "",
+           waypoint.x,
+           waypoint.y);
+}
+
+static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunning = false) {
+    DungeonRouteRunner::RouteRunCallbacks callbacks;
+    callbacks.get_map_id = &MapMgr::GetMapId;
+    callbacks.is_bot_running = &Bot::IsRunning;
+    callbacks.is_dead = &IsDead;
+    callbacks.resolve_start_index = &GetFroggyRouteStartIndex;
+    callbacks.is_route_map = &IsBogrootRouteMap;
+    callbacks.log_waypoint_state = &LogFroggyWaypointState;
+    callbacks.recover_wipe = &RecoverFromStandardWaypointWipe;
+    callbacks.handle_special_waypoint = &HandleFroggySpecialWaypointForRouteRunner;
+    callbacks.move_standard_waypoint = &MoveFroggyRouteWaypointWithCombatLoot;
+    callbacks.update_telemetry = &UpdateFroggyRouteTelemetry;
+    callbacks.log_waypoint = &LogFroggyRouteWaypoint;
+
+    DungeonRouteRunner::RouteRunOptions options;
+    options.ignore_bot_running = ignoreBotRunning;
+    options.log_prefix = "Froggy";
+    options.route_name = "Bogroot";
+    (void)DungeonRouteRunner::RunWaypointRoute(wps, count, callbacks, options);
+}
 
 #include "FroggyHMTekksEntry.h"
 
