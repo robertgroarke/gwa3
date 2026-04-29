@@ -1,5 +1,6 @@
 #include <gwa3/dungeon/DungeonLoot.h>
 
+#include <gwa3/dungeon/DungeonBundle.h>
 #include <gwa3/dungeon/DungeonInteractions.h>
 #include <gwa3/dungeon/DungeonInventory.h>
 #include <gwa3/core/Log.h>
@@ -836,6 +837,10 @@ bool OpenChestAt(float chestX,
     if (options.bundle_open && options.bundle_open(chestX, chestY, searchRadius)) {
         return true;
     }
+    if (options.use_bundle_fallback &&
+        OpenChestWithBundleFallback(chestX, chestY, searchRadius, wait_ms, options.bundle_fallback)) {
+        return true;
+    }
 
     uint32_t chestId = ResolveChestAtTargetCoords(chestX, chestY, searchRadius, options);
     if (chestId == 0u && me) {
@@ -886,6 +891,45 @@ bool OpenChestAt(float chestX,
         wait_ms,
         is_dead,
         options.resolved);
+}
+
+bool OpenChestWithBundleFallback(float chestX,
+                                 float chestY,
+                                 float searchRadius,
+                                 WaitFn wait_ms,
+                                 const ChestBundleFallbackOptions& options) {
+    const char* prefix = options.log_prefix ? options.log_prefix : "DungeonLoot";
+    const float sharedSignpostRadius = MaxFloat(options.min_signpost_radius, searchRadius);
+    const float sharedLootRadius = MaxFloat(
+        options.min_loot_radius,
+        searchRadius * options.loot_radius_multiplier);
+    if (!DungeonBundle::OpenChestAndPickUpBundle(
+            chestX,
+            chestY,
+            sharedSignpostRadius,
+            sharedLootRadius,
+            options.open_attempts,
+            options.pickup_attempts,
+            options.open_retry_delay_ms,
+            options.pickup_retry_delay_ms)) {
+        return false;
+    }
+
+    CallWait(wait_ms, options.verify_delay_ms);
+    const bool chestStillPresent = DungeonInteractions::IsChestStillPresentNear(chestX, chestY, searchRadius);
+    Log::Info("%s: OpenChestWithBundleFallback succeeded target=(%.0f, %.0f) signpostRadius=%.0f lootRadius=%.0f chestStillPresent=%d",
+              prefix,
+              chestX,
+              chestY,
+              sharedSignpostRadius,
+              sharedLootRadius,
+              chestStillPresent ? 1 : 0);
+    if (!chestStillPresent) {
+        return true;
+    }
+
+    Log::Warn("%s: OpenChestWithBundleFallback reported success but chest still appears present", prefix);
+    return false;
 }
 
 BossChestLootResult OpenBossChestAndLoot(

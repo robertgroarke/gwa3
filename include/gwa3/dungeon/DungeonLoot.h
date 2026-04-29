@@ -70,12 +70,26 @@ struct ResolvedChestOpenOptions {
     LootPickupOptions loot = {};
 };
 
+struct ChestBundleFallbackOptions {
+    float min_signpost_radius = 1500.0f;
+    float min_loot_radius = 18000.0f;
+    float loot_radius_multiplier = 4.0f;
+    int open_attempts = 2;
+    int pickup_attempts = 3;
+    uint32_t open_retry_delay_ms = 500u;
+    uint32_t pickup_retry_delay_ms = 500u;
+    uint32_t verify_delay_ms = 500u;
+    const char* log_prefix = nullptr;
+};
+
 struct ChestAtOpenOptions {
     float live_player_search_radius_min = 20000.0f;
     float fallback_search_radius_min = 1500.0f;
     float search_radius_multiplier = 4.0f;
     const char* log_prefix = nullptr;
     ChestBundleOpenFn bundle_open = nullptr;
+    bool use_bundle_fallback = false;
+    ChestBundleFallbackOptions bundle_fallback = {};
     SignpostScanLogFn signpost_scan_log = nullptr;
     ChestOpenOptions nearby = {};
     ResolvedChestOpenOptions resolved = {};
@@ -202,6 +216,11 @@ bool OpenChestAt(float chestX,
                  WaitFn wait_ms = nullptr,
                  BoolFn is_dead = nullptr,
                  const ChestAtOpenOptions& options = {});
+bool OpenChestWithBundleFallback(float chestX,
+                                 float chestY,
+                                 float searchRadius,
+                                 WaitFn wait_ms = nullptr,
+                                 const ChestBundleFallbackOptions& options = {});
 BossChestLootResult OpenBossChestAndLoot(
     float chestX,
     float chestY,

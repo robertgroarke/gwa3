@@ -4,6 +4,7 @@
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/DialogMgr.h>
 #include <gwa3/managers/ItemMgr.h>
+#include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/QuestMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
@@ -674,6 +675,21 @@ bool DropHeldBundle(bool assumeBundleHeld, bool allowInventoryFallback) {
     return true;
 }
 
+void ResetOpenedChestTrackerForCurrentMap(OpenedChestTracker& tracker,
+                                          const char* reason,
+                                          const char* log_prefix) {
+    const uint32_t currentMapId = MapMgr::GetMapId();
+    if (tracker.count() > 0u || tracker.map_id() != currentMapId) {
+        Log::Info("%s: Reset opened chest tracker reason=%s previousMap=%u currentMap=%u previousCount=%u",
+                  log_prefix ? log_prefix : "DungeonInteractions",
+                  reason ? reason : "",
+                  tracker.map_id(),
+                  currentMapId,
+                  static_cast<uint32_t>(tracker.count()));
+    }
+    tracker.ResetForMap(currentMapId);
+}
+
 bool OpenDoorAt(float doorX,
                 float doorY,
                 float checkpointX,
@@ -758,6 +774,23 @@ bool OpenDoorAt(float doorX,
               me ? AgentMgr::GetDistance(me->x, me->y, checkpointX, checkpointY) : -1.0f);
     CallWait(wait_ms, options.post_open_delay_ms);
     return pushedThrough;
+}
+
+bool OpenDoorAtWithProbe(float doorX,
+                         float doorY,
+                         float probeX,
+                         float probeY,
+                         MoveToPointResultFn move_to_point,
+                         WaitFn wait_ms,
+                         const DoorOpenOptions& options) {
+    return OpenDoorAt(
+        doorX,
+        doorY,
+        probeX,
+        probeY,
+        move_to_point,
+        wait_ms,
+        options);
 }
 
 } // namespace GWA3::DungeonInteractions

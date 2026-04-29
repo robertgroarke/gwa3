@@ -127,6 +127,9 @@ CandidateDialogResult InteractCandidateAndSendDialog(
 DirectNpcInteractResult PulseDirectNpcInteract(uint32_t npcId, const DirectNpcInteractOptions& options = {});
 uint32_t GetHeldBundleItemId();
 bool DropHeldBundle(bool assumeBundleHeld = false, bool allowInventoryFallback = true);
+void ResetOpenedChestTrackerForCurrentMap(OpenedChestTracker& tracker,
+                                          const char* reason = nullptr,
+                                          const char* log_prefix = nullptr);
 bool OpenDoorAt(float doorX,
                 float doorY,
                 float checkpointX,
@@ -134,5 +137,12 @@ bool OpenDoorAt(float doorX,
                 MoveToPointResultFn move_to_point,
                 WaitFn wait_ms = nullptr,
                 const DoorOpenOptions& options = {});
+bool OpenDoorAtWithProbe(float doorX,
+                         float doorY,
+                         float probeX,
+                         float probeY,
+                         MoveToPointResultFn move_to_point,
+                         WaitFn wait_ms = nullptr,
+                         const DoorOpenOptions& options = {});
 
 } // namespace GWA3::DungeonInteractions
