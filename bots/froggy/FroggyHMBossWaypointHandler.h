@@ -1,7 +1,5 @@
 // Froggy Bogroot boss waypoint handler. Included by FroggyHM.cpp before waypoint traversal.
 
-#include "FroggyHMBossPostRewardSupport.h"
-
 static void HandleBossWaypoint(const Waypoint& wp) {
     s_dungeonLoopTelemetry.boss_started = true;
     AggroMoveToEx(wp.x, wp.y, wp.fight_range);
@@ -74,11 +72,23 @@ static void HandleBossWaypoint(const Waypoint& wp) {
     s_dungeonLoopTelemetry.boss_completed = true;
 
     const bool questRewardAccepted = QuestMgr::GetQuestById(GWA3::QuestIds::TEKKS_WAR) == nullptr;
-    // Run salvage when either the quest cleared OR the reward dialog was latched.
-    SalvageBossRewardGoldIfReady(questRewardAccepted);
-
-    const bool returnedToSparkfly = WaitForBossPostRewardReturn(questRewardAccepted);
-    s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
+    DungeonRuntime::PostRewardReturnOptions postRewardOptions = {};
+    postRewardOptions.expected_return_map_id = MapIds::SPARKFLY_SWAMP;
+    postRewardOptions.fallback_recovery_map_id = MapIds::GADDS_ENCAMPMENT;
+    postRewardOptions.long_transition_timeout_ms = BOSS_POST_REWARD_LONG_TOTAL_WAIT_MS;
+    postRewardOptions.short_transition_timeout_ms = BOSS_POST_REWARD_SHORT_TOTAL_WAIT_MS;
+    postRewardOptions.long_load_timeout_ms = BOSS_POST_REWARD_LONG_BOGROOT_WAIT_MS;
+    postRewardOptions.short_load_timeout_ms = BOSS_POST_REWARD_SHORT_BOGROOT_WAIT_MS;
+    postRewardOptions.dungeon_map_ids = BOGROOT_DUNGEON_MAPS;
+    postRewardOptions.dungeon_map_count = BOGROOT_DUNGEON_MAP_COUNT;
+    postRewardOptions.reward_claimed = questRewardAccepted;
+    postRewardOptions.reward_dialog_latched = s_dungeonLoopTelemetry.reward_dialog_latched;
+    postRewardOptions.salvage_reward_items = &MaintenanceMgr::IdentifyAndSalvageGoldItems;
+    postRewardOptions.log_prefix = "Froggy";
+    postRewardOptions.label = "Boss post-reward";
+    const auto postRewardResult = DungeonRuntime::HandlePostRewardReturn(postRewardOptions);
+    s_dungeonLoopTelemetry.final_map_id = postRewardResult.final_map_id;
     s_dungeonLoopTelemetry.returned_to_sparkfly =
-        returnedToSparkfly && s_dungeonLoopTelemetry.final_map_id == MapIds::SPARKFLY_SWAMP;
+        postRewardResult.returned_expected_map &&
+        s_dungeonLoopTelemetry.final_map_id == MapIds::SPARKFLY_SWAMP;
 }

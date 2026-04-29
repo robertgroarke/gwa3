@@ -451,4 +451,93 @@ bool WaitForPostDungeonReturn(
     return false;
 }
 
+PostRewardReturnResult HandlePostRewardReturn(const PostRewardReturnOptions& options) {
+    PostRewardReturnResult result;
+    const char* prefix = LogPrefixOrDefault(options.log_prefix);
+    const char* label = options.label ? options.label : "Post reward";
+    result.used_long_wait = options.reward_claimed || options.reward_dialog_latched;
+
+    if (options.expected_return_map_id == 0u) {
+        return result;
+    }
+
+    if (result.used_long_wait && options.salvage_reward_items != nullptr) {
+        result.salvaged_item_count = options.salvage_reward_items();
+        result.salvaged_reward_items = true;
+        Log::Info("%s: %s reward salvage result salvaged=%u rewardClaimed=%d rewardLatched=%d",
+                  prefix,
+                  label,
+                  result.salvaged_item_count,
+                  options.reward_claimed ? 1 : 0,
+                  options.reward_dialog_latched ? 1 : 0);
+    } else if (!result.used_long_wait) {
+        Log::Info("%s: %s reward not claimed and dialog not latched; skipping post-reward salvage",
+                  prefix,
+                  label);
+    }
+
+    result.returned_expected_map = WaitForPostDungeonReturn(
+        options.expected_return_map_id,
+        result.used_long_wait ? options.long_transition_timeout_ms : options.short_transition_timeout_ms,
+        result.used_long_wait ? options.long_load_timeout_ms : options.short_load_timeout_ms,
+        options.dungeon_map_ids,
+        options.dungeon_map_count,
+        prefix);
+    if (result.returned_expected_map) {
+        result.final_map_id = MapMgr::GetMapId();
+        result.final_map_loaded = MapMgr::GetIsMapLoaded();
+        result.final_player_id = AgentMgr::GetMyId();
+        return result;
+    }
+
+    const uint32_t mapAfterReward = MapMgr::GetMapId();
+    const bool mapLoadedAfterReward = MapMgr::GetIsMapLoaded();
+    const uint32_t playerIdAfterReward = AgentMgr::GetMyId();
+    if (IsListedMap(mapAfterReward, options.dungeon_map_ids, options.dungeon_map_count)) {
+        if (!mapLoadedAfterReward || playerIdAfterReward == 0u) {
+            result.skipped_fallback_ghost_state = true;
+            Log::Info("%s: %s map stuck in ghost state map=%u loaded=%d playerId=%u; skipping explicit recovery travel",
+                      prefix,
+                      label,
+                      mapAfterReward,
+                      mapLoadedAfterReward ? 1 : 0,
+                      playerIdAfterReward);
+        } else if (options.fallback_recovery_map_id != 0u) {
+            result.fallback_attempted = true;
+            Log::Info("%s: %s still in dungeon after wait rewardClaimed=%d map=%u loaded=%d playerId=%u; traveling to recovery outpost map=%u",
+                      prefix,
+                      label,
+                      options.reward_claimed ? 1 : 0,
+                      mapAfterReward,
+                      mapLoadedAfterReward ? 1 : 0,
+                      playerIdAfterReward,
+                      options.fallback_recovery_map_id);
+            MapMgr::Travel(options.fallback_recovery_map_id);
+            result.fallback_recovered = WaitForMapReady(
+                options.fallback_recovery_map_id,
+                options.fallback_recovery_timeout_ms);
+            Log::Info("%s: %s recovery travel result=%d finalMap=%u loaded=%d playerId=%u",
+                      prefix,
+                      label,
+                      result.fallback_recovered ? 1 : 0,
+                      MapMgr::GetMapId(),
+                      MapMgr::GetIsMapLoaded() ? 1 : 0,
+                      AgentMgr::GetMyId());
+        }
+    } else {
+        Log::Info("%s: %s wait ended off dungeon rewardClaimed=%d map=%u loaded=%d playerId=%u",
+                  prefix,
+                  label,
+                  options.reward_claimed ? 1 : 0,
+                  mapAfterReward,
+                  mapLoadedAfterReward ? 1 : 0,
+                  playerIdAfterReward);
+    }
+
+    result.final_map_id = MapMgr::GetMapId();
+    result.final_map_loaded = MapMgr::GetIsMapLoaded();
+    result.final_player_id = AgentMgr::GetMyId();
+    return result;
+}
+
 } // namespace GWA3::DungeonRuntime
