@@ -1,104 +1,73 @@
-// Froggy Tekks quest and dungeon-entry preparation. Included by FroggyHM.cpp
-// while this interaction flow is progressively moved into shared quest helpers.
+// Froggy Tekks quest and dungeon-entry preparation. Froggy supplies the
+// Tekks-specific ids, coordinates, and timings; DungeonQuestRuntime owns the
+// reusable quest-giver entry flow.
 
-#include "FroggyHMTekksEntryDiagnostics.h"
-#include "FroggyHMTekksEntryQuestFlow.h"
+static DungeonQuestRuntime::QuestGiverEntryPlan MakeTekksDungeonEntryPlan() {
+    const auto bootstrap = GetEntryBootstrapPlan();
+    DungeonQuestRuntime::QuestGiverEntryPlan plan = {};
+    plan.npc = bootstrap.npc;
+    plan.npc.search_radius = TEKKS_NPC_SEARCH_RADIUS;
+    plan.quest_id = GWA3::QuestIds::TEKKS_WAR;
+    plan.dialogs.talk = GWA3::DialogIds::NPC_TALK;
+    plan.dialogs.accept = GWA3::DialogIds::TekksWar::QUEST_ACCEPT;
+    plan.dialogs.reward = GWA3::DialogIds::TekksWar::QUEST_REWARD;
+    plan.dialogs.dungeon_entry = GWA3::DialogIds::TekksWar::DUNGEON_ENTRY;
+    return plan;
+}
+
+static DungeonQuestRuntime::QuestGiverEntryOptions MakeTekksDungeonEntryOptions() {
+    DungeonQuestRuntime::QuestGiverEntryOptions options = {};
+    options.anchor_move_threshold = TEKKS_ANCHOR_MOVE_THRESHOLD;
+    options.pre_interact_dwell_ms = TEKKS_PRE_INTERACT_DWELL_MS;
+    options.cancel_dwell_ms = TEKKS_CANCEL_DWELL_MS;
+    options.npc_move_threshold = TEKKS_NPC_MOVE_THRESHOLD;
+    options.npc_settle_timeout_ms = TEKKS_NPC_SETTLE_TIMEOUT_MS;
+    options.npc_settle_distance = TEKKS_NPC_SETTLE_DISTANCE;
+    options.initial_interact_target_wait_ms = TEKKS_INITIAL_INTERACT_TARGET_WAIT_MS;
+    options.initial_interact_pass_wait_ms = TEKKS_INITIAL_INTERACT_PASS_WAIT_MS;
+    options.initial_interact_passes = TEKKS_INITIAL_INTERACT_PASSES;
+    options.post_interact_dwell_ms = TEKKS_POST_INTERACT_DWELL_MS;
+    options.direct_entry_wait_base_ms = TEKKS_DIRECT_ENTRY_WAIT_BASE_MS;
+    options.reward_first_wait_base_ms = TEKKS_REWARD_FIRST_WAIT_BASE_MS;
+    options.dialog_refresh_delay_ms = TEKKS_DIALOG_REFRESH_DELAY_MS;
+    options.post_reward_wait_base_ms = TEKKS_POST_REWARD_WAIT_BASE_MS;
+    options.post_reward_max_buttons_per_pass = TEKKS_POST_REWARD_MAX_BUTTONS_PER_PASS;
+    options.post_reward_max_passes = TEKKS_POST_REWARD_MAX_PASSES;
+    options.reopen_accept_target_wait_base_ms = TEKKS_REOPEN_ACCEPT_TARGET_WAIT_BASE_MS;
+    options.reopen_accept_pass_wait_ms = TEKKS_REOPEN_ACCEPT_PASS_WAIT_MS;
+    options.reopen_accept_interact_passes = TEKKS_REOPEN_ACCEPT_INTERACT_PASSES;
+    options.reopen_accept_attempts = TEKKS_REOPEN_ACCEPT_ATTEMPTS;
+    options.accept_wait_base_ms = TEKKS_ACCEPT_WAIT_BASE_MS;
+    options.accept_verify.timeout_ms = TEKKS_ACCEPT_VERIFY_TIMEOUT_MS;
+    options.accept_verify.refresh_interval_ms = TEKKS_ACCEPT_VERIFY_REFRESH_INTERVAL_MS;
+    options.accept_verify.refresh_delay_ms = TEKKS_DIALOG_REFRESH_DELAY_MS;
+    options.accept_verify.poll_ms = TEKKS_ACCEPT_VERIFY_POLL_MS;
+    options.accept_verify.post_set_active_delay_ms = TEKKS_SET_ACTIVE_DWELL_MS;
+    options.talk_wait_base_ms = TEKKS_TALK_WAIT_BASE_MS;
+    options.entry_dialog_wait_base_ms = TEKKS_ENTRY_DIALOG_WAIT_BASE_MS;
+    options.entry_verify_wait_base_ms = TEKKS_ENTRY_VERIFY_WAIT_BASE_MS;
+    options.entry_verify_refresh_interval_ms = TEKKS_ENTRY_VERIFY_REFRESH_INTERVAL_MS;
+    options.entry_verify_poll_ms = TEKKS_ENTRY_VERIFY_POLL_MS;
+    options.post_set_active_delay_ms = TEKKS_SET_ACTIVE_DWELL_MS;
+    options.log_prefix = "Froggy";
+    options.label = "Tekks";
+    return options;
+}
+
+static bool RefreshTekksQuestReadyForDungeonEntry(const char* label, uint32_t refreshDelayMs) {
+    DungeonQuestRuntime::QuestReadyOptions options = {};
+    options.refresh_delay_ms = refreshDelayMs;
+    options.post_set_active_delay_ms = TEKKS_SET_ACTIVE_DWELL_MS;
+    options.log_prefix = "Froggy";
+    options.label = label;
+    return DungeonQuestRuntime::RefreshQuestReadyForDungeonEntry(
+        GWA3::QuestIds::TEKKS_WAR,
+        options).ready;
+}
 
 static bool PrepareTekksDungeonEntry() {
-    const auto entryPlan = GetEntryBootstrapPlan();
-    const auto& tekksAnchor = entryPlan.npc;
-
-    Log::Info("Froggy: Preparing Tekks dungeon entry sequence");
-    // ---- Find Tekks and move close ----
-    MoveToAndWait(tekksAnchor.x, tekksAnchor.y, TEKKS_ANCHOR_MOVE_THRESHOLD);
-    WaitMs(TEKKS_PRE_INTERACT_DWELL_MS);
-    AgentMgr::CancelAction();
-    WaitMs(TEKKS_CANCEL_DWELL_MS);
-
-    uint32_t tekksId = DungeonInteractions::FindNearestNpc(
-        tekksAnchor.x,
-        tekksAnchor.y,
-        TEKKS_NPC_SEARCH_RADIUS);
-    if (!tekksId) {
-        Log::Info("Froggy: Tekks NPC not found near (%.0f, %.0f)", tekksAnchor.x, tekksAnchor.y);
-        return false;
-    }
-    Log::Info("Froggy: Tekks NPC found agent=%u", tekksId);
-    LogTekksQuestSnapshot("Tekks pre-interact snapshot");
-
-    auto* tekks = AgentMgr::GetAgentByID(tekksId);
-    if (tekks) {
-        MoveToAndWait(tekks->x, tekks->y, TEKKS_NPC_MOVE_THRESHOLD);
-        WaitForLocalPositionSettle(TEKKS_NPC_SETTLE_TIMEOUT_MS, TEKKS_NPC_SETTLE_DISTANCE);
-    }
-
-    // ---- Send GoNPC packet via SendPacketDirect (bypasses engine hook) ----
-    // The CtoS engine hook crashes on INTERACT_NPC (0x39) packets due to
-    // FPU state corruption in the detour. SendPacketDirect calls PacketSend
-    // directly on the current thread, bypassing GameThread::Enqueue and
-    // the engine hook detour entirely.
-    {
-        auto* me = AgentMgr::GetMyAgent();
-        Log::Info("Froggy: Tekks PRE-GoNPC pos=(%.0f, %.0f) tekks=(%.0f, %.0f) dist=%.0f",
-                  me ? me->x : 0, me ? me->y : 0,
-                  tekks ? tekks->x : 0, tekks ? tekks->y : 0,
-                  (me && tekks) ? AgentMgr::GetDistance(me->x, me->y, tekks->x, tekks->y) : -1.0f);
-    }
-
-    auto initialInteract = MakeTekksDirectInteractOptions(
-        TEKKS_INITIAL_INTERACT_TARGET_WAIT_MS,
-        TEKKS_INITIAL_INTERACT_PASS_WAIT_MS,
-        TEKKS_INITIAL_INTERACT_PASSES,
-        "Tekks");
-    (void)DungeonInteractions::PulseDirectNpcInteract(tekksId, initialInteract);
-
-    // ---- Dwell then blind dialog sends (AutoIt TakeQuest0 flow) ----
-    WaitMs(TEKKS_POST_INTERACT_DWELL_MS);
-    {
-        auto* me = AgentMgr::GetMyAgent();
-        tekks = AgentMgr::GetAgentByID(tekksId);
-        const float dist = (me && tekks) ? AgentMgr::GetDistance(me->x, me->y, tekks->x, tekks->y) : -1.0f;
-        Log::Info("Froggy: Tekks POST-GoNPC pos=(%.0f, %.0f) dist=%.0f dialogOpen=%d buttons=%u sender=%u lastDialog=0x%X",
-                  me ? me->x : 0, me ? me->y : 0, dist,
-                  DialogMgr::IsDialogOpen() ? 1 : 0,
-                  DialogMgr::GetButtonCount(),
-                  DialogMgr::GetDialogSenderAgentId(),
-                  DialogMgr::GetLastDialogId());
-    }
-
-    const auto snapshot = CaptureTekksDialogSnapshot();
-    const uint32_t ping = snapshot.ping;
-    LogTekksDialogSnapshot(snapshot);
-
-    if (snapshot.dialog.dialog_open && snapshot.dialog.sender_agent_id == tekksId && snapshot.has_dungeon_entry) {
-        if (!RefreshTekksQuestReadyForDungeonEntry("Tekks direct dungeon-entry precheck")) {
-            Log::Info("Froggy: Tekks direct dungeon-entry button visible without Tekks's War; retrying quest flow later");
-            return false;
-        }
-        const auto entryResult = SendTekksQuestDialog(
-            GWA3::DialogIds::TekksWar::DUNGEON_ENTRY, "Tekks direct dungeon-entry", TEKKS_DIRECT_ENTRY_WAIT_BASE_MS + ping);
-        LogTekksQuestSnapshot("Tekks direct dungeon-entry snapshot");
-        const bool confirmed = IsTekksDungeonEntryConfirmed(
-            entryResult.quest_present,
-            entryResult.active_quest_id,
-            entryResult.last_dialog_id == GWA3::DialogIds::TekksWar::DUNGEON_ENTRY);
-        Log::Info("Froggy: Tekks direct dungeon-entry complete questPresent=%d activeQuest=0x%X lastDialog=0x%X confirmed=%d",
-                  entryResult.quest_present ? 1 : 0,
-                  entryResult.active_quest_id,
-                  entryResult.last_dialog_id,
-                  confirmed ? 1 : 0);
-        return confirmed;
-    }
-
-    if (snapshot.quest_present) {
-        const auto rewardResult = SendTekksQuestDialog(
-            GWA3::DialogIds::TekksWar::QUEST_REWARD, "Tekks reward-first", TEKKS_REWARD_FIRST_WAIT_BASE_MS + ping);
-        const bool clearedAfterReward = !rewardResult.quest_present;
-        Log::Info("Froggy: Tekks reward-first snapshot clearedAfterReward=%d", clearedAfterReward ? 1 : 0);
-        if (clearedAfterReward) {
-            ReopenTekksAcceptAfterReward(tekksId, ping);
-        }
-    }
-
-    return AcceptTekksQuestAndEnter(tekksId, ping);
+    const auto result = DungeonQuestRuntime::PrepareDungeonEntryFromQuestGiver(
+        MakeTekksDungeonEntryPlan(),
+        MakeTekksDungeonEntryOptions());
+    return result.confirmed;
 }

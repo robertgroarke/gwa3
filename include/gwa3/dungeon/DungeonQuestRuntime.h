@@ -2,6 +2,7 @@
 
 #include <gwa3/dungeon/DungeonQuest.h>
 #include <gwa3/dungeon/DungeonBundle.h>
+#include <gwa3/dungeon/DungeonDialog.h>
 
 #include <cstdint>
 
@@ -85,6 +86,87 @@ struct DungeonEntryReadyResult {
     uint32_t sender_agent_id = 0u;
 };
 
+struct QuestReadyOptions {
+    uint32_t refresh_delay_ms = 150u;
+    uint32_t post_set_active_delay_ms = 150u;
+    bool set_active_when_present = true;
+    const char* log_prefix = nullptr;
+    const char* label = nullptr;
+};
+
+struct QuestReadyResult {
+    bool ready = false;
+    bool quest_present = false;
+    uint32_t active_quest_id = 0u;
+    uint32_t quest_log_size = 0u;
+};
+
+struct QuestGiverDialogIds {
+    uint32_t talk = 0u;
+    uint32_t accept = 0u;
+    uint32_t reward = 0u;
+    uint32_t dungeon_entry = 0u;
+};
+
+struct QuestGiverDialogSnapshot {
+    uint32_t ping = 0u;
+    bool quest_present = false;
+    DungeonDialog::DialogSnapshot dialog = {};
+    bool has_dungeon_entry = false;
+    bool has_talk = false;
+    bool has_accept = false;
+    bool has_reward = false;
+};
+
+struct QuestGiverEntryPlan {
+    DungeonQuest::QuestNpcAnchor npc = {};
+    uint32_t quest_id = 0u;
+    QuestGiverDialogIds dialogs = {};
+};
+
+struct QuestGiverEntryOptions {
+    float anchor_move_threshold = 500.0f;
+    uint32_t pre_interact_dwell_ms = 500u;
+    uint32_t cancel_dwell_ms = 500u;
+    float npc_move_threshold = 100.0f;
+    uint32_t npc_settle_timeout_ms = 1000u;
+    float npc_settle_distance = 15.0f;
+    uint32_t initial_interact_target_wait_ms = 500u;
+    uint32_t initial_interact_pass_wait_ms = 2000u;
+    int initial_interact_passes = 3;
+    uint32_t post_interact_dwell_ms = 2000u;
+    uint32_t direct_entry_wait_base_ms = 1000u;
+    uint32_t reward_first_wait_base_ms = 500u;
+    uint32_t dialog_refresh_delay_ms = 150u;
+    uint32_t post_reward_wait_base_ms = 500u;
+    uint32_t post_reward_max_buttons_per_pass = 4u;
+    int post_reward_max_passes = 4;
+    uint32_t reopen_accept_target_wait_base_ms = 150u;
+    uint32_t reopen_accept_pass_wait_ms = 1500u;
+    int reopen_accept_interact_passes = 1;
+    int reopen_accept_attempts = 3;
+    uint32_t accept_wait_base_ms = 500u;
+    QuestVerificationOptions accept_verify = {};
+    uint32_t talk_wait_base_ms = 500u;
+    uint32_t entry_dialog_wait_base_ms = 1000u;
+    uint32_t entry_verify_wait_base_ms = 2000u;
+    uint32_t entry_verify_refresh_interval_ms = 500u;
+    uint32_t entry_verify_poll_ms = 100u;
+    uint32_t post_set_active_delay_ms = 150u;
+    const char* log_prefix = nullptr;
+    const char* label = nullptr;
+};
+
+struct QuestGiverEntryResult {
+    bool confirmed = false;
+    bool npc_found = false;
+    bool quest_present = false;
+    bool entry_ready = false;
+    uint32_t npc_id = 0u;
+    uint32_t active_quest_id = 0u;
+    uint32_t last_dialog_id = 0u;
+};
+
 struct RewardClaimOptions {
     bool allow_dialog_without_npc = true;
     DialogExecutionOptions execution = {};
@@ -148,6 +230,12 @@ QuestDialogResult SendDialogAndRefreshQuest(
     const QuestDialogOptions& options = {});
 DungeonEntryReadyResult WaitForDungeonEntryReady(
     const DungeonEntryReadyOptions& options);
+QuestReadyResult RefreshQuestReadyForDungeonEntry(
+    uint32_t questId,
+    const QuestReadyOptions& options = {});
+QuestGiverEntryResult PrepareDungeonEntryFromQuestGiver(
+    const QuestGiverEntryPlan& plan,
+    const QuestGiverEntryOptions& options = {});
 bool InteractNearestNpcAndSendDialogPlan(
     const DungeonQuest::QuestNpcAnchor& npc,
     const DungeonQuest::DialogPlan& plan,

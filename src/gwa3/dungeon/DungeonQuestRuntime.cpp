@@ -8,6 +8,7 @@
 #include <gwa3/core/DialogHook.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/managers/AgentMgr.h>
+#include <gwa3/managers/ChatMgr.h>
 #include <gwa3/managers/DialogMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/QuestMgr.h>
@@ -42,6 +43,249 @@ bool WaitForDialogFromNpc(uint32_t npcId, uint32_t timeoutMs) {
         Sleep(50u);
     }
     return false;
+}
+
+const char* PrefixOrDefault(const char* prefix) {
+    return prefix != nullptr ? prefix : "DungeonQuestRuntime";
+}
+
+const char* LabelOrDefault(const char* label, const char* fallback) {
+    return label != nullptr ? label : fallback;
+}
+
+bool IsQuestReadyForDungeonEntry(uint32_t questId, bool questPresent, uint32_t activeQuestId) {
+    return questPresent || (questId != 0u && activeQuestId == questId);
+}
+
+void LogQuestSnapshot(uint32_t questId, const char* prefix, const char* label) {
+    Quest* quest = QuestMgr::GetQuestById(questId);
+    Log::Info("%s: %s activeQuest=0x%X questPresent=%d questLogSize=%u lastDialog=0x%X",
+              prefix,
+              label,
+              QuestMgr::GetActiveQuestId(),
+              quest != nullptr ? 1 : 0,
+              QuestMgr::GetQuestLogSize(),
+              DialogMgr::GetLastDialogId());
+    if (quest != nullptr) {
+        Log::Info("%s: %s quest: id=0x%X logState=%u map_from=%u map_to=%u marker=(%.0f, %.0f)",
+                  prefix,
+                  label,
+                  quest->quest_id,
+                  quest->log_state,
+                  quest->map_from,
+                  quest->map_to,
+                  quest->marker_x,
+                  quest->marker_y);
+    }
+}
+
+DungeonInteractions::DirectNpcInteractOptions MakeDirectInteractOptions(
+    uint32_t targetWaitMs,
+    uint32_t passWaitMs,
+    int passes,
+    const char* prefix,
+    const char* label) {
+    DungeonInteractions::DirectNpcInteractOptions interactOptions = {};
+    interactOptions.target_wait_ms = targetWaitMs;
+    interactOptions.pass_wait_ms = passWaitMs;
+    interactOptions.passes = passes;
+    interactOptions.log_prefix = prefix;
+    interactOptions.label = label;
+    return interactOptions;
+}
+
+QuestGiverDialogSnapshot CaptureQuestGiverDialogSnapshot(
+    uint32_t questId,
+    const QuestGiverDialogIds& dialogs) {
+    QuestGiverDialogSnapshot snapshot;
+    snapshot.ping = ChatMgr::GetPing();
+    snapshot.quest_present = QuestMgr::GetQuestById(questId) != nullptr;
+    snapshot.dialog = DungeonDialog::CaptureDialogSnapshot();
+    snapshot.has_dungeon_entry = DungeonDialog::HasDialogButton(dialogs.dungeon_entry);
+    snapshot.has_talk = DungeonDialog::HasDialogButton(dialogs.talk);
+    snapshot.has_accept = DungeonDialog::HasDialogButton(dialogs.accept);
+    snapshot.has_reward = DungeonDialog::HasDialogButton(dialogs.reward);
+    return snapshot;
+}
+
+void LogQuestGiverDialogSnapshot(
+    const QuestGiverDialogSnapshot& snapshot,
+    const char* prefix,
+    const char* label) {
+    Log::Info("%s: %s dialog snapshot visible=%d sender=%u buttons=%u hasReward=%d hasAccept=%d hasTalk=%d hasDungeonEntry=%d",
+              prefix,
+              label,
+              snapshot.dialog.dialog_open ? 1 : 0,
+              snapshot.dialog.sender_agent_id,
+              snapshot.dialog.button_count,
+              snapshot.has_reward ? 1 : 0,
+              snapshot.has_accept ? 1 : 0,
+              snapshot.has_talk ? 1 : 0,
+              snapshot.has_dungeon_entry ? 1 : 0);
+}
+
+QuestDialogResult SendQuestGiverDialog(
+    uint32_t dialogId,
+    uint32_t questId,
+    const char* label,
+    uint32_t postDialogWaitMs,
+    uint32_t refreshDelayMs,
+    const char* prefix) {
+    QuestDialogOptions dialogOptions = {};
+    dialogOptions.post_dialog_wait_ms = postDialogWaitMs;
+    dialogOptions.refresh_delay_ms = refreshDelayMs;
+    dialogOptions.log_prefix = prefix;
+    dialogOptions.label = label;
+    return SendDialogAndRefreshQuest(dialogId, questId, dialogOptions);
+}
+
+void AdvancePostRewardDialog(
+    uint32_t npcId,
+    uint32_t acceptDialogId,
+    uint32_t ping,
+    const QuestGiverEntryOptions& options,
+    const char* prefix,
+    const char* label) {
+    DungeonDialog::DialogAdvanceOptions advanceOptions = {};
+    advanceOptions.sender_agent_id = npcId;
+    advanceOptions.post_dialog_wait_ms = options.post_reward_wait_base_ms + ping;
+    advanceOptions.max_buttons_per_pass = options.post_reward_max_buttons_per_pass;
+    advanceOptions.max_passes = options.post_reward_max_passes;
+    advanceOptions.log_prefix = prefix;
+    advanceOptions.label = label;
+    (void)DungeonDialog::AdvanceDialogToButton(acceptDialogId, advanceOptions);
+}
+
+void ReopenAcceptAfterReward(
+    uint32_t npcId,
+    const QuestGiverDialogIds& dialogs,
+    uint32_t ping,
+    const QuestGiverEntryOptions& options,
+    const char* prefix,
+    const char* label) {
+    auto acceptInteract = MakeDirectInteractOptions(
+        options.reopen_accept_target_wait_base_ms + ping,
+        options.reopen_accept_pass_wait_ms,
+        options.reopen_accept_interact_passes,
+        prefix,
+        label);
+    for (int attempt = 0; attempt < options.reopen_accept_attempts; ++attempt) {
+        (void)DungeonInteractions::PulseDirectNpcInteract(npcId, acceptInteract);
+        if (!(DialogMgr::IsDialogOpen() && DialogMgr::GetDialogSenderAgentId() == npcId)) {
+            continue;
+        }
+        if (DungeonDialog::HasDialogButton(dialogs.accept)) {
+            break;
+        }
+        AdvancePostRewardDialog(npcId, dialogs.accept, ping, options, prefix, "post-reward");
+        if (DungeonDialog::HasDialogButton(dialogs.accept)) {
+            break;
+        }
+    }
+}
+
+bool VerifyDungeonEntryReady(
+    uint32_t questId,
+    uint32_t entryDialogId,
+    uint32_t npcId,
+    uint32_t timeoutMs,
+    const QuestGiverEntryOptions& options,
+    const char* prefix,
+    const char* label) {
+    DungeonEntryReadyOptions readyOptions = {};
+    readyOptions.quest_id = questId;
+    readyOptions.entry_dialog_id = entryDialogId;
+    readyOptions.npc_id = npcId;
+    readyOptions.timeout_ms = timeoutMs;
+    readyOptions.refresh_interval_ms = options.entry_verify_refresh_interval_ms;
+    readyOptions.poll_ms = options.entry_verify_poll_ms;
+    readyOptions.log_prefix = prefix;
+    readyOptions.label = label;
+    return WaitForDungeonEntryReady(readyOptions).ready;
+}
+
+QuestGiverEntryResult AcceptQuestAndEnter(
+    uint32_t npcId,
+    const QuestGiverEntryPlan& plan,
+    uint32_t ping,
+    const QuestGiverEntryOptions& options,
+    const char* prefix,
+    const char* label) {
+    QuestGiverEntryResult result;
+    result.npc_found = true;
+    result.npc_id = npcId;
+
+    Log::Info("%s: %s sending accept dialog 0x%X", prefix, label, plan.dialogs.accept);
+    DialogHook::RecordDialogSend(plan.dialogs.accept);
+    QuestMgr::Dialog(plan.dialogs.accept);
+    Sleep(options.accept_wait_base_ms + ping);
+
+    QuestVerificationOptions acceptVerify = options.accept_verify;
+    if (acceptVerify.refresh_delay_ms == 0u) {
+        acceptVerify.refresh_delay_ms = options.dialog_refresh_delay_ms;
+    }
+    const bool acceptedQuestPresent = WaitForQuestState(plan.quest_id, true, acceptVerify);
+    if (acceptedQuestPresent && QuestMgr::GetQuestById(plan.quest_id) != nullptr) {
+        QuestMgr::SetActiveQuest(plan.quest_id);
+        Sleep(options.post_set_active_delay_ms);
+    }
+    LogQuestSnapshot(plan.quest_id, prefix, "accept snapshot");
+
+    QuestReadyOptions readyOptions = {};
+    readyOptions.refresh_delay_ms = options.dialog_refresh_delay_ms;
+    readyOptions.post_set_active_delay_ms = options.post_set_active_delay_ms;
+    readyOptions.log_prefix = prefix;
+    readyOptions.label = "accept verification";
+    const QuestReadyResult readyAfterAccept = RefreshQuestReadyForDungeonEntry(plan.quest_id, readyOptions);
+    if (!readyAfterAccept.ready) {
+        Log::Info("%s: %s accept did not place quest in log; refusing dungeon-entry dialog", prefix, label);
+        result.quest_present = readyAfterAccept.quest_present;
+        result.active_quest_id = readyAfterAccept.active_quest_id;
+        result.last_dialog_id = DialogMgr::GetLastDialogId();
+        return result;
+    }
+
+    Log::Info("%s: %s sending talk dialog 0x%X", prefix, label, plan.dialogs.talk);
+    DialogHook::RecordDialogSend(plan.dialogs.talk);
+    QuestMgr::Dialog(plan.dialogs.talk);
+    Sleep(options.talk_wait_base_ms + ping);
+    Log::Info("%s: %s after Dialog(0x%X) lastDialog=0x%X",
+              prefix,
+              label,
+              plan.dialogs.talk,
+              DialogMgr::GetLastDialogId());
+
+    (void)SendQuestGiverDialog(
+        plan.dialogs.dungeon_entry,
+        plan.quest_id,
+        "dungeon-entry",
+        options.entry_dialog_wait_base_ms + ping,
+        options.dialog_refresh_delay_ms,
+        prefix);
+    LogQuestSnapshot(plan.quest_id, prefix, "dungeon-entry complete snapshot");
+
+    result.quest_present = QuestMgr::GetQuestById(plan.quest_id) != nullptr;
+    result.active_quest_id = QuestMgr::GetActiveQuestId();
+    result.last_dialog_id = DialogMgr::GetLastDialogId();
+    result.entry_ready = VerifyDungeonEntryReady(
+        plan.quest_id,
+        plan.dialogs.dungeon_entry,
+        npcId,
+        options.entry_verify_wait_base_ms + ping,
+        options,
+        prefix,
+        "entry verify");
+    result.confirmed = result.entry_ready &&
+                       IsQuestReadyForDungeonEntry(plan.quest_id, result.quest_present, result.active_quest_id);
+    Log::Info("%s: %s dungeon entry sequence complete questPresent=%d activeQuest=0x%X lastDialog=0x%X entryReady=%d confirmed=%d",
+              prefix,
+              label,
+              result.quest_present ? 1 : 0,
+              result.active_quest_id,
+              result.last_dialog_id,
+              result.entry_ready ? 1 : 0,
+              result.confirmed ? 1 : 0);
+    return result;
 }
 
 } // namespace
@@ -156,6 +400,217 @@ DungeonEntryReadyResult WaitForDungeonEntryReady(
               result.entry_button_visible ? 1 : 0,
               result.sender_agent_id);
     return result;
+}
+
+QuestReadyResult RefreshQuestReadyForDungeonEntry(
+    uint32_t questId,
+    const QuestReadyOptions& options) {
+    QuestReadyResult result;
+    if (questId == 0u) {
+        return result;
+    }
+
+    const char* prefix = PrefixOrDefault(options.log_prefix);
+    const char* label = LabelOrDefault(options.label, "quest ready");
+    QuestMgr::RequestQuestInfo(questId);
+    if (options.refresh_delay_ms > 0u) {
+        Sleep(options.refresh_delay_ms);
+    }
+
+    Quest* quest = QuestMgr::GetQuestById(questId);
+    result.active_quest_id = QuestMgr::GetActiveQuestId();
+    if (options.set_active_when_present && quest != nullptr && result.active_quest_id != questId) {
+        QuestMgr::SetActiveQuest(questId);
+        if (options.post_set_active_delay_ms > 0u) {
+            Sleep(options.post_set_active_delay_ms);
+        }
+        result.active_quest_id = QuestMgr::GetActiveQuestId();
+        quest = QuestMgr::GetQuestById(questId);
+    }
+
+    result.quest_present = quest != nullptr;
+    result.quest_log_size = QuestMgr::GetQuestLogSize();
+    result.ready = IsQuestReadyForDungeonEntry(questId, result.quest_present, result.active_quest_id);
+    Log::Info("%s: %s quest ready=%d activeQuest=0x%X questPresent=%d questLogSize=%u",
+              prefix,
+              label,
+              result.ready ? 1 : 0,
+              result.active_quest_id,
+              result.quest_present ? 1 : 0,
+              result.quest_log_size);
+    return result;
+}
+
+QuestGiverEntryResult PrepareDungeonEntryFromQuestGiver(
+    const QuestGiverEntryPlan& plan,
+    const QuestGiverEntryOptions& options) {
+    QuestGiverEntryResult result;
+    if (plan.quest_id == 0u || plan.dialogs.accept == 0u || plan.dialogs.dungeon_entry == 0u ||
+        plan.npc.search_radius <= 0.0f) {
+        return result;
+    }
+
+    const char* prefix = PrefixOrDefault(options.log_prefix);
+    const char* label = LabelOrDefault(options.label, "quest giver");
+    Log::Info("%s: Preparing %s dungeon entry sequence", prefix, label);
+
+    (void)DungeonNavigation::MoveToAndWait(
+        plan.npc.x,
+        plan.npc.y,
+        options.anchor_move_threshold,
+        DungeonNavigation::MOVE_TO_TIMEOUT_MS,
+        DungeonNavigation::MOVE_TO_POLL_MS,
+        MapMgr::GetMapId());
+    if (options.pre_interact_dwell_ms > 0u) {
+        Sleep(options.pre_interact_dwell_ms);
+    }
+    AgentMgr::CancelAction();
+    if (options.cancel_dwell_ms > 0u) {
+        Sleep(options.cancel_dwell_ms);
+    }
+
+    const uint32_t npcId = DungeonInteractions::FindNearestNpc(
+        plan.npc.x,
+        plan.npc.y,
+        plan.npc.search_radius);
+    if (npcId == 0u) {
+        Log::Info("%s: %s NPC not found near (%.0f, %.0f)", prefix, label, plan.npc.x, plan.npc.y);
+        return result;
+    }
+
+    result.npc_found = true;
+    result.npc_id = npcId;
+    Log::Info("%s: %s NPC found agent=%u", prefix, label, npcId);
+    LogQuestSnapshot(plan.quest_id, prefix, "pre-interact snapshot");
+
+    auto* npc = AgentMgr::GetAgentByID(npcId);
+    if (npc != nullptr) {
+        (void)DungeonNavigation::MoveToAndWait(
+            npc->x,
+            npc->y,
+            options.npc_move_threshold,
+            DungeonNavigation::MOVE_TO_TIMEOUT_MS,
+            DungeonNavigation::MOVE_TO_POLL_MS,
+            MapMgr::GetMapId());
+        DungeonNavigation::WaitForLocalPositionSettle(
+            options.npc_settle_timeout_ms,
+            options.npc_settle_distance);
+    }
+
+    {
+        auto* me = AgentMgr::GetMyAgent();
+        Log::Info("%s: %s PRE-GoNPC pos=(%.0f, %.0f) npc=(%.0f, %.0f) dist=%.0f",
+                  prefix,
+                  label,
+                  me ? me->x : 0.0f,
+                  me ? me->y : 0.0f,
+                  npc ? npc->x : 0.0f,
+                  npc ? npc->y : 0.0f,
+                  (me != nullptr && npc != nullptr) ? AgentMgr::GetDistance(me->x, me->y, npc->x, npc->y) : -1.0f);
+    }
+
+    auto initialInteract = MakeDirectInteractOptions(
+        options.initial_interact_target_wait_ms,
+        options.initial_interact_pass_wait_ms,
+        options.initial_interact_passes,
+        prefix,
+        label);
+    (void)DungeonInteractions::PulseDirectNpcInteract(npcId, initialInteract);
+
+    if (options.post_interact_dwell_ms > 0u) {
+        Sleep(options.post_interact_dwell_ms);
+    }
+
+    {
+        auto* me = AgentMgr::GetMyAgent();
+        npc = AgentMgr::GetAgentByID(npcId);
+        const float dist = (me != nullptr && npc != nullptr)
+            ? AgentMgr::GetDistance(me->x, me->y, npc->x, npc->y)
+            : -1.0f;
+        Log::Info("%s: %s POST-GoNPC pos=(%.0f, %.0f) dist=%.0f dialogOpen=%d buttons=%u sender=%u lastDialog=0x%X",
+                  prefix,
+                  label,
+                  me ? me->x : 0.0f,
+                  me ? me->y : 0.0f,
+                  dist,
+                  DialogMgr::IsDialogOpen() ? 1 : 0,
+                  DialogMgr::GetButtonCount(),
+                  DialogMgr::GetDialogSenderAgentId(),
+                  DialogMgr::GetLastDialogId());
+    }
+
+    const QuestGiverDialogSnapshot snapshot = CaptureQuestGiverDialogSnapshot(plan.quest_id, plan.dialogs);
+    const uint32_t ping = snapshot.ping;
+    LogQuestGiverDialogSnapshot(snapshot, prefix, label);
+
+    if (snapshot.dialog.dialog_open &&
+        snapshot.dialog.sender_agent_id == npcId &&
+        snapshot.has_dungeon_entry) {
+        QuestReadyOptions readyOptions = {};
+        readyOptions.refresh_delay_ms = options.dialog_refresh_delay_ms;
+        readyOptions.post_set_active_delay_ms = options.post_set_active_delay_ms;
+        readyOptions.log_prefix = prefix;
+        readyOptions.label = "direct dungeon-entry precheck";
+        const QuestReadyResult questReady = RefreshQuestReadyForDungeonEntry(plan.quest_id, readyOptions);
+        if (!questReady.ready) {
+            Log::Info("%s: %s direct dungeon-entry button visible without active quest; retrying quest flow later",
+                      prefix,
+                      label);
+            result.quest_present = questReady.quest_present;
+            result.active_quest_id = questReady.active_quest_id;
+            result.last_dialog_id = DialogMgr::GetLastDialogId();
+            return result;
+        }
+
+        const QuestDialogResult entryResult = SendQuestGiverDialog(
+            plan.dialogs.dungeon_entry,
+            plan.quest_id,
+            "direct dungeon-entry",
+            options.direct_entry_wait_base_ms + ping,
+            options.dialog_refresh_delay_ms,
+            prefix);
+        LogQuestSnapshot(plan.quest_id, prefix, "direct dungeon-entry snapshot");
+        result.quest_present = entryResult.quest_present;
+        result.active_quest_id = entryResult.active_quest_id;
+        result.last_dialog_id = entryResult.last_dialog_id;
+        result.entry_ready = entryResult.last_dialog_id == plan.dialogs.dungeon_entry;
+        result.confirmed = result.entry_ready &&
+                           IsQuestReadyForDungeonEntry(plan.quest_id, result.quest_present, result.active_quest_id);
+        Log::Info("%s: %s direct dungeon-entry complete questPresent=%d activeQuest=0x%X lastDialog=0x%X confirmed=%d",
+                  prefix,
+                  label,
+                  result.quest_present ? 1 : 0,
+                  result.active_quest_id,
+                  result.last_dialog_id,
+                  result.confirmed ? 1 : 0);
+        return result;
+    }
+
+    if (snapshot.quest_present && plan.dialogs.reward != 0u) {
+        const QuestDialogResult rewardResult = SendQuestGiverDialog(
+            plan.dialogs.reward,
+            plan.quest_id,
+            "reward-first",
+            options.reward_first_wait_base_ms + ping,
+            options.dialog_refresh_delay_ms,
+            prefix);
+        const bool clearedAfterReward = !rewardResult.quest_present;
+        Log::Info("%s: %s reward-first snapshot clearedAfterReward=%d",
+                  prefix,
+                  label,
+                  clearedAfterReward ? 1 : 0);
+        if (clearedAfterReward) {
+            ReopenAcceptAfterReward(
+                npcId,
+                plan.dialogs,
+                ping,
+                options,
+                prefix,
+                "re-interact for new accept");
+        }
+    }
+
+    return AcceptQuestAndEnter(npcId, plan, ping, options, prefix, label);
 }
 
 bool InteractNearestNpcAndSendDialogPlan(
