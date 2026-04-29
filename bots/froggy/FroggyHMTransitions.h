@@ -44,140 +44,39 @@ static DungeonEntryRecovery::DialogResetBouncePlan MakeTekksDialogResetBouncePla
     return plan;
 }
 
-static bool IsNearSparkflyDungeonSide() {
-    auto* me = AgentMgr::GetMyAgent();
-    if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != MapIds::SPARKFLY_SWAMP) {
-        return false;
-    }
-
-    const float distToTekksStage =
-        AgentMgr::GetDistance(me->x, me->y, SPARKFLY_TEKKS_STAGE.x, SPARKFLY_TEKKS_STAGE.y);
-    const float distToDungeonStage =
-        AgentMgr::GetDistance(me->x, me->y, SPARKFLY_DUNGEON_ENTRY_STAGE.x, SPARKFLY_DUNGEON_ENTRY_STAGE.y);
-    return distToTekksStage <= SPARKFLY_DUNGEON_SIDE_THRESHOLD ||
-           distToDungeonStage <= SPARKFLY_DUNGEON_SIDE_THRESHOLD;
+static DungeonEntryRecovery::QuestMapApproachPlan MakeFroggyTekksApproachPlan() {
+    DungeonEntryRecovery::QuestMapApproachPlan plan;
+    plan.quest_map_id = MapIds::SPARKFLY_SWAMP;
+    plan.near_side_anchor_a = {SPARKFLY_TEKKS_STAGE.x, SPARKFLY_TEKKS_STAGE.y};
+    plan.near_side_anchor_b = {SPARKFLY_DUNGEON_ENTRY_STAGE.x, SPARKFLY_DUNGEON_ENTRY_STAGE.y};
+    plan.quest_stage = {SPARKFLY_TEKKS_STAGE.x, SPARKFLY_TEKKS_STAGE.y};
+    plan.quest_search = {SPARKFLY_TEKKS_SEARCH.x, SPARKFLY_TEKKS_SEARCH.y};
+    plan.entry_stage = {SPARKFLY_DUNGEON_ENTRY_STAGE.x, SPARKFLY_DUNGEON_ENTRY_STAGE.y};
+    plan.near_side_threshold = SPARKFLY_DUNGEON_SIDE_THRESHOLD;
+    plan.short_move_threshold = SPARKFLY_TEKKS_SHORT_MOVE_THRESHOLD;
+    plan.full_move_threshold = SPARKFLY_TEKKS_FULL_MOVE_THRESHOLD;
+    plan.short_ready_threshold = 1500.0f;
+    plan.full_ready_threshold = 2500.0f;
+    plan.full_route = SPARKFLY_TO_DUNGEON;
+    plan.full_route_count = SPARKFLY_TO_DUNGEON_COUNT;
+    plan.full_route_attempts = 2;
+    plan.death_recovery_timeout_ms = 120000u;
+    plan.death_recovery_poll_ms = 500u;
+    plan.death_recovery_settle_ms = 1000u;
+    plan.move_to_point = &MoveToAndWait;
+    plan.follow_waypoints = &FollowWaypoints;
+    plan.is_dead = &IsDead;
+    plan.log_prefix = "Froggy";
+    plan.label = "Sparkfly Tekks";
+    return plan;
 }
 
 static bool IsSparkflyTekksApproachReady(float maxDist) {
-    auto* me = AgentMgr::GetMyAgent();
-    if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded() ||
-        MapMgr::GetMapId() != MapIds::SPARKFLY_SWAMP) {
-        return false;
-    }
-
-    return IsNearSparkflyDungeonSide() ||
-           AgentMgr::GetDistance(me->x, me->y, SPARKFLY_TEKKS_STAGE.x, SPARKFLY_TEKKS_STAGE.y) <= maxDist ||
-           AgentMgr::GetDistance(me->x, me->y, SPARKFLY_TEKKS_SEARCH.x, SPARKFLY_TEKKS_SEARCH.y) <= maxDist ||
-           AgentMgr::GetDistance(me->x, me->y, SPARKFLY_DUNGEON_ENTRY_STAGE.x, SPARKFLY_DUNGEON_ENTRY_STAGE.y) <= maxDist;
-}
-
-static void LogSparkflyTekksApproachStatus(const char* stage) {
-    auto* me = AgentMgr::GetMyAgent();
-    Log::Info("Froggy: Sparkfly Tekks %s map=%u loaded=%d alive=%d hp=%.3f player=(%.0f, %.0f) nearDungeonSide=%d distStage=%.0f distSearch=%.0f distEntry=%.0f",
-              stage ? stage : "status",
-              MapMgr::GetMapId(),
-              MapMgr::GetIsMapLoaded() ? 1 : 0,
-              me && me->hp > 0.0f ? 1 : 0,
-              me ? me->hp : 0.0f,
-              me ? me->x : 0.0f,
-              me ? me->y : 0.0f,
-              IsNearSparkflyDungeonSide() ? 1 : 0,
-              me ? AgentMgr::GetDistance(me->x, me->y, SPARKFLY_TEKKS_STAGE.x, SPARKFLY_TEKKS_STAGE.y) : -1.0f,
-              me ? AgentMgr::GetDistance(me->x, me->y, SPARKFLY_TEKKS_SEARCH.x, SPARKFLY_TEKKS_SEARCH.y) : -1.0f,
-              me ? AgentMgr::GetDistance(me->x, me->y, SPARKFLY_DUNGEON_ENTRY_STAGE.x, SPARKFLY_DUNGEON_ENTRY_STAGE.y) : -1.0f);
-}
-
-static bool WaitForSparkflyTekksDeathRecovery(const char* context) {
-    if (!IsDead()) {
-        return true;
-    }
-
-    LogBot("Sparkfly Tekks approach death during %s; waiting for resurrection",
-           context ? context : "route");
-    const bool recovered = DungeonRuntime::WaitForCondition(120000u, []() {
-        return !IsDead();
-    }, 500u);
-    WaitMs(1000);
-    LogSparkflyTekksApproachStatus(recovered ? "death-recovered" : "death-recovery-timeout");
-    return recovered &&
-           MapMgr::GetIsMapLoaded() &&
-           MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP;
+    return DungeonEntryRecovery::IsQuestMapApproachReady(MakeFroggyTekksApproachPlan(), maxDist);
 }
 
 static bool MoveToTekksFromSparkflyCurrentSide() {
-    if (MapMgr::GetMapId() != MapIds::SPARKFLY_SWAMP || !MapMgr::GetIsMapLoaded()) {
-        return false;
-    }
-
-    LogSparkflyTekksApproachStatus("approach-start");
-
-    if (IsNearSparkflyDungeonSide()) {
-        LogBot("Sparkfly near-dungeon return detected; using short Tekks approach");
-        const bool stageReached = MoveToAndWait(
-            SPARKFLY_TEKKS_STAGE.x,
-            SPARKFLY_TEKKS_STAGE.y,
-            SPARKFLY_TEKKS_SHORT_MOVE_THRESHOLD);
-        if (!WaitForSparkflyTekksDeathRecovery("short-stage")) {
-            return false;
-        }
-        const bool searchReached = MoveToAndWait(
-            SPARKFLY_TEKKS_SEARCH.x,
-            SPARKFLY_TEKKS_SEARCH.y,
-            SPARKFLY_TEKKS_SHORT_MOVE_THRESHOLD);
-        if (!WaitForSparkflyTekksDeathRecovery("short-search")) {
-            return false;
-        }
-        LogSparkflyTekksApproachStatus("short-complete");
-        return stageReached || searchReached || IsSparkflyTekksApproachReady(1500.0f);
-    }
-
-    for (int attempt = 1; attempt <= 2; ++attempt) {
-        LogBot("Sparkfly south-side entry detected; using full aggro route to Tekks attempt %d", attempt);
-        FollowWaypoints(SPARKFLY_TO_DUNGEON, SPARKFLY_TO_DUNGEON_COUNT, true);
-        LogSparkflyTekksApproachStatus("after-full-route");
-
-        if (!WaitForSparkflyTekksDeathRecovery("full-route")) {
-            return false;
-        }
-        if (MapMgr::GetMapId() != MapIds::SPARKFLY_SWAMP || !MapMgr::GetIsMapLoaded()) {
-            return false;
-        }
-        if (!IsSparkflyTekksApproachReady(SPARKFLY_DUNGEON_SIDE_THRESHOLD) && attempt < 2) {
-            LogBot("Sparkfly Tekks route recovered away from dungeon side; rerouting once");
-            continue;
-        }
-
-        const bool stageReached = MoveToAndWait(
-            SPARKFLY_TEKKS_STAGE.x,
-            SPARKFLY_TEKKS_STAGE.y,
-            SPARKFLY_TEKKS_FULL_MOVE_THRESHOLD);
-        if (!WaitForSparkflyTekksDeathRecovery("full-stage")) {
-            if (attempt < 2) {
-                LogBot("Sparkfly Tekks stage move died; retrying route");
-                continue;
-            }
-            return false;
-        }
-        const bool searchReached = MoveToAndWait(
-            SPARKFLY_TEKKS_SEARCH.x,
-            SPARKFLY_TEKKS_SEARCH.y,
-            SPARKFLY_TEKKS_FULL_MOVE_THRESHOLD);
-        if (!WaitForSparkflyTekksDeathRecovery("full-search")) {
-            if (attempt < 2) {
-                LogBot("Sparkfly Tekks search move died; retrying route");
-                continue;
-            }
-            return false;
-        }
-
-        LogSparkflyTekksApproachStatus("full-complete");
-        if (stageReached || searchReached || IsSparkflyTekksApproachReady(2500.0f)) {
-            return true;
-        }
-    }
-
-    LogSparkflyTekksApproachStatus("failed");
-    return false;
+    return DungeonEntryRecovery::MoveToQuestGiverFromCurrentQuestMapSide(MakeFroggyTekksApproachPlan());
 }
 
 static bool EnterBogrootFromSparkfly() {

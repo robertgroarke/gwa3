@@ -147,6 +147,150 @@ bool BounceThroughDungeonToResetDialog(const DialogResetBouncePlan& plan) {
            (plan.required_start_map_id == 0u || MapMgr::GetMapId() == plan.required_start_map_id);
 }
 
+bool IsNearQuestMapApproachSide(const QuestMapApproachPlan& plan) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != plan.quest_map_id) {
+        return false;
+    }
+
+    return AgentMgr::GetDistance(me->x, me->y, plan.near_side_anchor_a.x, plan.near_side_anchor_a.y) <=
+               plan.near_side_threshold ||
+           AgentMgr::GetDistance(me->x, me->y, plan.near_side_anchor_b.x, plan.near_side_anchor_b.y) <=
+               plan.near_side_threshold;
+}
+
+bool IsQuestMapApproachReady(const QuestMapApproachPlan& plan, float maxDist) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != plan.quest_map_id) {
+        return false;
+    }
+
+    return IsNearQuestMapApproachSide(plan) ||
+           AgentMgr::GetDistance(me->x, me->y, plan.quest_stage.x, plan.quest_stage.y) <= maxDist ||
+           AgentMgr::GetDistance(me->x, me->y, plan.quest_search.x, plan.quest_search.y) <= maxDist ||
+           AgentMgr::GetDistance(me->x, me->y, plan.entry_stage.x, plan.entry_stage.y) <= maxDist;
+}
+
+void LogQuestMapApproachStatus(const QuestMapApproachPlan& plan, const char* stage) {
+    auto* me = AgentMgr::GetMyAgent();
+    Log::Info("%s: %s %s map=%u loaded=%d alive=%d hp=%.3f player=(%.0f, %.0f) nearQuestSide=%d distStage=%.0f distSearch=%.0f distEntry=%.0f",
+              PrefixOrDefault(plan.log_prefix),
+              LabelOrDefault(plan.label, "quest approach"),
+              stage ? stage : "status",
+              MapMgr::GetMapId(),
+              MapMgr::GetIsMapLoaded() ? 1 : 0,
+              me && me->hp > 0.0f ? 1 : 0,
+              me ? me->hp : 0.0f,
+              me ? me->x : 0.0f,
+              me ? me->y : 0.0f,
+              IsNearQuestMapApproachSide(plan) ? 1 : 0,
+              me ? AgentMgr::GetDistance(me->x, me->y, plan.quest_stage.x, plan.quest_stage.y) : -1.0f,
+              me ? AgentMgr::GetDistance(me->x, me->y, plan.quest_search.x, plan.quest_search.y) : -1.0f,
+              me ? AgentMgr::GetDistance(me->x, me->y, plan.entry_stage.x, plan.entry_stage.y) : -1.0f);
+}
+
+bool WaitForQuestMapApproachDeathRecovery(const QuestMapApproachPlan& plan, const char* context) {
+    if (!plan.is_dead || !plan.is_dead()) {
+        return true;
+    }
+
+    Log::Info("%s: %s death during %s; waiting for resurrection",
+              PrefixOrDefault(plan.log_prefix),
+              LabelOrDefault(plan.label, "quest approach"),
+              context ? context : "route");
+    const bool recovered = DungeonRuntime::WaitForCondition(
+        plan.death_recovery_timeout_ms,
+        [&plan]() {
+            return !plan.is_dead || !plan.is_dead();
+        },
+        plan.death_recovery_poll_ms);
+    if (plan.death_recovery_settle_ms > 0u) {
+        DungeonRuntime::WaitMs(plan.death_recovery_settle_ms);
+    }
+    LogQuestMapApproachStatus(plan, recovered ? "death-recovered" : "death-recovery-timeout");
+    return recovered && MapMgr::GetIsMapLoaded() && MapMgr::GetMapId() == plan.quest_map_id;
+}
+
+bool MoveToQuestGiverFromCurrentQuestMapSide(const QuestMapApproachPlan& plan) {
+    const char* prefix = PrefixOrDefault(plan.log_prefix);
+    const char* label = LabelOrDefault(plan.label, "quest approach");
+    if (MapMgr::GetMapId() != plan.quest_map_id || !MapMgr::GetIsMapLoaded() || !plan.move_to_point) {
+        return false;
+    }
+
+    LogQuestMapApproachStatus(plan, "approach-start");
+
+    if (IsNearQuestMapApproachSide(plan)) {
+        Log::Info("%s: %s near-entry return detected; using short quest approach", prefix, label);
+        const bool stageReached = plan.move_to_point(
+            plan.quest_stage.x,
+            plan.quest_stage.y,
+            plan.short_move_threshold);
+        if (!WaitForQuestMapApproachDeathRecovery(plan, "short-stage")) {
+            return false;
+        }
+        const bool searchReached = plan.move_to_point(
+            plan.quest_search.x,
+            plan.quest_search.y,
+            plan.short_move_threshold);
+        if (!WaitForQuestMapApproachDeathRecovery(plan, "short-search")) {
+            return false;
+        }
+        LogQuestMapApproachStatus(plan, "short-complete");
+        return stageReached || searchReached || IsQuestMapApproachReady(plan, plan.short_ready_threshold);
+    }
+
+    for (int attempt = 1; attempt <= plan.full_route_attempts; ++attempt) {
+        Log::Info("%s: %s far-side entry detected; using full route attempt %d", prefix, label, attempt);
+        if (plan.follow_waypoints && plan.full_route && plan.full_route_count > 0) {
+            plan.follow_waypoints(plan.full_route, plan.full_route_count, true);
+        }
+        LogQuestMapApproachStatus(plan, "after-full-route");
+
+        if (!WaitForQuestMapApproachDeathRecovery(plan, "full-route")) {
+            return false;
+        }
+        if (MapMgr::GetMapId() != plan.quest_map_id || !MapMgr::GetIsMapLoaded()) {
+            return false;
+        }
+        if (!IsQuestMapApproachReady(plan, plan.near_side_threshold) && attempt < plan.full_route_attempts) {
+            Log::Info("%s: %s route recovered away from entry side; rerouting once", prefix, label);
+            continue;
+        }
+
+        const bool stageReached = plan.move_to_point(
+            plan.quest_stage.x,
+            plan.quest_stage.y,
+            plan.full_move_threshold);
+        if (!WaitForQuestMapApproachDeathRecovery(plan, "full-stage")) {
+            if (attempt < plan.full_route_attempts) {
+                Log::Info("%s: %s stage move died; retrying route", prefix, label);
+                continue;
+            }
+            return false;
+        }
+        const bool searchReached = plan.move_to_point(
+            plan.quest_search.x,
+            plan.quest_search.y,
+            plan.full_move_threshold);
+        if (!WaitForQuestMapApproachDeathRecovery(plan, "full-search")) {
+            if (attempt < plan.full_route_attempts) {
+                Log::Info("%s: %s search move died; retrying route", prefix, label);
+                continue;
+            }
+            return false;
+        }
+
+        LogQuestMapApproachStatus(plan, "full-complete");
+        if (stageReached || searchReached || IsQuestMapApproachReady(plan, plan.full_ready_threshold)) {
+            return true;
+        }
+    }
+
+    LogQuestMapApproachStatus(plan, "failed");
+    return false;
+}
+
 bool RecordEntryFailureAndMaybeResetDialog(
     EntryFailureTracker& tracker,
     const DialogResetBouncePlan& plan,
