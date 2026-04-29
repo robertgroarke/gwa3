@@ -162,10 +162,6 @@ inline constexpr bool IsTekksDungeonEntryConfirmed(bool questPresent, uint32_t a
     return entryReady && IsTekksQuestReadyForDungeonEntry(questPresent, activeQuestId);
 }
 
-inline constexpr bool ShouldResetTekksDialogAfterQuestFailures(int failedAttempts) {
-    return failedAttempts > TEKKS_DIALOG_RESET_FAILURE_THRESHOLD;
-}
-
 inline constexpr uint32_t ENTRY_DIALOGS[] = {
     DialogIds::NPC_TALK,
     DialogIds::TekksWar::QUEST_ACCEPT,

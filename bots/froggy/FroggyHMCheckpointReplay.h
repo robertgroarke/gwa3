@@ -23,18 +23,3 @@ static void LogQuestDoorCheckpointDiagnostic(const Waypoint* wps, int waypointIn
            me && me->hp > 0.0f ? 1 : 0,
            IsMapLoaded() ? 1 : 0);
 }
-
-static void ReplayFroggyCheckpointBacktrack(
-    const Waypoint* wps,
-    int count,
-    int currentIndex,
-    DungeonCheckpoint::WaypointReplayVisitFn afterMoveWaypoint = nullptr) {
-    DungeonCheckpoint::CheckpointBacktrackReplayOptions replayOptions;
-    replayOptions.waypoints = wps;
-    replayOptions.waypoint_count = count;
-    replayOptions.current_index = currentIndex;
-    replayOptions.backtrack_start = currentIndex - 3;
-    replayOptions.move_waypoint = &MoveFroggyWaypointForCheckpointReplay;
-    replayOptions.after_move_waypoint = afterMoveWaypoint;
-    (void)DungeonCheckpoint::ReplayCheckpointBacktrack(replayOptions);
-}

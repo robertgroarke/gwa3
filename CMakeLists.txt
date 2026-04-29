@@ -100,6 +100,7 @@ add_library(gwa3_core OBJECT
     src/gwa3/dungeon/DungeonDiagnostics.cpp
     src/gwa3/dungeon/DungeonDialog.cpp
     src/gwa3/dungeon/DungeonEffects.cpp
+    src/gwa3/dungeon/DungeonEntryRecovery.cpp
     src/gwa3/dungeon/DungeonInteractions.cpp
     src/gwa3/dungeon/DungeonInventory.cpp
     src/gwa3/dungeon/DungeonItemActions.cpp

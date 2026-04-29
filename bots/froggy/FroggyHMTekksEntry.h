@@ -54,17 +54,6 @@ static DungeonQuestRuntime::QuestGiverEntryOptions MakeTekksDungeonEntryOptions(
     return options;
 }
 
-static bool RefreshTekksQuestReadyForDungeonEntry(const char* label, uint32_t refreshDelayMs) {
-    DungeonQuestRuntime::QuestReadyOptions options = {};
-    options.refresh_delay_ms = refreshDelayMs;
-    options.post_set_active_delay_ms = TEKKS_SET_ACTIVE_DWELL_MS;
-    options.log_prefix = "Froggy";
-    options.label = label;
-    return DungeonQuestRuntime::RefreshQuestReadyForDungeonEntry(
-        GWA3::QuestIds::TEKKS_WAR,
-        options).ready;
-}
-
 static bool PrepareTekksDungeonEntry() {
     const auto result = DungeonQuestRuntime::PrepareDungeonEntryFromQuestGiver(
         MakeTekksDungeonEntryPlan(),

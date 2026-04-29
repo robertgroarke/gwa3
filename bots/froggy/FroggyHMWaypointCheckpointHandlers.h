@@ -52,17 +52,27 @@ static FroggyWaypointHandlerResult HandleFroggyQuestDoorCheckpoint(
     const Waypoint* wps,
     int count,
     int& waypointIndex) {
-    if (!RefreshTekksQuestReadyForDungeonEntry("quest-door checkpoint precheck")) {
+    DungeonEntryRecovery::QuestDoorRecoveryOptions questRecoveryOptions;
+    questRecoveryOptions.quest_id = GWA3::QuestIds::TEKKS_WAR;
+    questRecoveryOptions.quest_ready.refresh_delay_ms = TEKKS_QUEST_REFRESH_DELAY_MS;
+    questRecoveryOptions.quest_ready.post_set_active_delay_ms = TEKKS_SET_ACTIVE_DWELL_MS;
+    questRecoveryOptions.waypoints = wps;
+    questRecoveryOptions.waypoint_count = count;
+    questRecoveryOptions.current_index = waypointIndex;
+    questRecoveryOptions.backtrack_steps = 3;
+    questRecoveryOptions.move_waypoint = &MoveFroggyWaypointForCheckpointReplay;
+    questRecoveryOptions.after_move_waypoint = &LogQuestDoorCheckpointReplayWaypoint;
+    questRecoveryOptions.return_to_quest_map = MakeFroggyReturnToSparkflyPlan("Froggy quest-door refresh");
+    questRecoveryOptions.log_prefix = "Froggy";
+    questRecoveryOptions.label = "Quest Door Checkpoint";
+    const auto missingQuestRecovery = DungeonEntryRecovery::HandleQuestDoorRecovery(questRecoveryOptions);
+    if (missingQuestRecovery.recovery_triggered) {
         LogBot("Quest Door Checkpoint reached without Tekks's War; returning to Sparkfly for quest refresh");
         LogFroggyWaypointState("quest-door-missing-quest-refresh-trigger", wps, count, waypointIndex);
-        ReplayFroggyCheckpointBacktrack(wps, count, waypointIndex, &LogQuestDoorCheckpointReplayWaypoint);
-        const bool returned = ReturnToSparkflyFromBogroot();
-        Log::Info("Froggy: Bogroot quest-door missing-quest refresh returned=%d finalMap=%u",
-                  returned ? 1 : 0,
-                  MapMgr::GetMapId());
-        s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
+        s_dungeonLoopTelemetry.final_map_id = missingQuestRecovery.final_map_id;
         s_dungeonLoopTelemetry.returned_to_sparkfly =
-            returned && MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP;
+            missingQuestRecovery.returned_to_quest_map &&
+            missingQuestRecovery.final_map_id == MapIds::SPARKFLY_SWAMP;
         return FroggyWaypointHandlerResult::StopRoute;
     }
 
@@ -86,14 +96,20 @@ static FroggyWaypointHandlerResult HandleFroggyQuestDoorCheckpoint(
                waypointIndex,
                nearest);
         LogFroggyWaypointState("quest-door-refresh-trigger", wps, count, waypointIndex);
-        ReplayFroggyCheckpointBacktrack(wps, count, waypointIndex, &LogQuestDoorCheckpointReplayWaypoint);
-        const bool returned = ReturnToSparkflyFromBogroot();
-        Log::Info("Froggy: Bogroot quest-door refresh returned=%d finalMap=%u",
-                  returned ? 1 : 0,
-                  MapMgr::GetMapId());
-        s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
+        DungeonEntryRecovery::BacktrackReturnOptions returnOptions;
+        returnOptions.waypoints = wps;
+        returnOptions.waypoint_count = count;
+        returnOptions.current_index = waypointIndex;
+        returnOptions.backtrack_steps = 3;
+        returnOptions.move_waypoint = &MoveFroggyWaypointForCheckpointReplay;
+        returnOptions.after_move_waypoint = &LogQuestDoorCheckpointReplayWaypoint;
+        returnOptions.return_to_quest_map = MakeFroggyReturnToSparkflyPlan("Froggy quest-door refresh");
+        returnOptions.log_prefix = "Froggy";
+        returnOptions.label = "Quest Door Checkpoint";
+        const auto returned = DungeonEntryRecovery::ReplayBacktrackAndReturnToQuestMap(returnOptions);
+        s_dungeonLoopTelemetry.final_map_id = returned.final_map_id;
         s_dungeonLoopTelemetry.returned_to_sparkfly =
-            returned && MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP;
+            returned.returned_to_quest_map && returned.final_map_id == MapIds::SPARKFLY_SWAMP;
         return FroggyWaypointHandlerResult::StopRoute;
     }
     LogBot("Quest Door Checkpoint reached at wp %d nearest=%d", waypointIndex, nearest);

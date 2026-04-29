@@ -34,14 +34,15 @@ static bool WaitForBossPostRewardReturn(bool questRewardAccepted) {
                           mapLoadedAfterReward ? 1 : 0,
                           myIdAfterReward);
             } else {
-                Log::Info("Froggy: Boss post-reward still in Bogroot after wait questRewardAccepted=%d map=%u loaded=%d myId=%u; attempting explicit reverse",
+                Log::Info("Froggy: Boss post-reward still in Bogroot after wait questRewardAccepted=%d map=%u loaded=%d myId=%u; traveling to Gadd's for between-loop recovery",
                           questRewardAccepted ? 1 : 0,
                           mapAfterReward,
                           mapLoadedAfterReward ? 1 : 0,
                           myIdAfterReward);
-                returnedToSparkfly = ReverseToSparkflySwamp();
-                Log::Info("Froggy: Boss explicit reverse to Sparkfly result=%d finalMap=%u loaded=%d myId=%u",
-                          returnedToSparkfly ? 1 : 0,
+                MapMgr::Travel(MapIds::GADDS_ENCAMPMENT);
+                const bool returnedToGadds = DungeonRuntime::WaitForMapReady(MapIds::GADDS_ENCAMPMENT, 120000u);
+                Log::Info("Froggy: Boss post-reward Gadd's travel result=%d finalMap=%u loaded=%d myId=%u",
+                          returnedToGadds ? 1 : 0,
                           MapMgr::GetMapId(),
                           MapMgr::GetIsMapLoaded() ? 1 : 0,
                           AgentMgr::GetMyId());

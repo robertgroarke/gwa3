@@ -11,6 +11,7 @@
 #include <gwa3/dungeon/DungeonDiagnostics.h>
 #include <gwa3/dungeon/DungeonDialog.h>
 #include <gwa3/dungeon/DungeonEffects.h>
+#include <gwa3/dungeon/DungeonEntryRecovery.h>
 #include <gwa3/dungeon/DungeonInteractions.h>
 #include <gwa3/dungeon/DungeonInventory.h>
 #include <gwa3/dungeon/DungeonItemActions.h>
@@ -77,7 +78,10 @@ static uint32_t s_wipeCount = 0;
 static DWORD s_runStartTime = 0;
 static DWORD s_totalStartTime = 0;
 static DWORD s_bestRunTime = 0xFFFFFFFF;
-static int s_tekksQuestEntryFailureCount = 0;
+static DungeonEntryRecovery::EntryFailureTracker s_tekksQuestEntryFailures = {
+    0,
+    TEKKS_DIALOG_RESET_FAILURE_THRESHOLD,
+};
 static DungeonCombatRoutine::CombatSessionState s_combatSession = {};
 static SparkflyTraversalCombatStats s_sparkflyTraversalCombatStats = {};
 static DungeonLoopTelemetry s_dungeonLoopTelemetry = {};
@@ -93,9 +97,6 @@ static bool AcquireBogrootBossKey();
 static void UseDpRemovalIfNeeded();
 static bool OpenChestAt(float chestX, float chestY, float searchRadius = DEFAULT_CHEST_OPEN_RADIUS);
 static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunning);
-static bool RefreshTekksQuestReadyForDungeonEntry(
-    const char* label,
-    uint32_t refreshDelayMs = TEKKS_QUEST_REFRESH_DELAY_MS);
 
 #include "FroggyHMMovementCombatRuntime.h"
 #include "FroggyHMAggroCombatRuntime.h"

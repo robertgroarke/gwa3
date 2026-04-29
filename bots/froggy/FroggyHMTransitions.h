@@ -3,40 +3,45 @@
 
 #include "FroggyHMWipeRecovery.h"
 
-static bool ReverseToSparkflySwamp() {
-    return DungeonRuntime::StageAndPushUntilMapReady(
-        MapIds::SPARKFLY_SWAMP,
-        BOGROOT_REVERSE_TO_SPARKFLY_STAGE.x,
-        BOGROOT_REVERSE_TO_SPARKFLY_STAGE.y,
-        MAP_TRANSITION_STAGE_THRESHOLD,
-        BOGROOT_REVERSE_TO_SPARKFLY_STAGE.x,
-        BOGROOT_REVERSE_TO_SPARKFLY_STAGE.y,
-        &MoveToAndWait,
-        MAP_TRANSITION_REVERSE_PUSH_DELAY_MS,
-        MAP_TRANSITION_READY_TIMEOUT_MS,
-        MAP_TRANSITION_PUSH_TIMEOUT_MS,
-        MAP_TRANSITION_PUSH_INTERVAL_MS,
-        "Froggy reverse to Sparkfly");
+static DungeonEntryRecovery::TransitionPlan MakeFroggyReturnToSparkflyPlan(const char* label) {
+    DungeonEntryRecovery::TransitionPlan plan;
+    plan.required_start_map_id = MapIds::BOGROOT_GROWTHS_LVL1;
+    plan.target_map_id = MapIds::SPARKFLY_SWAMP;
+    plan.stage = {BOGROOT_RETURN_TO_SPARKFLY_STAGE.x, BOGROOT_RETURN_TO_SPARKFLY_STAGE.y};
+    plan.push = {BOGROOT_RETURN_TO_SPARKFLY_PUSH.x, BOGROOT_RETURN_TO_SPARKFLY_PUSH.y};
+    plan.stage_threshold = MAP_TRANSITION_STAGE_THRESHOLD;
+    plan.pre_push_delay_ms = MAP_TRANSITION_RETURN_PUSH_DELAY_MS;
+    plan.ready_timeout_ms = MAP_TRANSITION_READY_TIMEOUT_MS;
+    plan.push_timeout_ms = MAP_TRANSITION_PUSH_TIMEOUT_MS;
+    plan.push_interval_ms = MAP_TRANSITION_PUSH_INTERVAL_MS;
+    plan.move_to_point = &MoveToAndWait;
+    plan.log_prefix = "Froggy";
+    plan.label = label;
+    return plan;
 }
 
-static bool ReturnToSparkflyFromBogroot() {
-    if (MapMgr::GetMapId() != MapIds::BOGROOT_GROWTHS_LVL1) {
-        return false;
-    }
+static DungeonEntryRecovery::DungeonEntryPlan MakeFroggyBogrootEntryPlan(const char* label) {
+    DungeonEntryRecovery::DungeonEntryPlan plan;
+    plan.bootstrap = GetEntryBootstrapPlan();
+    plan.path_threshold = DungeonNavigation::MOVE_TO_DEFAULT_THRESHOLD;
+    plan.route_dwell_ms = MAP_TRANSITION_ENTRY_ROUTE_DWELL_MS;
+    plan.ready_timeout_ms = MAP_TRANSITION_READY_TIMEOUT_MS;
+    plan.push_timeout_ms = MAP_TRANSITION_PUSH_TIMEOUT_MS;
+    plan.push_interval_ms = MAP_TRANSITION_PUSH_INTERVAL_MS;
+    plan.log_prefix = "Froggy";
+    plan.label = label;
+    return plan;
+}
 
-    return DungeonRuntime::StageAndPushUntilMapReady(
-        MapIds::SPARKFLY_SWAMP,
-        BOGROOT_RETURN_TO_SPARKFLY_STAGE.x,
-        BOGROOT_RETURN_TO_SPARKFLY_STAGE.y,
-        MAP_TRANSITION_STAGE_THRESHOLD,
-        BOGROOT_RETURN_TO_SPARKFLY_PUSH.x,
-        BOGROOT_RETURN_TO_SPARKFLY_PUSH.y,
-        &MoveToAndWait,
-        MAP_TRANSITION_RETURN_PUSH_DELAY_MS,
-        MAP_TRANSITION_READY_TIMEOUT_MS,
-        MAP_TRANSITION_PUSH_TIMEOUT_MS,
-        MAP_TRANSITION_PUSH_INTERVAL_MS,
-        "Froggy transition");
+static DungeonEntryRecovery::DialogResetBouncePlan MakeTekksDialogResetBouncePlan() {
+    DungeonEntryRecovery::DialogResetBouncePlan plan;
+    plan.required_start_map_id = MapIds::SPARKFLY_SWAMP;
+    plan.enter = MakeFroggyBogrootEntryPlan("Tekks dialog reset enter");
+    plan.return_to_quest_map = MakeFroggyReturnToSparkflyPlan("Tekks dialog reset return");
+    plan.settle_ms = TEKKS_DIALOG_RESET_SETTLE_MS;
+    plan.log_prefix = "Froggy";
+    plan.label = "Tekks dialog reset bounce";
+    return plan;
 }
 
 static bool IsNearSparkflyDungeonSide() {
@@ -176,79 +181,17 @@ static bool MoveToTekksFromSparkflyCurrentSide() {
 }
 
 static bool EnterBogrootFromSparkfly() {
-    if (MapMgr::GetMapId() != MapIds::SPARKFLY_SWAMP) {
-        return false;
-    }
-
-    const auto entryPlan = GetEntryBootstrapPlan();
-    for (int i = 0; i < entryPlan.entry_path_count; ++i) {
-        const auto& point = entryPlan.entry_path[i];
-        if (i + 1 < entryPlan.entry_path_count) {
-            MoveToAndWait(point.x, point.y);
-        } else {
-            AgentMgr::Move(point.x, point.y);
-        }
-    }
-    WaitMs(MAP_TRANSITION_ENTRY_ROUTE_DWELL_MS);
-
-    return DungeonRuntime::PushUntilMapReady(
-        entryPlan.target_map_id,
-        entryPlan.zone_point.x,
-        entryPlan.zone_point.y,
-        MAP_TRANSITION_READY_TIMEOUT_MS,
-        MAP_TRANSITION_PUSH_TIMEOUT_MS,
-        MAP_TRANSITION_PUSH_INTERVAL_MS,
-        "Froggy transition");
+    return DungeonEntryRecovery::EnterDungeonFromQuestMap(
+        MakeFroggyBogrootEntryPlan("Froggy transition"));
 }
 
 static void ResetTekksQuestEntryFailures(const char* reason) {
-    if (s_tekksQuestEntryFailureCount > 0) {
-        Log::Info("Froggy: Resetting Tekks quest-entry failure count from %d reason=%s",
-                  s_tekksQuestEntryFailureCount,
-                  reason ? reason : "unspecified");
-    }
-    s_tekksQuestEntryFailureCount = 0;
-}
-
-static bool BounceThroughBogrootToResetTekksDialog() {
-    if (MapMgr::GetMapId() != MapIds::SPARKFLY_SWAMP) {
-        Log::Info("Froggy: Tekks dialog reset bounce skipped because map=%u is not Sparkfly",
-                  MapMgr::GetMapId());
-        return false;
-    }
-
-    LogBot("Tekks quest dialog failed repeatedly; zoning into Bogroot and back to reset dialog");
-    const bool entered = EnterBogrootFromSparkfly();
-    if (!entered) {
-        Log::Info("Froggy: Tekks dialog reset bounce failed to enter Bogroot finalMap=%u",
-                  MapMgr::GetMapId());
-        WaitMs(TEKKS_DIALOG_RESET_SETTLE_MS);
-        return false;
-    }
-
-    WaitMs(TEKKS_DIALOG_RESET_SETTLE_MS);
-    const bool returned = ReturnToSparkflyFromBogroot();
-    WaitMs(TEKKS_DIALOG_RESET_SETTLE_MS);
-    Log::Info("Froggy: Tekks dialog reset bounce entered=%d returned=%d finalMap=%u",
-              entered ? 1 : 0,
-              returned ? 1 : 0,
-              MapMgr::GetMapId());
-    return returned && MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP;
+    DungeonEntryRecovery::ResetEntryFailureTracker(s_tekksQuestEntryFailures, reason, "Froggy");
 }
 
 static bool RecordTekksQuestEntryFailureAndMaybeResetDialog(const char* context) {
-    ++s_tekksQuestEntryFailureCount;
-    Log::Info("Froggy: Tekks quest-entry failure count=%d threshold=%d context=%s map=%u",
-              s_tekksQuestEntryFailureCount,
-              TEKKS_DIALOG_RESET_FAILURE_THRESHOLD,
-              context ? context : "unspecified",
-              MapMgr::GetMapId());
-
-    if (!ShouldResetTekksDialogAfterQuestFailures(s_tekksQuestEntryFailureCount)) {
-        return false;
-    }
-
-    const bool bounced = BounceThroughBogrootToResetTekksDialog();
-    ResetTekksQuestEntryFailures(bounced ? "dialog-reset-bounce" : "dialog-reset-bounce-failed");
-    return bounced;
+    return DungeonEntryRecovery::RecordEntryFailureAndMaybeResetDialog(
+        s_tekksQuestEntryFailures,
+        MakeTekksDialogResetBouncePlan(),
+        context);
 }
