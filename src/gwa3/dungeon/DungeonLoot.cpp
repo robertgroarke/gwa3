@@ -53,6 +53,14 @@ void LogSignpostScan(const ChestAtOpenOptions& options,
     }
 }
 
+bool IsBossKeyCandidate(const Item* item,
+                        BossKeyItemPredicateFn predicate,
+                        const BossKeyModelSet& modelSet) {
+    if (!item) return false;
+    if (predicate) return predicate(item);
+    return IsBossKeyLikeItem(item, modelSet);
+}
+
 } // namespace
 
 bool IsAlwaysPickupModel(uint32_t modelId) {
@@ -100,9 +108,23 @@ bool IsQuestPickupModel(uint32_t modelId) {
     }
 }
 
+bool IsModelInBossKeySet(uint32_t modelId, const BossKeyModelSet& modelSet) {
+    if (!modelSet.model_ids || modelSet.model_count <= 0) return false;
+    for (int i = 0; i < modelSet.model_count; ++i) {
+        if (modelSet.model_ids[i] == modelId) return true;
+    }
+    return false;
+}
+
 bool IsBossKeyLikeItem(const Item* item) {
     if (!item) return false;
     return item->type == TYPE_KEY;
+}
+
+bool IsBossKeyLikeItem(const Item* item, const BossKeyModelSet& modelSet) {
+    if (!item) return false;
+    if (IsModelInBossKeySet(item->model_id, modelSet)) return true;
+    return modelSet.accept_type_key && item->type == TYPE_KEY;
 }
 
 bool IsWorldReadyForLoot() {
@@ -383,11 +405,11 @@ int PickUpNearbyLoot(float maxRange, WaitFn wait_ms, BoolFn is_dead, const LootP
 uint32_t CountNearbyBossKeyCandidates(float x,
                                       float y,
                                       float maxRange,
-                                      BossKeyItemPredicateFn is_boss_key) {
+                                      BossKeyItemPredicateFn is_boss_key,
+                                      const BossKeyModelSet& boss_key_models) {
     auto* me = AgentMgr::GetMyAgent();
     const uint32_t myId = me ? me->agent_id : 0u;
     uint32_t count = 0u;
-    const BossKeyItemPredicateFn predicate = is_boss_key ? is_boss_key : &IsBossKeyLikeItem;
     const uint32_t maxAgents = AgentMgr::GetMaxAgents();
     for (uint32_t i = 1u; i < maxAgents; ++i) {
         auto* agent = AgentMgr::GetAgentByID(i);
@@ -396,7 +418,7 @@ uint32_t CountNearbyBossKeyCandidates(float x,
         if (itemAgent->owner != 0u && itemAgent->owner != myId) continue;
         if (AgentMgr::GetDistance(x, y, agent->x, agent->y) > maxRange) continue;
         auto* item = ItemMgr::GetItemById(itemAgent->item_id);
-        if (!item || !predicate(item)) continue;
+        if (!IsBossKeyCandidate(item, is_boss_key, boss_key_models)) continue;
         ++count;
     }
     return count;
@@ -408,12 +430,12 @@ void LogNearbyBossKeyCandidates(const char* label,
                                 float maxRange,
                                 const char* log_prefix,
                                 const LootPickupOptions& options,
-                                BossKeyItemPredicateFn is_boss_key) {
+                                BossKeyItemPredicateFn is_boss_key,
+                                const BossKeyModelSet& boss_key_models) {
     auto* me = AgentMgr::GetMyAgent();
     const uint32_t myId = me ? me->agent_id : 0u;
     const uint32_t maxAgents = AgentMgr::GetMaxAgents();
     const char* prefix = log_prefix ? log_prefix : "DungeonLoot";
-    const BossKeyItemPredicateFn predicate = is_boss_key ? is_boss_key : &IsBossKeyLikeItem;
     uint32_t matches = 0u;
     for (uint32_t i = 1u; i < maxAgents; ++i) {
         auto* agent = AgentMgr::GetAgentByID(i);
@@ -423,7 +445,7 @@ void LogNearbyBossKeyCandidates(const char* label,
         const float dist = AgentMgr::GetDistance(x, y, agent->x, agent->y);
         if (dist > maxRange) continue;
         auto* item = ItemMgr::GetItemById(itemAgent->item_id);
-        if (!item || !predicate(item)) continue;
+        if (!IsBossKeyCandidate(item, is_boss_key, boss_key_models)) continue;
         ++matches;
         Log::Info("%s: %s candidate[%u] agent=%u itemId=%u model=%u type=%u owner=%u pos=(%.0f, %.0f) dist=%.0f shouldPick=%d",
                   prefix,
@@ -459,7 +481,6 @@ bool ForcePickUpBossKeyCandidates(float centerX,
     if (!me) return false;
     const uint32_t myId = me->agent_id;
     const char* prefix = options.log_prefix ? options.log_prefix : "DungeonLoot";
-    const BossKeyItemPredicateFn predicate = options.is_boss_key ? options.is_boss_key : &IsBossKeyLikeItem;
     bool pickedAny = false;
 
     for (uint32_t pass = 1u; pass <= options.passes; ++pass) {
@@ -473,7 +494,7 @@ bool ForcePickUpBossKeyCandidates(float centerX,
             const float distFromCenter = AgentMgr::GetDistance(centerX, centerY, agent->x, agent->y);
             if (distFromCenter > scanRange) continue;
             auto* item = ItemMgr::GetItemById(itemAgent->item_id);
-            if (!item || !predicate(item)) continue;
+            if (!IsBossKeyCandidate(item, options.is_boss_key, options.boss_key_models)) continue;
 
             me = AgentMgr::GetMyAgent();
             if (!me) return pickedAny;
@@ -524,7 +545,12 @@ bool ForcePickUpBossKeyCandidates(float centerX,
             }
         }
 
-        const uint32_t remaining = CountNearbyBossKeyCandidates(centerX, centerY, scanRange, predicate);
+        const uint32_t remaining = CountNearbyBossKeyCandidates(
+            centerX,
+            centerY,
+            scanRange,
+            options.is_boss_key,
+            options.boss_key_models);
         Log::Info("%s: ForcePickUpBossKey pass=%u remaining=%u pickedAny=%d",
                   prefix,
                   pass,
@@ -557,7 +583,8 @@ bool AcquireBossKey(const BossKeyAcquireOptions& options) {
         options.key_scan_range,
         prefix,
         options.loot,
-        options.is_boss_key);
+        options.is_boss_key,
+        options.boss_key_models);
 
     BossKeyPickupOptions forceOptions = options.force_pickup;
     if (!forceOptions.log_prefix) {
@@ -565,6 +592,9 @@ bool AcquireBossKey(const BossKeyAcquireOptions& options) {
     }
     if (!forceOptions.is_boss_key) {
         forceOptions.is_boss_key = options.is_boss_key;
+    }
+    if (!forceOptions.boss_key_models.model_ids) {
+        forceOptions.boss_key_models = options.boss_key_models;
     }
 
     for (uint32_t pass = 1u; pass <= options.passes; ++pass) {
@@ -593,7 +623,8 @@ bool AcquireBossKey(const BossKeyAcquireOptions& options) {
             options.key_x,
             options.key_y,
             options.key_scan_range,
-            options.is_boss_key);
+            options.is_boss_key,
+            options.boss_key_models);
         const uint32_t freeSlots = DungeonInventory::CountFreeSlots();
         Log::Info("%s: AcquireBossKey pass=%u picked=%d forced=%d nearbyKeys=%u player=(%.0f, %.0f) distToKey=%.0f",
                   prefix,
@@ -612,7 +643,8 @@ bool AcquireBossKey(const BossKeyAcquireOptions& options) {
             options.key_scan_range,
             prefix,
             options.loot,
-            options.is_boss_key);
+            options.is_boss_key,
+            options.boss_key_models);
         if (nearbyKeys == 0u) {
             return true;
         }
@@ -627,7 +659,8 @@ bool AcquireBossKey(const BossKeyAcquireOptions& options) {
         options.key_x,
         options.key_y,
         options.key_scan_range,
-        options.is_boss_key);
+        options.is_boss_key,
+        options.boss_key_models);
     LogNearbyBossKeyCandidates(
         "AcquireBossKey final",
         options.key_x,
@@ -635,7 +668,8 @@ bool AcquireBossKey(const BossKeyAcquireOptions& options) {
         options.key_scan_range,
         prefix,
         options.loot,
-        options.is_boss_key);
+        options.is_boss_key,
+        options.boss_key_models);
     Log::Warn("%s: AcquireBossKey incomplete nearbyKeys=%u player=(%.0f, %.0f)",
               prefix,
               nearbyKeys,
@@ -645,13 +679,6 @@ bool AcquireBossKey(const BossKeyAcquireOptions& options) {
     if (nearbyKeys > 0u && finalFreeSlots == 0u) {
         Log::Warn("%s: AcquireBossKey failed because inventory is full; refusing door-open validation", prefix);
         return false;
-    }
-    if (nearbyKeys > 0u && options.open_door_at) {
-        Log::Info("%s: AcquireBossKey attempting door-open validation despite persistent key agent", prefix);
-        if (options.open_door_at(options.boss_door_x, options.boss_door_y)) {
-            Log::Info("%s: AcquireBossKey accepted via door-open validation", prefix);
-            return true;
-        }
     }
     return nearbyKeys == 0u;
 }

@@ -5,6 +5,12 @@
 
 // ===== Loot Pickup =====
 
+inline constexpr uint32_t BOGROOT_BOSS_KEY_MODELS[] = {
+    ItemModelIds::DUNGEON_KEY_SORROWS_FURNACE,
+    ItemModelIds::DUNGEON_KEY_PRISON,
+    ItemModelIds::DUNGEON_KEY_BOGROOT,
+};
+
 static int PickupNearbyLoot(float maxRange) {
     DungeonLoot::LootPickupOptions options;
     options.is_world_ready = &DungeonLoot::IsWorldReadyForLoot;
@@ -12,19 +18,11 @@ static int PickupNearbyLoot(float maxRange) {
     return DungeonLoot::PickUpNearbyLoot(maxRange, &DungeonRuntime::WaitMs, &IsDead, options);
 }
 
-static bool IsBogrootBossKeyModel(uint32_t modelId) {
-    return modelId == ItemModelIds::DUNGEON_KEY_SORROWS_FURNACE ||
-           modelId == ItemModelIds::DUNGEON_KEY_PRISON ||
-           modelId == ItemModelIds::DUNGEON_KEY_BOGROOT;
-}
-
-static bool IsBogrootBossKeyLikeItem(const Item* item) {
-    if (!item) return false;
-    if (IsBogrootBossKeyModel(item->model_id)) return true;
-    return item->type == DungeonLoot::TYPE_KEY;
-}
-
 static void LogNearbyBogrootBossKeyCandidates(const char* label, float x, float y, float maxRange) {
+    DungeonLoot::BossKeyModelSet modelSet;
+    modelSet.model_ids = BOGROOT_BOSS_KEY_MODELS;
+    modelSet.model_count = static_cast<int>(sizeof(BOGROOT_BOSS_KEY_MODELS) / sizeof(BOGROOT_BOSS_KEY_MODELS[0]));
+    modelSet.accept_type_key = true;
     DungeonLoot::LogNearbyBossKeyCandidates(
         label,
         x,
@@ -32,7 +30,8 @@ static void LogNearbyBogrootBossKeyCandidates(const char* label, float x, float 
         maxRange,
         "Froggy",
         {},
-        &IsBogrootBossKeyLikeItem);
+        nullptr,
+        modelSet);
 }
 
 static void MoveToBogrootBossKeyWithAggro(float x, float y, float fightRange) {
@@ -44,20 +43,18 @@ static bool AcquireBogrootBossKey() {
     options.key_x = BOGROOT_BOSS_KEY_X;
     options.key_y = BOGROOT_BOSS_KEY_Y;
     options.key_scan_range = BOGROOT_BOSS_KEY_SCAN_RANGE;
-    options.boss_door_x = BOGROOT_BOSS_DOOR_X;
-    options.boss_door_y = BOGROOT_BOSS_DOOR_Y;
     options.log_prefix = "Froggy";
     options.combat_move_to = &MoveToBogrootBossKeyWithAggro;
     options.pickup_nearby_loot = &PickupNearbyLoot;
     options.move_to_point = &DungeonNavigation::MoveToPoint;
-    options.open_door_at = &OpenDungeonDoorAt;
     options.wait_ms = &DungeonRuntime::WaitMs;
     options.is_dead = &IsDead;
-    options.is_boss_key = &IsBogrootBossKeyLikeItem;
+    options.boss_key_models.model_ids = BOGROOT_BOSS_KEY_MODELS;
+    options.boss_key_models.model_count = static_cast<int>(sizeof(BOGROOT_BOSS_KEY_MODELS) / sizeof(BOGROOT_BOSS_KEY_MODELS[0]));
+    options.boss_key_models.accept_type_key = true;
     options.loot.is_world_ready = &DungeonLoot::IsWorldReadyForLoot;
     options.loot.log_prefix = "Froggy";
     options.force_pickup.log_prefix = "Froggy";
-    options.force_pickup.is_boss_key = &IsBogrootBossKeyLikeItem;
     return DungeonLoot::AcquireBossKey(options);
 }
 

@@ -28,11 +28,16 @@ using MoveToPointFn = void(*)(float x, float y, float threshold);
 using MoveToPointResultFn = bool(*)(float x, float y, float threshold);
 using CombatMoveToFn = void(*)(float x, float y, float fightRange);
 using PickupNearbyLootFn = int(*)(float maxRange);
-using OpenDoorAtFn = bool(*)(float x, float y);
 using OpenChestAtFn = bool(*)(float x, float y, float searchRadius);
 using ChestBundleOpenFn = bool(*)(float chestX, float chestY, float searchRadius);
 using SignpostScanLogFn = void(*)(float x, float y, float maxDist, const char* label, bool chestOnly);
 using BossKeyItemPredicateFn = bool(*)(const Item* item);
+
+struct BossKeyModelSet {
+    const uint32_t* model_ids = nullptr;
+    int model_count = 0;
+    bool accept_type_key = true;
+};
 
 struct LootPickupOptions {
     uint32_t general_loot_min_free_slots = 2u;
@@ -101,6 +106,7 @@ struct BossKeyPickupOptions {
     uint32_t passes = 2u;
     const char* log_prefix = nullptr;
     BossKeyItemPredicateFn is_boss_key = nullptr;
+    BossKeyModelSet boss_key_models = {};
     LootPickupOptions loot = {};
 };
 
@@ -108,8 +114,6 @@ struct BossKeyAcquireOptions {
     float key_x = 0.0f;
     float key_y = 0.0f;
     float key_scan_range = 0.0f;
-    float boss_door_x = 0.0f;
-    float boss_door_y = 0.0f;
     float move_fight_range = 1600.0f;
     float wide_loot_range = 18000.0f;
     float final_loot_range = 4000.0f;
@@ -121,10 +125,10 @@ struct BossKeyAcquireOptions {
     CombatMoveToFn combat_move_to = nullptr;
     PickupNearbyLootFn pickup_nearby_loot = nullptr;
     MoveToPointFn move_to_point = nullptr;
-    OpenDoorAtFn open_door_at = nullptr;
     WaitFn wait_ms = nullptr;
     BoolFn is_dead = nullptr;
     BossKeyItemPredicateFn is_boss_key = nullptr;
+    BossKeyModelSet boss_key_models = {};
     LootPickupOptions loot = {};
     BossKeyPickupOptions force_pickup = {};
 };
@@ -143,7 +147,9 @@ struct PostCombatLootSweepOptions {
 
 bool IsAlwaysPickupModel(uint32_t modelId);
 bool IsQuestPickupModel(uint32_t modelId);
+bool IsModelInBossKeySet(uint32_t modelId, const BossKeyModelSet& modelSet);
 bool IsBossKeyLikeItem(const Item* item);
+bool IsBossKeyLikeItem(const Item* item, const BossKeyModelSet& modelSet);
 bool IsWorldReadyForLoot();
 bool IsWorldReadyForLootWithPlayerAgent();
 float ComputePostCombatLootRange(float aggroRange,
@@ -158,14 +164,16 @@ int PickUpNearbyLoot(float maxRange, WaitFn wait_ms = nullptr, BoolFn is_dead = 
 uint32_t CountNearbyBossKeyCandidates(float x,
                                       float y,
                                       float maxRange,
-                                      BossKeyItemPredicateFn is_boss_key = nullptr);
+                                      BossKeyItemPredicateFn is_boss_key = nullptr,
+                                      const BossKeyModelSet& boss_key_models = {});
 void LogNearbyBossKeyCandidates(const char* label,
                                 float x,
                                 float y,
                                 float maxRange,
                                 const char* log_prefix = nullptr,
                                 const LootPickupOptions& options = {},
-                                BossKeyItemPredicateFn is_boss_key = nullptr);
+                                BossKeyItemPredicateFn is_boss_key = nullptr,
+                                const BossKeyModelSet& boss_key_models = {});
 bool ForcePickUpBossKeyCandidates(float centerX,
                                   float centerY,
                                   float scanRange,
