@@ -204,6 +204,14 @@ bool VerifyDungeonEntryReady(
     return WaitForDungeonEntryReady(readyOptions).ready;
 }
 
+bool StopWhenBossRewardDialogReady(uint32_t npcId, void* context) {
+    const auto* options = static_cast<const BossRewardClaimOptions*>(context);
+    if (options == nullptr || options->reward_dialog_id == 0u) {
+        return false;
+    }
+    return DungeonDialog::IsDialogOpenFromSenderWithButton(npcId, options->reward_dialog_id);
+}
+
 QuestGiverEntryResult AcceptQuestAndEnter(
     uint32_t npcId,
     const QuestGiverEntryPlan& plan,
@@ -856,6 +864,143 @@ BossRewardResult ExecuteBossRewardSequence(
         options.reward);
     result.reward_dialog_sent = reward.dialog_sent;
     result.reward_npc_found = reward.npc_found;
+    return result;
+}
+
+BossRewardClaimResult ClaimBossReward(uint32_t npcId, const BossRewardClaimOptions& options) {
+    BossRewardClaimResult result;
+    result.npc_id = npcId;
+    result.npc_found = npcId != 0u;
+    const char* prefix = PrefixOrDefault(options.log_prefix);
+    const char* label = LabelOrDefault(options.label, "Boss reward");
+    if (options.quest_id == 0u || options.reward_dialog_id == 0u) {
+        return result;
+    }
+
+    if (npcId == 0u) {
+        result.used_fallback = true;
+        Log::Info("%s: %s NPC not found near staging coords; sending reward dialog directly",
+                  prefix,
+                  label);
+        result.reward_cleared = AcceptQuestRewardWithRetry(
+            options.quest_id,
+            0u,
+            options.accept_retry_timeout_ms);
+        result.final_quest_present = QuestMgr::GetQuestById(options.quest_id) != nullptr;
+        Log::Info("%s: %s fallback cleared=%d questPresent=%d",
+                  prefix,
+                  label,
+                  result.reward_cleared ? 1 : 0,
+                  result.final_quest_present ? 1 : 0);
+        DungeonDialog::SendDialogWithRetry(
+            options.reward_dialog_id,
+            options.fallback_send_attempts,
+            options.fallback_send_delay_ms);
+        QuestMgr::RequestQuestInfo(options.quest_id);
+        if (options.fallback_refresh_delay_ms > 0u) {
+            Sleep(options.fallback_refresh_delay_ms);
+        }
+        result.final_quest_present = QuestMgr::GetQuestById(options.quest_id) != nullptr;
+        result.last_dialog_id = DialogMgr::GetLastDialogId();
+        return result;
+    }
+
+    auto* npc = AgentMgr::GetAgentByID(npcId);
+    Log::Info("%s: %s NPC agent=%u present=%d",
+              prefix,
+              label,
+              npcId,
+              npc != nullptr ? 1 : 0);
+    if (npc != nullptr) {
+        (void)DungeonNavigation::MoveToAndWait(
+            npc->x,
+            npc->y,
+            options.npc_move_threshold,
+            DungeonNavigation::MOVE_TO_TIMEOUT_MS,
+            DungeonNavigation::MOVE_TO_POLL_MS,
+            MapMgr::GetMapId());
+    }
+
+    DialogMgr::ClearDialog();
+    DialogMgr::ResetHookState();
+
+    DungeonInteractions::DirectNpcInteractOptions interactOptions = {};
+    interactOptions.target_wait_ms = options.interact_target_wait_ms;
+    interactOptions.pass_wait_ms = options.interact_pass_wait_ms;
+    interactOptions.passes = options.interact_passes;
+    interactOptions.log_prefix = prefix;
+    interactOptions.label = label;
+    interactOptions.stop_condition = &StopWhenBossRewardDialogReady;
+    interactOptions.stop_context = const_cast<BossRewardClaimOptions*>(&options);
+    (void)DungeonInteractions::PulseDirectNpcInteract(npcId, interactOptions);
+
+    if (options.dialog_dwell_ms > 0u) {
+        Sleep(options.dialog_dwell_ms);
+    }
+    AgentMgr::ChangeTarget(npcId);
+    if (options.target_settle_ms > 0u) {
+        Sleep(options.target_settle_ms);
+    }
+
+    DungeonDialog::LogDialogButtons(prefix, label);
+    DungeonDialog::DialogAdvanceOptions advanceOptions = {};
+    advanceOptions.sender_agent_id = npcId;
+    advanceOptions.request_quest_id_after_dialog = options.quest_id;
+    advanceOptions.max_passes = options.advance_max_passes;
+    advanceOptions.change_target_before_dialog = true;
+    advanceOptions.log_prefix = prefix;
+    advanceOptions.label = label;
+    result.reward_button_ready = DungeonDialog::AdvanceDialogToButton(
+        options.reward_dialog_id,
+        advanceOptions);
+
+    Log::Info("%s: %s prep target=%u sender=%u buttons=%u dialogOpen=%d",
+              prefix,
+              label,
+              AgentMgr::GetTargetId(),
+              DialogMgr::GetDialogSenderAgentId(),
+              DialogMgr::GetButtonCount(),
+              DialogMgr::IsDialogOpen() ? 1 : 0);
+    Log::Info("%s: %s button ready=%d",
+              prefix,
+              label,
+              result.reward_button_ready ? 1 : 0);
+    DungeonDialog::LogDialogButtons(prefix, label);
+
+    result.reward_cleared = AcceptQuestRewardWithRetry(
+        options.quest_id,
+        npcId,
+        options.accept_retry_timeout_ms);
+    result.final_quest_present = QuestMgr::GetQuestById(options.quest_id) != nullptr;
+    Log::Info("%s: %s QuestReward cleared=%d questPresent=%d",
+              prefix,
+              label,
+              result.reward_cleared ? 1 : 0,
+              result.final_quest_present ? 1 : 0);
+
+    if (!result.reward_cleared &&
+        DialogMgr::IsDialogOpen() &&
+        DialogMgr::GetDialogSenderAgentId() == npcId &&
+        DungeonDialog::HasDialogButton(options.reward_dialog_id)) {
+        AgentMgr::ChangeTarget(npcId);
+        if (options.target_settle_ms > 0u) {
+            Sleep(options.target_settle_ms);
+        }
+        Log::Info("%s: %s retrying direct dialog button 0x%X",
+                  prefix,
+                  label,
+                  options.reward_dialog_id);
+        QuestDialogOptions retryOptions = {};
+        retryOptions.post_dialog_wait_ms = options.retry_post_dialog_wait_ms;
+        retryOptions.refresh_delay_ms = options.retry_refresh_delay_ms;
+        retryOptions.log_prefix = prefix;
+        retryOptions.label = label;
+        (void)SendDialogAndRefreshQuest(options.reward_dialog_id, options.quest_id, retryOptions);
+        result.retry_sent = true;
+        result.final_quest_present = QuestMgr::GetQuestById(options.quest_id) != nullptr;
+    }
+
+    result.last_dialog_id = DialogMgr::GetLastDialogId();
     return result;
 }
 

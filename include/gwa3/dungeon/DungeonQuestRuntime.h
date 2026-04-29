@@ -221,6 +221,37 @@ struct BossRewardResult {
     bool reward_npc_found = false;
 };
 
+struct BossRewardClaimOptions {
+    uint32_t quest_id = 0u;
+    uint32_t reward_dialog_id = 0u;
+    float npc_move_threshold = 120.0f;
+    uint32_t interact_target_wait_ms = 500u;
+    uint32_t interact_pass_wait_ms = 1500u;
+    int interact_passes = 3;
+    uint32_t dialog_dwell_ms = 1000u;
+    uint32_t target_settle_ms = 150u;
+    int advance_max_passes = 4;
+    uint32_t accept_retry_timeout_ms = 5000u;
+    uint32_t retry_post_dialog_wait_ms = 1000u;
+    uint32_t retry_refresh_delay_ms = 500u;
+    int fallback_send_attempts = 1;
+    uint32_t fallback_send_delay_ms = 1000u;
+    uint32_t fallback_refresh_delay_ms = 500u;
+    const char* log_prefix = nullptr;
+    const char* label = nullptr;
+};
+
+struct BossRewardClaimResult {
+    bool npc_found = false;
+    bool used_fallback = false;
+    bool reward_button_ready = false;
+    bool reward_cleared = false;
+    bool retry_sent = false;
+    bool final_quest_present = false;
+    uint32_t npc_id = 0u;
+    uint32_t last_dialog_id = 0u;
+};
+
 bool SendDialogPlan(
     const DungeonQuest::DialogPlan& plan,
     const DialogExecutionOptions& options = {});
@@ -255,6 +286,7 @@ BossRewardResult ExecuteBossRewardSequence(
     const DungeonQuest::QuestNpcAnchor& rewardNpc,
     const DungeonQuest::DialogPlan& rewardDialog,
     const BossRewardOptions& options = {});
+BossRewardClaimResult ClaimBossReward(uint32_t npcId, const BossRewardClaimOptions& options);
 bool WaitForQuestState(
     uint32_t questId,
     bool expectPresent,
