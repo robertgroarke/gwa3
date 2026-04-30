@@ -3,6 +3,8 @@
 #include <gwa3/dungeon/DungeonQuest.h>
 #include <gwa3/dungeon/DungeonBundle.h>
 #include <gwa3/dungeon/DungeonDialog.h>
+#include <gwa3/dungeon/DungeonLoot.h>
+#include <gwa3/dungeon/DungeonRuntime.h>
 
 #include <cstdint>
 
@@ -252,6 +254,43 @@ struct BossRewardClaimResult {
     uint32_t last_dialog_id = 0u;
 };
 
+struct BossCompletionOptions {
+    DungeonLoot::CombatMoveToFn aggro_move_to = nullptr;
+    DungeonLoot::PickupNearbyLootFn pickup_nearby_loot = nullptr;
+    DungeonLoot::MoveToPointResultFn move_to_point = nullptr;
+    DungeonLoot::OpenChestAtFn open_chest_at = nullptr;
+    DungeonLoot::WaitFn wait_ms = nullptr;
+    DungeonRuntime::SalvageRewardItemsFn salvage_reward_items = nullptr;
+    float post_fight_loot_radius = 1500.0f;
+    uint32_t post_fight_loot_delay_ms = 3000u;
+    float chest_x = 0.0f;
+    float chest_y = 0.0f;
+    float chest_open_radius = 5000.0f;
+    float chest_loot_radius = 5000.0f;
+    DungeonLoot::BossChestLootOptions chest = {};
+    DungeonQuest::QuestNpcAnchor reward_npc = {};
+    RewardNpcStageOptions reward_stage = {};
+    RewardNpcResolveOptions reward_resolve = {};
+    BossRewardClaimOptions reward_claim = {};
+    DungeonRuntime::PostRewardReturnOptions post_reward = {};
+    const char* log_prefix = nullptr;
+    const char* label = nullptr;
+};
+
+struct BossCompletionResult {
+    DungeonLoot::BossChestLootResult chest = {};
+    RewardNpcStageResult reward_stage = {};
+    RewardNpcResolveResult reward_resolve = {};
+    BossRewardClaimResult reward_claim = {};
+    DungeonRuntime::PostRewardReturnResult post_reward = {};
+    bool reward_attempted = false;
+    bool reward_claimed = false;
+    bool reward_dialog_latched = false;
+    bool boss_completed = false;
+    uint32_t last_dialog_id = 0u;
+    uint32_t final_map_id = 0u;
+};
+
 bool SendDialogPlan(
     const DungeonQuest::DialogPlan& plan,
     const DialogExecutionOptions& options = {});
@@ -287,6 +326,11 @@ BossRewardResult ExecuteBossRewardSequence(
     const DungeonQuest::DialogPlan& rewardDialog,
     const BossRewardOptions& options = {});
 BossRewardClaimResult ClaimBossReward(uint32_t npcId, const BossRewardClaimOptions& options);
+BossCompletionResult ExecuteBossCompletion(
+    float bossX,
+    float bossY,
+    float fightRange,
+    const BossCompletionOptions& options = {});
 bool WaitForQuestState(
     uint32_t questId,
     bool expectPresent,

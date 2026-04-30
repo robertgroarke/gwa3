@@ -4,7 +4,9 @@
 #include <gwa3/dungeon/DungeonDiagnostics.h>
 #include <gwa3/dungeon/DungeonDialog.h>
 #include <gwa3/dungeon/DungeonInteractions.h>
+#include <gwa3/dungeon/DungeonLoot.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
+#include <gwa3/dungeon/DungeonRuntime.h>
 #include <gwa3/core/DialogHook.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/managers/AgentMgr.h>
@@ -1001,6 +1003,104 @@ BossRewardClaimResult ClaimBossReward(uint32_t npcId, const BossRewardClaimOptio
     }
 
     result.last_dialog_id = DialogMgr::GetLastDialogId();
+    return result;
+}
+
+BossCompletionResult ExecuteBossCompletion(
+    float bossX,
+    float bossY,
+    float fightRange,
+    const BossCompletionOptions& options) {
+    BossCompletionResult result = {};
+    const char* prefix = PrefixOrDefault(options.log_prefix);
+    const char* label = LabelOrDefault(options.label, "Boss completion");
+
+    if (options.aggro_move_to != nullptr) {
+        options.aggro_move_to(bossX, bossY, fightRange);
+    }
+    if (options.wait_ms != nullptr && options.post_fight_loot_delay_ms > 0u) {
+        options.wait_ms(options.post_fight_loot_delay_ms);
+    }
+    if (options.pickup_nearby_loot != nullptr && options.post_fight_loot_radius > 0.0f) {
+        (void)options.pickup_nearby_loot(options.post_fight_loot_radius);
+    }
+
+    if (options.move_to_point == nullptr ||
+        options.open_chest_at == nullptr ||
+        options.pickup_nearby_loot == nullptr) {
+        Log::Warn("%s: %s missing boss chest callbacks move=%d open=%d pickup=%d",
+                  prefix,
+                  label,
+                  options.move_to_point != nullptr ? 1 : 0,
+                  options.open_chest_at != nullptr ? 1 : 0,
+                  options.pickup_nearby_loot != nullptr ? 1 : 0);
+        return result;
+    }
+
+    DungeonLoot::BossChestLootOptions chestOptions = options.chest;
+    if (chestOptions.log_prefix == nullptr) {
+        chestOptions.log_prefix = prefix;
+    }
+    result.chest = DungeonLoot::OpenBossChestAndLoot(
+        options.chest_x,
+        options.chest_y,
+        options.chest_open_radius,
+        options.chest_loot_radius,
+        options.move_to_point,
+        options.open_chest_at,
+        options.pickup_nearby_loot,
+        options.wait_ms,
+        chestOptions);
+    if (!result.chest.completed) {
+        return result;
+    }
+
+    RewardNpcStageOptions stageOptions = options.reward_stage;
+    if (stageOptions.log_prefix == nullptr) {
+        stageOptions.log_prefix = prefix;
+    }
+    result.reward_stage = StageRewardNpcInteraction(options.reward_npc, stageOptions);
+    if (!result.reward_stage.reached) {
+        return result;
+    }
+    result.reward_attempted = true;
+
+    RewardNpcResolveOptions resolveOptions = options.reward_resolve;
+    if (resolveOptions.log_prefix == nullptr) {
+        resolveOptions.log_prefix = prefix;
+    }
+    result.reward_resolve = ResolveRewardNpc(options.reward_npc, resolveOptions);
+
+    BossRewardClaimOptions claimOptions = options.reward_claim;
+    if (claimOptions.log_prefix == nullptr) {
+        claimOptions.log_prefix = prefix;
+    }
+    if (claimOptions.label == nullptr) {
+        claimOptions.label = label;
+    }
+    result.reward_claim = ClaimBossReward(result.reward_resolve.npc_id, claimOptions);
+
+    result.last_dialog_id = DialogMgr::GetLastDialogId();
+    result.reward_dialog_latched =
+        claimOptions.reward_dialog_id != 0u && result.last_dialog_id == claimOptions.reward_dialog_id;
+    result.reward_claimed =
+        claimOptions.quest_id != 0u && QuestMgr::GetQuestById(claimOptions.quest_id) == nullptr;
+    result.boss_completed = true;
+
+    DungeonRuntime::PostRewardReturnOptions postRewardOptions = options.post_reward;
+    postRewardOptions.reward_claimed = result.reward_claimed;
+    postRewardOptions.reward_dialog_latched = result.reward_dialog_latched;
+    if (postRewardOptions.salvage_reward_items == nullptr) {
+        postRewardOptions.salvage_reward_items = options.salvage_reward_items;
+    }
+    if (postRewardOptions.log_prefix == nullptr) {
+        postRewardOptions.log_prefix = prefix;
+    }
+    if (postRewardOptions.label == nullptr) {
+        postRewardOptions.label = label;
+    }
+    result.post_reward = DungeonRuntime::HandlePostRewardReturn(postRewardOptions);
+    result.final_map_id = result.post_reward.final_map_id;
     return result;
 }
 
