@@ -6,6 +6,7 @@
 #include <gwa3/managers/PartyMgr.h>
 #include <gwa3/managers/MemoryMgr.h>
 #include <gwa3/managers/TradeMgr.h>
+#include <gwa3/managers/MerchantMgr.h>
 #include <gwa3/managers/DialogMgr.h>
 #include <gwa3/managers/ChatLogMgr.h>
 #include <gwa3/managers/QuestMgr.h>
@@ -1189,7 +1190,7 @@ namespace GWA3::LLM::GameSnapshot {
             return m;
         }
 
-        uint32_t itemCount = TradeMgr::GetMerchantItemCount();
+        uint32_t itemCount = MerchantMgr::GetMerchantItemCount();
         if (itemCount == 0) return m;
         m["is_open"] = true;
 
@@ -1222,7 +1223,7 @@ namespace GWA3::LLM::GameSnapshot {
             m["last_quote"] = quote;
         }
 
-        // Read merchant items using TradeMgr::GetMerchantItemByPosition,
+        // Read merchant items using MerchantMgr::GetMerchantItemByPosition,
         // which is proven working through the TradeMgr path. The previous
         // raw pointer-chain approach returned 0 items from the snapshot thread
         // despite item_count being correct.
@@ -1231,7 +1232,7 @@ namespace GWA3::LLM::GameSnapshot {
         MerchantItemData itemData[256] = {};
         uint32_t readCount = 0;
         for (uint32_t pos = 1; pos <= itemCount && pos <= 256; ++pos) {
-            auto* item = TradeMgr::GetMerchantItemByPosition(pos);
+            auto* item = MerchantMgr::GetMerchantItemByPosition(pos);
             if (!item) continue;
             if (!ReadMerchantItemData(item, itemData[readCount])) {
                 Log::Warn("[Snapshot] BuildMerchantJson: failed reading merchant item at pos=%u", pos);

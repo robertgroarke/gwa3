@@ -77,6 +77,7 @@ add_library(gwa3_core OBJECT
     src/gwa3/managers/UIMgr.cpp
     src/gwa3/managers/ChatMgr.cpp
     src/gwa3/managers/TradeMgr.cpp
+src/gwa3/managers/MerchantMgr.cpp
     src/gwa3/managers/MaintenanceMgr.cpp
     src/gwa3/managers/FriendListMgr.cpp
     src/gwa3/managers/PlayerMgr.cpp

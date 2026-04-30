@@ -12,6 +12,7 @@
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/TradeMgr.h>
+#include <gwa3/managers/MerchantMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
@@ -73,7 +74,7 @@ void LogMerchantOpenSnapshot(const char* label, uint32_t npcId, float npcX, floa
               npcY,
               me ? AgentMgr::GetDistance(meX, meY, npcX, npcY) : -1.0f,
               AgentMgr::GetTargetId(),
-              TradeMgr::GetMerchantItemCount());
+              MerchantMgr::GetMerchantItemCount());
 }
 
 bool MoveToPointWithResult(float x, float y, float threshold, MoveToPointResultFn move_to_point) {
@@ -286,7 +287,7 @@ bool WaitForMerchantContext(uint32_t timeoutMs, WaitFn wait_ms,
                             uint32_t merchant_root_hash, uint32_t poll_ms) {
     const DWORD start = GetTickCount();
     while ((GetTickCount() - start) < timeoutMs) {
-        if (TradeMgr::GetMerchantItemCount() > 0u) return true;
+        if (MerchantMgr::GetMerchantItemCount() > 0u) return true;
         if (UIMgr::IsFrameVisible(merchant_root_hash)) return true;
         CallWait(wait_ms, poll_ms);
     }

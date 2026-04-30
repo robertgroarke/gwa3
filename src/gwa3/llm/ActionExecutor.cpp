@@ -12,6 +12,7 @@
 #include <gwa3/managers/QuestMgr.h>
 #include <gwa3/managers/ChatMgr.h>
 #include <gwa3/managers/TradeMgr.h>
+#include <gwa3/managers/MerchantMgr.h>
 #include <gwa3/managers/MaintenanceMgr.h>
 #include <gwa3/managers/CameraMgr.h>
 #include <gwa3/managers/UIMgr.h>
@@ -189,7 +190,7 @@ namespace GWA3::LLM::ActionExecutor {
     static ActionResult HandleFroggyRunMaintenanceCycle(const json& p) {
         if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
         const bool includeSalvage = p.value("include_salvage", true);
-        if (TradeMgr::GetMerchantItemCount() == 0) {
+        if (MerchantMgr::GetMerchantItemCount() == 0) {
             return MakeError("merchant_not_open_call_open_merchant_first");
         }
 
@@ -537,10 +538,10 @@ namespace GWA3::LLM::ActionExecutor {
             return MakeError("missing model_id or quantity");
         uint32_t modelId = p["model_id"].get<uint32_t>();
         uint32_t qty = p["quantity"].get<uint32_t>();
-        if (TradeMgr::GetMerchantItemCount() == 0) {
+        if (MerchantMgr::GetMerchantItemCount() == 0) {
             return MakeError("merchant_not_open_call_open_merchant_first");
         }
-        const bool ok = TradeMgr::BuyMaterials(modelId, qty);
+        const bool ok = MerchantMgr::BuyMaterials(modelId, qty);
         return ok ? MakeOk() : MakeError("buy_materials_failed");
     }
 
@@ -558,7 +559,7 @@ namespace GWA3::LLM::ActionExecutor {
         uint32_t qty = p["quantity"].get<uint32_t>();
         uint32_t itemId = p["item_id"].get<uint32_t>();
         GWA3::GameThread::Enqueue([type, qty, itemId]() {
-            TradeMgr::TransactItems(type, qty, itemId);
+            MerchantMgr::TransactItems(type, qty, itemId);
         });
         return MakeOk();
     }
@@ -578,10 +579,10 @@ namespace GWA3::LLM::ActionExecutor {
         // (Code=007). GetMerchantItemCount() > 0 is populated only after
         // the server sends us the merchant inventory ??? same signal that
         // powers snapshot.merchant.is_open.
-        if (TradeMgr::GetMerchantItemCount() == 0) {
+        if (MerchantMgr::GetMerchantItemCount() == 0) {
             return MakeError("merchant_not_open_call_open_merchant_first");
         }
-        bool ok = TradeMgr::BuyMerchantItem(itemId, qty);
+        bool ok = MerchantMgr::BuyMerchantItem(itemId, qty);
         return ok ? MakeOk() : MakeError("buy_merchant_item_failed");
     }
 
@@ -589,10 +590,10 @@ namespace GWA3::LLM::ActionExecutor {
         if (!p.contains("item_id")) return MakeError("missing item_id");
         uint32_t itemId = p["item_id"].get<uint32_t>();
         uint32_t qty = p.value("quantity", 0u);
-        if (TradeMgr::GetMerchantItemCount() == 0) {
+        if (MerchantMgr::GetMerchantItemCount() == 0) {
             return MakeError("merchant_not_open_call_open_merchant_first");
         }
-        bool ok = TradeMgr::SellInventoryItem(itemId, qty);
+        bool ok = MerchantMgr::SellInventoryItem(itemId, qty);
         return ok ? MakeOk() : MakeError("sell_inventory_item_failed");
     }
 
@@ -657,12 +658,12 @@ namespace GWA3::LLM::ActionExecutor {
             for (uint32_t i = 0; i < matCount; ++i) { mIds[i] = matIds[i]; mQtys[i] = matQtys[i]; }
 
             GWA3::GameThread::Enqueue([modelId, qty, gold, mIds, mQtys, matCount]() {
-                TradeMgr::CraftMerchantItemByModelId(modelId, qty, gold, mIds, mQtys, matCount);
+                MerchantMgr::CraftMerchantItemByModelId(modelId, qty, gold, mIds, mQtys, matCount);
             });
         } else {
             // Fallback: raw TransactItems (type=3 = crafter)
             GWA3::GameThread::Enqueue([itemId, qty]() {
-                TradeMgr::TransactItems(3, qty, itemId);
+                MerchantMgr::TransactItems(3, qty, itemId);
             });
         }
         return MakeOk();
@@ -724,9 +725,9 @@ namespace GWA3::LLM::ActionExecutor {
                     CtoS::SendPacket(3, Packets::INTERACT_NPC, id, 0u);
                 });
                 Sleep(2000);
-                if (TradeMgr::GetMerchantItemCount() > 0) {
+                if (MerchantMgr::GetMerchantItemCount() > 0) {
                     Log::Info("[LLM-Action] open_merchant: dialog open after attempt %d (GoNPC): %u items",
-                              attempt + 1, TradeMgr::GetMerchantItemCount());
+                              attempt + 1, MerchantMgr::GetMerchantItemCount());
                     return;
                 }
                 // GoNPC alone didn't work ??? try native InteractNPC. This sets
@@ -735,9 +736,9 @@ namespace GWA3::LLM::ActionExecutor {
                     Log::Info("[LLM-Action] open_merchant: GoNPC alone failed, falling back to InteractNPC");
                     GWA3::GameThread::Enqueue([id]() { AgentMgr::InteractNPC(id); });
                     Sleep(2000);
-                    if (TradeMgr::GetMerchantItemCount() > 0) {
+                    if (MerchantMgr::GetMerchantItemCount() > 0) {
                         Log::Info("[LLM-Action] open_merchant: dialog open via InteractNPC: %u items",
-                                  TradeMgr::GetMerchantItemCount());
+                                  MerchantMgr::GetMerchantItemCount());
                         return;
                     }
                 }

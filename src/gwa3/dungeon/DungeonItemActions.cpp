@@ -9,6 +9,7 @@
 #include <gwa3/managers/EffectMgr.h>
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/TradeMgr.h>
+#include <gwa3/managers/MerchantMgr.h>
 
 #include <Windows.h>
 
@@ -114,7 +115,7 @@ int SellItems(ItemFilterFn should_sell, WaitFn wait_ms, const SellOptions& optio
             if (!item) continue;
             if (!should_sell(item)) continue;
 
-            TradeMgr::TransactItems(options.transact_type, item->quantity, item->item_id);
+            MerchantMgr::TransactItems(options.transact_type, item->quantity, item->item_id);
             CallWait(wait_ms, options.delay_ms + options.extra_delay_ms);
             ++sold;
         }

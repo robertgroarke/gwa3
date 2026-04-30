@@ -8,6 +8,7 @@
 #include <gwa3/managers/DialogMgr.h>
 #include <gwa3/managers/StoCMgr.h>
 #include <gwa3/managers/TradeMgr.h>
+#include <gwa3/managers/MerchantMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/managers/ChatMgr.h>
 #include <gwa3/managers/MemoryMgr.h>
@@ -192,17 +193,17 @@ static bool OpenNpcDialog(uint32_t npcId, const char* label, bool requireMerchan
         WaitMs(250);
         CtoS::SendPacket(3, Packets::INTERACT_NPC, npcId, 0u);
         WaitMs(2000);
-        if (!requireMerchantItems || TradeMgr::GetMerchantItemCount() > 0) {
+        if (!requireMerchantItems || MerchantMgr::GetMerchantItemCount() > 0) {
             Log::Info("MaintenanceMgr: Opened %s NPC=%u attempt=%d items=%u",
-                      label ? label : "NPC", npcId, attempt, TradeMgr::GetMerchantItemCount());
+                      label ? label : "NPC", npcId, attempt, MerchantMgr::GetMerchantItemCount());
             return true;
         }
         if (attempt == 2) {
             AgentMgr::InteractNPC(npcId);
             WaitMs(2000);
-            if (!requireMerchantItems || TradeMgr::GetMerchantItemCount() > 0) {
+            if (!requireMerchantItems || MerchantMgr::GetMerchantItemCount() > 0) {
                 Log::Info("MaintenanceMgr: Opened %s NPC=%u via native interact items=%u",
-                          label ? label : "NPC", npcId, TradeMgr::GetMerchantItemCount());
+                          label ? label : "NPC", npcId, MerchantMgr::GetMerchantItemCount());
                 return true;
             }
         }
@@ -213,7 +214,7 @@ static bool OpenNpcDialog(uint32_t npcId, const char* label, bool requireMerchan
 }
 
 static bool HasOpenMaterialTraderInventory() {
-    if (TradeMgr::GetMerchantItemCount() == 0) return false;
+    if (MerchantMgr::GetMerchantItemCount() == 0) return false;
     static const uint32_t kTraderMaterialModels[] = {
         ItemModelIds::BONES,
         ItemModelIds::IRON_INGOT,
@@ -228,7 +229,7 @@ static bool HasOpenMaterialTraderInventory() {
         ItemModelIds::FEATHERS
     };
     for (uint32_t modelId : kTraderMaterialModels) {
-        if (TradeMgr::GetMerchantItemIdByModelId(modelId) != 0) {
+        if (MerchantMgr::GetMerchantItemIdByModelId(modelId) != 0) {
             return true;
         }
     }
@@ -259,7 +260,7 @@ static bool OpenConfiguredMaterialTrader(const Config& cfg, uint32_t& traderNpc)
             return true;
         }
         Log::Warn("MaintenanceMgr: material trader attempt=%u opened non-trader inventory items=%u",
-                  attempt, TradeMgr::GetMerchantItemCount());
+                  attempt, MerchantMgr::GetMerchantItemCount());
         AgentMgr::CancelAction();
         WaitMs(400);
     }
@@ -290,7 +291,7 @@ static uint32_t SellScalesToMaterialTrader(const Config& cfg) {
 
             Log::Info("MaintenanceMgr: Selling scales to material trader item=%u qty=%u packs=%u",
                       item->item_id, item->quantity, packs);
-            if (!TradeMgr::SellMaterialsToTrader(item->item_id, packs)) {
+            if (!MerchantMgr::SellMaterialsToTrader(item->item_id, packs)) {
                 Log::Warn("MaintenanceMgr: Scale trader sell failed item=%u packs=%u",
                           item->item_id, packs);
                 return scalePacks;
@@ -830,7 +831,7 @@ uint32_t SellJunkItems() {
     Inventory* inv = ItemMgr::GetInventory();
     if (!inv) return 0;
 
-    uint32_t merchantItems = TradeMgr::GetMerchantItemCount();
+    uint32_t merchantItems = MerchantMgr::GetMerchantItemCount();
     if (merchantItems == 0) {
         Log::Warn("MaintenanceMgr: SellJunkItems ??? merchant not open");
         return 0;
@@ -849,7 +850,7 @@ uint32_t SellJunkItems() {
             uint32_t qty = (item->quantity > 0) ? item->quantity : 1;
             Log::Info("MaintenanceMgr: Selling item=%u model=%u value=%u qty=%u type=%u rarity=%u",
                       item->item_id, item->model_id, item->value, qty, item->type, GetRarity(item));
-            TradeMgr::SellInventoryItem(item->item_id, qty);
+            MerchantMgr::SellInventoryItem(item->item_id, qty);
             WaitMs(300);
             soldCount++;
         }
@@ -1959,7 +1960,7 @@ static uint32_t SellExcessSalvageKits(uint32_t targetSalvageKits) {
     uint32_t currentSalvKits = CountAllSalvageKits();
     if (currentSalvKits <= targetSalvageKits) return 0;
 
-    uint32_t merchantItems = TradeMgr::GetMerchantItemCount();
+    uint32_t merchantItems = MerchantMgr::GetMerchantItemCount();
     if (merchantItems == 0) {
         Log::Warn("MaintenanceMgr: SellExcessSalvageKits - merchant not open");
         return 0;
@@ -1979,7 +1980,7 @@ static uint32_t SellExcessSalvageKits(uint32_t targetSalvageKits) {
             const uint32_t qty = (item->quantity > 0) ? item->quantity : 1u;
             Log::Info("MaintenanceMgr: Selling excess salvage kit item=%u model=%u qty=%u count=%u target=%u",
                       item->item_id, item->model_id, qty, currentSalvKits, targetSalvageKits);
-            TradeMgr::SellInventoryItem(item->item_id, qty);
+            MerchantMgr::SellInventoryItem(item->item_id, qty);
             WaitMs(300);
             soldCount++;
             currentSalvKits = CountAllSalvageKits();
@@ -1996,7 +1997,7 @@ void BuyKitsToTarget(const Config& cfg) {
     uint32_t currentSalvKits = CountAllSalvageKits();
 
     // Check merchant is open
-    uint32_t merchantItems = TradeMgr::GetMerchantItemCount();
+    uint32_t merchantItems = MerchantMgr::GetMerchantItemCount();
     if (merchantItems == 0) {
         Log::Warn("MaintenanceMgr: BuyKitsToTarget ??? merchant not open");
         return;
@@ -2017,7 +2018,7 @@ void BuyKitsToTarget(const Config& cfg) {
     if (currentIdKits < cfg.targetIdKits) {
         uint32_t need = cfg.targetIdKits - currentIdKits;
         // Standard merchant slot 6 carries superior ID kits at 500g each.
-        bool bought = TradeMgr::BuyMerchantItemByPosition(6, need, 500);
+        bool bought = MerchantMgr::BuyMerchantItemByPosition(6, need, 500);
         if (bought) {
             Log::Info("MaintenanceMgr: Bought %u superior ID kits", need);
             WaitMs(1000);
@@ -2030,7 +2031,7 @@ void BuyKitsToTarget(const Config& cfg) {
     if (currentSalvKits < cfg.targetSalvageKits) {
         uint32_t need = cfg.targetSalvageKits - currentSalvKits;
         // Standard merchant slot 4 carries salvage kits at 2000g each.
-        bool bought = TradeMgr::BuyMerchantItemByPosition(4, need, 2000);
+        bool bought = MerchantMgr::BuyMerchantItemByPosition(4, need, 2000);
         if (bought) {
             Log::Info("MaintenanceMgr: Bought %u salvage kits", need);
             WaitMs(1000);
@@ -2110,7 +2111,7 @@ static uint32_t CraftConsetAtNpc(const ConsetCraftSpec& spec, uint32_t desiredSe
         const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
         const uint32_t qtys[2] = {50u, 50u};
         const uint32_t totalValue = 250u * batch;
-        if (!TradeMgr::CraftMerchantItemByModelId(spec.modelId, batch, totalValue, spec.materials, qtys, 2)) {
+        if (!MerchantMgr::CraftMerchantItemByModelId(spec.modelId, batch, totalValue, spec.materials, qtys, 2)) {
             Log::Warn("MaintenanceMgr: CraftMerchantItemByModelId rejected for %s batch=%u", spec.label, batch);
             break;
         }
@@ -2162,7 +2163,7 @@ static bool EnsureEmbarkMaterialTraderOpen(uint32_t& traderNpc) {
             return true;
         }
         Log::Warn("MaintenanceMgr: Embark material trader attempt=%u opened non-trader inventory items=%u",
-                  attempt, TradeMgr::GetMerchantItemCount());
+                  attempt, MerchantMgr::GetMerchantItemCount());
         AgentMgr::CancelAction();
         WaitMs(400);
     }
@@ -2184,7 +2185,7 @@ static bool BuyConsetMaterialVerified(uint32_t modelId,
         const uint32_t before = CountItemByModel(modelId);
         Log::Info("MaintenanceMgr: Buying materials model=%u qty=%u for %s attempt=%u",
                   modelId, remaining, label ? label : "material", attempt + 1u);
-        TradeMgr::BuyMaterials(modelId, remaining);
+        MerchantMgr::BuyMaterials(modelId, remaining);
         WaitMs(600);
 
         const uint32_t after = CountItemByModel(modelId);
@@ -2199,7 +2200,7 @@ static bool BuyConsetMaterialVerified(uint32_t modelId,
                       modelId, gained, remaining, label ? label : "material");
         } else {
             Log::Warn("MaintenanceMgr: Material buy made no progress model=%u remaining=%u label=%s merchantItems=%u",
-                      modelId, remaining, label ? label : "material", TradeMgr::GetMerchantItemCount());
+                      modelId, remaining, label ? label : "material", MerchantMgr::GetMerchantItemCount());
         }
 
         WaitMs(400);

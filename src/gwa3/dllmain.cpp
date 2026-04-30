@@ -20,6 +20,7 @@
 #include <gwa3/managers/QuestMgr.h>
 #include <gwa3/managers/ChatMgr.h>
 #include <gwa3/managers/TradeMgr.h>
+#include <gwa3/managers/MerchantMgr.h>
 #include <gwa3/managers/FriendListMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/managers/MemoryMgr.h>
@@ -302,6 +303,7 @@ DWORD WINAPI InitThread(LPVOID hModule) {
     GWA3::QuestMgr::Initialize();
     GWA3::ChatMgr::Initialize();
     GWA3::TradeMgr::Initialize();
+    GWA3::MerchantMgr::Initialize();
     GWA3::FriendListMgr::Initialize();
     GWA3::UIMgr::Initialize();
     GWA3::MemoryMgr::Initialize();
