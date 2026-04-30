@@ -45,6 +45,11 @@ struct DoorOpenOptions {
     FailureProbeFn failure_probe = nullptr;
 };
 
+DoorOpenOptions MakeDoorOpenOptions(const char* log_prefix = nullptr,
+                                    SignpostScanLogFn signpost_scan_log = nullptr,
+                                    AgentLogFn agent_log = nullptr,
+                                    FailureProbeFn failure_probe = nullptr);
+
 struct InteractCandidate {
     uint32_t agent_id = 0u;
     bool use_signpost = false;

@@ -3,6 +3,7 @@
 #include <gwa3/core/Log.h>
 #include <gwa3/dungeon/DungeonDialog.h>
 #include <gwa3/dungeon/DungeonInteractions.h>
+#include <gwa3/dungeon/DungeonNavigation.h>
 #include <gwa3/game/SkillIds.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/DialogMgr.h>
@@ -235,9 +236,10 @@ BlessingAcquireResult AcquireDungeonBlessingAt(
         if (options.move_to_point != nullptr) {
             (void)options.move_to_point(candidate.x, candidate.y, moveThreshold);
         }
-        if (options.wait_for_position_settle != nullptr) {
-            (void)options.wait_for_position_settle(options.settle_timeout_ms, options.settle_distance);
-        }
+        const bool settled = options.wait_for_position_settle != nullptr
+            ? options.wait_for_position_settle(options.settle_timeout_ms, options.settle_distance)
+            : DungeonNavigation::WaitForLocalPositionSettle(options.settle_timeout_ms, options.settle_distance);
+        (void)settled;
 
         DungeonInteractions::CandidateDialogOptions dialogOptions;
         dialogOptions.dialog_id = options.accept_dialog_id;

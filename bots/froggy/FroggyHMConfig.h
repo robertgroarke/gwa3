@@ -2,6 +2,7 @@
 
 #include <gwa3/dungeon/DungeonQuest.h>
 #include <gwa3/game/DialogIds.h>
+#include <gwa3/game/ItemModelIds.h>
 #include <gwa3/game/MapIds.h>
 #include <gwa3/game/QuestIds.h>
 
@@ -73,6 +74,13 @@ inline constexpr float BOGROOT_BOSS_KEY_Y = -5830.0f;
 inline constexpr float BOGROOT_BOSS_KEY_SCAN_RANGE = 18000.0f;
 inline constexpr float BOGROOT_BOSS_DOOR_X = 17925.0f;
 inline constexpr float BOGROOT_BOSS_DOOR_Y = -6197.0f;
+inline constexpr uint32_t BOGROOT_BOSS_KEY_MODELS[] = {
+    ItemModelIds::DUNGEON_KEY_SORROWS_FURNACE,
+    ItemModelIds::DUNGEON_KEY_PRISON,
+    ItemModelIds::DUNGEON_KEY_BOGROOT,
+};
+inline constexpr int BOGROOT_BOSS_KEY_MODEL_COUNT = static_cast<int>(
+    sizeof(BOGROOT_BOSS_KEY_MODELS) / sizeof(BOGROOT_BOSS_KEY_MODELS[0]));
 inline constexpr float SPARKFLY_DUNGEON_SIDE_THRESHOLD = 12000.0f;
 inline constexpr float SPARKFLY_TEKKS_SHORT_MOVE_THRESHOLD = 700.0f;
 inline constexpr float SPARKFLY_TEKKS_SHORT_ACCEPT_DISTANCE = 900.0f;

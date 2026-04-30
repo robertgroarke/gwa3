@@ -184,7 +184,78 @@ static void HoldSparkflyForLocalClear(float waypointX,
 static void GrabDungeonBlessing(float shrineX, float shrineY); // forward decl
 static bool OpenDungeonDoorAt(float doorX, float doorY);       // forward decl
 #include "FroggyHMBossWaypointHandler.h"
-#include "FroggyHMWaypointSupport.h"
+
+static bool IsBogrootRouteMap(uint32_t mapId) {
+    return IsBogrootMapId(mapId);
+}
+
+static int GetFroggyRouteStartIndex(const Waypoint* wps, int count, uint32_t mapId) {
+    const int nearestIdx = DungeonNavigation::GetNearestWaypointIndex(wps, count);
+    float distanceFromLvl1Portal = -1.0f;
+    if (mapId == MapIds::BOGROOT_GROWTHS_LVL2) {
+        if (auto* me = AgentMgr::GetMyAgent()) {
+            distanceFromLvl1Portal = AgentMgr::GetDistance(me->x, me->y,
+                                                           BOGROOT_LVL1_TO_LVL2_PORTAL.x,
+                                                           BOGROOT_LVL1_TO_LVL2_PORTAL.y);
+        }
+    }
+
+    const int startIdx = ResolveRouteStartIndex(mapId, wps, count, nearestIdx, distanceFromLvl1Portal);
+    if (mapId == MapIds::BOGROOT_GROWTHS_LVL1 && nearestIdx == 1 && startIdx == 0) {
+        Log::Info("Froggy: Bogroot lvl1 forcing startIdx from blessing back to opening aggro leg");
+    }
+    if (mapId == MapIds::BOGROOT_GROWTHS_LVL2 && nearestIdx >= 20 && startIdx == 0) {
+        Log::Info("Froggy: Bogroot lvl2 suppressing stale startIdx=%d while spawn handoff is unresolved (distFromLvl1Portal=%.0f)",
+                  nearestIdx,
+                  distanceFromLvl1Portal);
+    }
+    return startIdx;
+}
+
+static void LogFroggyWaypointState(const char* stage, const Waypoint* wps, int count, int waypointIndex) {
+    DungeonNavigation::WaypointTelemetryOptions options;
+    options.log_prefix = "Froggy";
+    options.route_name = "Bogroot";
+    options.nearest_enemy_range = TELEMETRY_NEAREST_ENEMY_RANGE;
+    options.nearby_enemy_range = TELEMETRY_NEARBY_ENEMY_RANGE;
+    DungeonNavigation::LogWaypointState(stage, wps, count, waypointIndex, options);
+}
+
+static void MoveFroggyWaypoint(float x, float y, float threshold) {
+    (void)MoveToAndWait(x, y, threshold);
+}
+
+static void AggroMoveFroggyWaypoint(float x, float y, float fightRange) {
+    AggroMoveToEx(x, y, fightRange);
+}
+
+static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypoint(
+    const Waypoint& waypoint,
+    float moveThreshold = 250.0f) {
+    return DungeonNavigation::MoveRouteWaypoint(
+        waypoint,
+        &MoveFroggyWaypoint,
+        &AggroMoveFroggyWaypoint,
+        &IsMapLoaded,
+        moveThreshold);
+}
+
+static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypointDefault(const Waypoint& waypoint) {
+    return MoveFroggyRouteWaypoint(waypoint);
+}
+
+static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypointWithCombatLoot(
+    const Waypoint& waypoint,
+    int waypointIndex) {
+    return DungeonNavigation::MoveRouteWaypointWithCombatLoot(
+        waypoint,
+        waypointIndex,
+        &MoveFroggyRouteWaypointDefault,
+        &IsMapLoaded,
+        &LootAfterCombatSweep,
+        "Froggy");
+}
+
 #include "FroggyHMCheckpointReplay.h"
 #include "FroggyHMLvl2TransitionWaypoint.h"
 
@@ -294,9 +365,127 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
 
 #include "FroggyHMTekksEntry.h"
 
-#include "FroggyHMLootAndDoors.h"
+static DungeonLoot::BossKeyModelSet MakeBogrootBossKeyModelSet() {
+    DungeonLoot::BossKeyModelSet modelSet;
+    modelSet.model_ids = BOGROOT_BOSS_KEY_MODELS;
+    modelSet.model_count = BOGROOT_BOSS_KEY_MODEL_COUNT;
+    modelSet.accept_type_key = true;
+    return modelSet;
+}
 
-#include "FroggyHMBlessing.h"
+static int PickupNearbyLoot(float maxRange) {
+    return DungeonLoot::PickUpNearbyLoot(
+        maxRange,
+        &DungeonRuntime::WaitMs,
+        &IsDead,
+        DungeonLoot::MakeLootPickupOptions("Froggy", &DungeonLoot::IsWorldReadyForLoot));
+}
+
+static void LogNearbyBogrootBossKeyCandidates(const char* label, float x, float y, float maxRange) {
+    DungeonLoot::LogNearbyBossKeyCandidates(
+        label,
+        x,
+        y,
+        maxRange,
+        "Froggy",
+        {},
+        nullptr,
+        MakeBogrootBossKeyModelSet());
+}
+
+static void MoveToBogrootBossKeyWithAggro(float x, float y, float fightRange) {
+    AggroMoveToEx(x, y, fightRange);
+}
+
+static bool AcquireBogrootBossKey() {
+    DungeonLoot::BossKeyAcquireOptions options;
+    options.key_x = BOGROOT_BOSS_KEY_X;
+    options.key_y = BOGROOT_BOSS_KEY_Y;
+    options.key_scan_range = BOGROOT_BOSS_KEY_SCAN_RANGE;
+    options.log_prefix = "Froggy";
+    options.combat_move_to = &MoveToBogrootBossKeyWithAggro;
+    options.pickup_nearby_loot = &PickupNearbyLoot;
+    options.move_to_point = &DungeonNavigation::MoveToPoint;
+    options.wait_ms = &DungeonRuntime::WaitMs;
+    options.is_dead = &IsDead;
+    options.boss_key_models = MakeBogrootBossKeyModelSet();
+    options.loot = DungeonLoot::MakeLootPickupOptions("Froggy", &DungeonLoot::IsWorldReadyForLoot);
+    options.force_pickup.log_prefix = "Froggy";
+    return DungeonLoot::AcquireBossKey(options);
+}
+
+static DungeonInteractions::OpenedChestTracker s_openedChestTracker;
+
+static void ResetOpenedChestTracker(const char* reason) {
+    DungeonInteractions::ResetOpenedChestTrackerForCurrentMap(s_openedChestTracker, reason, "Froggy");
+}
+
+static DungeonLoot::ChestBundleFallbackOptions MakeFroggyChestBundleFallbackOptions() {
+    DungeonLoot::ChestBundleFallbackOptions options;
+    options.min_signpost_radius = CHEST_BUNDLE_MIN_SIGNPOST_RADIUS;
+    options.min_loot_radius = CHEST_BUNDLE_MIN_LOOT_RADIUS;
+    options.loot_radius_multiplier = CHEST_BUNDLE_LOOT_RADIUS_MULTIPLIER;
+    options.open_attempts = CHEST_BUNDLE_OPEN_ATTEMPTS;
+    options.pickup_attempts = CHEST_BUNDLE_PICKUP_ATTEMPTS;
+    options.open_retry_delay_ms = CHEST_BUNDLE_OPEN_RETRY_DELAY_MS;
+    options.pickup_retry_delay_ms = CHEST_BUNDLE_PICKUP_RETRY_DELAY_MS;
+    options.verify_delay_ms = CHEST_BUNDLE_VERIFY_DELAY_MS;
+    options.log_prefix = "Froggy";
+    return options;
+}
+
+static bool OpenChestAt(float chestX, float chestY, float searchRadius) {
+    const auto options = DungeonLoot::MakeChestAtOpenOptions(
+        "Froggy",
+        true,
+        MakeFroggyChestBundleFallbackOptions(),
+        &LogNearbySignposts,
+        &DungeonLoot::IsWorldReadyForLoot);
+    return DungeonLoot::OpenChestAt(
+        chestX,
+        chestY,
+        searchRadius,
+        s_openedChestTracker,
+        &DungeonNavigation::MoveToPoint,
+        &DungeonRuntime::WaitMs,
+        &IsDead,
+        options);
+}
+
+static bool OpenDungeonDoorAt(float doorX, float doorY) {
+    const auto options = DungeonInteractions::MakeDoorOpenOptions(
+        "Froggy",
+        &LogNearbySignposts,
+        &LogAgentIdentity,
+        &LogNearbyBogrootBossKeyCandidates);
+    return DungeonInteractions::OpenDoorAtWithProbe(
+        doorX,
+        doorY,
+        BOGROOT_BOSS_KEY_DOOR_PROBE_X,
+        BOGROOT_BOSS_KEY_DOOR_PROBE_Y,
+        &MoveToAndWait,
+        &DungeonRuntime::WaitMs,
+        options);
+}
+
+static void GrabDungeonBlessing(float shrineX, float shrineY) {
+    DungeonEffects::DungeonBlessingAcquireOptions options;
+    options.primary_search_radius = BLESSING_PRIMARY_SEARCH_RADIUS;
+    options.fallback_search_radius = BLESSING_FALLBACK_SEARCH_RADIUS;
+    options.signpost_move_threshold = BLESSING_SIGNPOST_MOVE_THRESHOLD;
+    options.npc_move_threshold = BLESSING_NPC_MOVE_THRESHOLD;
+    options.required_title_id = BLESSING_TITLE_ID;
+    options.title_settle_delay_ms = BLESSING_TITLE_SETTLE_MS;
+    options.accept_dialog_id = BLESSING_ACCEPT_DIALOG_ID;
+    options.settle_timeout_ms = BLESSING_SETTLE_TIMEOUT_MS;
+    options.settle_distance = BLESSING_SETTLE_DISTANCE;
+    options.log_prefix = "Froggy: Blessing";
+    options.move_to_point = &MoveToAndWait;
+    options.wait_ms = &DungeonRuntime::WaitMs;
+    options.signpost_scan_log = &LogNearbySignposts;
+    options.agent_log = &LogAgentIdentity;
+    (void)DungeonEffects::AcquireDungeonBlessingAt(shrineX, shrineY, options);
+}
 
 static DungeonVendor::MaintenanceLocation MakeFroggyMaintenanceLocation() {
     DungeonVendor::MaintenanceLocation location = {};

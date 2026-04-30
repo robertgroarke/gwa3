@@ -195,6 +195,18 @@ void OpenedChestTracker::MarkOpened(uint32_t agentId) {
     opened_ids_[count_++] = agentId;
 }
 
+DoorOpenOptions MakeDoorOpenOptions(const char* log_prefix,
+                                    SignpostScanLogFn signpost_scan_log,
+                                    AgentLogFn agent_log,
+                                    FailureProbeFn failure_probe) {
+    DoorOpenOptions options;
+    options.log_prefix = log_prefix;
+    options.signpost_scan_log = signpost_scan_log;
+    options.agent_log = agent_log;
+    options.failure_probe = failure_probe;
+    return options;
+}
+
 bool IsChestGadgetId(uint32_t gadgetId) {
     return gadgetId == 6062u || gadgetId == 4579u || gadgetId == 4582u ||
            gadgetId == 8141u || gadgetId == 74u || gadgetId == 68u ||

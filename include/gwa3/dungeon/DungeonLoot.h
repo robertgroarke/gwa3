@@ -53,6 +53,9 @@ struct LootPickupOptions {
     const char* log_prefix = nullptr;
 };
 
+LootPickupOptions MakeLootPickupOptions(const char* log_prefix = nullptr,
+                                        BoolFn is_world_ready = nullptr);
+
 struct ChestOpenOptions {
     float move_threshold = 200.0f;
     uint32_t interact_delay_ms = 2000u;
@@ -94,6 +97,13 @@ struct ChestAtOpenOptions {
     ChestOpenOptions nearby = {};
     ResolvedChestOpenOptions resolved = {};
 };
+
+ChestAtOpenOptions MakeChestAtOpenOptions(
+    const char* log_prefix = nullptr,
+    bool use_bundle_fallback = false,
+    const ChestBundleFallbackOptions& bundle_fallback = {},
+    SignpostScanLogFn signpost_scan_log = nullptr,
+    BoolFn is_world_ready = nullptr);
 
 struct BossChestLootOptions {
     float stage_move_threshold = 250.0f;

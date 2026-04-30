@@ -64,6 +64,31 @@ bool IsBossKeyCandidate(const Item* item,
 
 } // namespace
 
+LootPickupOptions MakeLootPickupOptions(const char* log_prefix, BoolFn is_world_ready) {
+    LootPickupOptions options;
+    options.log_prefix = log_prefix;
+    options.is_world_ready = is_world_ready;
+    return options;
+}
+
+ChestAtOpenOptions MakeChestAtOpenOptions(
+    const char* log_prefix,
+    bool use_bundle_fallback,
+    const ChestBundleFallbackOptions& bundle_fallback,
+    SignpostScanLogFn signpost_scan_log,
+    BoolFn is_world_ready) {
+    ChestAtOpenOptions options;
+    options.log_prefix = log_prefix;
+    options.use_bundle_fallback = use_bundle_fallback;
+    options.bundle_fallback = bundle_fallback;
+    options.bundle_fallback.log_prefix = log_prefix;
+    options.signpost_scan_log = signpost_scan_log;
+    options.nearby.loot = MakeLootPickupOptions(log_prefix, is_world_ready);
+    options.resolved.log_prefix = log_prefix;
+    options.resolved.loot = MakeLootPickupOptions(log_prefix, is_world_ready);
+    return options;
+}
+
 bool IsAlwaysPickupModel(uint32_t modelId) {
     switch (modelId) {
     case 2619u: case 36985u:
