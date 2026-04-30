@@ -1,6 +1,9 @@
 #pragma once
 
+#include <gwa3/dungeon/DungeonCheckpoint.h>
+#include <gwa3/dungeon/DungeonEntryRecovery.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
+#include <gwa3/dungeon/DungeonQuestRuntime.h>
 #include <gwa3/dungeon/DungeonRoute.h>
 #include <gwa3/dungeon/DungeonRuntime.h>
 
@@ -47,6 +50,23 @@ using ContextBoolFn = bool(*)(const char* context);
 using LevelEventFn = void(*)(int level_index);
 using LevelRouteFn = void(*)(const DungeonRoute::Waypoint* waypoints, int count, bool ignore_bot_running);
 using LevelRouteLogFn = void(*)(int level_index, const RouteRunResult& route_result);
+using ContextWipeRecoveryFn = bool(*)(const DungeonRoute::Waypoint* waypoints,
+                                      int count,
+                                      int current_index,
+                                      DungeonCheckpoint::WaypointWipeRecoveryContext context,
+                                      int& out_restart_index);
+using RouteWaypointMoveFn = DungeonNavigation::WaypointMoveResult(*)(const DungeonRoute::Waypoint& waypoint);
+using AggroWaypointMoveFn = void(*)(float x, float y, float fight_range);
+using DoorOpenAtFn = bool(*)(float x, float y);
+using BlessingGrabFn = void(*)(float x, float y);
+using AcquireDungeonKeyFn = bool(*)();
+using WaypointActionFn = void(*)(const DungeonRoute::Waypoint& waypoint);
+using ReturnToOutpostFn = void(*)();
+using WaitForMapReadyFn = bool(*)(uint32_t map_id, uint32_t timeout_ms);
+using NearestWaypointFn = int(*)(const DungeonRoute::Waypoint* waypoints, int count);
+using WaypointReplayVisitFn = void(*)(const DungeonRoute::Waypoint* waypoints, int count, int waypoint_index);
+using RouteLabelTelemetryFn = void(*)(uint32_t final_map_id, bool returned_to_quest_map);
+using RouteLabelDiagnosticFn = void(*)(const DungeonRoute::Waypoint* waypoints, int waypoint_index);
 
 struct RouteRunCallbacks {
     GetMapIdFn get_map_id = nullptr;
@@ -60,6 +80,36 @@ struct RouteRunCallbacks {
     MoveStandardWaypointFn move_standard_waypoint = nullptr;
     TelemetryUpdateFn update_telemetry = nullptr;
     LogWaypointFn log_waypoint = nullptr;
+};
+
+struct RouteLabelExecutorOptions {
+    RouteWaypointMoveFn move_route_waypoint = nullptr;
+    RouteWaypointMoveFn move_key_waypoint = nullptr;
+    DungeonCheckpoint::WaypointMoveFn move_checkpoint_waypoint = nullptr;
+    AggroWaypointMoveFn aggro_move_to = nullptr;
+    DoorOpenAtFn open_dungeon_door_at = nullptr;
+    BlessingGrabFn grab_blessing = nullptr;
+    AcquireDungeonKeyFn acquire_dungeon_key = nullptr;
+    WaypointActionFn handle_level_transition = nullptr;
+    WaypointActionFn handle_boss_reward = nullptr;
+    ContextWipeRecoveryFn recover_wipe = nullptr;
+    BoolFn is_dead = nullptr;
+    ReturnToOutpostFn return_to_outpost = nullptr;
+    WaitForMapReadyFn wait_for_map_ready = nullptr;
+    NearestWaypointFn get_nearest_waypoint = nullptr;
+    LogWaypointStateFn log_waypoint_state = nullptr;
+    WaypointReplayVisitFn after_quest_door_backtrack_waypoint = nullptr;
+    RouteLabelDiagnosticFn quest_door_diagnostic = nullptr;
+    RouteLabelTelemetryFn update_return_to_quest_map = nullptr;
+    DungeonEntryRecovery::TransitionPlan return_to_quest_map = {};
+    DungeonQuestRuntime::QuestReadyOptions quest_ready = {};
+    uint32_t quest_id = 0u;
+    uint32_t recovery_outpost_map_id = 0u;
+    uint32_t recovery_outpost_timeout_ms = 60000u;
+    int dungeon_door_backtrack_steps = 3;
+    int quest_door_backtrack_steps = 3;
+    const char* boss_label = "Boss";
+    const char* log_prefix = "Dungeon";
 };
 
 struct RouteRunOptions {
@@ -131,6 +181,11 @@ RouteRunResult RunWaypointRoute(
     int count,
     const RouteRunCallbacks& callbacks,
     const RouteRunOptions& options = {});
+WaypointHandlerResult ExecuteRouteLabelWaypoint(
+    const DungeonRoute::Waypoint* waypoints,
+    int count,
+    int& waypoint_index,
+    const RouteLabelExecutorOptions& options);
 DungeonLoopResult RunDungeonLoop(
     const DungeonLoopCallbacks& callbacks,
     const DungeonLoopOptions& options);

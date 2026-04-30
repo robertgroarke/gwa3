@@ -135,7 +135,250 @@ void LogRouteWaypointState(const char* stage,
     }
 }
 
+const char* PrefixOrDefault(const char* prefix) {
+    return prefix ? prefix : "Dungeon";
+}
+
+void LogRouteLabelState(const char* stage,
+                        const DungeonRoute::Waypoint* waypoints,
+                        int count,
+                        int waypoint_index,
+                        const RouteLabelExecutorOptions& options) {
+    if (options.log_waypoint_state) {
+        options.log_waypoint_state(stage, waypoints, count, waypoint_index);
+    }
+}
+
+WaypointHandlerResult RecoverRouteLabelWipeIfDead(
+    const DungeonRoute::Waypoint* waypoints,
+    int count,
+    int& waypoint_index,
+    DungeonCheckpoint::WaypointWipeRecoveryContext context,
+    const RouteLabelExecutorOptions& options) {
+    if (!options.is_dead || !options.is_dead()) {
+        return WaypointHandlerResult::NotHandled;
+    }
+
+    int restart_index = waypoint_index;
+    if (!options.recover_wipe ||
+        !options.recover_wipe(waypoints, count, waypoint_index, context, restart_index)) {
+        return WaypointHandlerResult::StopRoute;
+    }
+    waypoint_index = restart_index;
+    return WaypointHandlerResult::ContinueRoute;
+}
+
+void UpdateReturnTelemetry(
+    const DungeonEntryRecovery::BacktrackReturnResult& result,
+    const RouteLabelExecutorOptions& options) {
+    if (options.update_return_to_quest_map) {
+        options.update_return_to_quest_map(result.final_map_id, result.returned_to_quest_map);
+    }
+}
+
+void UpdateReturnTelemetry(
+    const DungeonEntryRecovery::QuestDoorRecoveryResult& result,
+    const RouteLabelExecutorOptions& options) {
+    if (options.update_return_to_quest_map) {
+        options.update_return_to_quest_map(result.final_map_id, result.returned_to_quest_map);
+    }
+}
+
 } // namespace
+
+WaypointHandlerResult ExecuteRouteLabelWaypoint(
+    const DungeonRoute::Waypoint* waypoints,
+    int count,
+    int& waypoint_index,
+    const RouteLabelExecutorOptions& options) {
+    if (waypoints == nullptr || waypoint_index < 0 || waypoint_index >= count) {
+        return WaypointHandlerResult::NotHandled;
+    }
+
+    const auto& waypoint = waypoints[waypoint_index];
+    const auto label_kind = DungeonRoute::ClassifyWaypointLabel(waypoint.label);
+    switch (label_kind) {
+    case DungeonRoute::WaypointLabelKind::Blessing:
+        if (options.move_route_waypoint == nullptr || options.grab_blessing == nullptr) {
+            return WaypointHandlerResult::NotHandled;
+        }
+        (void)DungeonNavigation::HandleBlessingWaypoint(
+            waypoint,
+            options.move_route_waypoint,
+            options.grab_blessing);
+        LogRouteLabelState("post-blessing-move", waypoints, count, waypoint_index, options);
+        return WaypointHandlerResult::ContinueRoute;
+
+    case DungeonRoute::WaypointLabelKind::LevelTransition:
+        if (options.handle_level_transition == nullptr) {
+            return WaypointHandlerResult::NotHandled;
+        }
+        options.handle_level_transition(waypoint);
+        return WaypointHandlerResult::StopRoute;
+
+    case DungeonRoute::WaypointLabelKind::DungeonKey: {
+        const auto move_key = options.move_key_waypoint
+            ? options.move_key_waypoint
+            : options.move_route_waypoint;
+        if (move_key == nullptr || options.acquire_dungeon_key == nullptr) {
+            return WaypointHandlerResult::NotHandled;
+        }
+        (void)move_key(waypoint);
+        LogRouteLabelState("post-dungeon-key-move", waypoints, count, waypoint_index, options);
+        const bool key_acquired = options.acquire_dungeon_key();
+        Log::Info("%s: Dungeon Key step acquired=%d",
+                  PrefixOrDefault(options.log_prefix),
+                  key_acquired ? 1 : 0);
+        if (!key_acquired) {
+            Log::Warn("%s: Dungeon Key step failed to secure boss key; returning to outpost for maintenance/recovery",
+                      PrefixOrDefault(options.log_prefix));
+            if (options.return_to_outpost) {
+                options.return_to_outpost();
+            }
+            if (options.wait_for_map_ready && options.recovery_outpost_map_id != 0u) {
+                (void)options.wait_for_map_ready(
+                    options.recovery_outpost_map_id,
+                    options.recovery_outpost_timeout_ms);
+            }
+            if (options.update_return_to_quest_map) {
+                options.update_return_to_quest_map(MapMgr::GetMapId(), false);
+            }
+            return WaypointHandlerResult::StopRoute;
+        }
+        return WaypointHandlerResult::ContinueRoute;
+    }
+
+    case DungeonRoute::WaypointLabelKind::DungeonDoor:
+        if (options.aggro_move_to == nullptr || options.open_dungeon_door_at == nullptr) {
+            return WaypointHandlerResult::NotHandled;
+        }
+        (void)DungeonNavigation::HandleOpenDungeonDoorWaypoint(
+            waypoint,
+            options.aggro_move_to,
+            options.open_dungeon_door_at);
+        LogRouteLabelState("post-dungeon-door-move", waypoints, count, waypoint_index, options);
+        return WaypointHandlerResult::ContinueRoute;
+
+    case DungeonRoute::WaypointLabelKind::DungeonDoorCheckpoint: {
+        if (options.move_route_waypoint == nullptr ||
+            options.move_checkpoint_waypoint == nullptr ||
+            options.get_nearest_waypoint == nullptr) {
+            return WaypointHandlerResult::NotHandled;
+        }
+        (void)options.move_route_waypoint(waypoint);
+        LogRouteLabelState("post-dungeon-door-checkpoint-move", waypoints, count, waypoint_index, options);
+
+        const auto recovery = RecoverRouteLabelWipeIfDead(
+            waypoints,
+            count,
+            waypoint_index,
+            DungeonCheckpoint::WaypointWipeRecoveryContext::DungeonDoorCheckpoint,
+            options);
+        if (recovery != WaypointHandlerResult::NotHandled) {
+            return recovery;
+        }
+
+        DungeonCheckpoint::LockedDoorCheckpointOptions checkpoint_options;
+        checkpoint_options.waypoints = waypoints;
+        checkpoint_options.waypoint_count = count;
+        checkpoint_options.current_index = waypoint_index;
+        checkpoint_options.backtrack_steps = options.dungeon_door_backtrack_steps;
+        checkpoint_options.move_before_check = false;
+        checkpoint_options.log_prefix = PrefixOrDefault(options.log_prefix);
+        checkpoint_options.checkpoint_name = "Dungeon Door Checkpoint";
+        checkpoint_options.move_waypoint = options.move_checkpoint_waypoint;
+        checkpoint_options.get_nearest_waypoint = options.get_nearest_waypoint;
+        const auto checkpoint = DungeonCheckpoint::HandleLockedDoorCheckpoint(checkpoint_options);
+        waypoint_index = checkpoint.waypoint_index;
+        return WaypointHandlerResult::ContinueRoute;
+    }
+
+    case DungeonRoute::WaypointLabelKind::QuestDoorCheckpoint: {
+        if (options.move_route_waypoint == nullptr ||
+            options.move_checkpoint_waypoint == nullptr ||
+            options.get_nearest_waypoint == nullptr) {
+            return WaypointHandlerResult::NotHandled;
+        }
+
+        DungeonEntryRecovery::QuestDoorRecoveryOptions quest_recovery_options;
+        quest_recovery_options.quest_id = options.quest_id;
+        quest_recovery_options.quest_ready = options.quest_ready;
+        quest_recovery_options.waypoints = waypoints;
+        quest_recovery_options.waypoint_count = count;
+        quest_recovery_options.current_index = waypoint_index;
+        quest_recovery_options.backtrack_steps = options.quest_door_backtrack_steps;
+        quest_recovery_options.move_waypoint = options.move_checkpoint_waypoint;
+        quest_recovery_options.after_move_waypoint = options.after_quest_door_backtrack_waypoint;
+        quest_recovery_options.return_to_quest_map = options.return_to_quest_map;
+        quest_recovery_options.log_prefix = PrefixOrDefault(options.log_prefix);
+        quest_recovery_options.label = "Quest Door Checkpoint";
+        const auto missing_quest_recovery =
+            DungeonEntryRecovery::HandleQuestDoorRecovery(quest_recovery_options);
+        if (missing_quest_recovery.recovery_triggered) {
+            Log::Info("%s: Quest Door Checkpoint reached without quest; returning to quest map for refresh",
+                      PrefixOrDefault(options.log_prefix));
+            LogRouteLabelState("quest-door-missing-quest-refresh-trigger", waypoints, count, waypoint_index, options);
+            UpdateReturnTelemetry(missing_quest_recovery, options);
+            return WaypointHandlerResult::StopRoute;
+        }
+
+        (void)options.move_route_waypoint(waypoint);
+        LogRouteLabelState("post-quest-door-checkpoint-move", waypoints, count, waypoint_index, options);
+
+        const auto recovery = RecoverRouteLabelWipeIfDead(
+            waypoints,
+            count,
+            waypoint_index,
+            DungeonCheckpoint::WaypointWipeRecoveryContext::QuestDoorCheckpoint,
+            options);
+        if (recovery != WaypointHandlerResult::NotHandled) {
+            return recovery;
+        }
+
+        if (options.quest_door_diagnostic) {
+            options.quest_door_diagnostic(waypoints, waypoint_index);
+        }
+
+        const int nearest = options.get_nearest_waypoint(waypoints, count);
+        if (nearest < waypoint_index) {
+            Log::Info("%s: Failed first door at wp %d; nearest=%d, returning to quest map for refresh",
+                      PrefixOrDefault(options.log_prefix),
+                      waypoint_index,
+                      nearest);
+            LogRouteLabelState("quest-door-refresh-trigger", waypoints, count, waypoint_index, options);
+            DungeonEntryRecovery::BacktrackReturnOptions return_options;
+            return_options.waypoints = waypoints;
+            return_options.waypoint_count = count;
+            return_options.current_index = waypoint_index;
+            return_options.backtrack_steps = options.quest_door_backtrack_steps;
+            return_options.move_waypoint = options.move_checkpoint_waypoint;
+            return_options.after_move_waypoint = options.after_quest_door_backtrack_waypoint;
+            return_options.return_to_quest_map = options.return_to_quest_map;
+            return_options.log_prefix = PrefixOrDefault(options.log_prefix);
+            return_options.label = "Quest Door Checkpoint";
+            const auto returned = DungeonEntryRecovery::ReplayBacktrackAndReturnToQuestMap(return_options);
+            UpdateReturnTelemetry(returned, options);
+            return WaypointHandlerResult::StopRoute;
+        }
+        Log::Info("%s: Quest Door Checkpoint reached at wp %d nearest=%d",
+                  PrefixOrDefault(options.log_prefix),
+                  waypoint_index,
+                  nearest);
+        return WaypointHandlerResult::ContinueRoute;
+    }
+
+    case DungeonRoute::WaypointLabelKind::Boss:
+        if (options.handle_boss_reward == nullptr ||
+            std::strcmp(waypoint.label ? waypoint.label : "", options.boss_label ? options.boss_label : "Boss") != 0) {
+            return WaypointHandlerResult::NotHandled;
+        }
+        options.handle_boss_reward(waypoint);
+        return WaypointHandlerResult::StopRoute;
+
+    default:
+        return WaypointHandlerResult::NotHandled;
+    }
+}
 
 RouteRunResult RunWaypointRoute(
     const DungeonRoute::Waypoint* waypoints,

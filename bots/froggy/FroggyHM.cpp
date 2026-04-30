@@ -187,25 +187,72 @@ static bool OpenDungeonDoorAt(float doorX, float doorY);       // forward decl
 #include "FroggyHMWaypointSupport.h"
 #include "FroggyHMCheckpointReplay.h"
 #include "FroggyHMLvl2TransitionWaypoint.h"
-#include "FroggyHMWaypointLabelHandlers.h"
 
 static bool RecoverFromStandardWaypointWipe(const Waypoint* wps, int count, int currentIndex, int& outRestartIndex) {
     return RecoverFromWaypointWipe(wps, count, currentIndex, WipeRecoveryContext::Standard, outRestartIndex);
+}
+
+static bool RecoverFroggyLabelWaypointWipe(
+    const Waypoint* wps,
+    int count,
+    int currentIndex,
+    DungeonCheckpoint::WaypointWipeRecoveryContext context,
+    int& outRestartIndex) {
+    return RecoverFromWaypointWipe(wps, count, currentIndex, context, outRestartIndex);
+}
+
+static void UpdateFroggyQuestMapReturnTelemetry(uint32_t finalMapId, bool returnedToQuestMap) {
+    s_dungeonLoopTelemetry.final_map_id = finalMapId;
+    s_dungeonLoopTelemetry.returned_to_sparkfly =
+        returnedToQuestMap && finalMapId == MapIds::SPARKFLY_SWAMP;
+}
+
+static void HandleFroggyLevelTransitionWaypoint(const Waypoint&) {
+    HandleFroggyLvl1ToLvl2Waypoint();
+}
+
+static void HandleFroggyBossRewardWaypoint(const Waypoint& waypoint) {
+    HandleBossWaypoint(waypoint);
+}
+
+static DungeonRouteRunner::RouteLabelExecutorOptions MakeFroggyRouteLabelOptions() {
+    DungeonRouteRunner::RouteLabelExecutorOptions options;
+    options.move_route_waypoint = &MoveFroggyRouteWaypointDefault;
+    options.move_key_waypoint = &MoveFroggyRouteWaypointDefault;
+    options.move_checkpoint_waypoint = &MoveFroggyWaypointForCheckpointReplay;
+    options.aggro_move_to = &AggroMoveToEx;
+    options.open_dungeon_door_at = &OpenDungeonDoorAt;
+    options.grab_blessing = &GrabDungeonBlessing;
+    options.acquire_dungeon_key = &AcquireBogrootBossKey;
+    options.handle_level_transition = &HandleFroggyLevelTransitionWaypoint;
+    options.handle_boss_reward = &HandleFroggyBossRewardWaypoint;
+    options.recover_wipe = &RecoverFroggyLabelWaypointWipe;
+    options.is_dead = &IsDead;
+    options.return_to_outpost = &MapMgr::ReturnToOutpost;
+    options.wait_for_map_ready = &DungeonRuntime::WaitForMapReady;
+    options.get_nearest_waypoint = &DungeonNavigation::GetNearestWaypointIndex;
+    options.log_waypoint_state = &LogFroggyWaypointState;
+    options.after_quest_door_backtrack_waypoint = &LogQuestDoorCheckpointReplayWaypoint;
+    options.quest_door_diagnostic = &LogQuestDoorCheckpointDiagnostic;
+    options.update_return_to_quest_map = &UpdateFroggyQuestMapReturnTelemetry;
+    options.return_to_quest_map = MakeFroggyReturnToSparkflyPlan("Froggy quest-door refresh");
+    options.quest_id = GWA3::QuestIds::TEKKS_WAR;
+    options.quest_ready.refresh_delay_ms = TEKKS_QUEST_REFRESH_DELAY_MS;
+    options.quest_ready.post_set_active_delay_ms = TEKKS_SET_ACTIVE_DWELL_MS;
+    options.recovery_outpost_map_id = MapIds::GADDS_ENCAMPMENT;
+    options.log_prefix = "Froggy";
+    return options;
 }
 
 static DungeonRouteRunner::WaypointHandlerResult HandleFroggySpecialWaypointForRouteRunner(
     const Waypoint* wps,
     int count,
     int& waypointIndex) {
-    switch (HandleFroggySpecialWaypoint(wps, count, waypointIndex)) {
-    case FroggyWaypointHandlerResult::ContinueRoute:
-        return DungeonRouteRunner::WaypointHandlerResult::ContinueRoute;
-    case FroggyWaypointHandlerResult::StopRoute:
-        return DungeonRouteRunner::WaypointHandlerResult::StopRoute;
-    case FroggyWaypointHandlerResult::NotHandled:
-    default:
-        return DungeonRouteRunner::WaypointHandlerResult::NotHandled;
-    }
+    return DungeonRouteRunner::ExecuteRouteLabelWaypoint(
+        wps,
+        count,
+        waypointIndex,
+        MakeFroggyRouteLabelOptions());
 }
 
 static void UpdateFroggyRouteTelemetry(int waypointIndex, const Waypoint& waypoint) {
