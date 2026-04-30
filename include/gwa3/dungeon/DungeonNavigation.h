@@ -10,9 +10,19 @@ inline constexpr float MOVE_TO_DEFAULT_THRESHOLD = 250.0f;
 inline constexpr uint32_t MOVE_TO_TIMEOUT_MS = 30000u;
 inline constexpr uint32_t MOVE_TO_POLL_MS = 1000u;
 
+struct WaypointMoveResult {
+    bool reached = false;
+    bool map_changed = false;
+    bool dead = false;
+    bool timed_out = false;
+    float final_distance = -1.0f;
+    float threshold = MOVE_TO_DEFAULT_THRESHOLD;
+    uint32_t final_map_id = 0u;
+};
+
 using MoveIssuerFn = void(*)(float x, float y);
 using WaypointMoveFn = void(*)(float x, float y, float value);
-using RouteWaypointMoveFn = void(*)(const DungeonRoute::Waypoint& waypoint);
+using RouteWaypointMoveFn = WaypointMoveResult(*)(const DungeonRoute::Waypoint& waypoint);
 using DoorOpenAtFn = bool(*)(float x, float y);
 using BlessingGrabFn = void(*)(float x, float y);
 using LootAfterCombatFn = int(*)(float aggroRange, const char* reason);
@@ -130,7 +140,7 @@ bool MoveToAndWaitLogged(
     float y,
     float threshold = MOVE_TO_DEFAULT_THRESHOLD,
     const LoggedMoveOptions& options = {});
-void MoveRouteWaypoint(
+WaypointMoveResult MoveRouteWaypoint(
     const DungeonRoute::Waypoint& waypoint,
     WaypointMoveFn moveToPoint,
     WaypointMoveFn aggroMoveToPoint,
@@ -142,7 +152,7 @@ void LogWaypointState(
     int count,
     int waypointIndex,
     const WaypointTelemetryOptions& options = {});
-void MoveRouteWaypointWithCombatLoot(
+WaypointMoveResult MoveRouteWaypointWithCombatLoot(
     const DungeonRoute::Waypoint& waypoint,
     int waypointIndex,
     RouteWaypointMoveFn moveRouteWaypoint,

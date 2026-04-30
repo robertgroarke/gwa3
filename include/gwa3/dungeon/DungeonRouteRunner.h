@@ -1,5 +1,6 @@
 #pragma once
 
+#include <gwa3/dungeon/DungeonNavigation.h>
 #include <gwa3/dungeon/DungeonRoute.h>
 #include <gwa3/dungeon/DungeonRuntime.h>
 
@@ -35,8 +36,8 @@ using WipeRecoveryFn = bool(*)(const DungeonRoute::Waypoint* waypoints,
 using SpecialWaypointHandlerFn = WaypointHandlerResult(*)(const DungeonRoute::Waypoint* waypoints,
                                                           int count,
                                                           int& waypoint_index);
-using MoveStandardWaypointFn = void(*)(const DungeonRoute::Waypoint& waypoint,
-                                       int waypoint_index);
+using MoveStandardWaypointFn = DungeonNavigation::WaypointMoveResult(*)(const DungeonRoute::Waypoint& waypoint,
+                                                                        int waypoint_index);
 using TelemetryUpdateFn = void(*)(int waypoint_index,
                                   const DungeonRoute::Waypoint& waypoint);
 using LogWaypointFn = void(*)(int waypoint_index,
@@ -65,6 +66,8 @@ struct RouteRunOptions {
     bool ignore_bot_running = false;
     bool use_nearest_progress_backtrack = true;
     bool log_route_waypoint_state = true;
+    int max_waypoint_move_retries = 2;
+    int waypoint_move_backtrack_steps = 1;
     const char* log_prefix = "Dungeon";
     const char* route_name = "route";
 };

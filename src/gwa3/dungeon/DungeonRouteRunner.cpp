@@ -6,7 +6,9 @@
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/MapMgr.h>
 
+#include <algorithm>
 #include <cstring>
+#include <vector>
 
 namespace GWA3::DungeonRouteRunner {
 
@@ -151,6 +153,7 @@ RouteRunResult RunWaypointRoute(
     const bool use_progress_backtrack =
         options.use_nearest_progress_backtrack && !IsRouteMap(map_id, callbacks);
     auto progress_state = DungeonRoute::MakeWaypointProgressState(start_index);
+    std::vector<int> waypoint_move_retries(static_cast<size_t>(count), 0);
 
     Log::Info("%s: %s route start map=%u startIdx=%d count=%d ignoreBotRunning=%d",
               options.log_prefix ? options.log_prefix : "Dungeon",
@@ -223,9 +226,65 @@ RouteRunResult RunWaypointRoute(
             continue;
         }
 
-        callbacks.move_standard_waypoint(waypoint, i);
+        const auto move_result = callbacks.move_standard_waypoint(waypoint, i);
         if (IsRouteMap(map_id, callbacks)) {
             LogRouteWaypointState("post", waypoints, count, i, callbacks, options);
+        }
+        const uint32_t current_map_id = CurrentMapId(callbacks);
+        if (move_result.map_changed || current_map_id != map_id) {
+            Log::Info("%s: %s route map changed expected=%u actual=%u after wp=%d(%s)",
+                      options.log_prefix ? options.log_prefix : "Dungeon",
+                      options.route_name ? options.route_name : "route",
+                      map_id,
+                      current_map_id,
+                      i,
+                      waypoint.label ? waypoint.label : "");
+            result.map_changed = true;
+            result.stopped = true;
+            result.final_index = i;
+            return result;
+        }
+        if (move_result.dead || IsDead(callbacks)) {
+            int restart_index = i;
+            if (!callbacks.recover_wipe ||
+                !callbacks.recover_wipe(waypoints, count, i, restart_index)) {
+                result.stopped = true;
+                result.final_index = i;
+                return result;
+            }
+            i = restart_index - 1;
+            continue;
+        }
+        if (!move_result.reached) {
+            const int retries_used = waypoint_move_retries[static_cast<size_t>(i)];
+            if (retries_used < options.max_waypoint_move_retries) {
+                waypoint_move_retries[static_cast<size_t>(i)] = retries_used + 1;
+                const int backtrack_index = std::max(0, i - options.waypoint_move_backtrack_steps);
+                Log::Warn("%s: %s waypoint move failed wp=%d(%s) dist=%.0f threshold=%.0f retry=%d/%d backtrack=%d",
+                          options.log_prefix ? options.log_prefix : "Dungeon",
+                          options.route_name ? options.route_name : "route",
+                          i,
+                          waypoint.label ? waypoint.label : "",
+                          move_result.final_distance,
+                          move_result.threshold,
+                          retries_used + 1,
+                          options.max_waypoint_move_retries,
+                          backtrack_index);
+                i = backtrack_index - 1;
+                continue;
+            }
+
+            Log::Warn("%s: %s waypoint move failed permanently wp=%d(%s) dist=%.0f threshold=%.0f map=%u",
+                      options.log_prefix ? options.log_prefix : "Dungeon",
+                      options.route_name ? options.route_name : "route",
+                      i,
+                      waypoint.label ? waypoint.label : "",
+                      move_result.final_distance,
+                      move_result.threshold,
+                      current_map_id);
+            result.stopped = true;
+            result.final_index = i;
+            return result;
         }
         result.final_index = i;
     }

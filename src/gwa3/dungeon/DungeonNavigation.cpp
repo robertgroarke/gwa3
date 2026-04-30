@@ -21,6 +21,23 @@ MoveIssuerFn ResolveMoveIssuer(MoveIssuerFn moveIssuer) {
     return moveIssuer ? moveIssuer : &IssueMoveDirect;
 }
 
+WaypointMoveResult InspectWaypointMoveResult(const DungeonRoute::Waypoint& waypoint, float threshold) {
+    WaypointMoveResult result;
+    result.threshold = threshold;
+    result.final_map_id = MapMgr::GetMapId();
+
+    auto* me = AgentMgr::GetMyAgent();
+    result.dead = me == nullptr || me->hp <= 0.0f;
+    if (me != nullptr) {
+        result.final_distance = AgentMgr::GetDistance(me->x, me->y, waypoint.x, waypoint.y);
+    }
+    result.reached = !result.dead &&
+                     result.final_distance >= 0.0f &&
+                     result.final_distance <= threshold;
+    result.timed_out = !result.reached && !result.dead;
+    return result;
+}
+
 } // namespace
 
 bool IsWithinDistance(float currentX, float currentY, float targetX, float targetY, float threshold) {
@@ -213,22 +230,27 @@ bool MoveToAndWaitLogged(
     return result.arrived;
 }
 
-void MoveRouteWaypoint(
+WaypointMoveResult MoveRouteWaypoint(
     const DungeonRoute::Waypoint& waypoint,
     WaypointMoveFn moveToPoint,
     WaypointMoveFn aggroMoveToPoint,
     IsMapLoadedFn isMapLoaded,
     float moveThreshold) {
+    WaypointMoveResult result;
+    result.threshold = moveThreshold;
+    result.final_map_id = MapMgr::GetMapId();
     if (moveToPoint == nullptr || aggroMoveToPoint == nullptr || isMapLoaded == nullptr) {
-        return;
+        result.timed_out = true;
+        return result;
     }
 
     if (waypoint.fight_range > 0.0f && isMapLoaded()) {
         aggroMoveToPoint(waypoint.x, waypoint.y, waypoint.fight_range);
-        return;
+        return InspectWaypointMoveResult(waypoint, moveThreshold);
     }
 
     moveToPoint(waypoint.x, waypoint.y, moveThreshold);
+    return InspectWaypointMoveResult(waypoint, moveThreshold);
 }
 
 void LogWaypointState(
@@ -281,24 +303,26 @@ void LogWaypointState(
               nearbyEnemies);
 }
 
-void MoveRouteWaypointWithCombatLoot(
+WaypointMoveResult MoveRouteWaypointWithCombatLoot(
     const DungeonRoute::Waypoint& waypoint,
     int waypointIndex,
     RouteWaypointMoveFn moveRouteWaypoint,
     IsMapLoadedFn isMapLoaded,
     LootAfterCombatFn lootAfterCombat,
     const char* logPrefix) {
+    WaypointMoveResult result;
     if (moveRouteWaypoint == nullptr) {
-        return;
+        result.timed_out = true;
+        result.final_map_id = MapMgr::GetMapId();
+        return result;
     }
     if (waypoint.fight_range <= 0.0f || isMapLoaded == nullptr || !isMapLoaded()) {
-        moveRouteWaypoint(waypoint);
-        return;
+        return moveRouteWaypoint(waypoint);
     }
 
-    moveRouteWaypoint(waypoint);
-    if (lootAfterCombat == nullptr) {
-        return;
+    result = moveRouteWaypoint(waypoint);
+    if (!result.reached || lootAfterCombat == nullptr) {
+        return result;
     }
     const int picked = lootAfterCombat(
         waypoint.fight_range,
@@ -309,6 +333,7 @@ void MoveRouteWaypointWithCombatLoot(
               waypoint.label ? waypoint.label : "",
               DungeonLoot::ComputePostCombatLootRange(waypoint.fight_range),
               picked);
+    return result;
 }
 
 bool HandleBlessingWaypoint(

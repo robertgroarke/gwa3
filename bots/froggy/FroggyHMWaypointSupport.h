@@ -44,8 +44,10 @@ static void AggroMoveFroggyWaypoint(float x, float y, float fightRange) {
     AggroMoveToEx(x, y, fightRange);
 }
 
-static void MoveFroggyRouteWaypoint(const Waypoint& waypoint, float moveThreshold = 250.0f) {
-    DungeonNavigation::MoveRouteWaypoint(
+static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypoint(
+    const Waypoint& waypoint,
+    float moveThreshold = 250.0f) {
+    return DungeonNavigation::MoveRouteWaypoint(
         waypoint,
         &MoveFroggyWaypoint,
         &AggroMoveFroggyWaypoint,
@@ -53,12 +55,14 @@ static void MoveFroggyRouteWaypoint(const Waypoint& waypoint, float moveThreshol
         moveThreshold);
 }
 
-static void MoveFroggyRouteWaypointDefault(const Waypoint& waypoint) {
-    MoveFroggyRouteWaypoint(waypoint);
+static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypointDefault(const Waypoint& waypoint) {
+    return MoveFroggyRouteWaypoint(waypoint);
 }
 
-static void MoveFroggyRouteWaypointWithCombatLoot(const Waypoint& waypoint, int waypointIndex) {
-    DungeonNavigation::MoveRouteWaypointWithCombatLoot(
+static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypointWithCombatLoot(
+    const Waypoint& waypoint,
+    int waypointIndex) {
+    return DungeonNavigation::MoveRouteWaypointWithCombatLoot(
         waypoint,
         waypointIndex,
         &MoveFroggyRouteWaypointDefault,
