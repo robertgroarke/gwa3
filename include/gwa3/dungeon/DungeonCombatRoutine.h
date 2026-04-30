@@ -119,6 +119,23 @@ struct TargetFightOptions {
     SkillCastTimingOptions timing = {};
 };
 
+struct AggroSkillUseOptions {
+    bool wait_for_completion = true;
+    float aggro_range = DEFAULT_SKILL_AGGRO_RANGE;
+    float max_aftercast = 3.0f;
+    const char* log_prefix = nullptr;
+};
+
+struct DebugCombatStepOptions {
+    bool quick_step = false;
+    bool prefer_first_foe_target_skill = false;
+    float aggro_range = DEFAULT_SKILL_AGGRO_RANGE;
+    float max_aftercast = 3.0f;
+    AutoAttackFn auto_attack = nullptr;
+    uint32_t restricted_skill_override_map_id = 0u;
+    const char* log_prefix = nullptr;
+};
+
 struct SkillCandidateInspection {
     bool available = false;
     bool role_match = false;
@@ -178,6 +195,13 @@ SkillActionResult MakeAutoAttackActionResult(
     uint32_t targetId,
     uint32_t roleMask,
     uint32_t startedAtMs = 0u);
+
+void RecordAutoAttackAction(
+    CombatSessionState& session,
+    uint32_t targetId,
+    uint32_t roleMask,
+    uint32_t startedAtMs = 0u,
+    const char* descriptionFormat = "auto_attack target=%u");
 
 bool TryUseSkillWithRole(
     uint32_t targetId,
@@ -254,6 +278,13 @@ int UseSkillsInSlotOrderTracked(
     BoolFn isDead = nullptr,
     const SlotOrderUseOptions& options = {});
 
+int UseSkillsInAggroTracked(
+    CombatSessionState& session,
+    uint32_t targetId,
+    WaitFn waitMs = nullptr,
+    BoolFn isDead = nullptr,
+    const AggroSkillUseOptions& options = {});
+
 void FightTarget(
     CombatSessionState& session,
     uint32_t targetId,
@@ -272,6 +303,37 @@ bool ExecuteCombatStep(
     SkillExecutionContext& context,
     AutoAttackFn auto_attack,
     SkillActionResult& outAction);
+
+bool ExecuteBuiltinDebugCombatStep(
+    CombatSessionState& session,
+    uint32_t targetId,
+    WaitFn waitMs = nullptr,
+    BoolFn isDead = nullptr,
+    const DebugCombatStepOptions& options = {});
+
+bool RefreshCombatSkillbarForDebug(
+    CombatSessionState& session,
+    const char* logPrefix = nullptr);
+
+bool ResolveSyntheticSkillTarget(
+    uint32_t roleMask,
+    uint8_t targetType,
+    uint32_t defaultFoeId,
+    uint32_t& outTargetId);
+
+bool ResolveUsableSkillTargetForSlot(
+    CombatSessionState& session,
+    uint32_t slot,
+    uint32_t defaultFoeId,
+    uint32_t& outSkillId,
+    uint32_t& outTargetId,
+    uint8_t& outTargetType,
+    const char* logPrefix = nullptr);
+
+void DumpBuiltinCombatDecision(
+    CombatSessionState& session,
+    uint32_t targetId,
+    const char* logPrefix = nullptr);
 
 SkillCandidateInspection InspectSkillCandidate(
     const DungeonSkill::CachedSkill& skill,

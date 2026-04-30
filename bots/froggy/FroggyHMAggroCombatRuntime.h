@@ -13,13 +13,11 @@ static void RecordFroggyAggroTargetStats(
 }
 
 static void RecordFallbackAutoAttackStep(void*, uint32_t targetId, uint32_t actionStart) {
-    DungeonCombatRoutine::SetLastActionDescription(s_combatSession, "auto_attack target=%u", targetId);
-    DungeonCombatRoutine::ResetLastAction(s_combatSession);
-    DungeonCombatRoutine::ApplyLastAction(s_combatSession, DungeonCombatRoutine::MakeAutoAttackActionResult(
+    DungeonCombatRoutine::RecordAutoAttackAction(
+        s_combatSession,
         targetId,
         DungeonSkill::ROLE_ATTACK | DungeonSkill::ROLE_OFFENSIVE,
-        actionStart));
-    DungeonCombatRoutine::FinishLastAction(s_combatSession);
+        actionStart);
 }
 
 static void RecordFroggyAggroActionStats(void* userData, uint32_t actionStart) {
@@ -36,14 +34,12 @@ static void RecordFroggyAggroActionStats(void* userData, uint32_t actionStart) {
 }
 
 static int UseFroggySkillsInAggro(uint32_t targetId, float aggroRange, bool waitForSkillCompletion) {
-    DungeonCombatRoutine::SlotOrderUseOptions options;
+    DungeonCombatRoutine::AggroSkillUseOptions options;
     options.wait_for_completion = waitForSkillCompletion;
     options.aggro_range = aggroRange;
-    options.skill_use.timing = DungeonCombatRoutine::MakeSkillCastTimingOptions(
-        "Froggy",
-        IsBogrootMapId(MapMgr::GetMapId()) ? 1.5f : 3.0f);
-    options.skill_use.log_prefix = "Froggy";
-    return DungeonCombatRoutine::UseSkillsInSlotOrderTracked(
+    options.max_aftercast = IsBogrootMapId(MapMgr::GetMapId()) ? 1.5f : 3.0f;
+    options.log_prefix = "Froggy";
+    return DungeonCombatRoutine::UseSkillsInAggroTracked(
         s_combatSession,
         targetId,
         &DungeonRuntime::WaitMs,

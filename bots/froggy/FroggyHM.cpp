@@ -429,7 +429,6 @@ void Register() {
 
 #include "FroggyHMDebugMovement.h"
 #include "FroggyHMDebugCombat.h"
-#include "FroggyHMDebugCombatDump.h"
 #include "FroggyHMDebugDungeonLoop.h"
 
 } // namespace GWA3::Bot::Froggy

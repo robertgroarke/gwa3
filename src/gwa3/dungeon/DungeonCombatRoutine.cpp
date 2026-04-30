@@ -3,6 +3,7 @@
 #include <gwa3/core/Log.h>
 #include <gwa3/dungeon/DungeonCombat.h>
 #include <gwa3/managers/AgentMgr.h>
+#include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/SkillMgr.h>
 
 #include <Windows.h>
@@ -33,6 +34,10 @@ bool IsDead(BoolFn isDeadFn) {
 
 void DefaultAutoAttack(uint32_t targetId) {
     AgentMgr::Attack(targetId);
+}
+
+AutoAttackFn ResolveAutoAttack(AutoAttackFn autoAttack) {
+    return autoAttack ? autoAttack : &DefaultAutoAttack;
 }
 
 void LogSkillCacheSummary(const DungeonSkill::CachedSkill cache[8]) {
@@ -111,6 +116,205 @@ void WaitForSkillCastClear(const DungeonSkill::CachedSkill& skill,
         }
         WaitOrSleep(context.wait_ms, options.clear_poll_ms);
     }
+}
+
+void PrepareDebugCombatTarget(CombatSessionState& session, uint32_t targetId, const char* logPrefix) {
+    if (!session.skills_cached) {
+        RefreshSkillCacheWithDebugLog(session, logPrefix);
+    }
+    ResetUsedSkills(session);
+    AgentMgr::ChangeTarget(targetId);
+}
+
+bool TryUseFirstFoeTargetSkill(
+    CombatSessionState& session,
+    uint32_t targetId,
+    WaitFn waitMs,
+    BoolFn isDead,
+    const DebugCombatStepOptions& options) {
+    for (int i = 0; i < 8; ++i) {
+        const auto& cached = session.skill_cache[i];
+        if (cached.skill_id == 0u) {
+            continue;
+        }
+        if (cached.target_type != 5u) {
+            continue;
+        }
+        if (!DungeonSkill::CanUseSkill(cached, targetId, options.aggro_range)) {
+            continue;
+        }
+
+        TrackedSkillUseOptions skillOptions;
+        skillOptions.wait_for_completion = true;
+        skillOptions.aggro_range = options.aggro_range;
+        skillOptions.timing = MakeSkillCastTimingOptions(options.log_prefix, options.max_aftercast);
+        skillOptions.log_prefix = options.log_prefix;
+        if (TryUseSkillSlotTracked(session, i, targetId, waitMs, isDead, skillOptions)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void ExecuteQuickDebugCombatStep(
+    CombatSessionState& session,
+    uint32_t targetId,
+    WaitFn waitMs,
+    BoolFn isDead,
+    const DebugCombatStepOptions& options) {
+    PrepareDebugCombatTarget(session, targetId, options.log_prefix);
+    bool attacked = false;
+    const AutoAttackFn autoAttack = ResolveAutoAttack(options.auto_attack);
+    if (DungeonSkill::CanBasicAttack()) {
+        autoAttack(targetId);
+        attacked = true;
+    }
+
+    SlotOrderUseOptions slotOptions;
+    slotOptions.wait_for_completion = false;
+    slotOptions.aggro_range = options.aggro_range;
+    slotOptions.skill_use.timing = MakeSkillCastTimingOptions(options.log_prefix, options.max_aftercast);
+    slotOptions.skill_use.log_prefix = options.log_prefix;
+    const int usedSkills = UseSkillsInSlotOrderTracked(session, targetId, waitMs, isDead, slotOptions);
+    if (usedSkills <= 0 && attacked) {
+        RecordAutoAttackAction(
+            session,
+            targetId,
+            DungeonSkill::ROLE_ATTACK | DungeonSkill::ROLE_OFFENSIVE);
+    }
+}
+
+void ExecuteFoeTargetPreferredDebugCombatStep(
+    CombatSessionState& session,
+    uint32_t targetId,
+    WaitFn waitMs,
+    BoolFn isDead,
+    const DebugCombatStepOptions& options) {
+    PrepareDebugCombatTarget(session, targetId, options.log_prefix);
+    if (TryUseFirstFoeTargetSkill(session, targetId, waitMs, isDead, options)) {
+        return;
+    }
+
+    bool attacked = false;
+    const AutoAttackFn autoAttack = ResolveAutoAttack(options.auto_attack);
+    if (DungeonSkill::CanBasicAttack()) {
+        autoAttack(targetId);
+        attacked = true;
+    }
+
+    SlotOrderUseOptions slotOptions;
+    slotOptions.wait_for_completion = true;
+    slotOptions.aggro_range = options.aggro_range;
+    slotOptions.skill_use.timing = MakeSkillCastTimingOptions(options.log_prefix, options.max_aftercast);
+    slotOptions.skill_use.log_prefix = options.log_prefix;
+    const int usedSkills = UseSkillsInSlotOrderTracked(session, targetId, waitMs, isDead, slotOptions);
+    if (usedSkills <= 0 && attacked) {
+        RecordAutoAttackAction(
+            session,
+            targetId,
+            DungeonSkill::ROLE_ATTACK | DungeonSkill::ROLE_OFFENSIVE);
+    }
+}
+
+void DumpUnavailableBuiltinCombatContext(
+    CombatSessionState& session,
+    AgentLiving* me,
+    Agent* target,
+    Skillbar* bar,
+    const char* logPrefix) {
+    AddDecisionDumpLine(
+        session,
+        "unavailable me=%d target=%d bar=%d",
+        me ? 1 : 0, target ? 1 : 0, bar ? 1 : 0);
+    Log::Info("%s: BuiltinCombatDump: unavailable me=%d target=%d bar=%d",
+              logPrefix ? logPrefix : "DungeonCombatRoutine",
+              me ? 1 : 0,
+              target ? 1 : 0,
+              bar ? 1 : 0);
+}
+
+void DumpBuiltinCombatTargetHeader(
+    CombatSessionState& session,
+    uint32_t targetId,
+    AgentLiving* me,
+    AgentLiving* target,
+    const char* logPrefix) {
+    const float myEnergy = me->energy * me->max_energy;
+    const float distance = AgentMgr::GetDistance(me->x, me->y, target->x, target->y);
+    AddDecisionDumpLine(
+        session,
+        "target=%u distance=%.0f hp=%.3f energy=%.1f activeSkill=%u modelState=0x%X",
+        targetId,
+        distance,
+        target->hp,
+        myEnergy,
+        me->skill,
+        me->model_state);
+    Log::Info("%s: BuiltinCombatDump: target=%u distance=%.0f hp=%.3f energy=%.1f activeSkill=%u modelState=0x%X",
+              logPrefix ? logPrefix : "DungeonCombatRoutine",
+              targetId,
+              distance,
+              target->hp,
+              myEnergy,
+              me->skill,
+              me->model_state);
+}
+
+void DumpBuiltinCombatSkillSlot(
+    CombatSessionState& session,
+    int slotIndex,
+    const DungeonSkill::CachedSkill& skill,
+    uint32_t targetId,
+    const char* logPrefix) {
+    const int displaySlot = slotIndex + 1;
+    if (skill.skill_id == 0u) {
+        AddDecisionDumpLine(session, "slot=%d empty", displaySlot);
+        Log::Info("%s: BuiltinCombatDump: slot=%d empty",
+                  logPrefix ? logPrefix : "DungeonCombatRoutine",
+                  displaySlot);
+        return;
+    }
+
+    const auto inspection = InspectSkillCandidate(
+        skill,
+        slotIndex,
+        targetId,
+        DungeonSkill::ROLE_OFFENSIVE | DungeonSkill::ROLE_ATTACK);
+    const char* canUseReason = DungeonSkill::ExplainCanUseSkillFailure(skill, targetId);
+    AddDecisionDumpLine(
+        session,
+        "slot=%d skill=%u roles=0x%X match=%d recharge=%u ready=%d e=%u/%0.1f adren=%u/%u canCast=%d canUse=%d castReason=%s useReason=%s target=%u tgtType=%u type=%u",
+        displaySlot,
+        skill.skill_id,
+        skill.roles,
+        inspection.role_match ? 1 : 0,
+        inspection.recharge,
+        inspection.recharge_ready ? 1 : 0,
+        skill.energy_cost,
+        inspection.current_energy,
+        inspection.adrenaline_current,
+        inspection.adrenaline_required,
+        inspection.can_cast ? 1 : 0,
+        inspection.can_use ? 1 : 0,
+        inspection.can_cast_reason ? inspection.can_cast_reason : "ok",
+        canUseReason ? canUseReason : "ok",
+        inspection.resolved_target,
+        skill.target_type,
+        skill.skill_type);
+    Log::Info("%s: BuiltinCombatDump: slot=%d skill=%u roles=0x%X roleMatch=%d recharge=%u ready=%d energyCost=%u energyReady=%d canUse=%d resolvedTarget=%u targetType=%u type=%u",
+              logPrefix ? logPrefix : "DungeonCombatRoutine",
+              displaySlot,
+              skill.skill_id,
+              skill.roles,
+              inspection.role_match ? 1 : 0,
+              inspection.recharge,
+              inspection.recharge_ready ? 1 : 0,
+              skill.energy_cost,
+              inspection.energy_ready ? 1 : 0,
+              inspection.can_use ? 1 : 0,
+              inspection.resolved_target,
+              skill.target_type,
+              skill.skill_type);
 }
 
 } // namespace
@@ -293,6 +497,21 @@ SkillActionResult MakeAutoAttackActionResult(
     action.role_mask = roleMask;
     action.started_at_ms = startedAtMs != 0u ? startedAtMs : GetTickCount();
     return action;
+}
+
+void RecordAutoAttackAction(
+    CombatSessionState& session,
+    uint32_t targetId,
+    uint32_t roleMask,
+    uint32_t startedAtMs,
+    const char* descriptionFormat) {
+    SetLastActionDescription(
+        session,
+        descriptionFormat ? descriptionFormat : "auto_attack target=%u",
+        targetId);
+    ResetLastAction(session);
+    ApplyLastAction(session, MakeAutoAttackActionResult(targetId, roleMask, startedAtMs));
+    FinishLastAction(session);
 }
 
 bool TryUseSkillWithRole(
@@ -714,6 +933,22 @@ int UseSkillsInSlotOrderTracked(
     return usedCount;
 }
 
+int UseSkillsInAggroTracked(
+    CombatSessionState& session,
+    uint32_t targetId,
+    WaitFn waitMs,
+    BoolFn isDead,
+    const AggroSkillUseOptions& options) {
+    SlotOrderUseOptions slotOptions;
+    slotOptions.wait_for_completion = options.wait_for_completion;
+    slotOptions.aggro_range = options.aggro_range;
+    slotOptions.skill_use.timing = MakeSkillCastTimingOptions(
+        options.log_prefix,
+        options.max_aftercast);
+    slotOptions.skill_use.log_prefix = options.log_prefix;
+    return UseSkillsInSlotOrderTracked(session, targetId, waitMs, isDead, slotOptions);
+}
+
 void FightTarget(
     CombatSessionState& session,
     uint32_t targetId,
@@ -886,6 +1121,155 @@ bool ExecuteCombatStep(
     }
 
     return ExecuteBuiltinPriorityStep(targetId, context, autoAttack, outAction) && outAction.valid;
+}
+
+bool ExecuteBuiltinDebugCombatStep(
+    CombatSessionState& session,
+    uint32_t targetId,
+    WaitFn waitMs,
+    BoolFn isDead,
+    const DebugCombatStepOptions& options) {
+    if (targetId == 0u) {
+        return false;
+    }
+
+    auto* target = AgentMgr::GetAgentByID(targetId);
+    if (!target || target->type != 0xDBu) {
+        return false;
+    }
+
+    SetLastActionDescription(session, "uninitialized");
+    ResetLastAction(session);
+    ResetDebugTrace(session);
+    const bool originalDebugLogging = session.debug_logging;
+    session.debug_logging = true;
+
+    const bool enableSkillOverride =
+        options.restricted_skill_override_map_id != 0u &&
+        MapMgr::GetMapId() == options.restricted_skill_override_map_id;
+    if (enableSkillOverride) {
+        SkillMgr::SetRestrictedMapPlayerUseSkillOverride(true);
+    }
+
+    if (options.quick_step) {
+        ExecuteQuickDebugCombatStep(session, targetId, waitMs, isDead, options);
+    } else if (options.prefer_first_foe_target_skill) {
+        ExecuteFoeTargetPreferredDebugCombatStep(session, targetId, waitMs, isDead, options);
+    } else {
+        TargetFightOptions fightOptions;
+        fightOptions.llm_combat = false;
+        fightOptions.aggro_range = options.aggro_range;
+        fightOptions.auto_attack = ResolveAutoAttack(options.auto_attack);
+        fightOptions.log_prefix = options.log_prefix;
+        fightOptions.timing = MakeSkillCastTimingOptions(options.log_prefix, options.max_aftercast);
+        FightTarget(session, targetId, waitMs, isDead, fightOptions);
+    }
+
+    if (enableSkillOverride) {
+        SkillMgr::SetRestrictedMapPlayerUseSkillOverride(false);
+    }
+    session.debug_logging = originalDebugLogging;
+    return true;
+}
+
+bool RefreshCombatSkillbarForDebug(
+    CombatSessionState& session,
+    const char* logPrefix) {
+    session.skills_cached = false;
+    RefreshSkillCacheWithDebugLog(session, logPrefix);
+    if (!session.skills_cached) {
+        return false;
+    }
+
+    bool hasNonZero = false;
+    bool hasClassifiedRole = false;
+    for (int i = 0; i < 8; ++i) {
+        if (session.skill_cache[i].skill_id != 0u) {
+            hasNonZero = true;
+        }
+        if (session.skill_cache[i].roles != DungeonSkill::ROLE_NONE) {
+            hasClassifiedRole = true;
+        }
+    }
+
+    Log::Info("%s: combat skillbar refresh: cached=%d hasNonZero=%d hasRole=%d",
+              logPrefix ? logPrefix : "DungeonCombatRoutine",
+              session.skills_cached ? 1 : 0,
+              hasNonZero ? 1 : 0,
+              hasClassifiedRole ? 1 : 0);
+    return hasNonZero;
+}
+
+bool ResolveSyntheticSkillTarget(
+    uint32_t roleMask,
+    uint8_t targetType,
+    uint32_t defaultFoeId,
+    uint32_t& outTargetId) {
+    DungeonSkill::CachedSkill synthetic = {};
+    synthetic.roles = roleMask;
+    synthetic.target_type = targetType;
+    outTargetId = DungeonSkill::ResolveSkillTarget(synthetic, defaultFoeId);
+    return AgentMgr::GetMyAgent() != nullptr;
+}
+
+bool ResolveUsableSkillTargetForSlot(
+    CombatSessionState& session,
+    uint32_t slot,
+    uint32_t defaultFoeId,
+    uint32_t& outSkillId,
+    uint32_t& outTargetId,
+    uint8_t& outTargetType,
+    const char* logPrefix) {
+    if (!session.skills_cached) {
+        RefreshSkillCacheWithDebugLog(session, logPrefix);
+    }
+    outSkillId = 0u;
+    outTargetId = 0u;
+    outTargetType = 0u;
+    if (slot == 0u || slot > 8u) {
+        return false;
+    }
+
+    const auto& cached = session.skill_cache[slot - 1u];
+    if (cached.skill_id == 0u) {
+        return false;
+    }
+    if (!DungeonSkill::CanUseSkill(cached, defaultFoeId)) {
+        return false;
+    }
+
+    const uint32_t resolvedTarget = DungeonSkill::ResolveSkillTarget(cached, defaultFoeId);
+    if (resolvedTarget == 0u && DungeonSkill::SkillTargetTypeRequiresResolvedTarget(cached.target_type)) {
+        return false;
+    }
+
+    outSkillId = cached.skill_id;
+    outTargetId = resolvedTarget;
+    outTargetType = cached.target_type;
+    return true;
+}
+
+void DumpBuiltinCombatDecision(
+    CombatSessionState& session,
+    uint32_t targetId,
+    const char* logPrefix) {
+    ResetDecisionDump(session);
+    auto* me = AgentMgr::GetMyAgent();
+    auto* target = AgentMgr::GetAgentByID(targetId);
+    auto* bar = SkillMgr::GetPlayerSkillbar();
+    if (!me || !target || target->type != 0xDBu || !bar) {
+        DumpUnavailableBuiltinCombatContext(session, me, target, bar, logPrefix);
+        return;
+    }
+
+    if (!session.skills_cached) {
+        RefreshSkillCacheWithDebugLog(session, logPrefix);
+    }
+
+    DumpBuiltinCombatTargetHeader(session, targetId, me, static_cast<AgentLiving*>(target), logPrefix);
+    for (int i = 0; i < 8; ++i) {
+        DumpBuiltinCombatSkillSlot(session, i, session.skill_cache[i], targetId, logPrefix);
+    }
 }
 
 SkillCandidateInspection InspectSkillCandidate(
