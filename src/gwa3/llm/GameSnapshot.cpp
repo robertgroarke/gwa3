@@ -1182,7 +1182,7 @@ namespace GWA3::LLM::GameSnapshot {
         }
 
         const auto* area = MapMgr::GetAreaInfo(MapMgr::GetMapId());
-        if (area && area->type == 2) {
+        if (area && IsExplorableMapRegionType(area->type)) {
             // Merchant item arrays can stay populated with stale town-window
             // pointers after zoning. Do not touch them in explorable maps.
             m["skipped"] = "explorable";

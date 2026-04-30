@@ -7,6 +7,37 @@
 
 namespace GWA3 {
 
+enum class MapRegionType : uint32_t {
+    AllianceBattle = 0,
+    Arena = 1,
+    ExplorableZone = 2,
+    GuildBattleArea = 3,
+    GuildHall = 4,
+    MissionOutpost = 5,
+    CooperativeMission = 6,
+    CompetitiveMission = 7,
+    EliteMission = 8,
+    Challenge = 9,
+    Outpost = 10,
+    ZaishenBattle = 11,
+    HeroesAscent = 12,
+    City = 13,
+    MissionArea = 14,
+    HeroBattleOutpost = 15,
+    HeroBattleArea = 16,
+    EotnMission = 17,
+    Dungeon = 18,
+    Marketplace = 19,
+};
+
+inline constexpr bool IsMapRegionType(uint32_t type, MapRegionType expected) {
+    return type == static_cast<uint32_t>(expected);
+}
+
+inline constexpr bool IsExplorableMapRegionType(uint32_t type) {
+    return IsMapRegionType(type, MapRegionType::ExplorableZone);
+}
+
 struct AreaInfo { // total: 0x7C / 124 bytes
     /* +h0000 */ uint32_t campaign;
     /* +h0004 */ uint32_t continent;

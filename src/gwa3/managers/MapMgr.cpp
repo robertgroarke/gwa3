@@ -153,7 +153,7 @@ void ReturnToOutpost() {
     }
 
     const AreaInfo* area = GetAreaInfo(mapId);
-    const bool inExplorable = area && area->type == 2;
+    const bool inExplorable = area && IsExplorableMapRegionType(area->type);
 
     if (!inExplorable) {
         Log::Info("MapMgr: ReturnToOutpost sending direct packet outside explorable");
