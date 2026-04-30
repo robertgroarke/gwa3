@@ -6,6 +6,7 @@ static DungeonCheckpoint::WaypointWipeRecoveryOptions MakeFroggyWipeRecoveryOpti
     const Waypoint* wps,
     int count) {
     DungeonCheckpoint::WaypointWipeRecoveryOptions options;
+    options.waypoints = wps;
     options.nearest_index = DungeonNavigation::GetNearestWaypointIndex(wps, count);
     options.waypoint_count = count;
     options.backtrack_steps = 2;
@@ -14,6 +15,7 @@ static DungeonCheckpoint::WaypointWipeRecoveryOptions MakeFroggyWipeRecoveryOpti
     options.wait_ms = &DungeonRuntime::WaitMs;
     options.return_to_outpost = &MapMgr::ReturnToOutpost;
     options.use_dp_removal = &UseDpRemovalIfNeeded;
+    options.get_nearest_waypoint = &DungeonNavigation::GetNearestWaypointIndex;
     return options;
 }
 

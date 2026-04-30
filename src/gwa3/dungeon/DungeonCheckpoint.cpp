@@ -204,7 +204,12 @@ WaypointWipeRecoveryResult RecoverWaypointWipe(
         }
     }
 
-    int restartIndex = options.nearest_index - options.backtrack_steps;
+    int nearestIndex = options.nearest_index;
+    if (options.get_nearest_waypoint && options.waypoints && options.waypoint_count > 0) {
+        nearestIndex = options.get_nearest_waypoint(options.waypoints, options.waypoint_count);
+    }
+
+    int restartIndex = nearestIndex - options.backtrack_steps;
     if (restartIndex < 0) {
         restartIndex = 0;
     }
@@ -232,7 +237,14 @@ RouteWipeRecoveryResult RecoverRouteWaypointWipe(
               label,
               options.recovery.wipe_count ? *options.recovery.wipe_count + 1u : 1u);
 
-    const auto recovery = RecoverWaypointWipe(options.recovery);
+    auto recoveryOptions = options.recovery;
+    if (!recoveryOptions.waypoints) {
+        recoveryOptions.waypoints = options.waypoints;
+    }
+    if (recoveryOptions.waypoint_count <= 0) {
+        recoveryOptions.waypoint_count = options.waypoint_count;
+    }
+    const auto recovery = RecoverWaypointWipe(recoveryOptions);
     result.recovered = recovery.recovered;
     result.returned_to_outpost = recovery.returned_to_outpost;
     result.used_dp_removal = recovery.used_dp_removal;

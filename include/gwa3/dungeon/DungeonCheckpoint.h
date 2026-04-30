@@ -54,6 +54,7 @@ struct AdvanceCheckpointDecision {
 };
 
 struct WaypointWipeRecoveryOptions {
+    const DungeonRoute::Waypoint* waypoints = nullptr;
     int nearest_index = 0;
     int waypoint_count = 0;
     int backtrack_steps = 2;
@@ -66,6 +67,7 @@ struct WaypointWipeRecoveryOptions {
     WaitFn wait_ms = nullptr;
     VoidFn return_to_outpost = nullptr;
     VoidFn use_dp_removal = nullptr;
+    NearestWaypointIndexFn get_nearest_waypoint = nullptr;
 };
 
 struct WaypointWipeRecoveryResult {
