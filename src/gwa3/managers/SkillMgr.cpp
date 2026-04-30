@@ -6,7 +6,6 @@
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/RenderHook.h>
 #include <gwa3/core/Log.h>
-#include <gwa3/game/MapIds.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/PartyMgr.h>
@@ -172,7 +171,8 @@ void ResetRestrictedMapPlayerUseSkillCount() {
 }
 
 static bool IsPlayerUseSkillRestrictedMap(uint32_t mapId) {
-    return mapId == MapIds::SPARKFLY_SWAMP;
+    const AreaInfo* area = MapMgr::GetAreaInfo(mapId);
+    return area == nullptr || area->type != 2u;
 }
 
 static bool CanInvokePlayerUseSkillNow(DWORD now) {
@@ -227,13 +227,13 @@ void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
     const bool restrictedMap = IsPlayerUseSkillRestrictedMap(mapId);
     if (restrictedMap && InterlockedCompareExchange(&s_allowRestrictedMapPlayerUseSkill, 0, 0) == 0) {
         if (!s_loggedUseSkillRestrictedMapSuppressed) {
-            Log::Warn("SkillMgr: Suppressing player UseSkill on restricted map %u to avoid live crash", mapId);
+            Log::Warn("SkillMgr: Suppressing player UseSkill outside explorable map context map=%u", mapId);
             s_loggedUseSkillRestrictedMapSuppressed = true;
         }
         return;
     }
     if (restrictedMap && !s_loggedUseSkillRestrictedMapOverride) {
-        Log::Warn("SkillMgr: Allowing player UseSkill on restricted map %u under explicit override", mapId);
+        Log::Warn("SkillMgr: Allowing player UseSkill outside explorable map context map=%u under explicit override", mapId);
         s_loggedUseSkillRestrictedMapOverride = true;
     }
 

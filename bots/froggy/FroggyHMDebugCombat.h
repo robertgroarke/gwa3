@@ -16,7 +16,6 @@ bool ExecuteBuiltinCombatStep(uint32_t targetId, bool quickStep) {
     options.aggro_range = DungeonCombat::LONG_BOW_RANGE;
     options.max_aftercast = IsBogrootMapId(MapMgr::GetMapId()) ? 1.5f : 3.0f;
     options.auto_attack = &AgentMgr::Attack;
-    options.restricted_skill_override_map_id = MapIds::SPARKFLY_SWAMP;
     options.log_prefix = "Froggy";
     const bool executed = DungeonCombatRoutine::ExecuteBuiltinDebugCombatStep(
         s_combatSession,

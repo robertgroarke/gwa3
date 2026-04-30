@@ -69,7 +69,6 @@ static void FightEnemiesInAggro(float aggroRange, bool careful = false,
     options.careful = careful;
     options.wait_for_skill_completion = waitForSkillCompletion;
     options.max_fight_ms = maxFightMs;
-    options.restricted_skill_override_map_id = MapIds::SPARKFLY_SWAMP;
     options.log_prefix = "Froggy";
     options.loot_reason = stats ? "combat-step-stats" : "combat-step";
     (void)DungeonCombat::FightEnemiesInAggro(aggroRange, callbacks, options);
