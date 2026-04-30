@@ -215,6 +215,17 @@ static bool OpenNpcDialog(uint32_t npcId, const char* label, bool requireMerchan
 
 static bool HasOpenMaterialTraderInventory() {
     if (MerchantMgr::GetMerchantItemCount() == 0) return false;
+    static const uint32_t kConsetCrafterProductModels[] = {
+        ItemModelIds::GRAIL_OF_MIGHT,
+        ItemModelIds::ESSENCE_OF_CELERITY,
+        ItemModelIds::ARMOR_OF_SALVATION,
+    };
+    for (uint32_t modelId : kConsetCrafterProductModels) {
+        if (MerchantMgr::GetMerchantItemIdByModelId(modelId) != 0) {
+            return false;
+        }
+    }
+
     static const uint32_t kTraderMaterialModels[] = {
         ItemModelIds::BONES,
         ItemModelIds::IRON_INGOT,
@@ -2601,6 +2612,10 @@ bool ConvertExcessStorageGoldToConsets(const Config& cfg) {
 
     if (returnMapId != 0u && MapMgr::GetMapId() != returnMapId) {
         EnsureMap(returnMapId);
+    }
+    if (ItemMgr::GetGoldCharacter() >= cfg.maxCharacterGold ||
+        ItemMgr::GetGoldCharacter() >= cfg.depositWhenCharacterGoldAtLeast) {
+        DepositGold(cfg.depositKeepOnChar);
     }
 
     Log::Info("MaintenanceMgr: Conset conversion complete converted=%d storageGold=%u storedConsets=%u",
