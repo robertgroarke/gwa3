@@ -252,6 +252,25 @@ struct AggroMoveOptions {
     const char* log_prefix = "Dungeon";
 };
 
+struct AggroMoveProfileConfig {
+    BoolFn is_dead = nullptr;
+    BoolFn is_map_loaded = nullptr;
+    WaitFn wait_ms = nullptr;
+    AggroFightFn fight_in_aggro = nullptr;
+    HoldLocalClearFn hold_local_clear = nullptr;
+    HoldSpecialLocalClearFn hold_special_local_clear = nullptr;
+    PickupNearbyLootFn pickup_nearby_loot = nullptr;
+    void* special_stats = nullptr;
+    AggroMoveProfile profile = AggroMoveProfile::Standard;
+    bool exact_move_target = false;
+    bool use_special_local_clear = false;
+    bool use_local_clear_cooldown = false;
+    float sidestep_random_radius = 500.0f;
+    float opportunistic_loot_radius = 3000.0f;
+    uint32_t opportunistic_fight_budget_ms = 4000u;
+    const char* log_prefix = "Dungeon";
+};
+
 bool IssueAggroMove(
     AggroMoveState& state,
     float x,
@@ -290,5 +309,10 @@ void AggroMoveTo(
     float fightRange,
     const AggroMoveCallbacks& callbacks,
     const AggroMoveOptions& options = {});
+void AggroMoveToConfigured(
+    float x,
+    float y,
+    float fightRange,
+    const AggroMoveProfileConfig& config);
 
 } // namespace GWA3::DungeonNavigation

@@ -925,4 +925,40 @@ void AggroMoveTo(
     AggroMoveToStandard(x, y, fightRange, callbacks, options);
 }
 
+void AggroMoveToConfigured(
+    float x,
+    float y,
+    float fightRange,
+    const AggroMoveProfileConfig& config) {
+    Log::Info("%s: AggroMove configured start target=(%.0f, %.0f) fightRange=%.0f profile=%u exact=%d specialClear=%d",
+              config.log_prefix ? config.log_prefix : "Dungeon",
+              x,
+              y,
+              fightRange,
+              static_cast<unsigned>(config.profile),
+              config.exact_move_target ? 1 : 0,
+              config.use_special_local_clear ? 1 : 0);
+
+    AggroMoveCallbacks callbacks = {};
+    callbacks.is_dead = config.is_dead;
+    callbacks.is_map_loaded = config.is_map_loaded;
+    callbacks.wait_ms = config.wait_ms;
+    callbacks.fight_in_aggro = config.fight_in_aggro;
+    callbacks.hold_local_clear = config.hold_local_clear;
+    callbacks.hold_special_local_clear =
+        config.use_special_local_clear ? config.hold_special_local_clear : nullptr;
+    callbacks.pickup_nearby_loot = config.pickup_nearby_loot;
+    callbacks.special_stats = config.special_stats;
+
+    AggroMoveOptions options;
+    options.profile = config.profile;
+    options.exact_move_target = config.exact_move_target;
+    options.use_local_clear_cooldown = config.use_local_clear_cooldown;
+    options.log_prefix = config.log_prefix;
+    options.sidestep_random_radius = config.sidestep_random_radius;
+    options.opportunistic_fight_budget_ms = config.opportunistic_fight_budget_ms;
+    options.opportunistic_loot_radius = config.opportunistic_loot_radius;
+    AggroMoveTo(x, y, fightRange, callbacks, options);
+}
+
 } // namespace GWA3::DungeonNavigation
