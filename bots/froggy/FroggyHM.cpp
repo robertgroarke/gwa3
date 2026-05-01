@@ -100,7 +100,6 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
 
 #include "FroggyHMMovementCombatRuntime.h"
 #include "FroggyHMAggroCombatRuntime.h"
-#include "FroggyHMTransitionRuntime.h"
 
 static DungeonCombat::LocalClearPolicy BuildFroggyLocalClearPolicy(
     const char* label,
@@ -256,11 +255,37 @@ static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypointWithCombatLo
         "Froggy");
 }
 
-#include "FroggyHMLvl2TransitionWaypoint.h"
-
 static bool MoveFroggyWaypointForCheckpointReplay(const Waypoint& waypoint) {
     MoveFroggyRouteWaypoint(waypoint);
     return true;
+}
+
+static void MarkFroggyLevelTransitionStarted() {
+    s_dungeonLoopTelemetry.lvl1_to_lvl2_started = true;
+}
+
+static void RecordFroggyLevelTransitionAttempt(uint32_t attempt) {
+    s_dungeonLoopTelemetry.lvl1_to_lvl2_attempts = attempt;
+}
+
+static void MarkFroggyLevelTransitionEntered(uint32_t) {
+    s_dungeonLoopTelemetry.entered_lvl2 = true;
+}
+
+static void RecordFroggyLevelTransitionTelemetry(const DungeonRuntime::TransitionTelemetry& telemetry) {
+    s_dungeonLoopTelemetry.map_loaded = telemetry.map_loaded;
+    s_dungeonLoopTelemetry.player_alive = telemetry.player_alive;
+    s_dungeonLoopTelemetry.player_hp = telemetry.player_hp;
+    s_dungeonLoopTelemetry.player_x = telemetry.player_x;
+    s_dungeonLoopTelemetry.player_y = telemetry.player_y;
+    s_dungeonLoopTelemetry.target_id = telemetry.target_id;
+    s_dungeonLoopTelemetry.dist_to_exit = telemetry.dist_to_exit;
+    s_dungeonLoopTelemetry.nearest_enemy_dist = telemetry.nearest_enemy_dist;
+    s_dungeonLoopTelemetry.nearby_enemy_count = telemetry.nearby_enemy_count;
+    s_dungeonLoopTelemetry.lvl1_portal_id = telemetry.portal_id;
+    s_dungeonLoopTelemetry.lvl1_portal_x = telemetry.portal_x;
+    s_dungeonLoopTelemetry.lvl1_portal_y = telemetry.portal_y;
+    s_dungeonLoopTelemetry.lvl1_portal_dist = telemetry.portal_dist;
 }
 
 static DungeonCheckpoint::WaypointWipeRecoveryOptions MakeFroggyWipeRecoveryOptions() {
@@ -282,7 +307,39 @@ static void UpdateFroggyQuestMapReturnTelemetry(uint32_t finalMapId, bool return
 }
 
 static void HandleFroggyLevelTransitionWaypoint(const Waypoint&) {
-    HandleFroggyLvl1ToLvl2Waypoint();
+    DungeonRuntime::LevelTransitionOptions options;
+    options.log_prefix = "Froggy";
+    options.transition_name = "Lvl1 to Lvl2";
+    options.exit_anchor = {BOGROOT_LVL1_TO_LVL2_PORTAL.x, BOGROOT_LVL1_TO_LVL2_PORTAL.y};
+    options.target_map_id = MapIds::BOGROOT_GROWTHS_LVL2;
+    options.portal_search_radius = BOGROOT_LVL1_TO_LVL2_PORTAL_SEARCH_RADIUS;
+    options.timeout_ms = BOGROOT_LVL1_TO_LVL2_TIMEOUT_MS;
+    options.log_interval_ms = BOGROOT_LVL1_TO_LVL2_LOG_INTERVAL_MS;
+    options.move_poll_ms = BOGROOT_LVL1_TO_LVL2_MOVE_POLL_MS;
+    options.spawn_ready_timeout_ms = BOGROOT_LVL2_SPAWN_READY_TIMEOUT_MS;
+    options.spawn_stale_anchor = options.exit_anchor;
+    options.spawn_stale_anchor_clearance = BOGROOT_LVL1_TO_LVL2_HANDOFF_CLEARANCE;
+    options.spawn_settle_timeout_ms = BOGROOT_LVL2_SPAWN_SETTLE_TIMEOUT_MS;
+    options.spawn_settle_distance = BOGROOT_LVL2_SPAWN_SETTLE_DISTANCE;
+    options.nearest_enemy_range = TELEMETRY_NEAREST_ENEMY_RANGE;
+    options.nearby_enemy_range = TELEMETRY_NEARBY_ENEMY_RANGE;
+    options.queue_move = &AgentMgr::Move;
+    options.get_map_id = &MapMgr::GetMapId;
+    options.wait_ms = &DungeonRuntime::WaitMs;
+    options.find_portal = &DungeonInteractions::FindNearestSignpost;
+    options.on_started = &MarkFroggyLevelTransitionStarted;
+    options.on_attempt = &RecordFroggyLevelTransitionAttempt;
+    options.on_entered = &MarkFroggyLevelTransitionEntered;
+    options.on_telemetry = &RecordFroggyLevelTransitionTelemetry;
+
+    const auto result = DungeonRuntime::ExecuteLevelTransition(options);
+    if (result.entered_target_map) {
+        auto* me = AgentMgr::GetMyAgent();
+        Log::Info("Froggy: Lvl1 to Lvl2 nearestLvl2Wp=%d player=(%.0f, %.0f)",
+                  DungeonNavigation::GetNearestWaypointIndex(BOGROOT_LVL2, BOGROOT_LVL2_COUNT),
+                  me ? me->x : 0.0f,
+                  me ? me->y : 0.0f);
+    }
 }
 
 static void HandleFroggyBossRewardWaypoint(const Waypoint& waypoint) {

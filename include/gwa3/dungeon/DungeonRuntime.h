@@ -11,6 +11,7 @@ using QueueMoveFn = void(*)(float x, float y);
 using GetMapIdFn = uint32_t(*)();
 using WaitMsFn = void(*)(uint32_t ms);
 using SalvageRewardItemsFn = uint32_t(*)();
+using FindTransitionPortalFn = uint32_t(*)(float x, float y, float searchRadius);
 
 struct TransitionAnchor {
     float x = 0.0f;
@@ -33,6 +34,47 @@ struct TransitionTelemetry {
     float portal_dist = -1.0f;
     uint32_t portal_type = 0u;
     uint32_t portal_gadget = 0u;
+};
+
+using TransitionStartedFn = void(*)();
+using TransitionAttemptFn = void(*)(uint32_t attempt);
+using TransitionEnteredFn = void(*)(uint32_t attempt);
+using TransitionTelemetryFn = void(*)(const TransitionTelemetry& telemetry);
+
+struct LevelTransitionOptions {
+    const char* log_prefix = nullptr;
+    const char* transition_name = nullptr;
+    TransitionAnchor exit_anchor = {};
+    uint32_t target_map_id = 0u;
+    float portal_search_radius = 0.0f;
+    uint32_t timeout_ms = 60000u;
+    uint32_t log_interval_ms = 2000u;
+    uint32_t move_poll_ms = 250u;
+    uint32_t spawn_ready_timeout_ms = 0u;
+    uint32_t spawn_ready_poll_ms = 200u;
+    TransitionAnchor spawn_stale_anchor = {};
+    float spawn_stale_anchor_clearance = 0.0f;
+    uint32_t spawn_settle_timeout_ms = 0u;
+    float spawn_settle_distance = 0.0f;
+    float nearest_enemy_range = 5000.0f;
+    float nearby_enemy_range = 1800.0f;
+    QueueMoveFn queue_move = nullptr;
+    GetMapIdFn get_map_id = nullptr;
+    WaitMsFn wait_ms = nullptr;
+    FindTransitionPortalFn find_portal = nullptr;
+    TransitionStartedFn on_started = nullptr;
+    TransitionAttemptFn on_attempt = nullptr;
+    TransitionEnteredFn on_entered = nullptr;
+    TransitionTelemetryFn on_telemetry = nullptr;
+};
+
+struct LevelTransitionResult {
+    bool entered_target_map = false;
+    bool spawn_ready = false;
+    uint32_t attempts = 0u;
+    uint32_t portal_id = 0u;
+    uint32_t elapsed_ms = 0u;
+    uint32_t final_map_id = 0u;
 };
 
 struct PostRewardReturnOptions {
@@ -95,6 +137,7 @@ void LogLevelTransitionTelemetry(
     float nearestEnemyRange = 5000.0f,
     float nearbyEnemyRange = 1800.0f,
     TransitionTelemetry* outTelemetry = nullptr);
+LevelTransitionResult ExecuteLevelTransition(const LevelTransitionOptions& options);
 bool EnsureOutpostReady(uint32_t outpostMapId, uint32_t timeoutMs, const char* context = nullptr);
 bool PushUntilMapReady(
     uint32_t targetMapId,

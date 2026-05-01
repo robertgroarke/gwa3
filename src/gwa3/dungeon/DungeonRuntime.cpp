@@ -7,6 +7,7 @@
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/dungeon/DungeonCombat.h>
+#include <gwa3/dungeon/DungeonNavigation.h>
 
 #include <Windows.h>
 
@@ -214,6 +215,130 @@ void LogLevelTransitionTelemetry(
               telemetry.portal_x,
               telemetry.portal_y,
               telemetry.portal_dist);
+}
+
+LevelTransitionResult ExecuteLevelTransition(const LevelTransitionOptions& options) {
+    LevelTransitionResult result;
+    const char* prefix = LogPrefixOrDefault(options.log_prefix);
+    const char* name = options.transition_name ? options.transition_name : "Level transition";
+    QueueMoveFn queueMove = options.queue_move ? options.queue_move : &AgentMgr::Move;
+    GetMapIdFn getMapId = options.get_map_id ? options.get_map_id : &MapMgr::GetMapId;
+    WaitMsFn waitMs = options.wait_ms ? options.wait_ms : &WaitMs;
+
+    if (options.target_map_id == 0u || queueMove == nullptr || getMapId == nullptr || waitMs == nullptr) {
+        result.final_map_id = getMapId ? getMapId() : 0u;
+        return result;
+    }
+
+    if (options.on_started) {
+        options.on_started();
+    }
+
+    uint32_t portalId = 0u;
+    if (options.find_portal) {
+        portalId = options.find_portal(
+            options.exit_anchor.x,
+            options.exit_anchor.y,
+            options.portal_search_radius);
+    }
+    result.portal_id = portalId;
+
+    Log::Info("%s: %s move=(%.0f, %.0f) targetMap=%u portal=%u",
+              prefix,
+              name,
+              options.exit_anchor.x,
+              options.exit_anchor.y,
+              options.target_map_id,
+              portalId);
+
+    auto logStage = [&](const char* stage, uint32_t elapsedMs, uint32_t attempt) {
+        TransitionTelemetry telemetry;
+        LogLevelTransitionTelemetry(
+            prefix,
+            name,
+            stage,
+            portalId,
+            elapsedMs,
+            attempt,
+            options.exit_anchor,
+            options.nearest_enemy_range,
+            options.nearby_enemy_range,
+            &telemetry);
+        if (options.on_telemetry) {
+            options.on_telemetry(telemetry);
+        }
+    };
+
+    logStage("start", 0u, 0u);
+    const DWORD start = GetTickCount();
+    DWORD lastLogAt = 0u;
+    while ((GetTickCount() - start) < options.timeout_ms) {
+        ++result.attempts;
+        if (options.on_attempt) {
+            options.on_attempt(result.attempts);
+        }
+
+        const DWORD elapsed = GetTickCount() - start;
+        if (elapsed - lastLogAt >= options.log_interval_ms) {
+            if (options.find_portal) {
+                const uint32_t refreshedPortalId = options.find_portal(
+                    options.exit_anchor.x,
+                    options.exit_anchor.y,
+                    options.portal_search_radius);
+                if (refreshedPortalId != portalId) {
+                    Log::Info("%s: %s portal refresh old=%u new=%u",
+                              prefix,
+                              name,
+                              portalId,
+                              refreshedPortalId);
+                    portalId = refreshedPortalId;
+                    result.portal_id = portalId;
+                }
+            }
+            logStage("loop", elapsed, result.attempts);
+            lastLogAt = elapsed;
+        }
+
+        queueMove(options.exit_anchor.x, options.exit_anchor.y);
+        waitMs(options.move_poll_ms);
+        if (getMapId() == options.target_map_id) {
+            result.entered_target_map = true;
+            result.elapsed_ms = GetTickCount() - start;
+            result.final_map_id = getMapId();
+            logStage("entered", result.elapsed_ms, result.attempts);
+            if (options.on_entered) {
+                options.on_entered(result.attempts);
+            }
+            if (options.spawn_ready_timeout_ms > 0u) {
+                result.spawn_ready = WaitForLevelSpawnReady(
+                    options.target_map_id,
+                    options.spawn_stale_anchor,
+                    options.spawn_stale_anchor_clearance,
+                    options.spawn_ready_timeout_ms,
+                    options.spawn_ready_poll_ms);
+            } else {
+                result.spawn_ready = true;
+            }
+            auto* me = AgentMgr::GetMyAgent();
+            Log::Info("%s: %s spawn ready=%d player=(%.0f, %.0f)",
+                      prefix,
+                      name,
+                      result.spawn_ready ? 1 : 0,
+                      me ? me->x : 0.0f,
+                      me ? me->y : 0.0f);
+            if (options.spawn_settle_timeout_ms > 0u && options.spawn_settle_distance > 0.0f) {
+                DungeonNavigation::WaitForLocalPositionSettle(
+                    options.spawn_settle_timeout_ms,
+                    options.spawn_settle_distance);
+            }
+            return result;
+        }
+    }
+
+    result.elapsed_ms = GetTickCount() - start;
+    result.final_map_id = getMapId();
+    logStage("timeout", result.elapsed_ms, result.attempts);
+    return result;
 }
 
 bool EnsureOutpostReady(uint32_t outpostMapId, uint32_t timeoutMs, const char* context) {
