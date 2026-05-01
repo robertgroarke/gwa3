@@ -26,6 +26,65 @@ bool IsDead(const RouteRunCallbacks& callbacks) {
     return callbacks.is_dead ? callbacks.is_dead() : false;
 }
 
+bool HasConfiguredWipeRecovery(const DungeonCheckpoint::WaypointWipeRecoveryOptions& recovery) {
+    return recovery.is_dead != nullptr ||
+           recovery.wait_ms != nullptr ||
+           recovery.return_to_outpost != nullptr ||
+           recovery.use_dp_removal != nullptr ||
+           recovery.wipe_count != nullptr ||
+           recovery.get_nearest_waypoint != nullptr;
+}
+
+DungeonCheckpoint::WaypointWipeRecoveryOptions BuildWipeRecoveryOptions(
+    const DungeonCheckpoint::WaypointWipeRecoveryOptions& base,
+    const DungeonRoute::Waypoint* waypoints,
+    int count,
+    BoolFn is_dead) {
+    auto recovery = base;
+    recovery.waypoints = waypoints;
+    recovery.waypoint_count = count;
+    recovery.nearest_index = DungeonNavigation::GetNearestWaypointIndex(waypoints, count);
+    if (!recovery.is_dead) {
+        recovery.is_dead = is_dead;
+    }
+    if (!recovery.wait_ms) {
+        recovery.wait_ms = &DungeonRuntime::WaitMs;
+    }
+    if (!recovery.get_nearest_waypoint) {
+        recovery.get_nearest_waypoint = &DungeonNavigation::GetNearestWaypointIndex;
+    }
+    return recovery;
+}
+
+bool RecoverRouteWipeWithOptions(
+    const DungeonRoute::Waypoint* waypoints,
+    int count,
+    int current_index,
+    int& out_restart_index,
+    DungeonCheckpoint::WaypointWipeRecoveryContext context,
+    const DungeonCheckpoint::WaypointWipeRecoveryOptions& recovery_options,
+    BoolFn is_dead,
+    const char* log_prefix) {
+    if (!HasConfiguredWipeRecovery(recovery_options) && !is_dead) {
+        return false;
+    }
+
+    DungeonCheckpoint::RouteWipeRecoveryOptions options;
+    options.waypoints = waypoints;
+    options.waypoint_count = count;
+    options.current_index = current_index;
+    options.context = context;
+    options.log_prefix = log_prefix ? log_prefix : "Dungeon";
+    options.recovery = BuildWipeRecoveryOptions(recovery_options, waypoints, count, is_dead);
+
+    const auto recovery = DungeonCheckpoint::RecoverRouteWaypointWipe(options);
+    if (recovery.returned_to_outpost) {
+        return false;
+    }
+    out_restart_index = recovery.restart_index;
+    return true;
+}
+
 bool IsRouteMap(uint32_t map_id, const RouteRunCallbacks& callbacks) {
     return callbacks.is_route_map ? callbacks.is_route_map(map_id) : false;
 }
@@ -139,6 +198,28 @@ const char* PrefixOrDefault(const char* prefix) {
     return prefix ? prefix : "Dungeon";
 }
 
+void LogDefaultQuestDoorDiagnostic(
+    const DungeonRoute::Waypoint* waypoints,
+    int count,
+    int waypoint_index,
+    const RouteLabelExecutorOptions& options) {
+    if (!waypoints || waypoint_index < 0 || waypoint_index >= count) return;
+
+    auto* me = AgentMgr::GetMyAgent();
+    const float my_x = me ? me->x : 0.0f;
+    const float my_y = me ? me->y : 0.0f;
+    const float dist_to_checkpoint = me
+        ? AgentMgr::GetDistance(my_x, my_y, waypoints[waypoint_index].x, waypoints[waypoint_index].y)
+        : -1.0f;
+    Log::Info("%s: Quest Door Checkpoint diag: pos=(%.0f, %.0f) distToCheckpoint=%.0f alive=%d mapLoaded=%d",
+              PrefixOrDefault(options.log_prefix),
+              my_x,
+              my_y,
+              dist_to_checkpoint,
+              me && me->hp > 0.0f ? 1 : 0,
+              MapMgr::GetIsMapLoaded() ? 1 : 0);
+}
+
 void LogRouteLabelState(const char* stage,
                         const DungeonRoute::Waypoint* waypoints,
                         int count,
@@ -160,8 +241,19 @@ WaypointHandlerResult RecoverRouteLabelWipeIfDead(
     }
 
     int restart_index = waypoint_index;
-    if (!options.recover_wipe ||
-        !options.recover_wipe(waypoints, count, waypoint_index, context, restart_index)) {
+    if (options.recover_wipe) {
+        if (!options.recover_wipe(waypoints, count, waypoint_index, context, restart_index)) {
+            return WaypointHandlerResult::StopRoute;
+        }
+    } else if (!RecoverRouteWipeWithOptions(
+                   waypoints,
+                   count,
+                   waypoint_index,
+                   restart_index,
+                   context,
+                   options.wipe_recovery,
+                   options.is_dead,
+                   options.log_prefix)) {
         return WaypointHandlerResult::StopRoute;
     }
     waypoint_index = restart_index;
@@ -337,6 +429,8 @@ WaypointHandlerResult ExecuteRouteLabelWaypoint(
 
         if (options.quest_door_diagnostic) {
             options.quest_door_diagnostic(waypoints, waypoint_index);
+        } else {
+            LogDefaultQuestDoorDiagnostic(waypoints, count, waypoint_index, options);
         }
 
         const int nearest = options.get_nearest_waypoint(waypoints, count);
@@ -439,8 +533,18 @@ RouteRunResult RunWaypointRoute(
 
         if (IsDead(callbacks)) {
             int restart_index = i;
-            if (!callbacks.recover_wipe ||
-                !callbacks.recover_wipe(waypoints, count, i, restart_index)) {
+            const bool recovered = callbacks.recover_wipe
+                ? callbacks.recover_wipe(waypoints, count, i, restart_index)
+                : RecoverRouteWipeWithOptions(
+                    waypoints,
+                    count,
+                    i,
+                    restart_index,
+                    DungeonCheckpoint::WaypointWipeRecoveryContext::Standard,
+                    options.wipe_recovery,
+                    callbacks.is_dead,
+                    options.log_prefix);
+            if (!recovered) {
                 result.stopped = true;
                 return result;
             }
@@ -489,8 +593,18 @@ RouteRunResult RunWaypointRoute(
         }
         if (move_result.dead || IsDead(callbacks)) {
             int restart_index = i;
-            if (!callbacks.recover_wipe ||
-                !callbacks.recover_wipe(waypoints, count, i, restart_index)) {
+            const bool recovered = callbacks.recover_wipe
+                ? callbacks.recover_wipe(waypoints, count, i, restart_index)
+                : RecoverRouteWipeWithOptions(
+                    waypoints,
+                    count,
+                    i,
+                    restart_index,
+                    DungeonCheckpoint::WaypointWipeRecoveryContext::Standard,
+                    options.wipe_recovery,
+                    callbacks.is_dead,
+                    options.log_prefix);
+            if (!recovered) {
                 result.stopped = true;
                 result.final_index = i;
                 return result;

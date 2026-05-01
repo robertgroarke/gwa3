@@ -93,6 +93,7 @@ struct RouteLabelExecutorOptions {
     WaypointActionFn handle_level_transition = nullptr;
     WaypointActionFn handle_boss_reward = nullptr;
     ContextWipeRecoveryFn recover_wipe = nullptr;
+    DungeonCheckpoint::WaypointWipeRecoveryOptions wipe_recovery = {};
     BoolFn is_dead = nullptr;
     ReturnToOutpostFn return_to_outpost = nullptr;
     WaitForMapReadyFn wait_for_map_ready = nullptr;
@@ -118,6 +119,7 @@ struct RouteRunOptions {
     bool log_route_waypoint_state = true;
     int max_waypoint_move_retries = 2;
     int waypoint_move_backtrack_steps = 1;
+    DungeonCheckpoint::WaypointWipeRecoveryOptions wipe_recovery = {};
     const char* log_prefix = "Dungeon";
     const char* route_name = "route";
 };

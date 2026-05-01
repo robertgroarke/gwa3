@@ -1,7 +1,4 @@
-// Froggy wipe recovery and map transition helpers. Included by FroggyHM.cpp
-// before waypoint traversal so checkpoint recovery types are visible there.
-
-#include "FroggyHMWipeRecovery.h"
+// Froggy map transition helpers. Included by FroggyHM.cpp.
 
 static DungeonEntryRecovery::TransitionPlan MakeFroggyReturnToSparkflyPlan(const char* label) {
     DungeonEntryRecovery::TransitionPlan plan;
