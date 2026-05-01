@@ -1284,6 +1284,73 @@ bool ZoneThroughPoint(
     return false;
 }
 
+TravelToEntryMapStatus TravelToEntryMap(const TravelToEntryMapOptions& options) {
+    const char* prefix = PrefixOrDefault(options.log_prefix);
+    const char* label = LabelOrDefault(options.label, "Travel");
+    uint32_t mapId = MapMgr::GetMapId();
+
+    Log::Info("%s: %s start map=%u source=%u entry=%u pathCount=%d",
+              prefix,
+              label,
+              mapId,
+              options.source_map_id,
+              options.entry_map_id,
+              options.travel_path_count);
+
+    if (options.entry_map_id != 0u && mapId == options.entry_map_id) {
+        return TravelToEntryMapStatus::AtEntryMap;
+    }
+
+    if (options.source_map_id != 0u && mapId == options.source_map_id) {
+        if (!FollowTravelPath(
+                options.travel_path,
+                options.travel_path_count,
+                options.source_map_id,
+                options.path_tolerance,
+                options.move_timeout_ms,
+                options.move_reissue_ms)) {
+            Log::Warn("%s: %s travel path failed from source map=%u",
+                      prefix,
+                      label,
+                      options.source_map_id);
+            return TravelToEntryMapStatus::ReturnedToSourceMap;
+        }
+
+        if (!ZoneThroughPoint(
+                options.zone_point.x,
+                options.zone_point.y,
+                options.entry_map_id,
+                options.zone_timeout_ms,
+                options.zone_poll_ms)) {
+            Log::Warn("%s: %s zone failed targetMap=%u zone=(%.0f, %.0f)",
+                      prefix,
+                      label,
+                      options.entry_map_id,
+                      options.zone_point.x,
+                      options.zone_point.y);
+            return TravelToEntryMapStatus::ReturnedToSourceMap;
+        }
+    }
+
+    mapId = MapMgr::GetMapId();
+    if (options.entry_map_id != 0u && mapId == options.entry_map_id) {
+        Log::Info("%s: %s reached entry map=%u", prefix, label, mapId);
+        return TravelToEntryMapStatus::AtEntryMap;
+    }
+
+    if (options.source_map_id != 0u && mapId == options.source_map_id) {
+        return TravelToEntryMapStatus::ReturnedToSourceMap;
+    }
+
+    Log::Warn("%s: %s unsupported final map=%u source=%u entry=%u",
+              prefix,
+              label,
+              mapId,
+              options.source_map_id,
+              options.entry_map_id);
+    return TravelToEntryMapStatus::Failed;
+}
+
 bool ExecuteBootstrapPlan(
     const DungeonQuest::BootstrapPlan& plan,
     const DialogExecutionOptions& dialogOptions,

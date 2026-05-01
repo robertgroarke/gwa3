@@ -41,28 +41,21 @@ BotState HandleTownSetup(BotConfig& cfg) {
 }
 
 BotState HandleTravel(BotConfig& cfg) {
-    LogBot("State: Travel to Sparkfly Swamp");
-
     const uint32_t outpostMapId = cfg.outpost_map_id ? cfg.outpost_map_id : MapIds::GADDS_ENCAMPMENT;
-    uint32_t mapId = MapMgr::GetMapId();
 
-    if (mapId == outpostMapId) {
-        (void)DungeonQuestRuntime::FollowTravelPath(
-            GADDS_TO_SPARKFLY_PATH,
-            GADDS_TO_SPARKFLY_PATH_COUNT,
-            outpostMapId);
-        (void)DungeonQuestRuntime::ZoneThroughPoint(
-            GADDS_TO_SPARKFLY_ZONE.x,
-            GADDS_TO_SPARKFLY_ZONE.y,
-            MapIds::SPARKFLY_SWAMP,
-            10000u);
-    }
+    DungeonQuestRuntime::TravelToEntryMapOptions options = {};
+    options.source_map_id = outpostMapId;
+    options.entry_map_id = MapIds::SPARKFLY_SWAMP;
+    options.travel_path = GADDS_TO_SPARKFLY_PATH;
+    options.travel_path_count = GADDS_TO_SPARKFLY_PATH_COUNT;
+    options.zone_point = GADDS_TO_SPARKFLY_ZONE;
+    options.zone_timeout_ms = 10000u;
+    options.log_prefix = "Froggy";
+    options.label = "Travel to Sparkfly Swamp";
 
-    mapId = MapMgr::GetMapId();
-    if (mapId == MapIds::SPARKFLY_SWAMP) {
+    const auto result = DungeonQuestRuntime::TravelToEntryMap(options);
+    if (result == DungeonQuestRuntime::TravelToEntryMapStatus::AtEntryMap) {
         return BotState::InDungeon;
     }
-
-    // Fallback
     return BotState::InTown;
 }

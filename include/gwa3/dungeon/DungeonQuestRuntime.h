@@ -44,6 +44,27 @@ struct BootstrapExecutionOptions {
     uint32_t zone_poll_ms = 250u;
 };
 
+enum class TravelToEntryMapStatus : uint8_t {
+    AtEntryMap,
+    ReturnedToSourceMap,
+    Failed,
+};
+
+struct TravelToEntryMapOptions {
+    uint32_t source_map_id = 0u;
+    uint32_t entry_map_id = 0u;
+    const DungeonQuest::TravelPoint* travel_path = nullptr;
+    int travel_path_count = 0;
+    DungeonQuest::TravelPoint zone_point = {};
+    float path_tolerance = 250.0f;
+    uint32_t move_timeout_ms = 20000u;
+    uint32_t move_reissue_ms = 1000u;
+    uint32_t zone_timeout_ms = 10000u;
+    uint32_t zone_poll_ms = 250u;
+    const char* log_prefix = nullptr;
+    const char* label = nullptr;
+};
+
 struct QuestVerificationOptions {
     uint32_t refresh_delay_ms = 150u;
     uint32_t refresh_interval_ms = 1000u;
@@ -350,6 +371,7 @@ bool ZoneThroughPoint(
     uint32_t targetMapId,
     uint32_t timeoutMs = 60000u,
     uint32_t pollMs = 250u);
+TravelToEntryMapStatus TravelToEntryMap(const TravelToEntryMapOptions& options);
 bool ExecuteBootstrapPlan(
     const DungeonQuest::BootstrapPlan& plan,
     const DialogExecutionOptions& dialogOptions = {},
