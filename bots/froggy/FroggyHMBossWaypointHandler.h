@@ -1,8 +1,23 @@
 // Froggy Bogroot boss waypoint handler. Included by FroggyHM.cpp before waypoint traversal.
 
-static void HandleBossWaypoint(const Waypoint& wp) {
+static void MarkFroggyBossStarted(void*) {
     s_dungeonLoopTelemetry.boss_started = true;
+}
 
+static void ApplyFroggyBossResult(void*, const DungeonQuestRuntime::BossCompletionResult& result) {
+    s_dungeonLoopTelemetry.chest_attempts += result.chest.open_attempts;
+    s_dungeonLoopTelemetry.chest_successes += result.chest.open_successes;
+    s_dungeonLoopTelemetry.reward_attempted = result.reward_attempted;
+    s_dungeonLoopTelemetry.last_dialog_id = result.last_dialog_id;
+    s_dungeonLoopTelemetry.reward_dialog_latched = result.reward_dialog_latched;
+    s_dungeonLoopTelemetry.boss_completed = result.boss_completed;
+    s_dungeonLoopTelemetry.final_map_id = result.final_map_id;
+    s_dungeonLoopTelemetry.returned_to_sparkfly =
+        result.post_reward.returned_expected_map &&
+        s_dungeonLoopTelemetry.final_map_id == MapIds::SPARKFLY_SWAMP;
+}
+
+static DungeonQuestRuntime::BossCompletionOptions MakeFroggyBossCompletionOptions() {
     DungeonQuestRuntime::BossCompletionOptions options = {};
     options.aggro_move_to = &AggroMoveToEx;
     options.pickup_nearby_loot = &PickupNearbyLoot;
@@ -49,20 +64,18 @@ static void HandleBossWaypoint(const Waypoint& wp) {
     options.post_reward.label = "Boss post-reward";
     options.log_prefix = "Froggy";
     options.label = "Boss reward";
+    return options;
+}
 
-    const auto result = DungeonQuestRuntime::ExecuteBossCompletion(
+static void HandleBossWaypoint(const Waypoint& wp) {
+    DungeonQuestRuntime::BossWaypointOptions options = {};
+    options.completion = MakeFroggyBossCompletionOptions();
+    options.on_started = &MarkFroggyBossStarted;
+    options.on_result = &ApplyFroggyBossResult;
+
+    (void)DungeonQuestRuntime::ExecuteBossWaypoint(
         wp.x,
         wp.y,
         wp.fight_range,
         options);
-    s_dungeonLoopTelemetry.chest_attempts += result.chest.open_attempts;
-    s_dungeonLoopTelemetry.chest_successes += result.chest.open_successes;
-    s_dungeonLoopTelemetry.reward_attempted = result.reward_attempted;
-    s_dungeonLoopTelemetry.last_dialog_id = result.last_dialog_id;
-    s_dungeonLoopTelemetry.reward_dialog_latched = result.reward_dialog_latched;
-    s_dungeonLoopTelemetry.boss_completed = result.boss_completed;
-    s_dungeonLoopTelemetry.final_map_id = result.final_map_id;
-    s_dungeonLoopTelemetry.returned_to_sparkfly =
-        result.post_reward.returned_expected_map &&
-        s_dungeonLoopTelemetry.final_map_id == MapIds::SPARKFLY_SWAMP;
 }

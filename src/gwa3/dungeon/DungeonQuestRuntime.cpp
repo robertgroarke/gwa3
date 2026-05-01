@@ -1104,6 +1104,27 @@ BossCompletionResult ExecuteBossCompletion(
     return result;
 }
 
+BossCompletionResult ExecuteBossWaypoint(
+    float bossX,
+    float bossY,
+    float fightRange,
+    const BossWaypointOptions& options) {
+    if (options.on_started != nullptr) {
+        options.on_started(options.user_data);
+    }
+
+    const auto result = ExecuteBossCompletion(
+        bossX,
+        bossY,
+        fightRange,
+        options.completion);
+
+    if (options.on_result != nullptr) {
+        options.on_result(options.user_data, result);
+    }
+    return result;
+}
+
 bool WaitForQuestState(
     uint32_t questId,
     bool expectPresent,

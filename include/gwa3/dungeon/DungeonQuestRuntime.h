@@ -312,6 +312,16 @@ struct BossCompletionResult {
     uint32_t final_map_id = 0u;
 };
 
+using BossWaypointStartedFn = void(*)(void* userData);
+using BossWaypointResultFn = void(*)(void* userData, const BossCompletionResult& result);
+
+struct BossWaypointOptions {
+    BossCompletionOptions completion = {};
+    BossWaypointStartedFn on_started = nullptr;
+    BossWaypointResultFn on_result = nullptr;
+    void* user_data = nullptr;
+};
+
 bool SendDialogPlan(
     const DungeonQuest::DialogPlan& plan,
     const DialogExecutionOptions& options = {});
@@ -352,6 +362,11 @@ BossCompletionResult ExecuteBossCompletion(
     float bossY,
     float fightRange,
     const BossCompletionOptions& options = {});
+BossCompletionResult ExecuteBossWaypoint(
+    float bossX,
+    float bossY,
+    float fightRange,
+    const BossWaypointOptions& options = {});
 bool WaitForQuestState(
     uint32_t questId,
     bool expectPresent,
