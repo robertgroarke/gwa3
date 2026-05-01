@@ -243,18 +243,6 @@ static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypointDefault(cons
     return MoveFroggyRouteWaypoint(waypoint);
 }
 
-static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypointWithCombatLoot(
-    const Waypoint& waypoint,
-    int waypointIndex) {
-    return DungeonNavigation::MoveRouteWaypointWithCombatLoot(
-        waypoint,
-        waypointIndex,
-        &MoveFroggyRouteWaypointDefault,
-        &IsMapLoaded,
-        &LootAfterCombatSweep,
-        "Froggy");
-}
-
 static bool MoveFroggyWaypointForCheckpointReplay(const Waypoint& waypoint) {
     MoveFroggyRouteWaypoint(waypoint);
     return true;
@@ -397,7 +385,6 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
     callbacks.resolve_start_index = &GetFroggyRouteStartIndex;
     callbacks.is_route_map = &IsBogrootRouteMap;
     callbacks.log_waypoint_state = &LogFroggyWaypointState;
-    callbacks.move_standard_waypoint = &MoveFroggyRouteWaypointWithCombatLoot;
     callbacks.update_telemetry = &UpdateFroggyRouteTelemetry;
     callbacks.log_waypoint = &LogFroggyRouteWaypoint;
 
@@ -408,6 +395,11 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
     options.wipe_recovery = MakeFroggyWipeRecoveryOptions();
     options.log_prefix = "Froggy";
     options.route_name = "Bogroot";
+    options.standard_waypoint_movement.move_to_point = &MoveFroggyWaypoint;
+    options.standard_waypoint_movement.aggro_move_to_point = &AggroMoveFroggyWaypoint;
+    options.standard_waypoint_movement.is_map_loaded = &IsMapLoaded;
+    options.standard_waypoint_movement.loot_after_combat = &LootAfterCombatSweep;
+    options.standard_waypoint_movement.log_prefix = "Froggy";
     (void)DungeonRouteRunner::RunWaypointRoute(wps, count, callbacks, options);
 }
 

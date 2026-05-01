@@ -121,6 +121,7 @@ struct RouteRunOptions {
     int max_waypoint_move_retries = 2;
     int waypoint_move_backtrack_steps = 1;
     RouteLabelExecutorOptions route_label_options = {};
+    DungeonNavigation::RouteWaypointCombatLootOptions standard_waypoint_movement = {};
     DungeonCheckpoint::WaypointWipeRecoveryOptions wipe_recovery = {};
     const char* log_prefix = "Dungeon";
     const char* route_name = "route";

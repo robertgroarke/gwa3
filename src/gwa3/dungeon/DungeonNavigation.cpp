@@ -306,29 +306,40 @@ void LogWaypointState(
 WaypointMoveResult MoveRouteWaypointWithCombatLoot(
     const DungeonRoute::Waypoint& waypoint,
     int waypointIndex,
-    RouteWaypointMoveFn moveRouteWaypoint,
-    IsMapLoadedFn isMapLoaded,
-    LootAfterCombatFn lootAfterCombat,
-    const char* logPrefix) {
+    const RouteWaypointCombatLootOptions& options) {
     WaypointMoveResult result;
-    if (moveRouteWaypoint == nullptr) {
+    result.threshold = options.move_threshold;
+    result.final_map_id = MapMgr::GetMapId();
+    if (options.move_to_point == nullptr ||
+        options.aggro_move_to_point == nullptr ||
+        options.is_map_loaded == nullptr) {
         result.timed_out = true;
-        result.final_map_id = MapMgr::GetMapId();
         return result;
-    }
-    if (waypoint.fight_range <= 0.0f || isMapLoaded == nullptr || !isMapLoaded()) {
-        return moveRouteWaypoint(waypoint);
     }
 
-    result = moveRouteWaypoint(waypoint);
-    if (!result.reached || lootAfterCombat == nullptr) {
+    auto moveRouteWaypoint = [&]() {
+        return MoveRouteWaypoint(
+            waypoint,
+            options.move_to_point,
+            options.aggro_move_to_point,
+            options.is_map_loaded,
+            options.move_threshold);
+    };
+
+    if (waypoint.fight_range <= 0.0f || !options.is_map_loaded()) {
+        return moveRouteWaypoint();
+    }
+
+    result = moveRouteWaypoint();
+    if (!result.reached || options.loot_after_combat == nullptr) {
         return result;
     }
-    const int picked = lootAfterCombat(
+
+    const int picked = options.loot_after_combat(
         waypoint.fight_range,
         waypoint.label ? waypoint.label : "waypoint");
     Log::Info("%s: Post-pack loot sweep wp=%d(%s) range=%.0f picked=%d",
-              logPrefix ? logPrefix : "Dungeon",
+              options.log_prefix ? options.log_prefix : "Dungeon",
               waypointIndex,
               waypoint.label ? waypoint.label : "",
               DungeonLoot::ComputePostCombatLootRange(waypoint.fight_range),

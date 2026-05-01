@@ -105,6 +105,15 @@ struct WaypointTelemetryOptions {
     float nearby_enemy_range = 1800.0f;
 };
 
+struct RouteWaypointCombatLootOptions {
+    WaypointMoveFn move_to_point = nullptr;
+    WaypointMoveFn aggro_move_to_point = nullptr;
+    IsMapLoadedFn is_map_loaded = nullptr;
+    LootAfterCombatFn loot_after_combat = nullptr;
+    float move_threshold = 250.0f;
+    const char* log_prefix = "Dungeon";
+};
+
 bool IsWithinDistance(float currentX, float currentY, float targetX, float targetY, float threshold);
 float RandomizedCoordinate(float center, float radius);
 StuckMonitor MakeStuckMonitor(float startX, float startY);
@@ -155,10 +164,7 @@ void LogWaypointState(
 WaypointMoveResult MoveRouteWaypointWithCombatLoot(
     const DungeonRoute::Waypoint& waypoint,
     int waypointIndex,
-    RouteWaypointMoveFn moveRouteWaypoint,
-    IsMapLoadedFn isMapLoaded,
-    LootAfterCombatFn lootAfterCombat,
-    const char* logPrefix = "Dungeon");
+    const RouteWaypointCombatLootOptions& options);
 bool HandleBlessingWaypoint(
     const DungeonRoute::Waypoint& waypoint,
     RouteWaypointMoveFn moveRouteWaypoint,

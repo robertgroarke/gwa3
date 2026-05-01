@@ -35,6 +35,26 @@ bool HasConfiguredWipeRecovery(const DungeonCheckpoint::WaypointWipeRecoveryOpti
            recovery.get_nearest_waypoint != nullptr;
 }
 
+bool HasConfiguredStandardWaypointMovement(const DungeonNavigation::RouteWaypointCombatLootOptions& options) {
+    return options.move_to_point != nullptr &&
+           options.aggro_move_to_point != nullptr &&
+           options.is_map_loaded != nullptr;
+}
+
+DungeonNavigation::WaypointMoveResult MoveStandardWaypoint(
+    const DungeonRoute::Waypoint& waypoint,
+    int waypoint_index,
+    const RouteRunCallbacks& callbacks,
+    const RouteRunOptions& options) {
+    if (callbacks.move_standard_waypoint) {
+        return callbacks.move_standard_waypoint(waypoint, waypoint_index);
+    }
+    return DungeonNavigation::MoveRouteWaypointWithCombatLoot(
+        waypoint,
+        waypoint_index,
+        options.standard_waypoint_movement);
+}
+
 DungeonCheckpoint::WaypointWipeRecoveryOptions BuildWipeRecoveryOptions(
     const DungeonCheckpoint::WaypointWipeRecoveryOptions& base,
     const DungeonRoute::Waypoint* waypoints,
@@ -480,7 +500,10 @@ RouteRunResult RunWaypointRoute(
     const RouteRunCallbacks& callbacks,
     const RouteRunOptions& options) {
     RouteRunResult result;
-    if (!waypoints || count <= 0 || !callbacks.move_standard_waypoint) {
+    if (!waypoints ||
+        count <= 0 ||
+        (!callbacks.move_standard_waypoint &&
+         !HasConfiguredStandardWaypointMovement(options.standard_waypoint_movement))) {
         result.stopped = true;
         return result;
     }
@@ -575,7 +598,7 @@ RouteRunResult RunWaypointRoute(
             continue;
         }
 
-        const auto move_result = callbacks.move_standard_waypoint(waypoint, i);
+        const auto move_result = MoveStandardWaypoint(waypoint, i, callbacks, options);
         if (IsRouteMap(map_id, callbacks)) {
             LogRouteWaypointState("post", waypoints, count, i, callbacks, options);
         }
