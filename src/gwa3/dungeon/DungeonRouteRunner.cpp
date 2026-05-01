@@ -562,7 +562,9 @@ RouteRunResult RunWaypointRoute(
 
         const auto handled = callbacks.handle_special_waypoint
             ? callbacks.handle_special_waypoint(waypoints, count, i)
-            : WaypointHandlerResult::NotHandled;
+            : (options.execute_route_label_waypoints
+                ? ExecuteRouteLabelWaypoint(waypoints, count, i, options.route_label_options)
+                : WaypointHandlerResult::NotHandled);
         if (handled == WaypointHandlerResult::StopRoute) {
             result.stopped = true;
             result.final_index = i;

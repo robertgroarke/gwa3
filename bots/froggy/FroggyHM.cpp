@@ -373,17 +373,6 @@ static DungeonRouteRunner::RouteLabelExecutorOptions MakeFroggyRouteLabelOptions
     return options;
 }
 
-static DungeonRouteRunner::WaypointHandlerResult HandleFroggySpecialWaypointForRouteRunner(
-    const Waypoint* wps,
-    int count,
-    int& waypointIndex) {
-    return DungeonRouteRunner::ExecuteRouteLabelWaypoint(
-        wps,
-        count,
-        waypointIndex,
-        MakeFroggyRouteLabelOptions());
-}
-
 static void UpdateFroggyRouteTelemetry(int waypointIndex, const Waypoint& waypoint) {
     s_dungeonLoopTelemetry.last_waypoint_index = static_cast<uint32_t>(waypointIndex);
     s_dungeonLoopTelemetry.waypoint_iterations++;
@@ -408,13 +397,14 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
     callbacks.resolve_start_index = &GetFroggyRouteStartIndex;
     callbacks.is_route_map = &IsBogrootRouteMap;
     callbacks.log_waypoint_state = &LogFroggyWaypointState;
-    callbacks.handle_special_waypoint = &HandleFroggySpecialWaypointForRouteRunner;
     callbacks.move_standard_waypoint = &MoveFroggyRouteWaypointWithCombatLoot;
     callbacks.update_telemetry = &UpdateFroggyRouteTelemetry;
     callbacks.log_waypoint = &LogFroggyRouteWaypoint;
 
     DungeonRouteRunner::RouteRunOptions options;
     options.ignore_bot_running = ignoreBotRunning;
+    options.execute_route_label_waypoints = true;
+    options.route_label_options = MakeFroggyRouteLabelOptions();
     options.wipe_recovery = MakeFroggyWipeRecoveryOptions();
     options.log_prefix = "Froggy";
     options.route_name = "Bogroot";

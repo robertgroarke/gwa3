@@ -117,8 +117,10 @@ struct RouteRunOptions {
     bool ignore_bot_running = false;
     bool use_nearest_progress_backtrack = true;
     bool log_route_waypoint_state = true;
+    bool execute_route_label_waypoints = false;
     int max_waypoint_move_retries = 2;
     int waypoint_move_backtrack_steps = 1;
+    RouteLabelExecutorOptions route_label_options = {};
     DungeonCheckpoint::WaypointWipeRecoveryOptions wipe_recovery = {};
     const char* log_prefix = "Dungeon";
     const char* route_name = "route";
