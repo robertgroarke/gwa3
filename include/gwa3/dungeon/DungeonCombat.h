@@ -4,6 +4,11 @@
 
 #include <cstdint>
 
+namespace GWA3::DungeonCombatRoutine {
+struct CombatSessionState;
+struct SkillActionResult;
+} // namespace GWA3::DungeonCombatRoutine
+
 namespace GWA3::DungeonCombat {
 
 inline constexpr float LONG_BOW_RANGE = 1320.0f;
@@ -48,6 +53,12 @@ using AggroRecordTargetFn = void(*)(void* userData, uint32_t targetId);
 using AggroRecordAutoAttackFn = void(*)(void* userData, uint32_t targetId, uint32_t actionStartMs);
 using AggroRecordActionFn = void(*)(void* userData, uint32_t actionStartMs);
 using AggroPostLootFn = void(*)(void* userData, float aggroRange, const char* reason);
+using AggroSessionTargetFn = void(*)(void* userData, uint32_t targetId);
+using AggroSessionActionFn = void(*)(
+    void* userData,
+    const DungeonCombatRoutine::SkillActionResult& action,
+    uint32_t actionStartMs);
+using AggroAftercastResolverFn = float(*)(uint32_t mapId, void* userData);
 using LocalClearFightFn = void(*)(float clearRange,
                                   bool careful,
                                   void* userData,
@@ -171,6 +182,19 @@ struct AggroFightOptions {
     const char* loot_reason = "combat-step";
 };
 
+struct SessionAggroFightProfile {
+    DungeonCombatRoutine::CombatSessionState* session = nullptr;
+    WaitFn wait_ms = nullptr;
+    BoolFn is_dead = nullptr;
+    AggroPostLootFn post_loot = nullptr;
+    AggroSessionTargetFn on_target = nullptr;
+    AggroSessionActionFn on_action = nullptr;
+    AggroAftercastResolverFn resolve_max_aftercast = nullptr;
+    void* user_data = nullptr;
+    float default_max_aftercast = 3.0f;
+    const char* log_prefix = "DungeonCombat";
+};
+
 inline float ComputeLocalClearRange(float fightRange) {
     const float clearRange = fightRange + LOCAL_CLEAR_RANGE_PADDING;
     return clearRange > LOCAL_CLEAR_MIN_RANGE ? clearRange : LOCAL_CLEAR_MIN_RANGE;
@@ -221,6 +245,9 @@ bool AdvanceWithAggro(float x, float y, float fightRange, const CombatCallbacks&
 bool FightEnemiesInAggro(float aggroRange,
                          const AggroFightCallbacks& callbacks,
                          const AggroFightOptions& options = {});
+bool FightEnemiesInAggroWithSession(float aggroRange,
+                                    const SessionAggroFightProfile& profile,
+                                    const AggroFightOptions& options = {});
 DungeonNavigation::RouteFollowResult FollowWaypointsWithAggro(
     const DungeonRoute::Waypoint* waypoints,
     int count,

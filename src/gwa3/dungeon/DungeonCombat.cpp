@@ -1,5 +1,6 @@
 #include <gwa3/dungeon/DungeonCombat.h>
 
+#include <gwa3/dungeon/DungeonCombatRoutine.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
@@ -37,6 +38,84 @@ void CallWait(WaitFn fn, uint32_t ms) {
     return;
   }
   Sleep(ms);
+}
+
+struct SessionAggroFightContext {
+  const SessionAggroFightProfile* profile = nullptr;
+};
+
+const SessionAggroFightProfile* g_activeSessionAggroSkillProfile = nullptr;
+
+const SessionAggroFightProfile* ResolveSessionAggroProfile(void* userData) {
+  auto* context = static_cast<SessionAggroFightContext*>(userData);
+  return context ? context->profile : nullptr;
+}
+
+void RecordSessionAggroTarget(void* userData, uint32_t targetId) {
+  const auto* profile = ResolveSessionAggroProfile(userData);
+  if (profile == nullptr || profile->session == nullptr) {
+    return;
+  }
+
+  DungeonCombatRoutine::ResetUsedSkills(*profile->session);
+  if (profile->on_target != nullptr) {
+    profile->on_target(profile->user_data, targetId);
+  }
+}
+
+void RecordSessionFallbackAutoAttack(void* userData,
+                                     uint32_t targetId,
+                                     uint32_t actionStartMs) {
+  const auto* profile = ResolveSessionAggroProfile(userData);
+  if (profile == nullptr || profile->session == nullptr) {
+    return;
+  }
+
+  DungeonCombatRoutine::RecordAutoAttackAction(
+      *profile->session,
+      targetId,
+      DungeonSkill::ROLE_ATTACK | DungeonSkill::ROLE_OFFENSIVE,
+      actionStartMs);
+}
+
+void RecordSessionAggroAction(void* userData, uint32_t actionStartMs) {
+  const auto* profile = ResolveSessionAggroProfile(userData);
+  if (profile == nullptr || profile->session == nullptr || profile->on_action == nullptr) {
+    return;
+  }
+
+  profile->on_action(profile->user_data, profile->session->last_action, actionStartMs);
+}
+
+int UseSessionSkillsInAggro(uint32_t targetId,
+                            float aggroRange,
+                            bool waitForCompletion,
+                            const SessionAggroFightProfile& profile) {
+  if (profile.session == nullptr) {
+    return 0;
+  }
+
+  DungeonCombatRoutine::AggroSkillUseOptions skill_options;
+  skill_options.wait_for_completion = waitForCompletion;
+  skill_options.aggro_range = aggroRange;
+  skill_options.max_aftercast = profile.resolve_max_aftercast
+      ? profile.resolve_max_aftercast(MapMgr::GetMapId(), profile.user_data)
+      : profile.default_max_aftercast;
+  skill_options.log_prefix = profile.log_prefix;
+  return DungeonCombatRoutine::UseSkillsInAggroTracked(
+      *profile.session,
+      targetId,
+      profile.wait_ms,
+      profile.is_dead,
+      skill_options);
+}
+
+int UseSessionSkillsInAggroCallback(uint32_t targetId,
+                                    float aggroRange,
+                                    bool waitForCompletion) {
+  return g_activeSessionAggroSkillProfile
+      ? UseSessionSkillsInAggro(targetId, aggroRange, waitForCompletion, *g_activeSessionAggroSkillProfile)
+      : 0;
 }
 
 float ResolveLocalClearRange(float fightRange,
@@ -629,6 +708,38 @@ bool FightEnemiesInAggro(float aggroRange,
   if (callbacks.post_loot != nullptr) {
     callbacks.post_loot(callbacks.user_data, aggroRange, options.loot_reason);
   }
+  return ranPass;
+}
+
+bool FightEnemiesInAggroWithSession(float aggroRange,
+                                    const SessionAggroFightProfile& profile,
+                                    const AggroFightOptions& options) {
+  if (profile.session == nullptr) {
+    return false;
+  }
+
+  SessionAggroFightContext context;
+  context.profile = &profile;
+
+  AggroFightCallbacks callbacks = {};
+  callbacks.is_dead = profile.is_dead;
+  callbacks.wait_ms = profile.wait_ms;
+  callbacks.use_skills = &UseSessionSkillsInAggroCallback;
+  callbacks.record_target = &RecordSessionAggroTarget;
+  callbacks.record_auto_attack = &RecordSessionFallbackAutoAttack;
+  callbacks.record_action = &RecordSessionAggroAction;
+  callbacks.post_loot = profile.post_loot;
+  callbacks.user_data = &context;
+
+  auto fight_options = options;
+  if (fight_options.log_prefix == nullptr) {
+    fight_options.log_prefix = profile.log_prefix;
+  }
+
+  const auto* previousProfile = g_activeSessionAggroSkillProfile;
+  g_activeSessionAggroSkillProfile = &profile;
+  const bool ranPass = FightEnemiesInAggro(aggroRange, callbacks, fight_options);
+  g_activeSessionAggroSkillProfile = previousProfile;
   return ranPass;
 }
 

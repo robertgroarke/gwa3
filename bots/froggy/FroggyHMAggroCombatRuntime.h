@@ -1,10 +1,7 @@
-// Froggy aggro-combat adapters. Included by FroggyHM.cpp.
+// Froggy aggro-combat policy. Included by FroggyHM.cpp.
 
-static void RecordFroggyAggroTargetStats(
-    void* userData,
-    uint32_t bestTarget) {
+static void RecordFroggyAggroTargetStats(void* userData, uint32_t bestTarget) {
     auto* stats = static_cast<SparkflyTraversalCombatStats*>(userData);
-    DungeonCombatRoutine::ResetUsedSkills(s_combatSession);
     if (!stats) {
         return;
     }
@@ -12,39 +9,23 @@ static void RecordFroggyAggroTargetStats(
     stats->last_target_id = bestTarget;
 }
 
-static void RecordFallbackAutoAttackStep(void*, uint32_t targetId, uint32_t actionStart) {
-    DungeonCombatRoutine::RecordAutoAttackAction(
-        s_combatSession,
-        targetId,
-        DungeonSkill::ROLE_ATTACK | DungeonSkill::ROLE_OFFENSIVE,
-        actionStart);
-}
-
-static void RecordFroggyAggroActionStats(void* userData, uint32_t actionStart) {
+static void RecordFroggyAggroActionStats(
+    void* userData,
+    const DungeonCombatRoutine::SkillActionResult& action,
+    uint32_t actionStart) {
     auto* stats = static_cast<SparkflyTraversalCombatStats*>(userData);
-    const auto stepInfo = GetLastCombatStepInfo();
-    if (!stats || !stepInfo.valid || stepInfo.started_at_ms < actionStart) {
+    if (!stats || !action.valid || action.started_at_ms < actionStart) {
         return;
     }
-    if (stepInfo.used_skill) {
+    if (action.used_skill) {
         ++stats->skill_steps;
-    } else if (stepInfo.auto_attack) {
+    } else if (action.auto_attack) {
         ++stats->auto_attack_steps;
     }
 }
 
-static int UseFroggySkillsInAggro(uint32_t targetId, float aggroRange, bool waitForSkillCompletion) {
-    DungeonCombatRoutine::AggroSkillUseOptions options;
-    options.wait_for_completion = waitForSkillCompletion;
-    options.aggro_range = aggroRange;
-    options.max_aftercast = IsBogrootMapId(MapMgr::GetMapId()) ? 1.5f : 3.0f;
-    options.log_prefix = "Froggy";
-    return DungeonCombatRoutine::UseSkillsInAggroTracked(
-        s_combatSession,
-        targetId,
-        &DungeonRuntime::WaitMs,
-        &IsDead,
-        options);
+static float ResolveFroggyAggroMaxAftercast(uint32_t mapId, void*) {
+    return IsBogrootMapId(mapId) ? 1.5f : 3.0f;
 }
 
 static void FroggyAggroPostLoot(void* userData, float aggroRange, const char* reason) {
@@ -55,15 +36,16 @@ static void FightEnemiesInAggro(float aggroRange, bool careful = false,
                                 SparkflyTraversalCombatStats* stats = nullptr,
                                 bool waitForSkillCompletion = true,
                                 DWORD maxFightMs = 240000u) {
-    DungeonCombat::AggroFightCallbacks callbacks;
-    callbacks.is_dead = &IsDead;
-    callbacks.wait_ms = &DungeonRuntime::WaitMs;
-    callbacks.use_skills = &UseFroggySkillsInAggro;
-    callbacks.record_target = &RecordFroggyAggroTargetStats;
-    callbacks.record_auto_attack = &RecordFallbackAutoAttackStep;
-    callbacks.record_action = &RecordFroggyAggroActionStats;
-    callbacks.post_loot = &FroggyAggroPostLoot;
-    callbacks.user_data = stats;
+    DungeonCombat::SessionAggroFightProfile profile;
+    profile.session = &s_combatSession;
+    profile.wait_ms = &DungeonRuntime::WaitMs;
+    profile.is_dead = &IsDead;
+    profile.post_loot = &FroggyAggroPostLoot;
+    profile.on_target = &RecordFroggyAggroTargetStats;
+    profile.on_action = &RecordFroggyAggroActionStats;
+    profile.resolve_max_aftercast = &ResolveFroggyAggroMaxAftercast;
+    profile.user_data = stats;
+    profile.log_prefix = "Froggy";
 
     DungeonCombat::AggroFightOptions options;
     options.careful = careful;
@@ -71,5 +53,5 @@ static void FightEnemiesInAggro(float aggroRange, bool careful = false,
     options.max_fight_ms = maxFightMs;
     options.log_prefix = "Froggy";
     options.loot_reason = stats ? "combat-step-stats" : "combat-step";
-    (void)DungeonCombat::FightEnemiesInAggro(aggroRange, callbacks, options);
+    (void)DungeonCombat::FightEnemiesInAggroWithSession(aggroRange, profile, options);
 }
