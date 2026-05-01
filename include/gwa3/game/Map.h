@@ -38,6 +38,15 @@ inline constexpr bool IsExplorableMapRegionType(uint32_t type) {
     return IsMapRegionType(type, MapRegionType::ExplorableZone);
 }
 
+inline constexpr bool IsOutpostLikeMapRegionType(uint32_t type) {
+    return IsMapRegionType(type, MapRegionType::MissionOutpost) ||
+           IsMapRegionType(type, MapRegionType::Outpost) ||
+           IsMapRegionType(type, MapRegionType::HeroBattleOutpost) ||
+           IsMapRegionType(type, MapRegionType::City) ||
+           IsMapRegionType(type, MapRegionType::Marketplace) ||
+           IsMapRegionType(type, MapRegionType::GuildHall);
+}
+
 struct AreaInfo { // total: 0x7C / 124 bytes
     /* +h0000 */ uint32_t campaign;
     /* +h0004 */ uint32_t continent;

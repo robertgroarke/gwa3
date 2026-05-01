@@ -172,7 +172,7 @@ void ResetRestrictedMapPlayerUseSkillCount() {
 
 static bool IsPlayerUseSkillRestrictedMap(uint32_t mapId) {
     const AreaInfo* area = MapMgr::GetAreaInfo(mapId);
-    return area == nullptr || !IsExplorableMapRegionType(area->type);
+    return area != nullptr && IsOutpostLikeMapRegionType(area->type);
 }
 
 static bool CanInvokePlayerUseSkillNow(DWORD now) {
