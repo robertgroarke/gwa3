@@ -184,8 +184,8 @@ static void GrabDungeonBlessing(float shrineX, float shrineY); // forward decl
 static bool OpenDungeonDoorAt(float doorX, float doorY);       // forward decl
 #include "FroggyHMBossWaypointHandler.h"
 
-static bool IsBogrootRouteMap(uint32_t mapId) {
-    return IsBogrootMapId(mapId);
+static bool IsFroggyRouteMap(uint32_t mapId) {
+    return mapId == MapIds::SPARKFLY_SWAMP || IsBogrootMapId(mapId);
 }
 
 static int GetFroggyRouteStartIndex(const Waypoint* wps, int count, uint32_t mapId) {
@@ -214,7 +214,7 @@ static int GetFroggyRouteStartIndex(const Waypoint* wps, int count, uint32_t map
 static void LogFroggyWaypointState(const char* stage, const Waypoint* wps, int count, int waypointIndex) {
     DungeonNavigation::WaypointTelemetryOptions options;
     options.log_prefix = "Froggy";
-    options.route_name = "Bogroot";
+    options.route_name = MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP ? "Sparkfly" : "Bogroot";
     options.nearest_enemy_range = TELEMETRY_NEAREST_ENEMY_RANGE;
     options.nearby_enemy_range = TELEMETRY_NEARBY_ENEMY_RANGE;
     DungeonNavigation::LogWaypointState(stage, wps, count, waypointIndex, options);
@@ -383,7 +383,7 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
     callbacks.is_bot_running = &Bot::IsRunning;
     callbacks.is_dead = &IsDead;
     callbacks.resolve_start_index = &GetFroggyRouteStartIndex;
-    callbacks.is_route_map = &IsBogrootRouteMap;
+    callbacks.is_route_map = &IsFroggyRouteMap;
     callbacks.log_waypoint_state = &LogFroggyWaypointState;
     callbacks.update_telemetry = &UpdateFroggyRouteTelemetry;
     callbacks.log_waypoint = &LogFroggyRouteWaypoint;
@@ -394,7 +394,7 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
     options.route_label_options = MakeFroggyRouteLabelOptions();
     options.wipe_recovery = MakeFroggyWipeRecoveryOptions();
     options.log_prefix = "Froggy";
-    options.route_name = "Bogroot";
+    options.route_name = MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP ? "Sparkfly" : "Bogroot";
     options.standard_waypoint_movement.move_to_point = &MoveFroggyWaypoint;
     options.standard_waypoint_movement.aggro_move_to_point = &AggroMoveFroggyWaypoint;
     options.standard_waypoint_movement.is_map_loaded = &IsMapLoaded;

@@ -529,6 +529,15 @@ bool WaitForPostDungeonReturn(
               MapMgr::GetIsMapLoaded() ? 1 : 0,
               AgentMgr::GetMyId());
 
+    if (!leftDungeonState) {
+        Log::Info("%s transition never left dungeon state; skipping load wait finalMap=%u loaded=%d myId=%u",
+                  prefix,
+                  MapMgr::GetMapId(),
+                  MapMgr::GetIsMapLoaded() ? 1 : 0,
+                  AgentMgr::GetMyId());
+        return false;
+    }
+
     const DWORD loadStart = GetTickCount();
     lastLogAt = 0u;
     lastMapId = 0xFFFFFFFFu;
