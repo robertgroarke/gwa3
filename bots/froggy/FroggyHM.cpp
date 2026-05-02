@@ -316,7 +316,97 @@ static void AggroMoveToEx(float x, float y, float fightRange = DungeonCombat::AG
     DungeonNavigation::AggroMoveToConfigured(x, y, fightRange, config);
 }
 
-#include "FroggyHMTransitions.h"
+static DungeonEntryRecovery::TransitionPlan MakeFroggyReturnToSparkflyPlan(const char* label) {
+    DungeonEntryRecovery::TransitionPlan plan;
+    plan.required_start_map_id = MapIds::BOGROOT_GROWTHS_LVL1;
+    plan.target_map_id = MapIds::SPARKFLY_SWAMP;
+    plan.stage = {BOGROOT_RETURN_TO_SPARKFLY_STAGE.x, BOGROOT_RETURN_TO_SPARKFLY_STAGE.y};
+    plan.push = {BOGROOT_RETURN_TO_SPARKFLY_PUSH.x, BOGROOT_RETURN_TO_SPARKFLY_PUSH.y};
+    plan.stage_threshold = MAP_TRANSITION_STAGE_THRESHOLD;
+    plan.pre_push_delay_ms = MAP_TRANSITION_RETURN_PUSH_DELAY_MS;
+    plan.ready_timeout_ms = MAP_TRANSITION_READY_TIMEOUT_MS;
+    plan.push_timeout_ms = MAP_TRANSITION_PUSH_TIMEOUT_MS;
+    plan.push_interval_ms = MAP_TRANSITION_PUSH_INTERVAL_MS;
+    plan.move_to_point = &MoveToAndWait;
+    plan.log_prefix = "Froggy";
+    plan.label = label;
+    return plan;
+}
+
+static DungeonEntryRecovery::DungeonEntryPlan MakeFroggyBogrootEntryPlan(const char* label) {
+    DungeonEntryRecovery::DungeonEntryPlan plan;
+    plan.bootstrap = GetEntryBootstrapPlan();
+    plan.path_threshold = DungeonNavigation::MOVE_TO_DEFAULT_THRESHOLD;
+    plan.route_dwell_ms = MAP_TRANSITION_ENTRY_ROUTE_DWELL_MS;
+    plan.ready_timeout_ms = MAP_TRANSITION_READY_TIMEOUT_MS;
+    plan.push_timeout_ms = MAP_TRANSITION_PUSH_TIMEOUT_MS;
+    plan.push_interval_ms = MAP_TRANSITION_PUSH_INTERVAL_MS;
+    plan.log_prefix = "Froggy";
+    plan.label = label;
+    return plan;
+}
+
+static DungeonEntryRecovery::DialogResetBouncePlan MakeTekksDialogResetBouncePlan() {
+    DungeonEntryRecovery::DialogResetBouncePlan plan;
+    plan.required_start_map_id = MapIds::SPARKFLY_SWAMP;
+    plan.enter = MakeFroggyBogrootEntryPlan("Tekks dialog reset enter");
+    plan.return_to_quest_map = MakeFroggyReturnToSparkflyPlan("Tekks dialog reset return");
+    plan.settle_ms = TEKKS_DIALOG_RESET_SETTLE_MS;
+    plan.log_prefix = "Froggy";
+    plan.label = "Tekks dialog reset bounce";
+    return plan;
+}
+
+static DungeonEntryRecovery::QuestMapApproachPlan MakeFroggyTekksApproachPlan() {
+    DungeonEntryRecovery::QuestMapApproachPlan plan;
+    plan.quest_map_id = MapIds::SPARKFLY_SWAMP;
+    plan.near_side_anchor_a = {SPARKFLY_TEKKS_STAGE.x, SPARKFLY_TEKKS_STAGE.y};
+    plan.near_side_anchor_b = {SPARKFLY_DUNGEON_ENTRY_STAGE.x, SPARKFLY_DUNGEON_ENTRY_STAGE.y};
+    plan.quest_stage = {SPARKFLY_TEKKS_STAGE.x, SPARKFLY_TEKKS_STAGE.y};
+    plan.quest_search = {SPARKFLY_TEKKS_SEARCH.x, SPARKFLY_TEKKS_SEARCH.y};
+    plan.entry_stage = {SPARKFLY_DUNGEON_ENTRY_STAGE.x, SPARKFLY_DUNGEON_ENTRY_STAGE.y};
+    plan.near_side_threshold = SPARKFLY_DUNGEON_SIDE_THRESHOLD;
+    plan.short_move_threshold = SPARKFLY_TEKKS_SHORT_MOVE_THRESHOLD;
+    plan.full_move_threshold = SPARKFLY_TEKKS_FULL_MOVE_THRESHOLD;
+    plan.short_ready_threshold = 1500.0f;
+    plan.full_ready_threshold = 2500.0f;
+    plan.full_route = SPARKFLY_TO_DUNGEON;
+    plan.full_route_count = SPARKFLY_TO_DUNGEON_COUNT;
+    plan.full_route_attempts = 2;
+    plan.death_recovery_timeout_ms = 120000u;
+    plan.death_recovery_poll_ms = 500u;
+    plan.death_recovery_settle_ms = 1000u;
+    plan.move_to_point = &MoveToAndWait;
+    plan.follow_waypoints = &FollowWaypoints;
+    plan.is_dead = &IsDead;
+    plan.log_prefix = "Froggy";
+    plan.label = "Sparkfly Tekks";
+    return plan;
+}
+
+static bool IsSparkflyTekksApproachReady(float maxDist) {
+    return DungeonEntryRecovery::IsQuestMapApproachReady(MakeFroggyTekksApproachPlan(), maxDist);
+}
+
+static bool MoveToTekksFromSparkflyCurrentSide() {
+    return DungeonEntryRecovery::MoveToQuestGiverFromCurrentQuestMapSide(MakeFroggyTekksApproachPlan());
+}
+
+static bool EnterBogrootFromSparkfly() {
+    return DungeonEntryRecovery::EnterDungeonFromQuestMap(
+        MakeFroggyBogrootEntryPlan("Froggy transition"));
+}
+
+static void ResetTekksQuestEntryFailures(const char* reason) {
+    DungeonEntryRecovery::ResetEntryFailureTracker(s_tekksQuestEntryFailures, reason, "Froggy");
+}
+
+static bool RecordTekksQuestEntryFailureAndMaybeResetDialog(const char* context) {
+    return DungeonEntryRecovery::RecordEntryFailureAndMaybeResetDialog(
+        s_tekksQuestEntryFailures,
+        MakeTekksDialogResetBouncePlan(),
+        context);
+}
 
 static void GrabDungeonBlessing(float shrineX, float shrineY); // forward decl
 static bool OpenDungeonDoorAt(float doorX, float doorY);       // forward decl
@@ -541,7 +631,64 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
     (void)DungeonRouteRunner::RunWaypointRoute(wps, count, callbacks, options);
 }
 
-#include "FroggyHMTekksEntry.h"
+static DungeonQuestRuntime::QuestGiverEntryPlan MakeTekksDungeonEntryPlan() {
+    const auto bootstrap = GetEntryBootstrapPlan();
+    DungeonQuestRuntime::QuestGiverEntryPlan plan = {};
+    plan.npc = bootstrap.npc;
+    plan.npc.search_radius = TEKKS_NPC_SEARCH_RADIUS;
+    plan.quest_id = GWA3::QuestIds::TEKKS_WAR;
+    plan.dialogs.talk = GWA3::DialogIds::NPC_TALK;
+    plan.dialogs.accept = GWA3::DialogIds::TekksWar::QUEST_ACCEPT;
+    plan.dialogs.reward = GWA3::DialogIds::TekksWar::QUEST_REWARD;
+    plan.dialogs.dungeon_entry = GWA3::DialogIds::TekksWar::DUNGEON_ENTRY;
+    return plan;
+}
+
+static DungeonQuestRuntime::QuestGiverEntryOptions MakeTekksDungeonEntryOptions() {
+    DungeonQuestRuntime::QuestGiverEntryOptions options = {};
+    options.anchor_move_threshold = TEKKS_ANCHOR_MOVE_THRESHOLD;
+    options.pre_interact_dwell_ms = TEKKS_PRE_INTERACT_DWELL_MS;
+    options.cancel_dwell_ms = TEKKS_CANCEL_DWELL_MS;
+    options.npc_move_threshold = TEKKS_NPC_MOVE_THRESHOLD;
+    options.npc_settle_timeout_ms = TEKKS_NPC_SETTLE_TIMEOUT_MS;
+    options.npc_settle_distance = TEKKS_NPC_SETTLE_DISTANCE;
+    options.initial_interact_target_wait_ms = TEKKS_INITIAL_INTERACT_TARGET_WAIT_MS;
+    options.initial_interact_pass_wait_ms = TEKKS_INITIAL_INTERACT_PASS_WAIT_MS;
+    options.initial_interact_passes = TEKKS_INITIAL_INTERACT_PASSES;
+    options.post_interact_dwell_ms = TEKKS_POST_INTERACT_DWELL_MS;
+    options.direct_entry_wait_base_ms = TEKKS_DIRECT_ENTRY_WAIT_BASE_MS;
+    options.reward_first_wait_base_ms = TEKKS_REWARD_FIRST_WAIT_BASE_MS;
+    options.dialog_refresh_delay_ms = TEKKS_DIALOG_REFRESH_DELAY_MS;
+    options.post_reward_wait_base_ms = TEKKS_POST_REWARD_WAIT_BASE_MS;
+    options.post_reward_max_buttons_per_pass = TEKKS_POST_REWARD_MAX_BUTTONS_PER_PASS;
+    options.post_reward_max_passes = TEKKS_POST_REWARD_MAX_PASSES;
+    options.reopen_accept_target_wait_base_ms = TEKKS_REOPEN_ACCEPT_TARGET_WAIT_BASE_MS;
+    options.reopen_accept_pass_wait_ms = TEKKS_REOPEN_ACCEPT_PASS_WAIT_MS;
+    options.reopen_accept_interact_passes = TEKKS_REOPEN_ACCEPT_INTERACT_PASSES;
+    options.reopen_accept_attempts = TEKKS_REOPEN_ACCEPT_ATTEMPTS;
+    options.accept_wait_base_ms = TEKKS_ACCEPT_WAIT_BASE_MS;
+    options.accept_verify.timeout_ms = TEKKS_ACCEPT_VERIFY_TIMEOUT_MS;
+    options.accept_verify.refresh_interval_ms = TEKKS_ACCEPT_VERIFY_REFRESH_INTERVAL_MS;
+    options.accept_verify.refresh_delay_ms = TEKKS_DIALOG_REFRESH_DELAY_MS;
+    options.accept_verify.poll_ms = TEKKS_ACCEPT_VERIFY_POLL_MS;
+    options.accept_verify.post_set_active_delay_ms = TEKKS_SET_ACTIVE_DWELL_MS;
+    options.talk_wait_base_ms = TEKKS_TALK_WAIT_BASE_MS;
+    options.entry_dialog_wait_base_ms = TEKKS_ENTRY_DIALOG_WAIT_BASE_MS;
+    options.entry_verify_wait_base_ms = TEKKS_ENTRY_VERIFY_WAIT_BASE_MS;
+    options.entry_verify_refresh_interval_ms = TEKKS_ENTRY_VERIFY_REFRESH_INTERVAL_MS;
+    options.entry_verify_poll_ms = TEKKS_ENTRY_VERIFY_POLL_MS;
+    options.post_set_active_delay_ms = TEKKS_SET_ACTIVE_DWELL_MS;
+    options.log_prefix = "Froggy";
+    options.label = "Tekks";
+    return options;
+}
+
+static bool PrepareTekksDungeonEntry() {
+    const auto result = DungeonQuestRuntime::PrepareDungeonEntryFromQuestGiver(
+        MakeTekksDungeonEntryPlan(),
+        MakeTekksDungeonEntryOptions());
+    return result.confirmed;
+}
 
 static DungeonLoot::BossKeyModelSet MakeBogrootBossKeyModelSet() {
     DungeonLoot::BossKeyModelSet modelSet;
