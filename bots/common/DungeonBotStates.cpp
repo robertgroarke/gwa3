@@ -1,6 +1,8 @@
 #include <bots/common/DungeonBotStates.h>
 
+#include <gwa3/dungeon/DungeonQuestRuntime.h>
 #include <gwa3/dungeon/DungeonRuntime.h>
+#include <gwa3/core/Log.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/UIMgr.h>
 
@@ -17,6 +19,25 @@ uint32_t ResolveOutpostMapId(const BotConfig& cfg, const TownSetupOptions& optio
         return cfg.outpost_map_id;
     }
     return options.default_outpost_map_id;
+}
+
+uint32_t ResolveOutpostMapId(const BotConfig& cfg, uint32_t defaultOutpostMapId) {
+    if (cfg.outpost_map_id != 0u) {
+        return cfg.outpost_map_id;
+    }
+    return defaultOutpostMapId;
+}
+
+bool IsMapInList(uint32_t mapId, const uint32_t* mapIds, int mapCount) {
+    if (mapIds == nullptr || mapCount <= 0) {
+        return false;
+    }
+    for (int i = 0; i < mapCount; ++i) {
+        if (mapIds[i] == mapId) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace
@@ -128,6 +149,147 @@ BotState HandleTownSetup(BotConfig& cfg, const TownSetupOptions& options) {
     }
 
     return BotState::Traveling;
+}
+
+BotState HandleTravelToEntryMap(BotConfig& cfg, const TravelStateOptions& options) {
+    const uint32_t sourceMapId = ResolveOutpostMapId(cfg, options.default_source_map_id);
+    if (sourceMapId == 0u || options.entry_map_id == 0u) {
+        LogBot("%s: travel state missing source or entry map id",
+               PrefixOrDefault(options.log_prefix));
+        return BotState::Error;
+    }
+
+    DungeonQuestRuntime::TravelToEntryMapOptions travelOptions = {};
+    travelOptions.source_map_id = sourceMapId;
+    travelOptions.entry_map_id = options.entry_map_id;
+    travelOptions.travel_path = options.travel_path;
+    travelOptions.travel_path_count = options.travel_path_count;
+    travelOptions.zone_point = options.zone_point;
+    travelOptions.zone_timeout_ms = options.zone_timeout_ms;
+    travelOptions.log_prefix = PrefixOrDefault(options.log_prefix);
+    travelOptions.label = options.label != nullptr ? options.label : "Travel to entry map";
+
+    const auto result = DungeonQuestRuntime::TravelToEntryMap(travelOptions);
+    if (result == DungeonQuestRuntime::TravelToEntryMapStatus::AtEntryMap) {
+        return BotState::InDungeon;
+    }
+    return BotState::InTown;
+}
+
+BotState HandleDungeonProgression(BotConfig& cfg, const DungeonProgressionOptions& options) {
+    const char* prefix = PrefixOrDefault(options.log_prefix);
+    uint32_t mapId = MapMgr::GetMapId();
+
+    if (options.refresh_skill_cache) {
+        options.refresh_skill_cache();
+    }
+
+    if (mapId == options.entry_map_id) {
+        LogBot("State: %s - preparing %s entry",
+               options.entry_map_name != nullptr ? options.entry_map_name : "entry map",
+               options.dungeon_name != nullptr ? options.dungeon_name : "dungeon");
+
+        if (options.use_consumables) {
+            options.use_consumables(cfg);
+        }
+
+        if (options.move_to_entry_npc && !options.move_to_entry_npc()) {
+            LogBot("%s entry NPC approach failed; staying in entry map for retry",
+                   prefix);
+            Log::Warn("%s: skipping ACTION_CANCEL after entry approach failure; retry will issue fresh movement",
+                      prefix);
+            DungeonRuntime::WaitMs(options.retry_wait_ms);
+            return BotState::InDungeon;
+        }
+
+        if (options.prepare_entry && !options.prepare_entry()) {
+            LogBot("%s entry preparation failed; staying in entry map for retry",
+                   prefix);
+            if (options.record_entry_failure) {
+                options.record_entry_failure("entry-state");
+            }
+            Log::Warn("%s: skipping ACTION_CANCEL after entry prep failure; retry will refresh dialog/movement",
+                      prefix);
+            DungeonRuntime::WaitMs(options.retry_wait_ms);
+            return BotState::InDungeon;
+        }
+
+        if (options.reset_entry_failures) {
+            options.reset_entry_failures("entry-prepared");
+        }
+
+        if (options.enter_dungeon && !options.enter_dungeon()) {
+            LogBot("%s dungeon portal transition failed; staying in entry map for retry",
+                   prefix);
+            Log::Warn("%s: skipping ACTION_CANCEL after portal transition failure; retry will issue fresh movement",
+                      prefix);
+            DungeonRuntime::WaitMs(options.retry_wait_ms);
+            return BotState::InDungeon;
+        }
+    }
+
+    mapId = MapMgr::GetMapId();
+
+    if (IsMapInList(mapId, options.dungeon_map_ids, options.dungeon_map_count)) {
+        uint32_t runNumber = 0u;
+        if (options.mark_run_started) {
+            runNumber = options.mark_run_started();
+        }
+
+        DungeonLoopStateResult loopResult = {};
+        if (options.run_dungeon_loop) {
+            loopResult = options.run_dungeon_loop();
+        }
+        if (loopResult.final_map_id == 0u) {
+            loopResult.final_map_id = MapMgr::GetMapId();
+        }
+
+        if (loopResult.completed) {
+            if (options.mark_run_completed) {
+                options.mark_run_completed(runNumber, loopResult.final_map_id);
+            }
+
+            if (loopResult.final_map_id == options.entry_map_id) {
+                const bool maintenanceNeeded = options.needs_maintenance && options.needs_maintenance();
+                PostEntryMapRunDecision decision = {};
+                if (options.resolve_post_entry_map_run_decision) {
+                    decision = options.resolve_post_entry_map_run_decision(maintenanceNeeded);
+                }
+                if (decision.maintenance_deferred) {
+                    LogBot("Maintenance needed after run; deferring town maintenance and preserving entry-map loop");
+                }
+                LogBot("Run returned to entry map; re-entering dungeon without town reset");
+                return decision.next_state;
+            }
+
+            if (loopResult.final_map_id == ResolveOutpostMapId(cfg, options.default_outpost_map_id)) {
+                return BotState::InTown;
+            }
+        }
+
+        if (loopResult.final_map_id == options.entry_map_id) {
+            LogBot("%s loop returned to entry map before completion; retrying entry",
+                   options.dungeon_name != nullptr ? options.dungeon_name : "Dungeon");
+            return BotState::InDungeon;
+        }
+
+        LogBot("%s loop did not complete cleanly (finalMap=%u); retrying dungeon state",
+               options.dungeon_name != nullptr ? options.dungeon_name : "Dungeon",
+               loopResult.final_map_id);
+        DungeonRuntime::WaitMs(options.retry_wait_ms);
+        return BotState::InDungeon;
+    }
+
+    const uint32_t outpostMapId = ResolveOutpostMapId(cfg, options.default_outpost_map_id);
+    if (outpostMapId != 0u && mapId == outpostMapId) {
+        if (options.mark_run_failed) {
+            options.mark_run_failed(mapId);
+        }
+        LogBot("Run failed (returned to outpost), restarting");
+        return BotState::InTown;
+    }
+
+    return BotState::InDungeon;
 }
 
 } // namespace GWA3::Bot::DungeonStates
