@@ -68,6 +68,32 @@ using WaypointReplayVisitFn = void(*)(const DungeonRoute::Waypoint* waypoints, i
 using RouteLabelTelemetryFn = void(*)(uint32_t final_map_id, bool returned_to_quest_map);
 using RouteLabelDiagnosticFn = void(*)(const DungeonRoute::Waypoint* waypoints, int waypoint_index);
 
+struct RouteStartLabelRule {
+    uint32_t map_id = 0u;
+    int nearest_index = -1;
+    int waypoint_index = -1;
+    DungeonRoute::WaypointLabelKind label_kind = DungeonRoute::WaypointLabelKind::Unknown;
+    int forced_start_index = 0;
+    const char* log_message = nullptr;
+};
+
+struct RouteStartAnchorRule {
+    uint32_t map_id = 0u;
+    DungeonRuntime::TransitionAnchor anchor = {};
+    float max_distance_from_anchor = 0.0f;
+    int min_nearest_index = 0;
+    int forced_start_index = 0;
+    const char* log_message = nullptr;
+};
+
+struct RouteStartPolicyOptions {
+    const RouteStartLabelRule* label_rules = nullptr;
+    int label_rule_count = 0;
+    const RouteStartAnchorRule* anchor_rules = nullptr;
+    int anchor_rule_count = 0;
+    const char* log_prefix = "Dungeon";
+};
+
 struct RouteRunCallbacks {
     GetMapIdFn get_map_id = nullptr;
     BoolFn is_bot_running = nullptr;
@@ -121,6 +147,7 @@ struct RouteRunOptions {
     int max_waypoint_move_retries = 2;
     int waypoint_move_backtrack_steps = 1;
     RouteLabelExecutorOptions route_label_options = {};
+    RouteStartPolicyOptions route_start_policy = {};
     DungeonNavigation::RouteWaypointCombatLootOptions standard_waypoint_movement = {};
     DungeonCheckpoint::WaypointWipeRecoveryOptions wipe_recovery = {};
     const char* log_prefix = "Dungeon";
@@ -186,6 +213,12 @@ RouteRunResult RunWaypointRoute(
     int count,
     const RouteRunCallbacks& callbacks,
     const RouteRunOptions& options = {});
+int ResolveRouteStartIndexWithPolicy(
+    const DungeonRoute::Waypoint* waypoints,
+    int count,
+    uint32_t map_id,
+    int nearest_index,
+    const RouteStartPolicyOptions& options = {});
 WaypointHandlerResult ExecuteRouteLabelWaypoint(
     const DungeonRoute::Waypoint* waypoints,
     int count,

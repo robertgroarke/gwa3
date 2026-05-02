@@ -1,6 +1,5 @@
 #include <bots/froggy/FroggyHM.h>
 #include <bots/froggy/FroggyHMConfig.h>
-#include <bots/froggy/FroggyHMRoutePolicy.h>
 #include <bots/froggy/FroggyHMRoutes.h>
 #include <bots/common/BotFramework.h>
 #include <bots/common/DungeonBotStates.h>
@@ -416,27 +415,35 @@ static bool IsFroggyRouteMap(uint32_t mapId) {
     return mapId == MapIds::SPARKFLY_SWAMP || IsBogrootMapId(mapId);
 }
 
-static int GetFroggyRouteStartIndex(const Waypoint* wps, int count, uint32_t mapId) {
-    const int nearestIdx = DungeonNavigation::GetNearestWaypointIndex(wps, count);
-    float distanceFromLvl1Portal = -1.0f;
-    if (mapId == MapIds::BOGROOT_GROWTHS_LVL2) {
-        if (auto* me = AgentMgr::GetMyAgent()) {
-            distanceFromLvl1Portal = AgentMgr::GetDistance(me->x, me->y,
-                                                           BOGROOT_LVL1_TO_LVL2_PORTAL.x,
-                                                           BOGROOT_LVL1_TO_LVL2_PORTAL.y);
-        }
-    }
+static DungeonRouteRunner::RouteStartPolicyOptions MakeFroggyRouteStartPolicy() {
+    static constexpr DungeonRouteRunner::RouteStartLabelRule labelRules[] = {
+        {
+            MapIds::BOGROOT_GROWTHS_LVL1,
+            1,
+            1,
+            DungeonRoute::WaypointLabelKind::Blessing,
+            0,
+            "forcing start from opening leg before initial blessing",
+        },
+    };
+    static constexpr DungeonRouteRunner::RouteStartAnchorRule anchorRules[] = {
+        {
+            MapIds::BOGROOT_GROWTHS_LVL2,
+            {BOGROOT_LVL1_TO_LVL2_PORTAL.x, BOGROOT_LVL1_TO_LVL2_PORTAL.y},
+            BOGROOT_LVL1_TO_LVL2_HANDOFF_CLEARANCE,
+            20,
+            0,
+            "suppressing stale route start near transition handoff",
+        },
+    };
 
-    const int startIdx = ResolveRouteStartIndex(mapId, wps, count, nearestIdx, distanceFromLvl1Portal);
-    if (mapId == MapIds::BOGROOT_GROWTHS_LVL1 && nearestIdx == 1 && startIdx == 0) {
-        Log::Info("Froggy: Bogroot lvl1 forcing startIdx from blessing back to opening aggro leg");
-    }
-    if (mapId == MapIds::BOGROOT_GROWTHS_LVL2 && nearestIdx >= 20 && startIdx == 0) {
-        Log::Info("Froggy: Bogroot lvl2 suppressing stale startIdx=%d while spawn handoff is unresolved (distFromLvl1Portal=%.0f)",
-                  nearestIdx,
-                  distanceFromLvl1Portal);
-    }
-    return startIdx;
+    DungeonRouteRunner::RouteStartPolicyOptions options = {};
+    options.label_rules = labelRules;
+    options.label_rule_count = static_cast<int>(sizeof(labelRules) / sizeof(labelRules[0]));
+    options.anchor_rules = anchorRules;
+    options.anchor_rule_count = static_cast<int>(sizeof(anchorRules) / sizeof(anchorRules[0]));
+    options.log_prefix = "Froggy";
+    return options;
 }
 
 static void LogFroggyWaypointState(const char* stage, const Waypoint* wps, int count, int waypointIndex) {
@@ -610,7 +617,6 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
     callbacks.get_map_id = &MapMgr::GetMapId;
     callbacks.is_bot_running = &Bot::IsRunning;
     callbacks.is_dead = &IsDead;
-    callbacks.resolve_start_index = &GetFroggyRouteStartIndex;
     callbacks.is_route_map = &IsFroggyRouteMap;
     callbacks.log_waypoint_state = &LogFroggyWaypointState;
     callbacks.update_telemetry = &UpdateFroggyRouteTelemetry;
@@ -620,6 +626,7 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
     options.ignore_bot_running = ignoreBotRunning;
     options.execute_route_label_waypoints = true;
     options.route_label_options = MakeFroggyRouteLabelOptions();
+    options.route_start_policy = MakeFroggyRouteStartPolicy();
     options.wipe_recovery = MakeFroggyWipeRecoveryOptions();
     options.log_prefix = "Froggy";
     options.route_name = MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP ? "Sparkfly" : "Bogroot";

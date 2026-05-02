@@ -179,11 +179,17 @@ void WaitForLoopLevelSpawnGate(
 int ResolveStartIndex(const DungeonRoute::Waypoint* waypoints,
                       int count,
                       uint32_t map_id,
-                      const RouteRunCallbacks& callbacks) {
+                      const RouteRunCallbacks& callbacks,
+                      const RouteRunOptions& options) {
     if (callbacks.resolve_start_index) {
         return callbacks.resolve_start_index(waypoints, count, map_id);
     }
-    return DungeonNavigation::GetNearestWaypointIndex(waypoints, count);
+    return ResolveRouteStartIndexWithPolicy(
+        waypoints,
+        count,
+        map_id,
+        DungeonNavigation::GetNearestWaypointIndex(waypoints, count),
+        options.route_start_policy);
 }
 
 void LogWaypoint(int waypoint_index,
@@ -297,6 +303,59 @@ void UpdateReturnTelemetry(
 }
 
 } // namespace
+
+int ResolveRouteStartIndexWithPolicy(
+    const DungeonRoute::Waypoint* waypoints,
+    int count,
+    uint32_t map_id,
+    int nearest_index,
+    const RouteStartPolicyOptions& options) {
+    if (waypoints == nullptr || count <= 0 || nearest_index < 0) {
+        return 0;
+    }
+
+    const char* prefix = PrefixOrDefault(options.log_prefix);
+
+    for (int i = 0; i < options.label_rule_count; ++i) {
+        const auto& rule = options.label_rules[i];
+        if (rule.map_id != 0u && rule.map_id != map_id) continue;
+        if (rule.nearest_index >= 0 && rule.nearest_index != nearest_index) continue;
+        if (rule.waypoint_index < 0 || rule.waypoint_index >= count) continue;
+        if (DungeonRoute::ClassifyWaypointLabel(waypoints[rule.waypoint_index].label) != rule.label_kind) continue;
+
+        if (rule.log_message) {
+            Log::Info("%s: %s nearest=%d forcedStart=%d",
+                      prefix,
+                      rule.log_message,
+                      nearest_index,
+                      rule.forced_start_index);
+        }
+        return std::max(0, std::min(rule.forced_start_index, count - 1));
+    }
+
+    auto* me = AgentMgr::GetMyAgent();
+    for (int i = 0; i < options.anchor_rule_count; ++i) {
+        const auto& rule = options.anchor_rules[i];
+        if (rule.map_id != 0u && rule.map_id != map_id) continue;
+        if (nearest_index < rule.min_nearest_index) continue;
+        if (rule.max_distance_from_anchor <= 0.0f || me == nullptr) continue;
+
+        const float distance = AgentMgr::GetDistance(me->x, me->y, rule.anchor.x, rule.anchor.y);
+        if (distance >= rule.max_distance_from_anchor) continue;
+
+        if (rule.log_message) {
+            Log::Info("%s: %s nearest=%d forcedStart=%d distanceFromAnchor=%.0f",
+                      prefix,
+                      rule.log_message,
+                      nearest_index,
+                      rule.forced_start_index,
+                      distance);
+        }
+        return std::max(0, std::min(rule.forced_start_index, count - 1));
+    }
+
+    return nearest_index < count ? nearest_index : count - 1;
+}
 
 WaypointHandlerResult ExecuteRouteLabelWaypoint(
     const DungeonRoute::Waypoint* waypoints,
@@ -509,7 +568,7 @@ RouteRunResult RunWaypointRoute(
     }
 
     const uint32_t map_id = CurrentMapId(callbacks);
-    const int start_index = ResolveStartIndex(waypoints, count, map_id, callbacks);
+    const int start_index = ResolveStartIndex(waypoints, count, map_id, callbacks, options);
     const bool use_progress_backtrack =
         options.use_nearest_progress_backtrack && !IsRouteMap(map_id, callbacks);
     auto progress_state = DungeonRoute::MakeWaypointProgressState(start_index);
