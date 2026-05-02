@@ -98,7 +98,16 @@ static void UseDpRemovalIfNeeded();
 static bool OpenChestAt(float chestX, float chestY, float searchRadius = DEFAULT_CHEST_OPEN_RADIUS);
 static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunning);
 
-#include "FroggyHMMovementCombatRuntime.h"
+static int LootAfterCombatSweep(float aggroRange, const char* reason) {
+    DungeonLoot::PostCombatLootSweepOptions options = {};
+    options.log_prefix = "Froggy";
+    options.reason = reason;
+    options.wait_ms = &DungeonRuntime::WaitMs;
+    options.is_world_ready = &DungeonLoot::IsWorldReadyForLootWithPlayerAgent;
+    options.pickup_nearby_loot = &PickupNearbyLoot;
+    return DungeonLoot::SweepPostCombatLoot(aggroRange, options);
+}
+
 #include "FroggyHMAggroCombatRuntime.h"
 
 static DungeonCombat::LocalClearPolicy BuildFroggyLocalClearPolicy(
@@ -580,7 +589,24 @@ static void UseDpRemovalIfNeeded() {
 
 #include "FroggyHMTownStates.h"
 #include "FroggyHMDungeonState.h"
-#include "FroggyHMErrorState.h"
+
+BotState HandleError(BotConfig& cfg) {
+    (void)cfg;
+    LogBot("State: ERROR - waiting 10s before retry");
+    WaitMs(10000);
+
+    uint32_t mapId = MapMgr::GetMapId();
+    if (mapId == 0) {
+        return BotState::CharSelect;
+    }
+    if (mapId == MapIds::SPARKFLY_SWAMP ||
+        mapId == MapIds::BOGROOT_GROWTHS_LVL1 ||
+        mapId == MapIds::BOGROOT_GROWTHS_LVL2) {
+        LogBot("Error recovery staying in explorable map %u", mapId);
+        return BotState::InDungeon;
+    }
+    return BotState::InTown;
+}
 
 BotState HandleLoot(BotConfig& cfg) {
     (void)cfg;
@@ -658,6 +684,9 @@ void Register() {
 
 #include "FroggyHMDebugMovement.h"
 #include "FroggyHMDebugCombat.h"
-#include "FroggyHMDebugDungeonLoop.h"
+
+bool DebugRunDungeonLoopFromCurrentMap() {
+    return RunDungeonLoopFromCurrentMap();
+}
 
 } // namespace GWA3::Bot::Froggy
