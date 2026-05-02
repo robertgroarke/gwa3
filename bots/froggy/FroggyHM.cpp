@@ -1279,8 +1279,205 @@ void Register() {
     LogBot("Froggy HM module registered (hard mode)");
 }
 
-#include "FroggyHMDebugMovement.h"
-#include "FroggyHMDebugCombat.h"
+bool DebugAggroMoveTo(float x, float y, float fightRange) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded()) {
+        return false;
+    }
+
+    if (!s_combatSession.skills_cached) {
+        DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(s_combatSession, "Froggy");
+    }
+
+    LogBot("DebugAggroMoveTo request target=(%.0f, %.0f) fightRange=%.0f", x, y, fightRange);
+    AggroMoveToEx(x, y, fightRange);
+    return DungeonCombat::DistanceToPoint(x, y) <= DungeonCombat::AGGRO_ARRIVAL_THRESHOLD;
+}
+
+bool DebugClearAggroInPlace(float fightRange) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded()) {
+        return false;
+    }
+
+    const float nearestBefore = DungeonCombat::GetNearestLivingEnemyDistance(fightRange + 500.0f);
+    LogBot("DebugClearAggroInPlace start fightRange=%.0f nearestBefore=%.0f", fightRange, nearestBefore);
+    AgentMgr::CancelAction();
+    WaitMs(100);
+    FightEnemiesInAggro(fightRange, false, &s_sparkflyTraversalCombatStats);
+    AgentMgr::CancelAction();
+    WaitMs(250);
+    const float nearestAfter = DungeonCombat::GetNearestLivingEnemyDistance(fightRange + 500.0f);
+    LogBot("DebugClearAggroInPlace end nearestAfter=%.0f cleared=%d",
+           nearestAfter,
+           nearestAfter > fightRange ? 1 : 0);
+    return nearestAfter > fightRange;
+}
+
+bool DebugRunSparkflyRouteToTekks() {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != MapIds::SPARKFLY_SWAMP) {
+        return false;
+    }
+
+    static constexpr float kTekksStageThreshold = 900.0f;
+    static constexpr float kTekksReadyThreshold = 2500.0f;
+
+    LogBot("DebugRunSparkflyRouteToTekks start");
+    const bool approached = MoveToTekksFromSparkflyCurrentSide();
+    if (!approached || !MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != MapIds::SPARKFLY_SWAMP) {
+        LogBot("DebugRunSparkflyRouteToTekks aborted after approach: approached=%d map=%u loaded=%d",
+               approached ? 1 : 0,
+               MapMgr::GetMapId(),
+               MapMgr::GetIsMapLoaded() ? 1 : 0);
+        return false;
+    }
+
+    const bool staged = MoveToAndWait(SPARKFLY_TEKKS_STAGE.x, SPARKFLY_TEKKS_STAGE.y, kTekksStageThreshold);
+    const float stageRemaining = DungeonCombat::DistanceToPoint(SPARKFLY_TEKKS_STAGE.x, SPARKFLY_TEKKS_STAGE.y);
+    const float searchRemaining = DungeonCombat::DistanceToPoint(SPARKFLY_TEKKS_SEARCH.x, SPARKFLY_TEKKS_SEARCH.y);
+    const bool ready = staged || IsSparkflyTekksApproachReady(kTekksReadyThreshold);
+    LogBot("DebugRunSparkflyRouteToTekks end staged=%d stageRemaining=%.0f searchRemaining=%.0f ready=%d",
+           staged ? 1 : 0,
+           stageRemaining,
+           searchRemaining,
+           ready ? 1 : 0);
+    return ready;
+}
+
+bool DebugPrepareTekksDungeonEntry() {
+    const bool ready = DungeonRuntime::WaitForCondition(5000, []() {
+        auto* meInner = AgentMgr::GetMyAgent();
+        return meInner != nullptr &&
+               meInner->hp > 0.0f &&
+               MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP &&
+               AgentMgr::GetMyId() != 0;
+    }, 100);
+    auto* me = AgentMgr::GetMyAgent();
+    Log::Info("Froggy: DebugPrepareTekksDungeonEntry gate ready=%d map=%u loaded=%d myId=%u hp=%.3f",
+              ready ? 1 : 0,
+              MapMgr::GetMapId(),
+              MapMgr::GetIsMapLoaded() ? 1 : 0,
+              AgentMgr::GetMyId(),
+              me ? me->hp : 0.0f);
+    if (!ready) {
+        return false;
+    }
+
+    Log::Info("Froggy: DebugPrepareTekksDungeonEntry start");
+    LogBot("DebugPrepareTekksDungeonEntry start");
+    const bool prepared = PrepareTekksDungeonEntry();
+    Log::Info("Froggy: DebugPrepareTekksDungeonEntry end prepared=%d activeQuest=0x%X lastDialog=0x%X",
+              prepared ? 1 : 0,
+              QuestMgr::GetActiveQuestId(),
+              DialogMgr::GetLastDialogId());
+    LogBot("DebugPrepareTekksDungeonEntry end prepared=%d activeQuest=0x%X lastDialog=0x%X",
+           prepared ? 1 : 0,
+           QuestMgr::GetActiveQuestId(),
+           DialogMgr::GetLastDialogId());
+    return prepared;
+}
+
+bool ExecuteBuiltinCombatStep(uint32_t targetId, bool quickStep) {
+    auto* target = AgentMgr::GetAgentByID(targetId);
+    if (!target || target->type != 0xDBu) {
+        return false;
+    }
+
+    auto& cfg = Bot::GetConfig();
+    const CombatMode originalMode = cfg.combat_mode;
+    cfg.combat_mode = CombatMode::Builtin;
+
+    DungeonCombatRoutine::DebugCombatStepOptions options = {};
+    options.quick_step = quickStep;
+    options.prefer_first_foe_target_skill = MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP;
+    options.aggro_range = DungeonCombat::LONG_BOW_RANGE;
+    options.max_aftercast = IsBogrootMapId(MapMgr::GetMapId()) ? 1.5f : 3.0f;
+    options.auto_attack = &AgentMgr::Attack;
+    options.log_prefix = "Froggy";
+    const bool executed = DungeonCombatRoutine::ExecuteBuiltinDebugCombatStep(
+        s_combatSession,
+        targetId,
+        &DungeonRuntime::WaitMs,
+        &IsDead,
+        options);
+
+    cfg.combat_mode = originalMode;
+    return executed;
+}
+
+const char* GetLastCombatStepDescription() {
+    return s_combatSession.last_step;
+}
+
+LastCombatStepInfo GetLastCombatStepInfo() {
+    return s_combatSession.last_action;
+}
+
+void ResetSparkflyTraversalCombatStats() {
+    s_sparkflyTraversalCombatStats = {};
+}
+
+SparkflyTraversalCombatStats GetSparkflyTraversalCombatStats() {
+    return s_sparkflyTraversalCombatStats;
+}
+
+bool DebugResolveSyntheticSkillTarget(uint32_t roleMask, uint8_t targetType,
+                                      uint32_t defaultFoeId, uint32_t& outTargetId) {
+    return DungeonCombatRoutine::ResolveSyntheticSkillTarget(
+        roleMask,
+        targetType,
+        defaultFoeId,
+        outTargetId);
+}
+
+bool DebugResolveUsableSkillTargetForSlot(uint32_t slot, uint32_t defaultFoeId,
+                                          uint32_t& outSkillId, uint32_t& outTargetId, uint8_t& outTargetType) {
+    return DungeonCombatRoutine::ResolveUsableSkillTargetForSlot(
+        s_combatSession,
+        slot,
+        defaultFoeId,
+        outSkillId,
+        outTargetId,
+        outTargetType,
+        "Froggy");
+}
+
+uint32_t DebugGetCastingEnemy() {
+    return DungeonSkill::GetCastingBalledEnemy();
+}
+
+uint32_t DebugGetEnchantedEnemy() {
+    return DungeonSkill::GetEnchantedBalledEnemy();
+}
+
+uint32_t DebugGetMeleeRangeEnemy() {
+    return DungeonSkill::GetMeleeBalledEnemy();
+}
+
+bool RefreshCombatSkillbar() {
+    return DungeonCombatRoutine::RefreshCombatSkillbarForDebug(s_combatSession, "Froggy");
+}
+
+void DebugDumpBuiltinCombatDecision(uint32_t targetId) {
+    DungeonCombatRoutine::DumpBuiltinCombatDecision(s_combatSession, targetId, "Froggy");
+}
+
+int GetBuiltinCombatDecisionDumpCount() {
+    return DungeonCombatRoutine::GetDecisionDumpCount(s_combatSession);
+}
+
+const char* GetBuiltinCombatDecisionDumpLine(int index) {
+    return DungeonCombatRoutine::GetDecisionDumpLine(s_combatSession, index);
+}
+
+int GetCombatDebugTraceCount() {
+    return DungeonCombatRoutine::GetDebugTraceCount(s_combatSession);
+}
+
+const char* GetCombatDebugTraceLine(int index) {
+    return DungeonCombatRoutine::GetDebugTraceLine(s_combatSession, index);
+}
 
 bool DebugRunDungeonLoopFromCurrentMap() {
     return RunDungeonLoopFromCurrentMap();
