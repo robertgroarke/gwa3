@@ -1,6 +1,6 @@
-#include <gwa3/dungeon/DungeonQuest.h>
+#include <gwa3/advanced/QuestPlan.h>
 
-namespace GWA3::DungeonQuest {
+namespace GWA3::AdvancedQuest {
 
 bool IsValidDialogPlan(const DialogPlan& plan) {
     return plan.dialog_ids != nullptr
@@ -105,4 +105,4 @@ TravelPoint ResolveBootstrapZonePoint(const BootstrapPlan& plan) {
     return point ? *point : TravelPoint{};
 }
 
-} // namespace GWA3::DungeonQuest
+} // namespace GWA3::AdvancedQuest
