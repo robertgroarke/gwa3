@@ -1,4 +1,4 @@
-#include <gwa3/dungeon/DungeonRuntime.h>
+#include <gwa3/advanced/Runtime.h>
 
 #include <gwa3/core/Log.h>
 #include <gwa3/managers/AgentMgr.h>
@@ -6,12 +6,12 @@
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/packets/CtoS.h>
-#include <gwa3/dungeon/DungeonCombat.h>
+#include <gwa3/advanced/Combat.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
 
 #include <Windows.h>
 
-namespace GWA3::DungeonRuntime {
+namespace GWA3::AdvancedRuntime {
 
 namespace {
 
@@ -44,7 +44,7 @@ bool IsListedMap(uint32_t mapId, const uint32_t* mapIds, int mapCount) {
 }
 
 const char* LogPrefixOrDefault(const char* logPrefix) {
-    return logPrefix ? logPrefix : "DungeonRuntime";
+    return logPrefix ? logPrefix : "Runtime";
 }
 
 } // namespace
@@ -154,10 +154,10 @@ TransitionTelemetry CaptureLevelTransitionTelemetry(
         ? AgentMgr::GetDistance(me->x, me->y, exitAnchor.x, exitAnchor.y)
         : -1.0f;
     telemetry.nearest_enemy_dist = me
-        ? DungeonCombat::GetNearestLivingEnemyDistance(nearestEnemyRange)
+        ? AdvancedCombat::GetNearestLivingEnemyDistance(nearestEnemyRange)
         : -1.0f;
     telemetry.nearby_enemy_count = me
-        ? DungeonCombat::CountLivingEnemiesInRange(nearbyEnemyRange)
+        ? AdvancedCombat::CountLivingEnemiesInRange(nearbyEnemyRange)
         : 0u;
     telemetry.portal_id = portalId;
 
@@ -198,7 +198,7 @@ void LogLevelTransitionTelemetry(
         *outTelemetry = telemetry;
     }
     Log::Info("%s: %s [%s] attempt=%lu elapsed=%lums map=%u loaded=%d me=(%.0f, %.0f) distToExit=%.0f target=%u portal=%u type=0x%X gadget=%u portalPos=(%.0f, %.0f) portalDist=%.0f",
-              logPrefix ? logPrefix : "DungeonRuntime",
+              logPrefix ? logPrefix : "Runtime",
               transitionName ? transitionName : "Level transition",
               stage ? stage : "unknown",
               static_cast<unsigned long>(attempt),
@@ -346,7 +346,7 @@ bool EnsureOutpostReady(uint32_t outpostMapId, uint32_t timeoutMs, const char* c
     const uint32_t loadingState = MapMgr::GetLoadingState();
     if (currentMapId == outpostMapId) {
         const bool ready = WaitForMapReady(outpostMapId, timeoutMs);
-        Log::Info("DungeonRuntime: %s outpost already selected map=%u ready=%d loading=%u",
+        Log::Info("Runtime: %s outpost already selected map=%u ready=%d loading=%u",
                   ContextOrDefault(context),
                   outpostMapId,
                   ready ? 1 : 0,
@@ -354,13 +354,13 @@ bool EnsureOutpostReady(uint32_t outpostMapId, uint32_t timeoutMs, const char* c
         return ready;
     }
 
-    Log::Info("DungeonRuntime: %s traveling to outpost map=%u from map=%u loading=%u",
+    Log::Info("Runtime: %s traveling to outpost map=%u from map=%u loading=%u",
               ContextOrDefault(context),
               outpostMapId,
               currentMapId,
               loadingState);
     if (!MapMgr::Travel(outpostMapId)) {
-        Log::Warn("DungeonRuntime: %s travel request rejected target=%u currentMap=%u loading=%u",
+        Log::Warn("Runtime: %s travel request rejected target=%u currentMap=%u loading=%u",
                   ContextOrDefault(context),
                   outpostMapId,
                   currentMapId,
@@ -369,7 +369,7 @@ bool EnsureOutpostReady(uint32_t outpostMapId, uint32_t timeoutMs, const char* c
     }
 
     const bool ready = WaitForMapReady(outpostMapId, timeoutMs);
-    Log::Info("DungeonRuntime: %s outpost travel result ready=%d currentMap=%u loading=%u",
+    Log::Info("Runtime: %s outpost travel result ready=%d currentMap=%u loading=%u",
               ContextOrDefault(context),
               ready ? 1 : 0,
               MapMgr::GetMapId(),
@@ -385,7 +385,7 @@ bool PushUntilMapReady(
     uint32_t loadTimeoutMs,
     uint32_t settleMs,
     const char* context) {
-    const char* transitionContext = TransitionContextOrDefault(context, "Dungeon transition");
+    const char* transitionContext = TransitionContextOrDefault(context, "Map transition");
     SuspendTransitionSensitiveHooks(transitionContext);
     const bool transitioned = WaitForCondition(transitionTimeoutMs, [targetMapId, pushX, pushY]() {
         if (MapMgr::GetMapId() == targetMapId) {
@@ -674,4 +674,4 @@ PostRewardReturnResult HandlePostRewardReturn(const PostRewardReturnOptions& opt
     return result;
 }
 
-} // namespace GWA3::DungeonRuntime
+} // namespace GWA3::AdvancedRuntime
