@@ -194,6 +194,7 @@ struct SessionAggroFightProfile {
     AggroSessionActionFn on_action = nullptr;
     AggroAftercastResolverFn resolve_max_aftercast = nullptr;
     void* user_data = nullptr;
+    void* post_loot_user_data = nullptr;
     float default_max_aftercast = 3.0f;
     const char* log_prefix = "DungeonCombat";
 };

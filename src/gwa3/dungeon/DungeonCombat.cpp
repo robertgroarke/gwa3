@@ -42,6 +42,7 @@ void CallWait(WaitFn fn, uint32_t ms) {
 
 struct SessionAggroFightContext {
   const SessionAggroFightProfile* profile = nullptr;
+  void* post_loot_user_data = nullptr;
 };
 
 const SessionAggroFightProfile* g_activeSessionAggroSkillProfile = nullptr;
@@ -85,6 +86,16 @@ void RecordSessionAggroAction(void* userData, uint32_t actionStartMs) {
   }
 
   profile->on_action(profile->user_data, profile->session->last_action, actionStartMs);
+}
+
+void RecordSessionPostLoot(void* userData, float aggroRange, const char* reason) {
+  auto* context = static_cast<SessionAggroFightContext*>(userData);
+  const auto* profile = context ? context->profile : nullptr;
+  if (profile == nullptr || profile->post_loot == nullptr) {
+    return;
+  }
+
+  profile->post_loot(context->post_loot_user_data, aggroRange, reason);
 }
 
 void RecordRouteCombatTargetStats(void* userData, uint32_t targetId) {
@@ -779,6 +790,9 @@ bool FightEnemiesInAggroWithSession(float aggroRange,
 
   SessionAggroFightContext context;
   context.profile = &profile;
+  context.post_loot_user_data = profile.post_loot_user_data
+      ? profile.post_loot_user_data
+      : profile.user_data;
 
   AggroFightCallbacks callbacks = {};
   callbacks.is_dead = profile.is_dead;
@@ -787,7 +801,7 @@ bool FightEnemiesInAggroWithSession(float aggroRange,
   callbacks.record_target = &RecordSessionAggroTarget;
   callbacks.record_auto_attack = &RecordSessionFallbackAutoAttack;
   callbacks.record_action = &RecordSessionAggroAction;
-  callbacks.post_loot = profile.post_loot;
+  callbacks.post_loot = profile.post_loot ? &RecordSessionPostLoot : nullptr;
   callbacks.user_data = &context;
 
   auto fight_options = options;
@@ -821,6 +835,7 @@ void FightEnemiesInAggroFromRouteContext(float aggroRange,
   profile.on_action = &RecordRouteCombatActionStats;
   profile.resolve_max_aftercast = context->resolve_max_aftercast;
   profile.user_data = context->stats;
+  profile.post_loot_user_data = context;
   profile.default_max_aftercast = context->default_max_aftercast;
   profile.log_prefix = context->log_prefix;
 
