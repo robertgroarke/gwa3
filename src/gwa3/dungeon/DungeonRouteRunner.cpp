@@ -55,6 +55,34 @@ DungeonNavigation::WaypointMoveResult MoveStandardWaypoint(
         options.standard_waypoint_movement);
 }
 
+bool HasConfiguredLabelWaypointMovement(const RouteLabelExecutorOptions& options) {
+    return options.move_route_waypoint != nullptr ||
+           HasConfiguredStandardWaypointMovement(options.standard_waypoint_movement);
+}
+
+DungeonNavigation::WaypointMoveResult MoveLabelRouteWaypoint(
+    const DungeonRoute::Waypoint& waypoint,
+    int waypoint_index,
+    const RouteLabelExecutorOptions& options) {
+    if (options.move_route_waypoint) {
+        return options.move_route_waypoint(waypoint);
+    }
+    return DungeonNavigation::MoveRouteWaypointWithCombatLoot(
+        waypoint,
+        waypoint_index,
+        options.standard_waypoint_movement);
+}
+
+DungeonNavigation::WaypointMoveResult MoveLabelKeyWaypoint(
+    const DungeonRoute::Waypoint& waypoint,
+    int waypoint_index,
+    const RouteLabelExecutorOptions& options) {
+    if (options.move_key_waypoint) {
+        return options.move_key_waypoint(waypoint);
+    }
+    return MoveLabelRouteWaypoint(waypoint, waypoint_index, options);
+}
+
 DungeonCheckpoint::WaypointWipeRecoveryOptions BuildWipeRecoveryOptions(
     const DungeonCheckpoint::WaypointWipeRecoveryOptions& base,
     const DungeonRoute::Waypoint* waypoints,
@@ -411,13 +439,11 @@ WaypointHandlerResult ExecuteRouteLabelWaypoint(
     const auto label_kind = DungeonRoute::ClassifyWaypointLabel(waypoint.label);
     switch (label_kind) {
     case DungeonRoute::WaypointLabelKind::Blessing:
-        if (options.move_route_waypoint == nullptr || options.grab_blessing == nullptr) {
+        if (!HasConfiguredLabelWaypointMovement(options) || options.grab_blessing == nullptr) {
             return WaypointHandlerResult::NotHandled;
         }
-        (void)DungeonNavigation::HandleBlessingWaypoint(
-            waypoint,
-            options.move_route_waypoint,
-            options.grab_blessing);
+        (void)MoveLabelRouteWaypoint(waypoint, waypoint_index, options);
+        options.grab_blessing(waypoint.x, waypoint.y);
         LogRouteLabelState("post-blessing-move", waypoints, count, waypoint_index, options);
         return WaypointHandlerResult::ContinueRoute;
 
@@ -433,13 +459,10 @@ WaypointHandlerResult ExecuteRouteLabelWaypoint(
         return WaypointHandlerResult::StopRoute;
 
     case DungeonRoute::WaypointLabelKind::DungeonKey: {
-        const auto move_key = options.move_key_waypoint
-            ? options.move_key_waypoint
-            : options.move_route_waypoint;
-        if (move_key == nullptr || options.acquire_dungeon_key == nullptr) {
+        if (!HasConfiguredLabelWaypointMovement(options) || options.acquire_dungeon_key == nullptr) {
             return WaypointHandlerResult::NotHandled;
         }
-        (void)move_key(waypoint);
+        (void)MoveLabelKeyWaypoint(waypoint, waypoint_index, options);
         LogRouteLabelState("post-dungeon-key-move", waypoints, count, waypoint_index, options);
         const bool key_acquired = options.acquire_dungeon_key();
         Log::Info("%s: Dungeon Key step acquired=%d",
@@ -476,12 +499,12 @@ WaypointHandlerResult ExecuteRouteLabelWaypoint(
         return WaypointHandlerResult::ContinueRoute;
 
     case DungeonRoute::WaypointLabelKind::DungeonDoorCheckpoint: {
-        if (options.move_route_waypoint == nullptr ||
+        if (!HasConfiguredLabelWaypointMovement(options) ||
             options.move_checkpoint_waypoint == nullptr ||
             options.get_nearest_waypoint == nullptr) {
             return WaypointHandlerResult::NotHandled;
         }
-        (void)options.move_route_waypoint(waypoint);
+        (void)MoveLabelRouteWaypoint(waypoint, waypoint_index, options);
         LogRouteLabelState("post-dungeon-door-checkpoint-move", waypoints, count, waypoint_index, options);
 
         const auto recovery = RecoverRouteLabelWipeIfDead(
@@ -510,7 +533,7 @@ WaypointHandlerResult ExecuteRouteLabelWaypoint(
     }
 
     case DungeonRoute::WaypointLabelKind::QuestDoorCheckpoint: {
-        if (options.move_route_waypoint == nullptr ||
+        if (!HasConfiguredLabelWaypointMovement(options) ||
             options.move_checkpoint_waypoint == nullptr ||
             options.get_nearest_waypoint == nullptr) {
             return WaypointHandlerResult::NotHandled;
@@ -538,7 +561,7 @@ WaypointHandlerResult ExecuteRouteLabelWaypoint(
             return WaypointHandlerResult::StopRoute;
         }
 
-        (void)options.move_route_waypoint(waypoint);
+        (void)MoveLabelRouteWaypoint(waypoint, waypoint_index, options);
         LogRouteLabelState("post-quest-door-checkpoint-move", waypoints, count, waypoint_index, options);
 
         const auto recovery = RecoverRouteLabelWipeIfDead(

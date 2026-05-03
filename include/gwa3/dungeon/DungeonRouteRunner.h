@@ -149,6 +149,7 @@ struct RouteLabelExecutorOptions {
     const char* route_name = "route";
     float telemetry_nearest_enemy_range = 5000.0f;
     float telemetry_nearby_enemy_range = 1800.0f;
+    DungeonNavigation::RouteWaypointCombatLootOptions standard_waypoint_movement = {};
 };
 
 struct RouteRunOptions {

@@ -165,10 +165,6 @@ WaypointMoveResult MoveRouteWaypointWithCombatLoot(
     const DungeonRoute::Waypoint& waypoint,
     int waypointIndex,
     const RouteWaypointCombatLootOptions& options);
-bool HandleBlessingWaypoint(
-    const DungeonRoute::Waypoint& waypoint,
-    RouteWaypointMoveFn moveRouteWaypoint,
-    BlessingGrabFn grabBlessing);
 bool HandleOpenDungeonDoorWaypoint(
     const DungeonRoute::Waypoint& waypoint,
     WaypointMoveFn aggroMoveToPoint,

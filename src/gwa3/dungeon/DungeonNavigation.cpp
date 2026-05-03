@@ -347,18 +347,6 @@ WaypointMoveResult MoveRouteWaypointWithCombatLoot(
     return result;
 }
 
-bool HandleBlessingWaypoint(
-    const DungeonRoute::Waypoint& waypoint,
-    RouteWaypointMoveFn moveRouteWaypoint,
-    BlessingGrabFn grabBlessing) {
-    if (moveRouteWaypoint == nullptr || grabBlessing == nullptr) {
-        return false;
-    }
-    moveRouteWaypoint(waypoint);
-    grabBlessing(waypoint.x, waypoint.y);
-    return true;
-}
-
 bool HandleOpenDungeonDoorWaypoint(
     const DungeonRoute::Waypoint& waypoint,
     WaypointMoveFn aggroMoveToPoint,
@@ -820,34 +808,49 @@ void AggroMoveToStandard(
             }
 
             moveState.blockedCount = 0;
+            float fallbackTargetDistance = nearestDistance;
             const uint32_t bestId = DungeonSkill::GetBestBalledEnemy(localClearRange);
-            if (!bestId) {
+            const uint32_t fallbackId = bestId
+                ? bestId
+                : DungeonCombat::FindNearestLivingEnemy(localClearRange, &fallbackTargetDistance);
+            if (!fallbackId) {
+                IssueAggroMove(moveState, x, y, options.exact_move_target, true);
                 CallWait(callbacks.wait_ms, DungeonCombat::AGGRO_STANDARD_NO_BALL_DELAY_MS);
+                if (!IsAggroMoveWorldReady(callbacks)) {
+                    return;
+                }
+                HandleBlockedMoveProgress(
+                    moveState,
+                    x,
+                    y,
+                    oldX,
+                    oldY,
+                    options.exact_move_target);
                 continue;
             }
 
             if (callbacks.hold_special_local_clear != nullptr) {
                 Log::Info("%s: AggroMove holding special local clear foe=%u waypoint=(%.0f, %.0f) dist=%.0f",
                           options.log_prefix ? options.log_prefix : "Dungeon",
-                          bestId,
+                          fallbackId,
                           x,
                           y,
-                          nearestDistance);
+                          fallbackTargetDistance);
                 callbacks.hold_special_local_clear(
                     x,
                     y,
                     fightRange,
-                    bestId,
+                    fallbackId,
                     callbacks.user_data ? callbacks.user_data : callbacks.special_stats);
             } else if (callbacks.hold_local_clear != nullptr) {
                 Log::Info("%s: AggroMove holding local clear foe=%u waypoint=(%.0f, %.0f) dist=%.0f clearRange=%.0f",
                           options.log_prefix ? options.log_prefix : "Dungeon",
-                          bestId,
+                          fallbackId,
                           x,
                           y,
-                          nearestDistance,
+                          fallbackTargetDistance,
                           localClearRange);
-                callbacks.hold_local_clear("Route", x, y, fightRange, bestId, callbacks.user_data);
+                callbacks.hold_local_clear("Route", x, y, fightRange, fallbackId, callbacks.user_data);
                 if (options.use_local_clear_cooldown) {
                     ArmLocalClearCooldown(moveState, x, y);
                 }

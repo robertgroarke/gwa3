@@ -209,19 +209,6 @@ static DungeonCombat::RouteCombatContext MakeFroggyRouteCombatContext(
     return context;
 }
 
-static void FightEnemiesInAggro(float aggroRange, bool careful = false,
-                                SparkflyTraversalCombatStats* stats = nullptr,
-                                bool waitForSkillCompletion = true,
-                                DWORD maxFightMs = 240000u) {
-    auto context = MakeFroggyRouteCombatContext(stats);
-    DungeonCombat::FightEnemiesInAggroFromRouteContext(
-        aggroRange,
-        careful,
-        &context,
-        waitForSkillCompletion,
-        maxFightMs);
-}
-
 static bool MoveToAndWait(float x, float y, float threshold = DungeonNavigation::MOVE_TO_DEFAULT_THRESHOLD) {
     DungeonNavigation::LoggedMoveOptions options;
     options.log_prefix = "Froggy";
@@ -437,17 +424,26 @@ static DungeonRouteRunner::RouteStartPolicyOptions MakeFroggyRouteStartPolicy() 
     return options;
 }
 
-static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypoint(const Waypoint& waypoint) {
-    return DungeonNavigation::MoveRouteWaypoint(
+static DungeonNavigation::RouteWaypointCombatLootOptions MakeFroggyWaypointMovementOptions() {
+    DungeonNavigation::RouteWaypointCombatLootOptions options;
+    options.move_to_point = [](float x, float y, float threshold) {
+        (void)MoveToAndWait(x, y, threshold);
+    };
+    options.aggro_move_to_point = [](float x, float y, float fightRange) {
+        AggroMoveToEx(x, y, fightRange);
+    };
+    options.is_map_loaded = &IsMapLoaded;
+    options.loot_after_combat = &LootAfterCombatSweep;
+    options.log_prefix = "Froggy";
+    return options;
+}
+
+static bool MoveFroggyCheckpointWaypoint(const Waypoint& waypoint) {
+    const auto result = DungeonNavigation::MoveRouteWaypointWithCombatLoot(
         waypoint,
-        [](float x, float y, float threshold) {
-            (void)MoveToAndWait(x, y, threshold);
-        },
-        [](float x, float y, float fightRange) {
-            AggroMoveToEx(x, y, fightRange);
-        },
-        &IsMapLoaded,
-        250.0f);
+        -1,
+        MakeFroggyWaypointMovementOptions());
+    return result.reached || result.map_changed;
 }
 
 static DungeonCheckpoint::WaypointWipeRecoveryOptions MakeFroggyWipeRecoveryOptions() {
@@ -518,12 +514,7 @@ static DungeonRuntime::LevelTransitionOptions MakeFroggyLevelTransitionOptions()
 
 static DungeonRouteRunner::RouteLabelExecutorOptions MakeFroggyRouteLabelOptions() {
     DungeonRouteRunner::RouteLabelExecutorOptions options;
-    options.move_route_waypoint = &MoveFroggyRouteWaypoint;
-    options.move_key_waypoint = &MoveFroggyRouteWaypoint;
-    options.move_checkpoint_waypoint = [](const Waypoint& waypoint) {
-        (void)MoveFroggyRouteWaypoint(waypoint);
-        return true;
-    };
+    options.move_checkpoint_waypoint = &MoveFroggyCheckpointWaypoint;
     options.aggro_move_to = &AggroMoveToEx;
     options.open_dungeon_door_at = &OpenDungeonDoorAt;
     options.grab_blessing = &GrabDungeonBlessing;
@@ -545,6 +536,7 @@ static DungeonRouteRunner::RouteLabelExecutorOptions MakeFroggyRouteLabelOptions
     options.route_name = MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP ? "Sparkfly" : "Bogroot";
     options.telemetry_nearest_enemy_range = TELEMETRY_NEAREST_ENEMY_RANGE;
     options.telemetry_nearby_enemy_range = TELEMETRY_NEARBY_ENEMY_RANGE;
+    options.standard_waypoint_movement = MakeFroggyWaypointMovementOptions();
     return options;
 }
 
@@ -571,15 +563,7 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
     options.progress_telemetry.last_waypoint_label_size = sizeof(g_dungeonLoopTelemetry.last_waypoint_label);
     options.telemetry_nearest_enemy_range = TELEMETRY_NEAREST_ENEMY_RANGE;
     options.telemetry_nearby_enemy_range = TELEMETRY_NEARBY_ENEMY_RANGE;
-    options.standard_waypoint_movement.move_to_point = [](float x, float y, float threshold) {
-        (void)MoveToAndWait(x, y, threshold);
-    };
-    options.standard_waypoint_movement.aggro_move_to_point = [](float x, float y, float fightRange) {
-        AggroMoveToEx(x, y, fightRange);
-    };
-    options.standard_waypoint_movement.is_map_loaded = &IsMapLoaded;
-    options.standard_waypoint_movement.loot_after_combat = &LootAfterCombatSweep;
-    options.standard_waypoint_movement.log_prefix = "Froggy";
+    options.standard_waypoint_movement = MakeFroggyWaypointMovementOptions();
     (void)DungeonRouteRunner::RunWaypointRoute(wps, count, callbacks, options);
 }
 
@@ -1112,7 +1096,13 @@ bool DebugClearAggroInPlace(float fightRange) {
     LogBot("DebugClearAggroInPlace start fightRange=%.0f nearestBefore=%.0f", fightRange, nearestBefore);
     AgentMgr::CancelAction();
     WaitMs(100);
-    FightEnemiesInAggro(fightRange, false, &g_sparkflyTraversalCombatStats);
+    auto routeCombatContext = MakeFroggyRouteCombatContext(&g_sparkflyTraversalCombatStats);
+    DungeonCombat::FightEnemiesInAggroFromRouteContext(
+        fightRange,
+        false,
+        &routeCombatContext,
+        true,
+        240000u);
     AgentMgr::CancelAction();
     WaitMs(250);
     const float nearestAfter = DungeonCombat::GetNearestLivingEnemyDistance(fightRange + 500.0f);
