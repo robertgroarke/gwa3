@@ -1,9 +1,9 @@
-#include <gwa3/dungeon/DungeonTravel.h>
+#include <gwa3/advanced/Travel.h>
 #include <gwa3/managers/MapMgr.h>
 
 #include <Windows.h>
 
-namespace GWA3::DungeonTravel {
+namespace GWA3::AdvancedTravel {
 
 namespace {
 
@@ -102,5 +102,5 @@ RandomDistrictTravelPlan TravelRandomDistrict(
     return plan;
 }
 
-} // namespace GWA3::DungeonTravel
+} // namespace GWA3::AdvancedTravel
 

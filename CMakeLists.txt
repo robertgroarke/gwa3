@@ -109,7 +109,7 @@ src/gwa3/managers/MerchantMgr.cpp
     src/gwa3/advanced/Loot.cpp
     src/gwa3/advanced/Waypoint.cpp
     src/gwa3/dungeon/DungeonLoot.cpp
-    src/gwa3/dungeon/DungeonOutpostSetup.cpp
+    src/gwa3/advanced/OutpostSetup.cpp
     src/gwa3/advanced/QuestPlan.cpp
     src/gwa3/dungeon/DungeonQuestRuntime.cpp
     src/gwa3/dungeon/DungeonRouteRunner.cpp
@@ -122,7 +122,7 @@ src/gwa3/managers/MerchantMgr.cpp
     bots/kathandrax/KathandraxBot.cpp
     src/gwa3/dungeon/DungeonNavigation.cpp
     src/gwa3/dungeon/DungeonRoute.cpp
-    src/gwa3/dungeon/DungeonTravel.cpp
+    src/gwa3/advanced/Travel.cpp
     bots/ravens_point/RavensPoint.cpp
     bots/ravens_point/RavensPointBot.cpp
     bots/rragars_menagerie/RragarsMenagerie.cpp

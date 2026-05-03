@@ -1,4 +1,4 @@
-#include <gwa3/dungeon/DungeonOutpostSetup.h>
+#include <gwa3/advanced/OutpostSetup.h>
 
 #include <gwa3/core/Log.h>
 #include <gwa3/managers/MapMgr.h>
@@ -14,7 +14,7 @@
 #include <cstring>
 #include <string>
 
-namespace GWA3::DungeonOutpostSetup {
+namespace GWA3::AdvancedOutpostSetup {
 
 namespace {
 
@@ -435,7 +435,7 @@ bool ApplyOutpostSetup(Config& cfg, const Options& options) {
                                        options.default_hero_config_file);
     }
     cfg.hero_config_file = hero_config_file;
-    GWA3::Log::Info("Dungeon outpost setup using hero config: %s", cfg.hero_config_file.c_str());
+    GWA3::Log::Info("Outpost setup using hero config: %s", cfg.hero_config_file.c_str());
 
     std::array<uint32_t, kMaxHeroTemplates> fallback_hero_ids = {};
     for (std::size_t i = 0; i < fallback_hero_ids.size(); ++i) {
@@ -443,10 +443,10 @@ bool ApplyOutpostSetup(Config& cfg, const Options& options) {
     }
 
     if (PartyMgr::CountPartyHeroes() > 0u) {
-        GWA3::Log::Info("Clearing %u existing heroes before dungeon setup", PartyMgr::CountPartyHeroes());
+        GWA3::Log::Info("Clearing %u existing heroes before outpost setup", PartyMgr::CountPartyHeroes());
         PartyMgr::KickAllHeroes();
         if (!WaitForHeroesCleared(options.clear_timeout_ms, options.clear_poll_interval_ms)) {
-            GWA3::Log::Info("Dungeon outpost setup failed: heroes did not clear");
+            GWA3::Log::Info("Outpost setup failed: heroes did not clear");
             return false;
         }
     }
@@ -468,7 +468,7 @@ bool ApplyOutpostSetup(Config& cfg, const Options& options) {
             if (!WaitForHeroCount(static_cast<uint32_t>(i + 1u),
                                   options.add_hero_timeout_ms,
                                   options.clear_poll_interval_ms)) {
-                GWA3::Log::Info("Dungeon outpost setup failed: hero %u did not join slot %zu",
+                GWA3::Log::Info("Outpost setup failed: hero %u did not join slot %zu",
                        templates[i].hero_id,
                        i + 1u);
                 return false;
@@ -483,7 +483,7 @@ bool ApplyOutpostSetup(Config& cfg, const Options& options) {
             WaitMs(options.skillbar_delay_ms);
         }
     } else {
-        GWA3::Log::Info("Dungeon outpost setup falling back to preconfigured hero ids");
+        GWA3::Log::Info("Outpost setup falling back to preconfigured hero ids");
         for (std::size_t i = 0; i < fallback_hero_ids.size(); ++i) {
             const uint32_t hero_id = fallback_hero_ids[i];
             if (hero_id == 0u) {
@@ -494,7 +494,7 @@ bool ApplyOutpostSetup(Config& cfg, const Options& options) {
             if (!WaitForHeroCount(active_hero_count + 1u,
                                   options.add_hero_timeout_ms,
                                   options.clear_poll_interval_ms)) {
-                GWA3::Log::Info("Dungeon outpost setup failed: fallback hero %u did not join", hero_id);
+                GWA3::Log::Info("Outpost setup failed: fallback hero %u did not join", hero_id);
                 return false;
             }
             ++active_hero_count;
@@ -503,7 +503,7 @@ bool ApplyOutpostSetup(Config& cfg, const Options& options) {
     }
 
     if (active_hero_count == 0u) {
-        GWA3::Log::Info("Dungeon outpost setup failed: no heroes configured");
+        GWA3::Log::Info("Outpost setup failed: no heroes configured");
         return false;
     }
 
@@ -517,10 +517,10 @@ bool ApplyOutpostSetup(Config& cfg, const Options& options) {
         WaitMs(options.hero_behavior_delay_ms);
     }
 
-    GWA3::Log::Info("Dungeon outpost setup complete: heroes=%u hardMode=%u",
+    GWA3::Log::Info("Outpost setup complete: heroes=%u hardMode=%u",
            active_hero_count,
            (cfg.hard_mode && options.enable_hard_mode) ? 1u : 0u);
     return true;
 }
 
-} // namespace GWA3::DungeonOutpostSetup
+} // namespace GWA3::AdvancedOutpostSetup
