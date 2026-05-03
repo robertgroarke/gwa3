@@ -1,7 +1,6 @@
-#include <gwa3/dungeon/DungeonCombatRoutine.h>
+#include <gwa3/advanced/CombatRoutine.h>
 
 #include <gwa3/core/Log.h>
-#include <gwa3/dungeon/DungeonCombat.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/SkillMgr.h>
@@ -14,7 +13,7 @@
 #include <cmath>
 #include <iterator>
 
-namespace GWA3::DungeonCombatRoutine {
+namespace GWA3::AdvancedCombatRoutine {
 
 namespace {
 
@@ -40,7 +39,27 @@ AutoAttackFn ResolveAutoAttack(AutoAttackFn autoAttack) {
     return autoAttack ? autoAttack : &DefaultAutoAttack;
 }
 
-void LogSkillCacheSummary(const DungeonSkill::CachedSkill cache[8]) {
+float GetNearestLivingEnemyDistance() {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) return 99999.0f;
+
+    float nearestSq = 99999.0f * 99999.0f;
+    const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1u; i < maxAgents; ++i) {
+        auto* agent = AgentMgr::GetAgentByID(i);
+        if (!agent || agent->type != 0xDBu) continue;
+
+        auto* living = static_cast<AgentLiving*>(agent);
+        if (living->allegiance != 3u || living->hp <= 0.0f) continue;
+
+        const float distSq = AgentMgr::GetSquaredDistance(me->x, me->y, living->x, living->y);
+        if (distSq < nearestSq) nearestSq = distSq;
+    }
+
+    return std::sqrt(nearestSq);
+}
+
+void LogSkillCacheSummary(const AdvancedSkill::CachedSkill cache[8]) {
     Log::Info("DungeonCombatRoutine: Skillbar cached (bitmask roles): %u/%u/%u/%u/%u/%u/%u/%u",
               cache[0].skill_id,
               cache[1].skill_id,
@@ -52,7 +71,7 @@ void LogSkillCacheSummary(const DungeonSkill::CachedSkill cache[8]) {
               cache[7].skill_id);
 }
 
-void LogSkillCacheSlot(int slotIndex, const DungeonSkill::CachedSkill& skill) {
+void LogSkillCacheSlot(int slotIndex, const AdvancedSkill::CachedSkill& skill) {
     Log::Info("DungeonCombatRoutine: cache slot=%d skill=%u roles=0x%X targetType=%u energy=%u type=%u activation=%.2f recharge=%.2f",
               slotIndex + 1,
               skill.skill_id,
@@ -65,7 +84,7 @@ void LogSkillCacheSlot(int slotIndex, const DungeonSkill::CachedSkill& skill) {
 }
 
 bool WaitForSkillCastLatch(int slotIndex,
-                           const DungeonSkill::CachedSkill& skill,
+                           const AdvancedSkill::CachedSkill& skill,
                            const SkillCastTiming& timing,
                            uint32_t rechargeBefore,
                            uint32_t eventBefore,
@@ -94,7 +113,7 @@ bool WaitForSkillCastLatch(int slotIndex,
     return false;
 }
 
-void WaitForSkillCastClear(const DungeonSkill::CachedSkill& skill,
+void WaitForSkillCastClear(const AdvancedSkill::CachedSkill& skill,
                            bool sawCastLatch,
                            SkillExecutionContext& context,
                            const SkillCastTimingOptions& options) {
@@ -140,7 +159,7 @@ bool TryUseFirstFoeTargetSkill(
         if (cached.target_type != 5u) {
             continue;
         }
-        if (!DungeonSkill::CanUseSkill(cached, targetId, options.aggro_range)) {
+        if (!AdvancedSkill::CanUseSkill(cached, targetId, options.aggro_range)) {
             continue;
         }
 
@@ -165,7 +184,7 @@ void ExecuteQuickDebugCombatStep(
     PrepareDebugCombatTarget(session, targetId, options.log_prefix);
     bool attacked = false;
     const AutoAttackFn autoAttack = ResolveAutoAttack(options.auto_attack);
-    if (DungeonSkill::CanBasicAttack()) {
+    if (AdvancedSkill::CanBasicAttack()) {
         autoAttack(targetId);
         attacked = true;
     }
@@ -180,7 +199,7 @@ void ExecuteQuickDebugCombatStep(
         RecordAutoAttackAction(
             session,
             targetId,
-            DungeonSkill::ROLE_ATTACK | DungeonSkill::ROLE_OFFENSIVE);
+            AdvancedSkill::ROLE_ATTACK | AdvancedSkill::ROLE_OFFENSIVE);
     }
 }
 
@@ -197,7 +216,7 @@ void ExecuteFoeTargetPreferredDebugCombatStep(
 
     bool attacked = false;
     const AutoAttackFn autoAttack = ResolveAutoAttack(options.auto_attack);
-    if (DungeonSkill::CanBasicAttack()) {
+    if (AdvancedSkill::CanBasicAttack()) {
         autoAttack(targetId);
         attacked = true;
     }
@@ -212,7 +231,7 @@ void ExecuteFoeTargetPreferredDebugCombatStep(
         RecordAutoAttackAction(
             session,
             targetId,
-            DungeonSkill::ROLE_ATTACK | DungeonSkill::ROLE_OFFENSIVE);
+            AdvancedSkill::ROLE_ATTACK | AdvancedSkill::ROLE_OFFENSIVE);
     }
 }
 
@@ -263,7 +282,7 @@ void DumpBuiltinCombatTargetHeader(
 void DumpBuiltinCombatSkillSlot(
     CombatSessionState& session,
     int slotIndex,
-    const DungeonSkill::CachedSkill& skill,
+    const AdvancedSkill::CachedSkill& skill,
     uint32_t targetId,
     const char* logPrefix) {
     const int displaySlot = slotIndex + 1;
@@ -279,8 +298,8 @@ void DumpBuiltinCombatSkillSlot(
         skill,
         slotIndex,
         targetId,
-        DungeonSkill::ROLE_OFFENSIVE | DungeonSkill::ROLE_ATTACK);
-    const char* canUseReason = DungeonSkill::ExplainCanUseSkillFailure(skill, targetId);
+        AdvancedSkill::ROLE_OFFENSIVE | AdvancedSkill::ROLE_ATTACK);
+    const char* canUseReason = AdvancedSkill::ExplainCanUseSkillFailure(skill, targetId);
     AddDecisionDumpLine(
         session,
         "slot=%d skill=%u roles=0x%X match=%d recharge=%u ready=%d e=%u/%0.1f adren=%u/%u canCast=%d canUse=%d castReason=%s useReason=%s target=%u tgtType=%u type=%u",
@@ -320,7 +339,7 @@ void DumpBuiltinCombatSkillSlot(
 } // namespace
 
 SkillExecutionContext MakeSkillExecutionContext(
-    DungeonSkill::CachedSkill* skillCache,
+    AdvancedSkill::CachedSkill* skillCache,
     bool* skillUsedThisStep,
     std::size_t skillCount,
     WaitFn waitMs,
@@ -351,12 +370,12 @@ void ResetUsedSkills(CombatSessionState& session) {
 }
 
 bool RefreshSkillCache(CombatSessionState& session,
-                       const DungeonSkill::SkillCacheLogCallbacks* logCallbacks) {
-    return DungeonSkill::CacheSkillBar(session.skill_cache, session.skills_cached, logCallbacks);
+                       const AdvancedSkill::SkillCacheLogCallbacks* logCallbacks) {
+    return AdvancedSkill::CacheSkillBar(session.skill_cache, session.skills_cached, logCallbacks);
 }
 
 bool RefreshSkillCacheWithDebugLog(CombatSessionState& session, const char*) {
-    static constexpr DungeonSkill::SkillCacheLogCallbacks kLogCallbacks = {
+    static constexpr AdvancedSkill::SkillCacheLogCallbacks kLogCallbacks = {
         &LogSkillCacheSummary,
         &LogSkillCacheSlot
     };
@@ -469,7 +488,7 @@ const char* GetDecisionDumpLine(const CombatSessionState& session, int index) {
 
 SkillActionResult MakeSkillActionResult(
     int slotIndex,
-    const DungeonSkill::CachedSkill& skill,
+    const AdvancedSkill::CachedSkill& skill,
     uint32_t resolvedTarget,
     uint32_t startedAtMs) {
     SkillActionResult action;
@@ -572,13 +591,13 @@ bool TryUseSkillIndex(
     if (cached.energy_cost > static_cast<uint8_t>(myEnergy)) {
         return false;
     }
-    if (!DungeonSkill::CanUseSkill(cached, targetId)) {
+    if (!AdvancedSkill::CanUseSkill(cached, targetId)) {
         return false;
     }
 
-    const uint32_t resolvedTarget = DungeonSkill::ResolveSkillTarget(cached, targetId);
+    const uint32_t resolvedTarget = AdvancedSkill::ResolveSkillTarget(cached, targetId);
     if (resolvedTarget == 0u &&
-        DungeonSkill::SkillTargetTypeRequiresResolvedTarget(cached.target_type)) {
+        AdvancedSkill::SkillTargetTypeRequiresResolvedTarget(cached.target_type)) {
         return false;
     }
 
@@ -590,7 +609,7 @@ bool TryUseSkillIndex(
     const DWORD castStart = GetTickCount();
     while ((GetTickCount() - castStart) < kUseSkillTimeoutMs) {
         if (IsDead(context.is_dead)) break;
-        if (!DungeonSkill::CanCast(cached)) break;
+        if (!AdvancedSkill::CanCast(cached)) break;
         WaitOrSleep(context.wait_ms, 50u);
     }
 
@@ -635,15 +654,15 @@ SkillUseResolution ResolveSkillUseTarget(
         return resolution;
     }
 
-    resolution.resolved_target = DungeonSkill::ResolveSkillTarget(cached, targetId, aggroRange);
-    if (!DungeonSkill::CanUseSkill(cached, targetId, aggroRange)) {
+    resolution.resolved_target = AdvancedSkill::ResolveSkillTarget(cached, targetId, aggroRange);
+    if (!AdvancedSkill::CanUseSkill(cached, targetId, aggroRange)) {
         resolution.status = SkillUseResolutionStatus::CannotUse;
-        resolution.failure_reason = DungeonSkill::ExplainCanUseSkillFailure(cached, targetId, aggroRange);
+        resolution.failure_reason = AdvancedSkill::ExplainCanUseSkillFailure(cached, targetId, aggroRange);
         return resolution;
     }
 
     if (resolution.resolved_target == 0u &&
-        DungeonSkill::SkillTargetTypeRequiresResolvedTarget(cached.target_type)) {
+        AdvancedSkill::SkillTargetTypeRequiresResolvedTarget(cached.target_type)) {
         resolution.status = SkillUseResolutionStatus::MissingResolvedTarget;
         return resolution;
     }
@@ -811,7 +830,7 @@ bool TryUseSkillSlotTracked(
 
 SkillCastTiming BuildSkillCastTiming(
     int slotIndex,
-    const DungeonSkill::CachedSkill& skill,
+    const AdvancedSkill::CachedSkill& skill,
     const SkillCastTimingOptions& options) {
     const auto* skillData = SkillMgr::GetSkillConstantData(skill.skill_id);
     SkillCastTiming timing = {};
@@ -840,7 +859,7 @@ SkillCastTiming BuildSkillCastTiming(
 
 void WaitForSkillCastCompletion(
     int slotIndex,
-    const DungeonSkill::CachedSkill& skill,
+    const AdvancedSkill::CachedSkill& skill,
     const SkillCastTiming& timing,
     uint32_t rechargeBefore,
     uint32_t eventBefore,
@@ -923,7 +942,7 @@ int UseSkillsInSlotOrderTracked(
             ++usedCount;
         }
         if (options.stop_when_enemy_out_of_range &&
-            DungeonCombat::GetNearestLivingEnemyDistance() > options.aggro_range) {
+            GetNearestLivingEnemyDistance() > options.aggro_range) {
             break;
         }
     }
@@ -987,7 +1006,7 @@ void FightTarget(
     }
 
     bool attacked = false;
-    if (targetId != 0 && DungeonSkill::CanBasicAttack()) {
+    if (targetId != 0 && AdvancedSkill::CanBasicAttack()) {
         DebugLog(session, prefix, "FightTarget opening auto-attack target=%u before slot sweep", targetId);
         autoAttack(targetId);
         attacked = true;
@@ -1005,7 +1024,7 @@ void FightTarget(
             session,
             "auto_attack target=%u",
             targetId,
-            DungeonSkill::ROLE_ATTACK | DungeonSkill::ROLE_OFFENSIVE);
+            AdvancedSkill::ROLE_ATTACK | AdvancedSkill::ROLE_OFFENSIVE);
         FinishLastAction(session);
     }
 }
@@ -1033,70 +1052,70 @@ bool ExecuteBuiltinPriorityStep(
 
     SkillActionResult lastAction = {};
 
-    const uint32_t lowestAlly = DungeonSkill::GetLowestHealthAlly();
+    const uint32_t lowestAlly = AdvancedSkill::GetLowestHealthAlly();
     if (lowestAlly != 0u) {
         auto* ally = AgentMgr::GetAgentByID(lowestAlly);
         if (ally && ally->type == 0xDBu) {
             const auto* allyLiving = static_cast<AgentLiving*>(ally);
             if (allyLiving->hp < 0.3f && allyLiving->hp > 0.0f &&
-                TryUseSkillWithRole(lowestAlly, DungeonSkill::ROLE_ANY_HEAL, context, outAction)) {
+                TryUseSkillWithRole(lowestAlly, AdvancedSkill::ROLE_ANY_HEAL, context, outAction)) {
                 return true;
             }
         }
     }
 
-    const uint32_t deadAlly = DungeonSkill::GetDeadAlly();
+    const uint32_t deadAlly = AdvancedSkill::GetDeadAlly();
     if (deadAlly != 0u &&
-        TryUseSkillWithRole(deadAlly, DungeonSkill::ROLE_RESURRECT, context, outAction)) {
+        TryUseSkillWithRole(deadAlly, AdvancedSkill::ROLE_RESURRECT, context, outAction)) {
         return true;
     }
 
     if (me->hp < 0.3f) {
-        if (TryUseSkillWithRole(targetId, DungeonSkill::ROLE_SURVIVAL, context, outAction)) return true;
-        if (TryUseSkillWithRole(me->agent_id, DungeonSkill::ROLE_ANY_HEAL, context, outAction)) return true;
-        if (TryUseSkillWithRole(targetId, DungeonSkill::ROLE_PROT | DungeonSkill::ROLE_DEFENSIVE, context, outAction)) {
+        if (TryUseSkillWithRole(targetId, AdvancedSkill::ROLE_SURVIVAL, context, outAction)) return true;
+        if (TryUseSkillWithRole(me->agent_id, AdvancedSkill::ROLE_ANY_HEAL, context, outAction)) return true;
+        if (TryUseSkillWithRole(targetId, AdvancedSkill::ROLE_PROT | AdvancedSkill::ROLE_DEFENSIVE, context, outAction)) {
             return true;
         }
     }
 
     if (me->hex != 0u) {
-        if (TryUseSkillWithRole(me->agent_id, DungeonSkill::ROLE_HEX_REMOVE | DungeonSkill::ROLE_COND_REMOVE,
+        if (TryUseSkillWithRole(me->agent_id, AdvancedSkill::ROLE_HEX_REMOVE | AdvancedSkill::ROLE_COND_REMOVE,
                                 context, lastAction)) {
             outAction = lastAction;
         }
     }
 
-    const uint32_t castingFoe = DungeonSkill::GetCastingEnemy();
+    const uint32_t castingFoe = AdvancedSkill::GetCastingEnemy();
     if (castingFoe != 0u) {
-        if (TryUseSkillWithRole(castingFoe, DungeonSkill::ROLE_INTERRUPT_HARD, context, outAction)) {
+        if (TryUseSkillWithRole(castingFoe, AdvancedSkill::ROLE_INTERRUPT_HARD, context, outAction)) {
             return true;
         }
-        if (TryUseSkillWithRole(castingFoe, DungeonSkill::ROLE_INTERRUPT_SOFT, context, outAction)) {
+        if (TryUseSkillWithRole(castingFoe, AdvancedSkill::ROLE_INTERRUPT_SOFT, context, outAction)) {
             return true;
         }
     }
 
-    if (UseAllSkillsWithRole(targetId, DungeonSkill::ROLE_PRECAST | DungeonSkill::ROLE_SHOUT, 8, context, &lastAction) > 0) {
+    if (UseAllSkillsWithRole(targetId, AdvancedSkill::ROLE_PRECAST | AdvancedSkill::ROLE_SHOUT, 8, context, &lastAction) > 0) {
         outAction = lastAction;
     }
-    if (UseAllSkillsWithRole(targetId, DungeonSkill::ROLE_HEX | DungeonSkill::ROLE_PRESSURE, 8, context, &lastAction) > 0) {
+    if (UseAllSkillsWithRole(targetId, AdvancedSkill::ROLE_HEX | AdvancedSkill::ROLE_PRESSURE, 8, context, &lastAction) > 0) {
         outAction = lastAction;
     }
 
-    const uint32_t enchantedFoe = DungeonSkill::GetEnchantedEnemy();
+    const uint32_t enchantedFoe = AdvancedSkill::GetEnchantedEnemy();
     if (enchantedFoe != 0u &&
-        TryUseSkillWithRole(enchantedFoe, DungeonSkill::ROLE_ENCHANT_REMOVE, context, outAction)) {
+        TryUseSkillWithRole(enchantedFoe, AdvancedSkill::ROLE_ENCHANT_REMOVE, context, outAction)) {
         return true;
     }
 
-    if (TryUseSkillWithRole(targetId, DungeonSkill::ROLE_OFFENSIVE | DungeonSkill::ROLE_ATTACK, context, outAction)) {
+    if (TryUseSkillWithRole(targetId, AdvancedSkill::ROLE_OFFENSIVE | AdvancedSkill::ROLE_ATTACK, context, outAction)) {
         return true;
     }
 
     if (autoAttack) {
         outAction = MakeAutoAttackActionResult(
             targetId,
-            DungeonSkill::ROLE_ATTACK | DungeonSkill::ROLE_OFFENSIVE);
+            AdvancedSkill::ROLE_ATTACK | AdvancedSkill::ROLE_OFFENSIVE);
         autoAttack(targetId);
         outAction.finished_at_ms = GetTickCount();
         return true;
@@ -1187,7 +1206,7 @@ bool RefreshCombatSkillbarForDebug(
         if (session.skill_cache[i].skill_id != 0u) {
             hasNonZero = true;
         }
-        if (session.skill_cache[i].roles != DungeonSkill::ROLE_NONE) {
+        if (session.skill_cache[i].roles != AdvancedSkill::ROLE_NONE) {
             hasClassifiedRole = true;
         }
     }
@@ -1205,10 +1224,10 @@ bool ResolveSyntheticSkillTarget(
     uint8_t targetType,
     uint32_t defaultFoeId,
     uint32_t& outTargetId) {
-    DungeonSkill::CachedSkill synthetic = {};
+    AdvancedSkill::CachedSkill synthetic = {};
     synthetic.roles = roleMask;
     synthetic.target_type = targetType;
-    outTargetId = DungeonSkill::ResolveSkillTarget(synthetic, defaultFoeId);
+    outTargetId = AdvancedSkill::ResolveSkillTarget(synthetic, defaultFoeId);
     return AgentMgr::GetMyAgent() != nullptr;
 }
 
@@ -1234,12 +1253,12 @@ bool ResolveUsableSkillTargetForSlot(
     if (cached.skill_id == 0u) {
         return false;
     }
-    if (!DungeonSkill::CanUseSkill(cached, defaultFoeId)) {
+    if (!AdvancedSkill::CanUseSkill(cached, defaultFoeId)) {
         return false;
     }
 
-    const uint32_t resolvedTarget = DungeonSkill::ResolveSkillTarget(cached, defaultFoeId);
-    if (resolvedTarget == 0u && DungeonSkill::SkillTargetTypeRequiresResolvedTarget(cached.target_type)) {
+    const uint32_t resolvedTarget = AdvancedSkill::ResolveSkillTarget(cached, defaultFoeId);
+    if (resolvedTarget == 0u && AdvancedSkill::SkillTargetTypeRequiresResolvedTarget(cached.target_type)) {
         return false;
     }
 
@@ -1273,7 +1292,7 @@ void DumpBuiltinCombatDecision(
 }
 
 SkillCandidateInspection InspectSkillCandidate(
-    const DungeonSkill::CachedSkill& skill,
+    const AdvancedSkill::CachedSkill& skill,
     int slotIndex,
     uint32_t targetId,
     uint32_t roleMask) {
@@ -1294,10 +1313,10 @@ SkillCandidateInspection InspectSkillCandidate(
     inspection.recharge_ready = inspection.recharge == 0u;
     inspection.current_energy = me->energy * me->max_energy;
     inspection.energy_ready = skill.energy_cost <= static_cast<uint8_t>(inspection.current_energy);
-    inspection.can_cast = DungeonSkill::CanCast(skill);
-    inspection.can_use = DungeonSkill::CanUseSkill(skill, targetId);
-    inspection.can_cast_reason = DungeonSkill::ExplainCanCastFailure(skill);
-    inspection.resolved_target = DungeonSkill::ResolveSkillTarget(skill, targetId);
+    inspection.can_cast = AdvancedSkill::CanCast(skill);
+    inspection.can_use = AdvancedSkill::CanUseSkill(skill, targetId);
+    inspection.can_cast_reason = AdvancedSkill::ExplainCanCastFailure(skill);
+    inspection.resolved_target = AdvancedSkill::ResolveSkillTarget(skill, targetId);
 
     const auto* skillData = SkillMgr::GetSkillConstantData(skill.skill_id);
     inspection.adrenaline_required = skillData ? skillData->adrenaline : 0u;
@@ -1305,4 +1324,4 @@ SkillCandidateInspection InspectSkillCandidate(
     return inspection;
 }
 
-} // namespace GWA3::DungeonCombatRoutine
+} // namespace GWA3::AdvancedCombatRoutine

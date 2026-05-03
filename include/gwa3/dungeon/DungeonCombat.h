@@ -1,13 +1,9 @@
 #pragma once
 
+#include <gwa3/dungeon/DungeonCombatRoutine.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
 
 #include <cstdint>
-
-namespace GWA3::DungeonCombatRoutine {
-struct CombatSessionState;
-struct SkillActionResult;
-} // namespace GWA3::DungeonCombatRoutine
 
 namespace GWA3::DungeonCombat {
 
