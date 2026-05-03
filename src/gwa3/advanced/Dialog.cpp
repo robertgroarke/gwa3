@@ -1,4 +1,4 @@
-#include <gwa3/dungeon/DungeonDialog.h>
+#include <gwa3/advanced/Dialog.h>
 
 #include <gwa3/core/DialogHook.h>
 #include <gwa3/core/Log.h>
@@ -8,7 +8,7 @@
 
 #include <Windows.h>
 
-namespace GWA3::DungeonDialog {
+namespace GWA3::AdvancedDialog {
 
 DialogSnapshot CaptureDialogSnapshot() {
     DialogSnapshot snapshot = {};
@@ -44,7 +44,7 @@ bool IsDialogOpenFromSenderWithButton(uint32_t senderAgentId, uint32_t dialogId)
 }
 
 void LogDialogButtons(const char* log_prefix, const char* label) {
-    const char* prefix = log_prefix ? log_prefix : "DungeonDialog";
+    const char* prefix = log_prefix ? log_prefix : "AdvancedDialog";
     const char* logLabel = label ? label : "Dialog buttons";
     const DialogSnapshot snapshot = CaptureDialogSnapshot();
     Log::Info("%s: %s dialogOpen=%d sender=%u buttons=%u lastDialog=0x%X",
@@ -71,7 +71,7 @@ bool AdvanceDialogToButton(uint32_t targetDialogId, const DialogAdvanceOptions& 
         return false;
     }
 
-    const char* prefix = options.log_prefix != nullptr ? options.log_prefix : "DungeonDialog";
+    const char* prefix = options.log_prefix != nullptr ? options.log_prefix : "AdvancedDialog";
     const char* label = options.label != nullptr ? options.label : "AdvanceDialogToButton";
 
     for (int pass = 0; pass < options.max_passes; ++pass) {
@@ -188,4 +188,4 @@ bool SendDialogSequenceRepeated(
     return true;
 }
 
-} // namespace GWA3::DungeonDialog
+} // namespace GWA3::AdvancedDialog

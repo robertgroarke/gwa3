@@ -1,10 +1,10 @@
-#include <gwa3/dungeon/DungeonItemPolicy.h>
+#include <gwa3/advanced/ItemPolicy.h>
 
-#include <gwa3/dungeon/DungeonInventory.h>
+#include <gwa3/advanced/Inventory.h>
 #include <gwa3/game/Item.h>
 #include <gwa3/game/ItemModelIds.h>
 
-namespace GWA3::DungeonItemPolicy {
+namespace GWA3::AdvancedItemPolicy {
 
 namespace {
 
@@ -49,9 +49,9 @@ bool ShouldSalvageItem(const Item* item) {
     if (!item || item->item_id == 0u || item->model_id == 0u) return false;
     if (item->equipped || item->customized) return false;
 
-    const uint16_t rarity = DungeonInventory::GetItemRarity(item);
-    if (rarity != DungeonInventory::RARITY_WHITE &&
-        rarity != DungeonInventory::RARITY_BLUE) {
+    const uint16_t rarity = AdvancedInventory::GetItemRarity(item);
+    if (rarity != AdvancedInventory::RARITY_WHITE &&
+        rarity != AdvancedInventory::RARITY_BLUE) {
         return false;
     }
 
@@ -67,28 +67,28 @@ bool ShouldSellItem(const Item* item) {
     if (!item || item->item_id == 0u || item->model_id == 0u) return false;
     if (item->equipped || item->customized) return false;
 
-    const uint16_t rarity = DungeonInventory::GetItemRarity(item);
-    if (rarity == DungeonInventory::RARITY_GREEN) return false;
-    if ((rarity == DungeonInventory::RARITY_GOLD ||
-         rarity == DungeonInventory::RARITY_PURPLE) &&
-        !DungeonInventory::IsIdentified(item)) {
+    const uint16_t rarity = AdvancedInventory::GetItemRarity(item);
+    if (rarity == AdvancedInventory::RARITY_GREEN) return false;
+    if ((rarity == AdvancedInventory::RARITY_GOLD ||
+         rarity == AdvancedInventory::RARITY_PURPLE) &&
+        !AdvancedInventory::IsIdentified(item)) {
         return false;
     }
 
     if (IsProtectedModel(item->model_id)) return false;
-    if (rarity == DungeonInventory::RARITY_WHITE) return true;
-    if (rarity == DungeonInventory::RARITY_BLUE &&
-        DungeonInventory::IsIdentified(item)) {
+    if (rarity == AdvancedInventory::RARITY_WHITE) return true;
+    if (rarity == AdvancedInventory::RARITY_BLUE &&
+        AdvancedInventory::IsIdentified(item)) {
         return true;
     }
-    if (DungeonInventory::IsIdentified(item) && item->value < 100u) return true;
+    if (AdvancedInventory::IsIdentified(item) && item->value < 100u) return true;
     return false;
 }
 
 bool ShouldStoreItem(const Item* item) {
     if (!item || item->item_id == 0u) return false;
     if (IsStoredValuableModel(item->model_id)) return true;
-    return DungeonInventory::GetItemRarity(item) == DungeonInventory::RARITY_GREEN;
+    return AdvancedInventory::GetItemRarity(item) == AdvancedInventory::RARITY_GREEN;
 }
 
-} // namespace GWA3::DungeonItemPolicy
+} // namespace GWA3::AdvancedItemPolicy

@@ -1,7 +1,7 @@
-#include <gwa3/dungeon/DungeonEffects.h>
+#include <gwa3/advanced/Effects.h>
 
 #include <gwa3/core/Log.h>
-#include <gwa3/dungeon/DungeonDialog.h>
+#include <gwa3/advanced/Dialog.h>
 #include <gwa3/dungeon/DungeonInteractions.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
 #include <gwa3/game/SkillIds.h>
@@ -12,7 +12,7 @@
 
 #include <Windows.h>
 
-namespace GWA3::DungeonEffects {
+namespace GWA3::AdvancedEffects {
 
 namespace {
 
@@ -144,7 +144,7 @@ BlessingAcquireResult TryAcquireBlessingAt(
         Sleep(options.interact_delay_ms);
     }
 
-    result.dialog_sent = DungeonDialog::SendDialogWithRetry(
+    result.dialog_sent = AdvancedDialog::SendDialogWithRetry(
         options.accept_dialog_id,
         options.dialog_retries,
         options.dialog_delay_ms);
@@ -161,7 +161,7 @@ BlessingAcquireResult TryAcquireBlessingAt(
 BlessingAcquireResult AcquireDungeonBlessingAt(
     float shrineX,
     float shrineY,
-    const DungeonBlessingAcquireOptions& options) {
+    const BlessingInteractionOptions& options) {
     BlessingAcquireResult result;
     result.final_title_id = PlayerMgr::GetActiveTitleId();
     const char* prefix = options.log_prefix != nullptr ? options.log_prefix : "Dungeon blessing";
@@ -246,7 +246,7 @@ BlessingAcquireResult AcquireDungeonBlessingAt(
         dialogOptions.candidate_index = candidateIndex;
         dialogOptions.log_prefix = prefix;
         dialogOptions.wait_ms = options.wait_ms;
-        dialogOptions.stop_condition = &DungeonEffects::HasBlessing;
+        dialogOptions.stop_condition = &AdvancedEffects::HasBlessing;
         const auto dialogResult = DungeonInteractions::InteractCandidateAndSendDialog(candidate, dialogOptions);
         result.interacted = dialogResult.interacted || result.interacted;
         result.dialog_sent = dialogResult.dialog_sent || result.dialog_sent;
@@ -262,4 +262,4 @@ BlessingAcquireResult AcquireDungeonBlessingAt(
     return result;
 }
 
-} // namespace GWA3::DungeonEffects
+} // namespace GWA3::AdvancedEffects

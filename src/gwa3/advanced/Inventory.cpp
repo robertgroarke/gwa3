@@ -1,11 +1,11 @@
-#include <gwa3/dungeon/DungeonInventory.h>
+#include <gwa3/advanced/Inventory.h>
 
 #include <gwa3/core/Log.h>
 #include <gwa3/managers/ItemMgr.h>
 
 #include <Windows.h>
 
-namespace GWA3::DungeonInventory {
+namespace GWA3::AdvancedInventory {
 
 uint16_t GetItemRarity(const Item* item) {
     if (!item) return 0u;
@@ -118,4 +118,4 @@ UnclaimedItemClaimResult ClaimUnclaimedItemsByModel(const UnclaimedItemClaimOpti
     return result;
 }
 
-} // namespace GWA3::DungeonInventory
+} // namespace GWA3::AdvancedInventory

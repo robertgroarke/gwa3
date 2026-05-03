@@ -99,13 +99,13 @@ src/gwa3/managers/MerchantMgr.cpp
     src/gwa3/dungeon/DungeonCombatRoutine.cpp
     src/gwa3/dungeon/DungeonCheckpoint.cpp
     src/gwa3/dungeon/DungeonDiagnostics.cpp
-    src/gwa3/dungeon/DungeonDialog.cpp
-    src/gwa3/dungeon/DungeonEffects.cpp
+    src/gwa3/advanced/Dialog.cpp
+    src/gwa3/advanced/Effects.cpp
     src/gwa3/dungeon/DungeonEntryRecovery.cpp
     src/gwa3/dungeon/DungeonInteractions.cpp
-    src/gwa3/dungeon/DungeonInventory.cpp
-    src/gwa3/dungeon/DungeonItemActions.cpp
-    src/gwa3/dungeon/DungeonItemPolicy.cpp
+    src/gwa3/advanced/Inventory.cpp
+    src/gwa3/advanced/ItemActions.cpp
+    src/gwa3/advanced/ItemPolicy.cpp
     src/gwa3/dungeon/DungeonLoot.cpp
     src/gwa3/dungeon/DungeonOutpostSetup.cpp
     src/gwa3/dungeon/DungeonQuest.cpp
@@ -113,7 +113,7 @@ src/gwa3/managers/MerchantMgr.cpp
     src/gwa3/dungeon/DungeonRouteRunner.cpp
     src/gwa3/dungeon/DungeonRuntime.cpp
     src/gwa3/dungeon/DungeonSkill.cpp
-    src/gwa3/dungeon/DungeonVendor.cpp
+    src/gwa3/advanced/Merchant.cpp
     bots/frostmaws_burrows/FrostmawsBurrows.cpp
     bots/frostmaws_burrows/FrostmawsBurrowsBot.cpp
     bots/kathandrax/Kathandrax.cpp

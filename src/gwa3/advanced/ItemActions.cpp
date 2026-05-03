@@ -1,8 +1,8 @@
-#include <gwa3/dungeon/DungeonItemActions.h>
+#include <gwa3/advanced/ItemActions.h>
 
-#include <gwa3/dungeon/DungeonEffects.h>
-#include <gwa3/dungeon/DungeonInventory.h>
-#include <gwa3/dungeon/DungeonItemPolicy.h>
+#include <gwa3/advanced/Inventory.h>
+#include <gwa3/advanced/ItemPolicy.h>
+#include <gwa3/advanced/Effects.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/game/ItemModelIds.h>
@@ -13,7 +13,7 @@
 
 #include <Windows.h>
 
-namespace GWA3::DungeonItemActions {
+namespace GWA3::AdvancedItemActions {
 
 namespace {
 
@@ -154,7 +154,7 @@ int DepositItemsToStorage(ItemFilterFn should_store, WaitFn wait_ms, const Depos
 }
 
 bool UseItemByModel(uint32_t model_id, WaitFn wait_ms, const UseItemOptions& options) {
-    auto* item = DungeonInventory::FindItemByModel(model_id);
+    auto* item = AdvancedInventory::FindItemByModel(model_id);
     if (!item) return false;
 
     ItemMgr::UseItem(item->item_id);
@@ -189,7 +189,7 @@ ConsetUseResult UseFullConsetIfNeeded(uint32_t agent_id, WaitFn wait_ms, const C
         options.grail_model_id,
         wait_ms,
         options.use);
-    result.full_active = DungeonEffects::HasFullConset(agent_id);
+    result.full_active = AdvancedEffects::HasFullConset(agent_id);
     return result;
 }
 
@@ -220,7 +220,7 @@ ConsetUseAttemptResult UseConsetsForCurrentPlayerIfEnabled(
     result = UseConsetsForAgentIfEnabled(true, my_id, wait_ms, options);
     if (!result.attempted) return result;
 
-    const char* prefix = log_prefix ? log_prefix : "DungeonItemActions";
+    const char* prefix = log_prefix ? log_prefix : "AdvancedItemActions";
     if (result.consets.used_armor) {
         Log::Info("%s: Using Armor of Salvation", prefix);
     }
@@ -280,4 +280,4 @@ DpRemovalUseResult UseDpRemovalSweetIfNeeded(uint32_t* wipe_count,
     return result;
 }
 
-} // namespace GWA3::DungeonItemActions
+} // namespace GWA3::AdvancedItemActions

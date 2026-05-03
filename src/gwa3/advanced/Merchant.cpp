@@ -1,9 +1,9 @@
-#include <gwa3/dungeon/DungeonVendor.h>
+#include <gwa3/advanced/Merchant.h>
 
+#include <gwa3/advanced/Effects.h>
+#include <gwa3/advanced/Inventory.h>
 #include <gwa3/dungeon/DungeonDiagnostics.h>
-#include <gwa3/dungeon/DungeonEffects.h>
 #include <gwa3/dungeon/DungeonInteractions.h>
-#include <gwa3/dungeon/DungeonInventory.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
 #include <gwa3/dungeon/DungeonRuntime.h>
 #include <gwa3/core/Log.h>
@@ -19,7 +19,7 @@
 
 #include <Windows.h>
 
-namespace GWA3::DungeonVendor {
+namespace GWA3::AdvancedMerchant {
 
 namespace {
 
@@ -57,7 +57,7 @@ uint32_t MoveToNearestNpc(float anchorX, float anchorY, MoveToPointFn move_to_po
 }
 
 const char* Prefix(const char* prefix) {
-    return prefix ? prefix : "DungeonVendor";
+    return prefix ? prefix : "AdvancedMerchant";
 }
 
 void LogMerchantOpenSnapshot(const char* label, uint32_t npcId, float npcX, float npcY, const char* prefix) {
@@ -132,15 +132,15 @@ bool EnsureMaintenanceOutpost(uint32_t outpost_map_id,
 }
 
 void LogMaintenanceInventorySnapshot(const char* prefix) {
-    const uint32_t free_slots = DungeonInventory::CountFreeSlots();
-    const uint32_t id_kits = DungeonInventory::CountItemByModel(ItemModelIds::IDENTIFICATION_KIT) +
-                             DungeonInventory::CountItemByModel(ItemModelIds::SUPERIOR_IDENTIFICATION_KIT);
-    const uint32_t salv_kits = DungeonInventory::CountItemByModel(ItemModelIds::SUPERIOR_SALVAGE_KIT) +
-                               DungeonInventory::CountItemByModel(ItemModelIds::EXPERT_SALVAGE_KIT);
+    const uint32_t free_slots = AdvancedInventory::CountFreeSlots();
+    const uint32_t id_kits = AdvancedInventory::CountItemByModel(ItemModelIds::IDENTIFICATION_KIT) +
+                             AdvancedInventory::CountItemByModel(ItemModelIds::SUPERIOR_IDENTIFICATION_KIT);
+    const uint32_t salv_kits = AdvancedInventory::CountItemByModel(ItemModelIds::SUPERIOR_SALVAGE_KIT) +
+                               AdvancedInventory::CountItemByModel(ItemModelIds::EXPERT_SALVAGE_KIT);
     const uint32_t char_gold = ItemMgr::GetGoldCharacter();
-    const uint32_t effect_count = DungeonEffects::GetPlayerEffectCount();
-    const bool has_blessing = DungeonEffects::HasAnyDungeonBlessing();
-    const bool has_conset = DungeonEffects::HasFullConset();
+    const uint32_t effect_count = AdvancedEffects::GetPlayerEffectCount();
+    const bool has_blessing = AdvancedEffects::HasAnyDungeonBlessing();
+    const bool has_conset = AdvancedEffects::HasFullConset();
 
     Log::Info("%s: Inventory: %u free slots, %u ID kits, %u salvage kits, %u gold",
               prefix,
@@ -160,7 +160,7 @@ void ClaimConfiguredUnclaimedItems(const MaintenanceStateOptions& options) {
         return;
     }
 
-    DungeonInventory::UnclaimedItemClaimOptions claim_options = options.unclaimed_items;
+    AdvancedInventory::UnclaimedItemClaimOptions claim_options = options.unclaimed_items;
     if (!claim_options.log_prefix) {
         claim_options.log_prefix = options.log_prefix;
     }
@@ -168,7 +168,7 @@ void ClaimConfiguredUnclaimedItems(const MaintenanceStateOptions& options) {
         claim_options.wait_ms = options.wait_ms;
     }
 
-    const auto result = DungeonInventory::ClaimUnclaimedItemsByModel(claim_options);
+    const auto result = AdvancedInventory::ClaimUnclaimedItemsByModel(claim_options);
     if (result.accepted) {
         Log::Info("%s: claimed unclaimed town items quantity=%u",
                   Prefix(options.log_prefix),
@@ -386,7 +386,7 @@ bool OpenMerchantContextNearCoords(float searchX,
 }
 
 int SellItemsAtMerchant(float anchorX, float anchorY, MoveToPointFn move_to_point,
-                        DungeonItemActions::ItemFilterFn should_sell,
+                        AdvancedItemActions::ItemFilterFn should_sell,
                         WaitFn wait_ms, const SellAtMerchantOptions& options) {
     const uint32_t npcId = MoveToNearestNpc(anchorX, anchorY, move_to_point, options.npc);
     if (npcId == 0u) {
@@ -395,11 +395,11 @@ int SellItemsAtMerchant(float anchorX, float anchorY, MoveToPointFn move_to_poin
     if (!OpenMerchantContextWithLegacyPacket(npcId, wait_ms, options.merchant)) {
         return 0;
     }
-    return DungeonItemActions::SellItems(should_sell, wait_ms, options.sell);
+    return AdvancedItemActions::SellItems(should_sell, wait_ms, options.sell);
 }
 
 int DepositItemsAtStorage(float anchorX, float anchorY, MoveToPointFn move_to_point,
-                          DungeonItemActions::ItemFilterFn should_store,
+                          AdvancedItemActions::ItemFilterFn should_store,
                           WaitFn wait_ms, const DepositAtStorageOptions& options) {
     const uint32_t npcId = MoveToNearestNpc(anchorX, anchorY, move_to_point, options.npc);
     if (npcId == 0u) {
@@ -408,7 +408,7 @@ int DepositItemsAtStorage(float anchorX, float anchorY, MoveToPointFn move_to_po
 
     AgentMgr::InteractNPC(npcId);
     CallWait(wait_ms, options.npc.interact_delay_ms);
-    return DungeonItemActions::DepositItemsToStorage(should_store, wait_ms, options.deposit);
+    return AdvancedItemActions::DepositItemsToStorage(should_store, wait_ms, options.deposit);
 }
 
 MaintenanceMgr::Config BuildMaintenanceConfig(uint32_t outpost_map_id,
@@ -482,7 +482,7 @@ MaintenanceStateResult RunFullMaintenanceState(uint32_t configured_outpost_map_i
     ClaimConfiguredUnclaimedItems(options);
 
     const auto dp_result =
-        DungeonItemActions::UseDpRemovalSweetIfNeeded(wipe_count, options.wait_ms, options.dp_removal);
+        AdvancedItemActions::UseDpRemovalSweetIfNeeded(wipe_count, options.wait_ms, options.dp_removal);
     if (dp_result.used_model_id != 0u) {
         Log::Info("%s: Using DP removal sweet (model=%u) after %u wipes",
                   prefix,
@@ -500,7 +500,7 @@ MaintenanceStateResult RunFullMaintenanceState(uint32_t configured_outpost_map_i
         "Maintenance: merchant window failed to open, skipping shared maintenance",
         false);
 
-    const uint32_t free_slots = DungeonInventory::CountFreeSlots();
+    const uint32_t free_slots = AdvancedInventory::CountFreeSlots();
     const bool still_needs_maintenance = MaintenanceMgr::NeedsMaintenance(maintenance_cfg);
     if (free_slots < options.critical_free_slots) {
         Log::Warn("%s: Critically low inventory space (%u slots). Consider manual cleanup.",
@@ -526,4 +526,4 @@ MaintenanceStateResult RunFullMaintenanceState(uint32_t configured_outpost_map_i
     return MaintenanceStateResult::Done;
 }
 
-} // namespace GWA3::DungeonVendor
+} // namespace GWA3::AdvancedMerchant
