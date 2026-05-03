@@ -114,7 +114,7 @@ src/gwa3/managers/MerchantMgr.cpp
     src/gwa3/dungeon/DungeonQuestRuntime.cpp
     src/gwa3/dungeon/DungeonRouteRunner.cpp
     src/gwa3/dungeon/DungeonRuntime.cpp
-    src/gwa3/dungeon/DungeonSkill.cpp
+    src/gwa3/advanced/CombatSkill.cpp
     src/gwa3/advanced/Merchant.cpp
     bots/frostmaws_burrows/FrostmawsBurrows.cpp
     bots/frostmaws_burrows/FrostmawsBurrowsBot.cpp

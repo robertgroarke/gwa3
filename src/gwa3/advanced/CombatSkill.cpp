@@ -1,4 +1,4 @@
-#include <gwa3/dungeon/DungeonSkill.h>
+#include <gwa3/advanced/CombatSkill.h>
 
 #include <gwa3/game/SkillIds.h>
 #include <gwa3/managers/AgentMgr.h>
@@ -10,7 +10,7 @@
 #include <cstddef>
 #include <cstring>
 
-namespace GWA3::DungeonSkill {
+namespace GWA3::AdvancedSkill {
 
 namespace {
 
@@ -877,4 +877,4 @@ bool CanUseSkill(const CachedSkill& skill, uint32_t targetId, float aggroRange) 
     return ExplainCanUseSkillFailure(skill, targetId, aggroRange) == nullptr;
 }
 
-} // namespace GWA3::DungeonSkill
+} // namespace GWA3::AdvancedSkill
