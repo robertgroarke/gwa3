@@ -292,4 +292,66 @@ BotState HandleDungeonProgression(BotConfig& cfg, const DungeonProgressionOption
     return BotState::InDungeon;
 }
 
+BotState HandleErrorRecovery(BotConfig& cfg, const ErrorRecoveryOptions& options) {
+    (void)cfg;
+    LogBot("State: ERROR - waiting %u ms before retry", options.wait_ms);
+    DungeonRuntime::WaitMs(options.wait_ms);
+
+    const uint32_t mapId = MapMgr::GetMapId();
+    if (mapId == 0u) {
+        return BotState::CharSelect;
+    }
+    if (mapId == options.entry_map_id ||
+        IsMapInList(mapId, options.dungeon_map_ids, options.dungeon_map_count)) {
+        LogBot("%s: Error recovery staying in explorable map %u",
+               PrefixOrDefault(options.log_prefix),
+               mapId);
+        return BotState::InDungeon;
+    }
+    return BotState::InTown;
+}
+
+BotState HandleLootCollection(BotConfig& cfg, const LootCollectionOptions& options) {
+    (void)cfg;
+    LogBot("State: Loot collection");
+    DungeonRuntime::WaitMs(options.wait_ms);
+    return BotState::Merchant;
+}
+
+BotState HandleMerchantMaintenance(BotConfig& cfg, const MerchantMaintenanceOptions& options) {
+    const auto result = DungeonVendor::RunMerchantMaintenanceState(
+        cfg.outpost_map_id,
+        options.location,
+        options.state);
+    switch (result) {
+    case DungeonVendor::MaintenanceStateResult::Done:
+        return BotState::InTown;
+    case DungeonVendor::MaintenanceStateResult::NeedsMaintenance:
+        return BotState::Maintenance;
+    case DungeonVendor::MaintenanceStateResult::Retry:
+        return BotState::Merchant;
+    case DungeonVendor::MaintenanceStateResult::Stop:
+    default:
+        return BotState::Stopping;
+    }
+}
+
+BotState HandleFullMaintenance(BotConfig& cfg, const FullMaintenanceOptions& options) {
+    const auto result = DungeonVendor::RunFullMaintenanceState(
+        cfg.outpost_map_id,
+        options.wipe_count,
+        options.location,
+        options.state);
+    switch (result) {
+    case DungeonVendor::MaintenanceStateResult::Done:
+        return BotState::Traveling;
+    case DungeonVendor::MaintenanceStateResult::Retry:
+        return BotState::Maintenance;
+    case DungeonVendor::MaintenanceStateResult::NeedsMaintenance:
+    case DungeonVendor::MaintenanceStateResult::Stop:
+    default:
+        return BotState::Stopping;
+    }
+}
+
 } // namespace GWA3::Bot::DungeonStates

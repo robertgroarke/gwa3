@@ -437,15 +437,6 @@ static DungeonRouteRunner::RouteStartPolicyOptions MakeFroggyRouteStartPolicy() 
     return options;
 }
 
-static void LogFroggyWaypointState(const char* stage, const Waypoint* wps, int count, int waypointIndex) {
-    DungeonNavigation::WaypointTelemetryOptions options;
-    options.log_prefix = "Froggy";
-    options.route_name = MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP ? "Sparkfly" : "Bogroot";
-    options.nearest_enemy_range = TELEMETRY_NEAREST_ENEMY_RANGE;
-    options.nearby_enemy_range = TELEMETRY_NEARBY_ENEMY_RANGE;
-    DungeonNavigation::LogWaypointState(stage, wps, count, waypointIndex, options);
-}
-
 static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypoint(const Waypoint& waypoint) {
     return DungeonNavigation::MoveRouteWaypoint(
         waypoint,
@@ -457,22 +448,6 @@ static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypoint(const Waypo
         },
         &IsMapLoaded,
         250.0f);
-}
-
-static void RecordFroggyLevelTransitionTelemetry(const DungeonRuntime::TransitionTelemetry& telemetry) {
-    g_dungeonLoopTelemetry.map_loaded = telemetry.map_loaded;
-    g_dungeonLoopTelemetry.player_alive = telemetry.player_alive;
-    g_dungeonLoopTelemetry.player_hp = telemetry.player_hp;
-    g_dungeonLoopTelemetry.player_x = telemetry.player_x;
-    g_dungeonLoopTelemetry.player_y = telemetry.player_y;
-    g_dungeonLoopTelemetry.target_id = telemetry.target_id;
-    g_dungeonLoopTelemetry.dist_to_exit = telemetry.dist_to_exit;
-    g_dungeonLoopTelemetry.nearest_enemy_dist = telemetry.nearest_enemy_dist;
-    g_dungeonLoopTelemetry.nearby_enemy_count = telemetry.nearby_enemy_count;
-    g_dungeonLoopTelemetry.lvl1_portal_id = telemetry.portal_id;
-    g_dungeonLoopTelemetry.lvl1_portal_x = telemetry.portal_x;
-    g_dungeonLoopTelemetry.lvl1_portal_y = telemetry.portal_y;
-    g_dungeonLoopTelemetry.lvl1_portal_dist = telemetry.portal_dist;
 }
 
 static DungeonCheckpoint::WaypointWipeRecoveryOptions MakeFroggyWipeRecoveryOptions() {
@@ -493,7 +468,7 @@ static void UpdateFroggyQuestMapReturnTelemetry(uint32_t finalMapId, bool return
         returnedToQuestMap && finalMapId == MapIds::SPARKFLY_SWAMP;
 }
 
-static void HandleFroggyLevelTransitionWaypoint(const Waypoint&) {
+static DungeonRuntime::LevelTransitionOptions MakeFroggyLevelTransitionOptions() {
     DungeonRuntime::LevelTransitionOptions options;
     options.log_prefix = "Froggy";
     options.transition_name = "Lvl1 to Lvl2";
@@ -523,16 +498,22 @@ static void HandleFroggyLevelTransitionWaypoint(const Waypoint&) {
     options.on_entered = [](uint32_t) {
         g_dungeonLoopTelemetry.entered_lvl2 = true;
     };
-    options.on_telemetry = &RecordFroggyLevelTransitionTelemetry;
-
-    const auto result = DungeonRuntime::ExecuteLevelTransition(options);
-    if (result.entered_target_map) {
-        auto* me = AgentMgr::GetMyAgent();
-        Log::Info("Froggy: Lvl1 to Lvl2 nearestLvl2Wp=%d player=(%.0f, %.0f)",
-                  DungeonNavigation::GetNearestWaypointIndex(BOGROOT_LVL2, BOGROOT_LVL2_COUNT),
-                  me ? me->x : 0.0f,
-                  me ? me->y : 0.0f);
-    }
+    options.on_telemetry = [](const DungeonRuntime::TransitionTelemetry& telemetry) {
+        g_dungeonLoopTelemetry.map_loaded = telemetry.map_loaded;
+        g_dungeonLoopTelemetry.player_alive = telemetry.player_alive;
+        g_dungeonLoopTelemetry.player_hp = telemetry.player_hp;
+        g_dungeonLoopTelemetry.player_x = telemetry.player_x;
+        g_dungeonLoopTelemetry.player_y = telemetry.player_y;
+        g_dungeonLoopTelemetry.target_id = telemetry.target_id;
+        g_dungeonLoopTelemetry.dist_to_exit = telemetry.dist_to_exit;
+        g_dungeonLoopTelemetry.nearest_enemy_dist = telemetry.nearest_enemy_dist;
+        g_dungeonLoopTelemetry.nearby_enemy_count = telemetry.nearby_enemy_count;
+        g_dungeonLoopTelemetry.lvl1_portal_id = telemetry.portal_id;
+        g_dungeonLoopTelemetry.lvl1_portal_x = telemetry.portal_x;
+        g_dungeonLoopTelemetry.lvl1_portal_y = telemetry.portal_y;
+        g_dungeonLoopTelemetry.lvl1_portal_dist = telemetry.portal_dist;
+    };
+    return options;
 }
 
 static DungeonRouteRunner::RouteLabelExecutorOptions MakeFroggyRouteLabelOptions() {
@@ -547,14 +528,13 @@ static DungeonRouteRunner::RouteLabelExecutorOptions MakeFroggyRouteLabelOptions
     options.open_dungeon_door_at = &OpenDungeonDoorAt;
     options.grab_blessing = &GrabDungeonBlessing;
     options.acquire_dungeon_key = &AcquireBogrootBossKey;
-    options.handle_level_transition = &HandleFroggyLevelTransitionWaypoint;
+    options.level_transition = MakeFroggyLevelTransitionOptions();
     options.handle_boss_reward = &HandleBossWaypoint;
     options.wipe_recovery = MakeFroggyWipeRecoveryOptions();
     options.is_dead = &IsDead;
     options.return_to_outpost = &MapMgr::ReturnToOutpost;
     options.wait_for_map_ready = &DungeonRuntime::WaitForMapReady;
     options.get_nearest_waypoint = &DungeonNavigation::GetNearestWaypointIndex;
-    options.log_waypoint_state = &LogFroggyWaypointState;
     options.update_return_to_quest_map = &UpdateFroggyQuestMapReturnTelemetry;
     options.return_to_quest_map = MakeFroggyReturnToSparkflyPlan("Froggy quest-door refresh");
     options.quest_id = GWA3::QuestIds::TEKKS_WAR;
@@ -562,23 +542,10 @@ static DungeonRouteRunner::RouteLabelExecutorOptions MakeFroggyRouteLabelOptions
     options.quest_ready.post_set_active_delay_ms = TEKKS_SET_ACTIVE_DWELL_MS;
     options.recovery_outpost_map_id = MapIds::GADDS_ENCAMPMENT;
     options.log_prefix = "Froggy";
+    options.route_name = MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP ? "Sparkfly" : "Bogroot";
+    options.telemetry_nearest_enemy_range = TELEMETRY_NEAREST_ENEMY_RANGE;
+    options.telemetry_nearby_enemy_range = TELEMETRY_NEARBY_ENEMY_RANGE;
     return options;
-}
-
-static void UpdateFroggyRouteTelemetry(int waypointIndex, const Waypoint& waypoint) {
-    g_dungeonLoopTelemetry.last_waypoint_index = static_cast<uint32_t>(waypointIndex);
-    g_dungeonLoopTelemetry.waypoint_iterations++;
-    strncpy_s(g_dungeonLoopTelemetry.last_waypoint_label,
-              waypoint.label ? waypoint.label : "",
-              _TRUNCATE);
-}
-
-static void LogFroggyRouteWaypoint(int waypointIndex, const Waypoint& waypoint) {
-    LogBot("Moving to waypoint %d: %s (%.0f, %.0f)",
-           waypointIndex,
-           waypoint.label ? waypoint.label : "",
-           waypoint.x,
-           waypoint.y);
 }
 
 static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunning = false) {
@@ -589,9 +556,6 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
     callbacks.is_route_map = [](uint32_t mapId) {
         return mapId == MapIds::SPARKFLY_SWAMP || IsBogrootMapId(mapId);
     };
-    callbacks.log_waypoint_state = &LogFroggyWaypointState;
-    callbacks.update_telemetry = &UpdateFroggyRouteTelemetry;
-    callbacks.log_waypoint = &LogFroggyRouteWaypoint;
 
     DungeonRouteRunner::RouteRunOptions options;
     options.ignore_bot_running = ignoreBotRunning;
@@ -601,6 +565,12 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
     options.wipe_recovery = MakeFroggyWipeRecoveryOptions();
     options.log_prefix = "Froggy";
     options.route_name = MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP ? "Sparkfly" : "Bogroot";
+    options.progress_telemetry.last_waypoint_index = &g_dungeonLoopTelemetry.last_waypoint_index;
+    options.progress_telemetry.waypoint_iterations = &g_dungeonLoopTelemetry.waypoint_iterations;
+    options.progress_telemetry.last_waypoint_label = g_dungeonLoopTelemetry.last_waypoint_label;
+    options.progress_telemetry.last_waypoint_label_size = sizeof(g_dungeonLoopTelemetry.last_waypoint_label);
+    options.telemetry_nearest_enemy_range = TELEMETRY_NEAREST_ENEMY_RANGE;
+    options.telemetry_nearby_enemy_range = TELEMETRY_NEARBY_ENEMY_RANGE;
     options.standard_waypoint_movement.move_to_point = [](float x, float y, float threshold) {
         (void)MoveToAndWait(x, y, threshold);
     };
@@ -1060,65 +1030,19 @@ BotState HandleDungeon(BotConfig& cfg) {
     return DungeonStates::HandleDungeonProgression(cfg, options);
 }
 
-BotState HandleError(BotConfig& cfg) {
-    (void)cfg;
-    LogBot("State: ERROR - waiting 10s before retry");
-    WaitMs(10000);
-
-    uint32_t mapId = MapMgr::GetMapId();
-    if (mapId == 0) {
-        return BotState::CharSelect;
-    }
-    if (mapId == MapIds::SPARKFLY_SWAMP ||
-        mapId == MapIds::BOGROOT_GROWTHS_LVL1 ||
-        mapId == MapIds::BOGROOT_GROWTHS_LVL2) {
-        LogBot("Error recovery staying in explorable map %u", mapId);
-        return BotState::InDungeon;
-    }
-    return BotState::InTown;
-}
-
-BotState HandleLoot(BotConfig& cfg) {
-    (void)cfg;
-    LogBot("State: Loot collection");
-    WaitMs(2000);
-    return BotState::Merchant;
-}
-
 BotState HandleMerchant(BotConfig& cfg) {
-    const auto result = DungeonVendor::RunMerchantMaintenanceState(
-        cfg.outpost_map_id,
-        MakeFroggyMaintenanceLocation(),
-        MakeFroggyMaintenanceStateOptions());
-    switch (result) {
-    case DungeonVendor::MaintenanceStateResult::Done:
-        return BotState::InTown;
-    case DungeonVendor::MaintenanceStateResult::NeedsMaintenance:
-        return BotState::Maintenance;
-    case DungeonVendor::MaintenanceStateResult::Retry:
-        return BotState::Merchant;
-    case DungeonVendor::MaintenanceStateResult::Stop:
-    default:
-        return BotState::Stopping;
-    }
+    DungeonStates::MerchantMaintenanceOptions options = {};
+    options.location = MakeFroggyMaintenanceLocation();
+    options.state = MakeFroggyMaintenanceStateOptions();
+    return DungeonStates::HandleMerchantMaintenance(cfg, options);
 }
 
 BotState HandleMaintenance(BotConfig& cfg) {
-    const auto result = DungeonVendor::RunFullMaintenanceState(
-        cfg.outpost_map_id,
-        &s_wipeCount,
-        MakeFroggyMaintenanceLocation(),
-        MakeFroggyMaintenanceStateOptions());
-    switch (result) {
-    case DungeonVendor::MaintenanceStateResult::Done:
-        return BotState::Traveling;
-    case DungeonVendor::MaintenanceStateResult::Retry:
-        return BotState::Maintenance;
-    case DungeonVendor::MaintenanceStateResult::NeedsMaintenance:
-    case DungeonVendor::MaintenanceStateResult::Stop:
-    default:
-        return BotState::Stopping;
-    }
+    DungeonStates::FullMaintenanceOptions options = {};
+    options.location = MakeFroggyMaintenanceLocation();
+    options.state = MakeFroggyMaintenanceStateOptions();
+    options.wipe_count = &s_wipeCount;
+    return DungeonStates::HandleFullMaintenance(cfg, options);
 }
 
 // ===== Registration =====
@@ -1130,10 +1054,19 @@ void Register() {
     Bot::RegisterStateHandler(BotState::InTown, HandleTownSetup);
     Bot::RegisterStateHandler(BotState::Traveling, HandleTravel);
     Bot::RegisterStateHandler(BotState::InDungeon, HandleDungeon);
-    Bot::RegisterStateHandler(BotState::Looting, HandleLoot);
+    Bot::RegisterStateHandler(BotState::Looting, [](BotConfig& cfg) {
+        return DungeonStates::HandleLootCollection(cfg);
+    });
     Bot::RegisterStateHandler(BotState::Merchant, HandleMerchant);
     Bot::RegisterStateHandler(BotState::Maintenance, HandleMaintenance);
-    Bot::RegisterStateHandler(BotState::Error, HandleError);
+    Bot::RegisterStateHandler(BotState::Error, [](BotConfig& cfg) {
+        DungeonStates::ErrorRecoveryOptions options = {};
+        options.entry_map_id = MapIds::SPARKFLY_SWAMP;
+        options.dungeon_map_ids = BOGROOT_DUNGEON_MAPS;
+        options.dungeon_map_count = BOGROOT_DUNGEON_MAP_COUNT;
+        options.log_prefix = "Froggy";
+        return DungeonStates::HandleErrorRecovery(cfg, options);
+    });
 
     // Default route config. Hero templates are resolved from config/gwa3.ini.
     auto& cfg = Bot::GetConfig();

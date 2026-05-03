@@ -217,6 +217,39 @@ void LogRouteWaypointState(const char* stage,
     if (!options.log_route_waypoint_state) return;
     if (callbacks.log_waypoint_state) {
         callbacks.log_waypoint_state(stage, waypoints, count, waypoint_index);
+        return;
+    }
+
+    DungeonNavigation::WaypointTelemetryOptions telemetry;
+    telemetry.log_prefix = options.log_prefix;
+    telemetry.route_name = options.route_name;
+    telemetry.nearest_enemy_range = options.telemetry_nearest_enemy_range;
+    telemetry.nearby_enemy_range = options.telemetry_nearby_enemy_range;
+    DungeonNavigation::LogWaypointState(stage, waypoints, count, waypoint_index, telemetry);
+}
+
+void UpdateRouteTelemetry(int waypoint_index,
+                          const DungeonRoute::Waypoint& waypoint,
+                          const RouteRunCallbacks& callbacks,
+                          const RouteRunOptions& options) {
+    if (callbacks.update_telemetry) {
+        callbacks.update_telemetry(waypoint_index, waypoint);
+        return;
+    }
+
+    const auto& telemetry = options.progress_telemetry;
+    if (telemetry.last_waypoint_index) {
+        *telemetry.last_waypoint_index = static_cast<uint32_t>(waypoint_index);
+    }
+    if (telemetry.waypoint_iterations) {
+        ++(*telemetry.waypoint_iterations);
+    }
+    if (telemetry.last_waypoint_label && telemetry.last_waypoint_label_size > 0u) {
+        strncpy_s(
+            telemetry.last_waypoint_label,
+            telemetry.last_waypoint_label_size,
+            waypoint.label ? waypoint.label : "",
+            _TRUNCATE);
     }
 }
 
@@ -253,7 +286,15 @@ void LogRouteLabelState(const char* stage,
                         const RouteLabelExecutorOptions& options) {
     if (options.log_waypoint_state) {
         options.log_waypoint_state(stage, waypoints, count, waypoint_index);
+        return;
     }
+
+    DungeonNavigation::WaypointTelemetryOptions telemetry;
+    telemetry.log_prefix = options.log_prefix;
+    telemetry.route_name = options.route_name;
+    telemetry.nearest_enemy_range = options.telemetry_nearest_enemy_range;
+    telemetry.nearby_enemy_range = options.telemetry_nearby_enemy_range;
+    DungeonNavigation::LogWaypointState(stage, waypoints, count, waypoint_index, telemetry);
 }
 
 WaypointHandlerResult RecoverRouteLabelWipeIfDead(
@@ -381,10 +422,14 @@ WaypointHandlerResult ExecuteRouteLabelWaypoint(
         return WaypointHandlerResult::ContinueRoute;
 
     case DungeonRoute::WaypointLabelKind::LevelTransition:
-        if (options.handle_level_transition == nullptr) {
+        if (options.handle_level_transition) {
+            options.handle_level_transition(waypoint);
+            return WaypointHandlerResult::StopRoute;
+        }
+        if (options.level_transition.target_map_id == 0u) {
             return WaypointHandlerResult::NotHandled;
         }
-        options.handle_level_transition(waypoint);
+        (void)DungeonRuntime::ExecuteLevelTransition(options.level_transition);
         return WaypointHandlerResult::StopRoute;
 
     case DungeonRoute::WaypointLabelKind::DungeonKey: {
@@ -638,9 +683,7 @@ RouteRunResult RunWaypointRoute(
         if (IsRouteMap(map_id, callbacks)) {
             LogRouteWaypointState("pre", waypoints, count, i, callbacks, options);
         }
-        if (callbacks.update_telemetry) {
-            callbacks.update_telemetry(i, waypoint);
-        }
+        UpdateRouteTelemetry(i, waypoint, callbacks, options);
 
         const auto handled = callbacks.handle_special_waypoint
             ? callbacks.handle_special_waypoint(waypoints, count, i)

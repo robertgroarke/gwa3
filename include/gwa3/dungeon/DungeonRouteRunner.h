@@ -7,6 +7,7 @@
 #include <gwa3/dungeon/DungeonRoute.h>
 #include <gwa3/dungeon/DungeonRuntime.h>
 
+#include <cstddef>
 #include <cstdint>
 
 namespace GWA3::DungeonRouteRunner {
@@ -94,6 +95,13 @@ struct RouteStartPolicyOptions {
     const char* log_prefix = "Dungeon";
 };
 
+struct RouteProgressTelemetry {
+    uint32_t* last_waypoint_index = nullptr;
+    uint32_t* waypoint_iterations = nullptr;
+    char* last_waypoint_label = nullptr;
+    std::size_t last_waypoint_label_size = 0u;
+};
+
 struct RouteRunCallbacks {
     GetMapIdFn get_map_id = nullptr;
     BoolFn is_bot_running = nullptr;
@@ -117,6 +125,7 @@ struct RouteLabelExecutorOptions {
     BlessingGrabFn grab_blessing = nullptr;
     AcquireDungeonKeyFn acquire_dungeon_key = nullptr;
     WaypointActionFn handle_level_transition = nullptr;
+    DungeonRuntime::LevelTransitionOptions level_transition = {};
     WaypointActionFn handle_boss_reward = nullptr;
     ContextWipeRecoveryFn recover_wipe = nullptr;
     DungeonCheckpoint::WaypointWipeRecoveryOptions wipe_recovery = {};
@@ -137,6 +146,9 @@ struct RouteLabelExecutorOptions {
     int quest_door_backtrack_steps = 3;
     const char* boss_label = "Boss";
     const char* log_prefix = "Dungeon";
+    const char* route_name = "route";
+    float telemetry_nearest_enemy_range = 5000.0f;
+    float telemetry_nearby_enemy_range = 1800.0f;
 };
 
 struct RouteRunOptions {
@@ -150,6 +162,9 @@ struct RouteRunOptions {
     RouteStartPolicyOptions route_start_policy = {};
     DungeonNavigation::RouteWaypointCombatLootOptions standard_waypoint_movement = {};
     DungeonCheckpoint::WaypointWipeRecoveryOptions wipe_recovery = {};
+    RouteProgressTelemetry progress_telemetry = {};
+    float telemetry_nearest_enemy_range = 5000.0f;
+    float telemetry_nearby_enemy_range = 1800.0f;
     const char* log_prefix = "Dungeon";
     const char* route_name = "route";
 };

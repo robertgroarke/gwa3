@@ -3,6 +3,7 @@
 #include <bots/common/BotFramework.h>
 #include <gwa3/dungeon/DungeonOutpostSetup.h>
 #include <gwa3/dungeon/DungeonQuest.h>
+#include <gwa3/dungeon/DungeonVendor.h>
 #include <gwa3/managers/MaintenanceMgr.h>
 
 #include <cstdint>
@@ -102,9 +103,37 @@ struct DungeonProgressionOptions {
     MarkRunFailedFn mark_run_failed = {};
 };
 
+struct ErrorRecoveryOptions {
+    uint32_t entry_map_id = 0u;
+    const uint32_t* dungeon_map_ids = nullptr;
+    int dungeon_map_count = 0;
+    uint32_t wait_ms = 10000u;
+    const char* log_prefix = "Dungeon";
+};
+
+struct LootCollectionOptions {
+    uint32_t wait_ms = 2000u;
+    const char* log_prefix = "Dungeon";
+};
+
+struct MerchantMaintenanceOptions {
+    DungeonVendor::MaintenanceLocation location = {};
+    DungeonVendor::MaintenanceStateOptions state = {};
+};
+
+struct FullMaintenanceOptions {
+    DungeonVendor::MaintenanceLocation location = {};
+    DungeonVendor::MaintenanceStateOptions state = {};
+    uint32_t* wipe_count = nullptr;
+};
+
 BotState HandleCharSelect(BotConfig& cfg, const CharSelectOptions& options = {});
 BotState HandleTownSetup(BotConfig& cfg, const TownSetupOptions& options);
 BotState HandleTravelToEntryMap(BotConfig& cfg, const TravelStateOptions& options);
 BotState HandleDungeonProgression(BotConfig& cfg, const DungeonProgressionOptions& options);
+BotState HandleErrorRecovery(BotConfig& cfg, const ErrorRecoveryOptions& options);
+BotState HandleLootCollection(BotConfig& cfg, const LootCollectionOptions& options = {});
+BotState HandleMerchantMaintenance(BotConfig& cfg, const MerchantMaintenanceOptions& options);
+BotState HandleFullMaintenance(BotConfig& cfg, const FullMaintenanceOptions& options);
 
 } // namespace GWA3::Bot::DungeonStates

@@ -284,10 +284,8 @@ namespace GWA3::Bot::Froggy {
     BotState HandleTownSetup(BotConfig& cfg);
     BotState HandleTravel(BotConfig& cfg);
     BotState HandleDungeon(BotConfig& cfg);
-    BotState HandleLoot(BotConfig& cfg);
     BotState HandleMerchant(BotConfig& cfg);
     BotState HandleMaintenance(BotConfig& cfg);
-    BotState HandleError(BotConfig& cfg);
 
     // Execute one bounded builtin combat step against a target.
     bool ExecuteBuiltinCombatStep(uint32_t targetId, bool quickStep = false);
