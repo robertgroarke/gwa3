@@ -736,7 +736,7 @@ void AggroMoveToOpportunistic(
             callbacks.fight_in_aggro(
                 fightRange,
                 false,
-                nullptr,
+                callbacks.user_data,
                 true,
                 options.opportunistic_fight_budget_ms);
         }
@@ -838,7 +838,7 @@ void AggroMoveToStandard(
                     y,
                     fightRange,
                     bestId,
-                    callbacks.special_stats);
+                    callbacks.user_data ? callbacks.user_data : callbacks.special_stats);
             } else if (callbacks.hold_local_clear != nullptr) {
                 Log::Info("%s: AggroMove holding local clear foe=%u waypoint=(%.0f, %.0f) dist=%.0f clearRange=%.0f",
                           options.log_prefix ? options.log_prefix : "Dungeon",
@@ -847,7 +847,7 @@ void AggroMoveToStandard(
                           y,
                           nearestDistance,
                           localClearRange);
-                callbacks.hold_local_clear("Route", x, y, fightRange, bestId, nullptr);
+                callbacks.hold_local_clear("Route", x, y, fightRange, bestId, callbacks.user_data);
                 if (options.use_local_clear_cooldown) {
                     ArmLocalClearCooldown(moveState, x, y);
                 }
@@ -949,6 +949,7 @@ void AggroMoveToConfigured(
         config.use_special_local_clear ? config.hold_special_local_clear : nullptr;
     callbacks.pickup_nearby_loot = config.pickup_nearby_loot;
     callbacks.special_stats = config.special_stats;
+    callbacks.user_data = config.user_data;
 
     AggroMoveOptions options;
     options.profile = config.profile;

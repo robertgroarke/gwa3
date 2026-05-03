@@ -87,6 +87,65 @@ void RecordSessionAggroAction(void* userData, uint32_t actionStartMs) {
   profile->on_action(profile->user_data, profile->session->last_action, actionStartMs);
 }
 
+void RecordRouteCombatTargetStats(void* userData, uint32_t targetId) {
+  auto* stats = static_cast<RouteCombatStats*>(userData);
+  if (stats == nullptr) {
+    return;
+  }
+
+  ++stats->quick_step_attempts;
+  stats->last_target_id = targetId;
+}
+
+void RecordRouteCombatActionStats(
+    void* userData,
+    const DungeonCombatRoutine::SkillActionResult& action,
+    uint32_t actionStartMs) {
+  auto* stats = static_cast<RouteCombatStats*>(userData);
+  if (stats == nullptr || !action.valid || action.started_at_ms < actionStartMs) {
+    return;
+  }
+
+  if (action.used_skill) {
+    ++stats->skill_steps;
+  } else if (action.auto_attack) {
+    ++stats->auto_attack_steps;
+  }
+}
+
+void RecordRouteLocalClearPassStats(void* userData, int, uint32_t targetId) {
+  auto* context = static_cast<RouteCombatContext*>(userData);
+  if (context == nullptr || context->stats == nullptr) {
+    return;
+  }
+
+  ++context->stats->settle_requests;
+  context->stats->last_target_id = targetId;
+}
+
+void RouteCombatPostLoot(void* userData, float aggroRange, const char* reason) {
+  auto* context = static_cast<RouteCombatContext*>(userData);
+  if (context == nullptr || context->post_combat_loot == nullptr) {
+    return;
+  }
+
+  (void)context->post_combat_loot(aggroRange, reason);
+}
+
+void RouteLocalClearFightInAggro(
+    float aggroRange,
+    bool careful,
+    void* userData,
+    bool waitForSkillCompletion,
+    uint32_t maxFightMs) {
+  FightEnemiesInAggroFromRouteContext(
+      aggroRange,
+      careful,
+      userData,
+      waitForSkillCompletion,
+      maxFightMs);
+}
+
 int UseSessionSkillsInAggro(uint32_t targetId,
                             float aggroRange,
                             bool waitForCompletion,
@@ -741,6 +800,91 @@ bool FightEnemiesInAggroWithSession(float aggroRange,
   const bool ranPass = FightEnemiesInAggro(aggroRange, callbacks, fight_options);
   g_activeSessionAggroSkillProfile = previousProfile;
   return ranPass;
+}
+
+void FightEnemiesInAggroFromRouteContext(float aggroRange,
+                                         bool careful,
+                                         void* userData,
+                                         bool waitForSkillCompletion,
+                                         uint32_t maxFightMs) {
+  auto* context = static_cast<RouteCombatContext*>(userData);
+  if (context == nullptr || context->session == nullptr) {
+    return;
+  }
+
+  SessionAggroFightProfile profile;
+  profile.session = context->session;
+  profile.wait_ms = context->wait_ms;
+  profile.is_dead = context->is_dead;
+  profile.post_loot = &RouteCombatPostLoot;
+  profile.on_target = &RecordRouteCombatTargetStats;
+  profile.on_action = &RecordRouteCombatActionStats;
+  profile.resolve_max_aftercast = context->resolve_max_aftercast;
+  profile.user_data = context->stats;
+  profile.default_max_aftercast = context->default_max_aftercast;
+  profile.log_prefix = context->log_prefix;
+
+  AggroFightOptions options;
+  options.careful = careful;
+  options.wait_for_skill_completion = waitForSkillCompletion;
+  options.max_fight_ms = maxFightMs;
+  options.log_prefix = context->log_prefix;
+  options.loot_reason =
+      context->stats != nullptr && context->stats_loot_reason != nullptr
+          ? context->stats_loot_reason
+          : context->default_loot_reason;
+  (void)FightEnemiesInAggroWithSession(aggroRange, profile, options);
+}
+
+void HoldRouteLocalClearFromContext(const char* label,
+                                    float waypointX,
+                                    float waypointY,
+                                    float fightRange,
+                                    uint32_t targetId,
+                                    void* userData) {
+  auto* context = static_cast<RouteCombatContext*>(userData);
+  if (context == nullptr) {
+    return;
+  }
+
+  const LocalClearProfile profile =
+      context->resolve_local_clear_profile != nullptr
+          ? context->resolve_local_clear_profile(MapMgr::GetMapId(), context->policy_user_data)
+          : LocalClearProfile::StandardTraversal;
+  const LocalClearPolicy policy = BuildLocalClearPolicy(
+      profile,
+      label,
+      fightRange,
+      context->stats != nullptr);
+
+  HoldLocalClearCallbacks callbacks = {};
+  callbacks.is_dead = context->is_dead;
+  callbacks.is_map_loaded = context->is_map_loaded;
+  callbacks.wait_ms = context->wait_ms;
+  callbacks.fight_in_aggro = &RouteLocalClearFightInAggro;
+  callbacks.post_loot = &RouteCombatPostLoot;
+  callbacks.on_clear_pass = &RecordRouteLocalClearPassStats;
+  callbacks.user_data = context;
+
+  HoldLocalClearOptions options;
+  options.target_id = targetId;
+  options.log_prefix = context->log_prefix;
+  (void)HoldForLocalClear(waypointX, waypointY, fightRange, policy, callbacks, options);
+}
+
+void HoldSpecialRouteLocalClearFromContext(float waypointX,
+                                           float waypointY,
+                                           float fightRange,
+                                           uint32_t targetId,
+                                           void* userData) {
+  auto* context = static_cast<RouteCombatContext*>(userData);
+  HoldRouteLocalClearFromContext(
+      context != nullptr ? context->special_local_clear_label : "Route",
+      waypointX,
+      waypointY,
+      fightRange,
+      targetId,
+      userData);
 }
 
 DungeonNavigation::RouteFollowResult

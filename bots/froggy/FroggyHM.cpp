@@ -80,8 +80,8 @@ static DungeonEntryRecovery::EntryFailureTracker s_tekksQuestEntryFailures = {
     TEKKS_DIALOG_RESET_FAILURE_THRESHOLD,
 };
 DungeonCombatRoutine::CombatSessionState g_combatSession = {};
-static SparkflyTraversalCombatStats s_sparkflyTraversalCombatStats = {};
-static DungeonLoopTelemetry s_dungeonLoopTelemetry = {};
+SparkflyTraversalCombatStats g_sparkflyTraversalCombatStats = {};
+DungeonLoopTelemetry g_dungeonLoopTelemetry = {};
 
 using DungeonRuntime::IsDead;
 using DungeonRuntime::IsMapLoaded;
@@ -187,135 +187,39 @@ static int LootAfterCombatSweep(float aggroRange, const char* reason) {
     return DungeonLoot::SweepPostCombatLoot(aggroRange, options);
 }
 
-static void RecordFroggyAggroTargetStats(void* userData, uint32_t bestTarget) {
-    auto* stats = static_cast<SparkflyTraversalCombatStats*>(userData);
-    if (!stats) {
-        return;
-    }
-    ++stats->quick_step_attempts;
-    stats->last_target_id = bestTarget;
-}
-
-static void RecordFroggyAggroActionStats(
-    void* userData,
-    const DungeonCombatRoutine::SkillActionResult& action,
-    uint32_t actionStart) {
-    auto* stats = static_cast<SparkflyTraversalCombatStats*>(userData);
-    if (!stats || !action.valid || action.started_at_ms < actionStart) {
-        return;
-    }
-    if (action.used_skill) {
-        ++stats->skill_steps;
-    } else if (action.auto_attack) {
-        ++stats->auto_attack_steps;
-    }
-}
-
-static float ResolveFroggyAggroMaxAftercast(uint32_t mapId, void*) {
-    return IsBogrootMapId(mapId) ? 1.5f : 3.0f;
-}
-
-static void FroggyAggroPostLoot(void* userData, float aggroRange, const char* reason) {
-    LootAfterCombatSweep(aggroRange, userData ? "combat-step-stats" : (reason ? reason : "combat-step"));
+static DungeonCombat::RouteCombatContext MakeFroggyRouteCombatContext(
+    SparkflyTraversalCombatStats* stats = nullptr) {
+    DungeonCombat::RouteCombatContext context;
+    context.session = &g_combatSession;
+    context.stats = stats;
+    context.wait_ms = &DungeonRuntime::WaitMs;
+    context.is_dead = &IsDead;
+    context.is_map_loaded = &IsMapLoaded;
+    context.post_combat_loot = &LootAfterCombatSweep;
+    context.resolve_max_aftercast = [](uint32_t mapId, void*) {
+        return IsBogrootMapId(mapId) ? 1.5f : 3.0f;
+    };
+    context.resolve_local_clear_profile = [](uint32_t mapId, void*) {
+        return IsBogrootMapId(mapId)
+            ? DungeonCombat::LocalClearProfile::ShortTraversal
+            : DungeonCombat::LocalClearProfile::StandardTraversal;
+    };
+    context.log_prefix = "Froggy";
+    context.special_local_clear_label = "Sparkfly";
+    return context;
 }
 
 static void FightEnemiesInAggro(float aggroRange, bool careful = false,
                                 SparkflyTraversalCombatStats* stats = nullptr,
                                 bool waitForSkillCompletion = true,
                                 DWORD maxFightMs = 240000u) {
-    DungeonCombat::SessionAggroFightProfile profile;
-    profile.session = &g_combatSession;
-    profile.wait_ms = &DungeonRuntime::WaitMs;
-    profile.is_dead = &IsDead;
-    profile.post_loot = &FroggyAggroPostLoot;
-    profile.on_target = &RecordFroggyAggroTargetStats;
-    profile.on_action = &RecordFroggyAggroActionStats;
-    profile.resolve_max_aftercast = &ResolveFroggyAggroMaxAftercast;
-    profile.user_data = stats;
-    profile.log_prefix = "Froggy";
-
-    DungeonCombat::AggroFightOptions options;
-    options.careful = careful;
-    options.wait_for_skill_completion = waitForSkillCompletion;
-    options.max_fight_ms = maxFightMs;
-    options.log_prefix = "Froggy";
-    options.loot_reason = stats ? "combat-step-stats" : "combat-step";
-    (void)DungeonCombat::FightEnemiesInAggroWithSession(aggroRange, profile, options);
-}
-
-static DungeonCombat::LocalClearPolicy BuildFroggyLocalClearPolicy(
-    const char* label,
-    float fightRange,
-    SparkflyTraversalCombatStats* stats) {
-    const auto profile = IsBogrootMapId(MapMgr::GetMapId())
-        ? DungeonCombat::LocalClearProfile::ShortTraversal
-        : DungeonCombat::LocalClearProfile::StandardTraversal;
-    return DungeonCombat::BuildLocalClearPolicy(profile, label, fightRange, stats != nullptr);
-}
-
-static void RecordFroggyLocalClearPass(void* userData, int, uint32_t targetId) {
-    auto* stats = static_cast<SparkflyTraversalCombatStats*>(userData);
-    if (!stats) return;
-    ++stats->settle_requests;
-    stats->last_target_id = targetId;
-}
-
-static void FroggyLocalClearPostLoot(void*, float aggroRange, const char* reason) {
-    LootAfterCombatSweep(aggroRange, reason);
-}
-
-static void FroggyLocalClearFightInAggro(
-    float aggroRange,
-    bool careful,
-    void* stats,
-    bool waitForSkillCompletion,
-    uint32_t maxFightMs) {
-    FightEnemiesInAggro(
+    auto context = MakeFroggyRouteCombatContext(stats);
+    DungeonCombat::FightEnemiesInAggroFromRouteContext(
         aggroRange,
         careful,
-        static_cast<SparkflyTraversalCombatStats*>(stats),
+        &context,
         waitForSkillCompletion,
         maxFightMs);
-}
-
-static DungeonCombat::HoldLocalClearCallbacks MakeFroggyLocalClearCallbacks(
-    SparkflyTraversalCombatStats* stats) {
-    DungeonCombat::HoldLocalClearCallbacks callbacks = {};
-    callbacks.is_dead = &IsDead;
-    callbacks.is_map_loaded = &IsMapLoaded;
-    callbacks.wait_ms = &DungeonRuntime::WaitMs;
-    callbacks.fight_in_aggro = &FroggyLocalClearFightInAggro;
-    callbacks.post_loot = &FroggyLocalClearPostLoot;
-    callbacks.on_clear_pass = &RecordFroggyLocalClearPass;
-    callbacks.user_data = stats;
-    return callbacks;
-}
-
-static void HoldForLocalClear(const char* label,
-                              float waypointX,
-                              float waypointY,
-                              float fightRange,
-                              uint32_t bestId,
-                              SparkflyTraversalCombatStats* stats) {
-    const auto policy = BuildFroggyLocalClearPolicy(label, fightRange, stats);
-    DungeonCombat::HoldLocalClearOptions options = {};
-    options.target_id = bestId;
-    options.log_prefix = "Froggy";
-    (void)DungeonCombat::HoldForLocalClear(
-        waypointX,
-        waypointY,
-        fightRange,
-        policy,
-        MakeFroggyLocalClearCallbacks(stats),
-        options);
-}
-
-static void HoldSparkflyForLocalClear(float waypointX,
-                                      float waypointY,
-                                      float fightRange,
-                                      uint32_t bestId,
-                                      SparkflyTraversalCombatStats* stats) {
-    HoldForLocalClear("Sparkfly", waypointX, waypointY, fightRange, bestId, stats);
 }
 
 static bool MoveToAndWait(float x, float y, float threshold = DungeonNavigation::MOVE_TO_DEFAULT_THRESHOLD) {
@@ -325,63 +229,21 @@ static bool MoveToAndWait(float x, float y, float threshold = DungeonNavigation:
     return DungeonNavigation::MoveToAndWaitLogged(x, y, threshold, options);
 }
 
-static void FroggyFightEnemiesInAggroForMove(
-    float aggroRange,
-    bool careful,
-    void* stats,
-    bool waitForSkillCompletion,
-    uint32_t maxFightMs) {
-    FightEnemiesInAggro(
-        aggroRange,
-        careful,
-        static_cast<SparkflyTraversalCombatStats*>(stats),
-        waitForSkillCompletion,
-        maxFightMs);
-}
-
-static void FroggyHoldSpecialLocalClear(
-    float x,
-    float y,
-    float fightRange,
-    uint32_t targetId,
-    void* stats) {
-    HoldSparkflyForLocalClear(
-        x,
-        y,
-        fightRange,
-        targetId,
-        static_cast<SparkflyTraversalCombatStats*>(stats));
-}
-
-static void FroggyHoldLocalClear(
-    const char* label,
-    float x,
-    float y,
-    float fightRange,
-    uint32_t targetId,
-    void* stats) {
-    HoldForLocalClear(
-        label,
-        x,
-        y,
-        fightRange,
-        targetId,
-        static_cast<SparkflyTraversalCombatStats*>(stats));
-}
-
 static void AggroMoveToEx(float x, float y, float fightRange = DungeonCombat::AGGRO_DEFAULT_FIGHT_RANGE) {
     const bool sparkflyMap = MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP;
     const bool bogrootMap = IsBogrootMapId(MapMgr::GetMapId());
+    auto routeCombatContext = MakeFroggyRouteCombatContext(
+        sparkflyMap ? &g_sparkflyTraversalCombatStats : nullptr);
 
     DungeonNavigation::AggroMoveProfileConfig config;
     config.is_dead = &IsDead;
     config.is_map_loaded = &IsMapLoaded;
     config.wait_ms = &DungeonRuntime::WaitMs;
-    config.fight_in_aggro = &FroggyFightEnemiesInAggroForMove;
-    config.hold_local_clear = &FroggyHoldLocalClear;
-    config.hold_special_local_clear = &FroggyHoldSpecialLocalClear;
+    config.fight_in_aggro = &DungeonCombat::FightEnemiesInAggroFromRouteContext;
+    config.hold_local_clear = &DungeonCombat::HoldRouteLocalClearFromContext;
+    config.hold_special_local_clear = &DungeonCombat::HoldSpecialRouteLocalClearFromContext;
     config.pickup_nearby_loot = &PickupNearbyLoot;
-    config.special_stats = &s_sparkflyTraversalCombatStats;
+    config.user_data = &routeCombatContext;
     config.profile = bogrootMap
         ? DungeonNavigation::AggroMoveProfile::Opportunistic
         : DungeonNavigation::AggroMoveProfile::Standard;
@@ -463,48 +325,20 @@ static DungeonEntryRecovery::QuestMapApproachPlan MakeFroggyTekksApproachPlan() 
     return plan;
 }
 
-static bool IsSparkflyTekksApproachReady(float maxDist) {
-    return DungeonEntryRecovery::IsQuestMapApproachReady(MakeFroggyTekksApproachPlan(), maxDist);
-}
-
-static bool MoveToTekksFromSparkflyCurrentSide() {
-    return DungeonEntryRecovery::MoveToQuestGiverFromCurrentQuestMapSide(MakeFroggyTekksApproachPlan());
-}
-
-static bool EnterBogrootFromSparkfly() {
-    return DungeonEntryRecovery::EnterDungeonFromQuestMap(
-        MakeFroggyBogrootEntryPlan("Froggy transition"));
-}
-
-static void ResetTekksQuestEntryFailures(const char* reason) {
-    DungeonEntryRecovery::ResetEntryFailureTracker(s_tekksQuestEntryFailures, reason, "Froggy");
-}
-
-static bool RecordTekksQuestEntryFailureAndMaybeResetDialog(const char* context) {
-    return DungeonEntryRecovery::RecordEntryFailureAndMaybeResetDialog(
-        s_tekksQuestEntryFailures,
-        MakeTekksDialogResetBouncePlan(),
-        context);
-}
-
 static void GrabDungeonBlessing(float shrineX, float shrineY); // forward decl
 static bool OpenDungeonDoorAt(float doorX, float doorY);       // forward decl
 
-static void MarkFroggyBossStarted(void*) {
-    s_dungeonLoopTelemetry.boss_started = true;
-}
-
 static void ApplyFroggyBossResult(void*, const DungeonQuestRuntime::BossCompletionResult& result) {
-    s_dungeonLoopTelemetry.chest_attempts += result.chest.open_attempts;
-    s_dungeonLoopTelemetry.chest_successes += result.chest.open_successes;
-    s_dungeonLoopTelemetry.reward_attempted = result.reward_attempted;
-    s_dungeonLoopTelemetry.last_dialog_id = result.last_dialog_id;
-    s_dungeonLoopTelemetry.reward_dialog_latched = result.reward_dialog_latched;
-    s_dungeonLoopTelemetry.boss_completed = result.boss_completed;
-    s_dungeonLoopTelemetry.final_map_id = result.final_map_id;
-    s_dungeonLoopTelemetry.returned_to_sparkfly =
+    g_dungeonLoopTelemetry.chest_attempts += result.chest.open_attempts;
+    g_dungeonLoopTelemetry.chest_successes += result.chest.open_successes;
+    g_dungeonLoopTelemetry.reward_attempted = result.reward_attempted;
+    g_dungeonLoopTelemetry.last_dialog_id = result.last_dialog_id;
+    g_dungeonLoopTelemetry.reward_dialog_latched = result.reward_dialog_latched;
+    g_dungeonLoopTelemetry.boss_completed = result.boss_completed;
+    g_dungeonLoopTelemetry.final_map_id = result.final_map_id;
+    g_dungeonLoopTelemetry.returned_to_sparkfly =
         result.post_reward.returned_expected_map &&
-        s_dungeonLoopTelemetry.final_map_id == MapIds::SPARKFLY_SWAMP;
+        g_dungeonLoopTelemetry.final_map_id == MapIds::SPARKFLY_SWAMP;
 }
 
 static DungeonQuestRuntime::BossCompletionOptions MakeFroggyBossCompletionOptions() {
@@ -560,7 +394,9 @@ static DungeonQuestRuntime::BossCompletionOptions MakeFroggyBossCompletionOption
 static void HandleBossWaypoint(const Waypoint& wp) {
     DungeonQuestRuntime::BossWaypointOptions options = {};
     options.completion = MakeFroggyBossCompletionOptions();
-    options.on_started = &MarkFroggyBossStarted;
+    options.on_started = [](void*) {
+        g_dungeonLoopTelemetry.boss_started = true;
+    };
     options.on_result = &ApplyFroggyBossResult;
 
     (void)DungeonQuestRuntime::ExecuteBossWaypoint(
@@ -568,10 +404,6 @@ static void HandleBossWaypoint(const Waypoint& wp) {
         wp.y,
         wp.fight_range,
         options);
-}
-
-static bool IsFroggyRouteMap(uint32_t mapId) {
-    return mapId == MapIds::SPARKFLY_SWAMP || IsBogrootMapId(mapId);
 }
 
 static DungeonRouteRunner::RouteStartPolicyOptions MakeFroggyRouteStartPolicy() {
@@ -614,60 +446,33 @@ static void LogFroggyWaypointState(const char* stage, const Waypoint* wps, int c
     DungeonNavigation::LogWaypointState(stage, wps, count, waypointIndex, options);
 }
 
-static void MoveFroggyWaypoint(float x, float y, float threshold) {
-    (void)MoveToAndWait(x, y, threshold);
-}
-
-static void AggroMoveFroggyWaypoint(float x, float y, float fightRange) {
-    AggroMoveToEx(x, y, fightRange);
-}
-
-static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypoint(
-    const Waypoint& waypoint,
-    float moveThreshold = 250.0f) {
+static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypoint(const Waypoint& waypoint) {
     return DungeonNavigation::MoveRouteWaypoint(
         waypoint,
-        &MoveFroggyWaypoint,
-        &AggroMoveFroggyWaypoint,
+        [](float x, float y, float threshold) {
+            (void)MoveToAndWait(x, y, threshold);
+        },
+        [](float x, float y, float fightRange) {
+            AggroMoveToEx(x, y, fightRange);
+        },
         &IsMapLoaded,
-        moveThreshold);
-}
-
-static DungeonNavigation::WaypointMoveResult MoveFroggyRouteWaypointDefault(const Waypoint& waypoint) {
-    return MoveFroggyRouteWaypoint(waypoint);
-}
-
-static bool MoveFroggyWaypointForCheckpointReplay(const Waypoint& waypoint) {
-    MoveFroggyRouteWaypoint(waypoint);
-    return true;
-}
-
-static void MarkFroggyLevelTransitionStarted() {
-    s_dungeonLoopTelemetry.lvl1_to_lvl2_started = true;
-}
-
-static void RecordFroggyLevelTransitionAttempt(uint32_t attempt) {
-    s_dungeonLoopTelemetry.lvl1_to_lvl2_attempts = attempt;
-}
-
-static void MarkFroggyLevelTransitionEntered(uint32_t) {
-    s_dungeonLoopTelemetry.entered_lvl2 = true;
+        250.0f);
 }
 
 static void RecordFroggyLevelTransitionTelemetry(const DungeonRuntime::TransitionTelemetry& telemetry) {
-    s_dungeonLoopTelemetry.map_loaded = telemetry.map_loaded;
-    s_dungeonLoopTelemetry.player_alive = telemetry.player_alive;
-    s_dungeonLoopTelemetry.player_hp = telemetry.player_hp;
-    s_dungeonLoopTelemetry.player_x = telemetry.player_x;
-    s_dungeonLoopTelemetry.player_y = telemetry.player_y;
-    s_dungeonLoopTelemetry.target_id = telemetry.target_id;
-    s_dungeonLoopTelemetry.dist_to_exit = telemetry.dist_to_exit;
-    s_dungeonLoopTelemetry.nearest_enemy_dist = telemetry.nearest_enemy_dist;
-    s_dungeonLoopTelemetry.nearby_enemy_count = telemetry.nearby_enemy_count;
-    s_dungeonLoopTelemetry.lvl1_portal_id = telemetry.portal_id;
-    s_dungeonLoopTelemetry.lvl1_portal_x = telemetry.portal_x;
-    s_dungeonLoopTelemetry.lvl1_portal_y = telemetry.portal_y;
-    s_dungeonLoopTelemetry.lvl1_portal_dist = telemetry.portal_dist;
+    g_dungeonLoopTelemetry.map_loaded = telemetry.map_loaded;
+    g_dungeonLoopTelemetry.player_alive = telemetry.player_alive;
+    g_dungeonLoopTelemetry.player_hp = telemetry.player_hp;
+    g_dungeonLoopTelemetry.player_x = telemetry.player_x;
+    g_dungeonLoopTelemetry.player_y = telemetry.player_y;
+    g_dungeonLoopTelemetry.target_id = telemetry.target_id;
+    g_dungeonLoopTelemetry.dist_to_exit = telemetry.dist_to_exit;
+    g_dungeonLoopTelemetry.nearest_enemy_dist = telemetry.nearest_enemy_dist;
+    g_dungeonLoopTelemetry.nearby_enemy_count = telemetry.nearby_enemy_count;
+    g_dungeonLoopTelemetry.lvl1_portal_id = telemetry.portal_id;
+    g_dungeonLoopTelemetry.lvl1_portal_x = telemetry.portal_x;
+    g_dungeonLoopTelemetry.lvl1_portal_y = telemetry.portal_y;
+    g_dungeonLoopTelemetry.lvl1_portal_dist = telemetry.portal_dist;
 }
 
 static DungeonCheckpoint::WaypointWipeRecoveryOptions MakeFroggyWipeRecoveryOptions() {
@@ -683,8 +488,8 @@ static DungeonCheckpoint::WaypointWipeRecoveryOptions MakeFroggyWipeRecoveryOpti
 }
 
 static void UpdateFroggyQuestMapReturnTelemetry(uint32_t finalMapId, bool returnedToQuestMap) {
-    s_dungeonLoopTelemetry.final_map_id = finalMapId;
-    s_dungeonLoopTelemetry.returned_to_sparkfly =
+    g_dungeonLoopTelemetry.final_map_id = finalMapId;
+    g_dungeonLoopTelemetry.returned_to_sparkfly =
         returnedToQuestMap && finalMapId == MapIds::SPARKFLY_SWAMP;
 }
 
@@ -709,9 +514,15 @@ static void HandleFroggyLevelTransitionWaypoint(const Waypoint&) {
     options.get_map_id = &MapMgr::GetMapId;
     options.wait_ms = &DungeonRuntime::WaitMs;
     options.find_portal = &DungeonInteractions::FindNearestSignpost;
-    options.on_started = &MarkFroggyLevelTransitionStarted;
-    options.on_attempt = &RecordFroggyLevelTransitionAttempt;
-    options.on_entered = &MarkFroggyLevelTransitionEntered;
+    options.on_started = []() {
+        g_dungeonLoopTelemetry.lvl1_to_lvl2_started = true;
+    };
+    options.on_attempt = [](uint32_t attempt) {
+        g_dungeonLoopTelemetry.lvl1_to_lvl2_attempts = attempt;
+    };
+    options.on_entered = [](uint32_t) {
+        g_dungeonLoopTelemetry.entered_lvl2 = true;
+    };
     options.on_telemetry = &RecordFroggyLevelTransitionTelemetry;
 
     const auto result = DungeonRuntime::ExecuteLevelTransition(options);
@@ -724,21 +535,20 @@ static void HandleFroggyLevelTransitionWaypoint(const Waypoint&) {
     }
 }
 
-static void HandleFroggyBossRewardWaypoint(const Waypoint& waypoint) {
-    HandleBossWaypoint(waypoint);
-}
-
 static DungeonRouteRunner::RouteLabelExecutorOptions MakeFroggyRouteLabelOptions() {
     DungeonRouteRunner::RouteLabelExecutorOptions options;
-    options.move_route_waypoint = &MoveFroggyRouteWaypointDefault;
-    options.move_key_waypoint = &MoveFroggyRouteWaypointDefault;
-    options.move_checkpoint_waypoint = &MoveFroggyWaypointForCheckpointReplay;
+    options.move_route_waypoint = &MoveFroggyRouteWaypoint;
+    options.move_key_waypoint = &MoveFroggyRouteWaypoint;
+    options.move_checkpoint_waypoint = [](const Waypoint& waypoint) {
+        (void)MoveFroggyRouteWaypoint(waypoint);
+        return true;
+    };
     options.aggro_move_to = &AggroMoveToEx;
     options.open_dungeon_door_at = &OpenDungeonDoorAt;
     options.grab_blessing = &GrabDungeonBlessing;
     options.acquire_dungeon_key = &AcquireBogrootBossKey;
     options.handle_level_transition = &HandleFroggyLevelTransitionWaypoint;
-    options.handle_boss_reward = &HandleFroggyBossRewardWaypoint;
+    options.handle_boss_reward = &HandleBossWaypoint;
     options.wipe_recovery = MakeFroggyWipeRecoveryOptions();
     options.is_dead = &IsDead;
     options.return_to_outpost = &MapMgr::ReturnToOutpost;
@@ -756,9 +566,9 @@ static DungeonRouteRunner::RouteLabelExecutorOptions MakeFroggyRouteLabelOptions
 }
 
 static void UpdateFroggyRouteTelemetry(int waypointIndex, const Waypoint& waypoint) {
-    s_dungeonLoopTelemetry.last_waypoint_index = static_cast<uint32_t>(waypointIndex);
-    s_dungeonLoopTelemetry.waypoint_iterations++;
-    strncpy_s(s_dungeonLoopTelemetry.last_waypoint_label,
+    g_dungeonLoopTelemetry.last_waypoint_index = static_cast<uint32_t>(waypointIndex);
+    g_dungeonLoopTelemetry.waypoint_iterations++;
+    strncpy_s(g_dungeonLoopTelemetry.last_waypoint_label,
               waypoint.label ? waypoint.label : "",
               _TRUNCATE);
 }
@@ -776,7 +586,9 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
     callbacks.get_map_id = &MapMgr::GetMapId;
     callbacks.is_bot_running = &Bot::IsRunning;
     callbacks.is_dead = &IsDead;
-    callbacks.is_route_map = &IsFroggyRouteMap;
+    callbacks.is_route_map = [](uint32_t mapId) {
+        return mapId == MapIds::SPARKFLY_SWAMP || IsBogrootMapId(mapId);
+    };
     callbacks.log_waypoint_state = &LogFroggyWaypointState;
     callbacks.update_telemetry = &UpdateFroggyRouteTelemetry;
     callbacks.log_waypoint = &LogFroggyRouteWaypoint;
@@ -789,8 +601,12 @@ static void FollowWaypoints(const Waypoint* wps, int count, bool ignoreBotRunnin
     options.wipe_recovery = MakeFroggyWipeRecoveryOptions();
     options.log_prefix = "Froggy";
     options.route_name = MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP ? "Sparkfly" : "Bogroot";
-    options.standard_waypoint_movement.move_to_point = &MoveFroggyWaypoint;
-    options.standard_waypoint_movement.aggro_move_to_point = &AggroMoveFroggyWaypoint;
+    options.standard_waypoint_movement.move_to_point = [](float x, float y, float threshold) {
+        (void)MoveToAndWait(x, y, threshold);
+    };
+    options.standard_waypoint_movement.aggro_move_to_point = [](float x, float y, float fightRange) {
+        AggroMoveToEx(x, y, fightRange);
+    };
     options.standard_waypoint_movement.is_map_loaded = &IsMapLoaded;
     options.standard_waypoint_movement.loot_after_combat = &LootAfterCombatSweep;
     options.standard_waypoint_movement.log_prefix = "Froggy";
@@ -884,17 +700,13 @@ static void LogNearbyBogrootBossKeyCandidates(const char* label, float x, float 
         MakeBogrootBossKeyModelSet());
 }
 
-static void MoveToBogrootBossKeyWithAggro(float x, float y, float fightRange) {
-    AggroMoveToEx(x, y, fightRange);
-}
-
 static bool AcquireBogrootBossKey() {
     DungeonLoot::BossKeyAcquireOptions options;
     options.key_x = BOGROOT_BOSS_KEY_X;
     options.key_y = BOGROOT_BOSS_KEY_Y;
     options.key_scan_range = BOGROOT_BOSS_KEY_SCAN_RANGE;
     options.log_prefix = "Froggy";
-    options.combat_move_to = &MoveToBogrootBossKeyWithAggro;
+    options.combat_move_to = &AggroMoveToEx;
     options.pickup_nearby_loot = &PickupNearbyLoot;
     options.move_to_point = &DungeonNavigation::MoveToPoint;
     options.wait_ms = &DungeonRuntime::WaitMs;
@@ -906,10 +718,6 @@ static bool AcquireBogrootBossKey() {
 }
 
 static DungeonInteractions::OpenedChestTracker s_openedChestTracker;
-
-static void ResetOpenedChestTracker(const char* reason) {
-    DungeonInteractions::ResetOpenedChestTrackerForCurrentMap(s_openedChestTracker, reason, "Froggy");
-}
 
 static DungeonLoot::ChestBundleFallbackOptions MakeFroggyChestBundleFallbackOptions() {
     DungeonLoot::ChestBundleFallbackOptions options;
@@ -994,10 +802,6 @@ static DungeonVendor::MaintenanceLocation MakeFroggyMaintenanceLocation() {
     return location;
 }
 
-static MaintenanceMgr::Config MakeFroggyMaintenanceConfig(uint32_t outpostMapId) {
-    return DungeonVendor::BuildMaintenanceConfig(outpostMapId, MakeFroggyMaintenanceLocation());
-}
-
 static DungeonVendor::MaintenanceStateOptions MakeFroggyMaintenanceStateOptions() {
     DungeonVendor::MaintenanceStateOptions options = {};
     options.fallback_outpost_map_id = MapIds::GADDS_ENCAMPMENT;
@@ -1005,14 +809,6 @@ static DungeonVendor::MaintenanceStateOptions MakeFroggyMaintenanceStateOptions(
     options.move_to_point = &MoveToAndWait;
     options.wait_ms = &DungeonRuntime::WaitMs;
     return options;
-}
-
-static void UseConsumables(const BotConfig& cfg) {
-    (void)DungeonItemActions::UseConsetsForCurrentPlayerIfEnabled(
-        cfg.use_consets,
-        &DungeonRuntime::WaitMs,
-        {},
-        "Froggy");
 }
 
 static void UseDpRemovalIfNeeded() {
@@ -1028,54 +824,12 @@ static void UseDpRemovalIfNeeded() {
 }
 
 void ResetDungeonLoopTelemetry() {
-    s_dungeonLoopTelemetry = {};
+    g_dungeonLoopTelemetry = {};
     s_wipeCount = 0;
-    ResetOpenedChestTracker("dungeon-loop-start");
-}
-
-DungeonLoopTelemetry GetDungeonLoopTelemetry() {
-    s_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
-    s_dungeonLoopTelemetry.last_dialog_id = DialogMgr::GetLastDialogId();
-    return s_dungeonLoopTelemetry;
-}
-
-static bool PrepareTekksDungeonEntryForLoop(const char*) {
-    return PrepareTekksDungeonEntry();
-}
-
-static bool EnterBogrootFromSparkflyForLoop(const char*) {
-    return EnterBogrootFromSparkfly();
-}
-
-static bool RecordTekksQuestEntryFailureForLoop(const char* context) {
-    return RecordTekksQuestEntryFailureAndMaybeResetDialog(context);
-}
-
-static bool ResetTekksQuestEntryFailuresForLoop(const char* context) {
-    ResetTekksQuestEntryFailures(context);
-    return true;
-}
-
-static bool HasReachedBogrootLvl2ForLoop() {
-    return s_dungeonLoopTelemetry.entered_lvl2;
-}
-
-static bool HasCompletedBogrootObjectiveForLoop() {
-    return s_dungeonLoopTelemetry.boss_completed;
-}
-
-static void MarkBogrootLevelStartedForLoop(int levelIndex) {
-    if (levelIndex == 0) {
-        s_dungeonLoopTelemetry.started_in_lvl1 = true;
-    } else if (levelIndex == 1) {
-        s_dungeonLoopTelemetry.started_in_lvl2 = true;
-    }
-}
-
-static void MarkBogrootProgressLevelReachedForLoop(int levelIndex) {
-    if (levelIndex >= 1) {
-        s_dungeonLoopTelemetry.entered_lvl2 = true;
-    }
+    DungeonInteractions::ResetOpenedChestTrackerForCurrentMap(
+        s_openedChestTracker,
+        "dungeon-loop-start",
+        "Froggy");
 }
 
 static void LogBogrootLevelRouteResultForLoop(
@@ -1084,14 +838,14 @@ static void LogBogrootLevelRouteResultForLoop(
     if (levelIndex == 0) {
         Log::Info("Froggy: Bogroot loop after lvl1 map=%u lastWp=%u(%s) returnedToSparkfly=%d",
                   MapMgr::GetMapId(),
-                  s_dungeonLoopTelemetry.last_waypoint_index,
-                  s_dungeonLoopTelemetry.last_waypoint_label,
-                  s_dungeonLoopTelemetry.returned_to_sparkfly ? 1 : 0);
+                  g_dungeonLoopTelemetry.last_waypoint_index,
+                  g_dungeonLoopTelemetry.last_waypoint_label,
+                  g_dungeonLoopTelemetry.returned_to_sparkfly ? 1 : 0);
     } else if (levelIndex == 1) {
         Log::Info("Froggy: Bogroot loop after lvl2 map=%u bossStarted=%d bossCompleted=%d",
                   MapMgr::GetMapId(),
-                  s_dungeonLoopTelemetry.boss_started ? 1 : 0,
-                  s_dungeonLoopTelemetry.boss_completed ? 1 : 0);
+                  g_dungeonLoopTelemetry.boss_started ? 1 : 0,
+                  g_dungeonLoopTelemetry.boss_completed ? 1 : 0);
     }
 }
 
@@ -1115,15 +869,42 @@ bool RunDungeonLoopFromCurrentMap() {
     DungeonRouteRunner::DungeonLoopCallbacks callbacks = {};
     callbacks.get_map_id = &MapMgr::GetMapId;
     callbacks.follow_waypoints = &FollowWaypoints;
-    callbacks.is_loop_objective_completed = &HasCompletedBogrootObjectiveForLoop;
-    callbacks.is_progress_level_reached = &HasReachedBogrootLvl2ForLoop;
+    callbacks.is_loop_objective_completed = []() {
+        return g_dungeonLoopTelemetry.boss_completed;
+    };
+    callbacks.is_progress_level_reached = []() {
+        return g_dungeonLoopTelemetry.entered_lvl2;
+    };
     callbacks.reset_loop_state = &ResetDungeonLoopTelemetry;
-    callbacks.prepare_entry = &PrepareTekksDungeonEntryForLoop;
-    callbacks.enter_dungeon = &EnterBogrootFromSparkflyForLoop;
-    callbacks.record_entry_failure = &RecordTekksQuestEntryFailureForLoop;
-    callbacks.reset_entry_failures = &ResetTekksQuestEntryFailuresForLoop;
-    callbacks.on_level_started = &MarkBogrootLevelStartedForLoop;
-    callbacks.on_progress_level_reached = &MarkBogrootProgressLevelReachedForLoop;
+    callbacks.prepare_entry = [](const char*) {
+        return PrepareTekksDungeonEntry();
+    };
+    callbacks.enter_dungeon = [](const char*) {
+        return DungeonEntryRecovery::EnterDungeonFromQuestMap(
+            MakeFroggyBogrootEntryPlan("Froggy transition"));
+    };
+    callbacks.record_entry_failure = [](const char* context) {
+        return DungeonEntryRecovery::RecordEntryFailureAndMaybeResetDialog(
+            s_tekksQuestEntryFailures,
+            MakeTekksDialogResetBouncePlan(),
+            context);
+    };
+    callbacks.reset_entry_failures = [](const char* context) {
+        DungeonEntryRecovery::ResetEntryFailureTracker(s_tekksQuestEntryFailures, context, "Froggy");
+        return true;
+    };
+    callbacks.on_level_started = [](int levelIndex) {
+        if (levelIndex == 0) {
+            g_dungeonLoopTelemetry.started_in_lvl1 = true;
+        } else if (levelIndex == 1) {
+            g_dungeonLoopTelemetry.started_in_lvl2 = true;
+        }
+    };
+    callbacks.on_progress_level_reached = [](int levelIndex) {
+        if (levelIndex >= 1) {
+            g_dungeonLoopTelemetry.entered_lvl2 = true;
+        }
+    };
     callbacks.after_level_route = &LogBogrootLevelRouteResultForLoop;
 
     DungeonRouteRunner::DungeonLoopOptions options = {};
@@ -1139,16 +920,12 @@ bool RunDungeonLoopFromCurrentMap() {
     options.entry_refresh_context = "bogroot-loop-refresh";
 
     const auto result = DungeonRouteRunner::RunDungeonLoop(callbacks, options);
-    s_dungeonLoopTelemetry.final_map_id = result.final_map_id;
-    s_dungeonLoopTelemetry.last_dialog_id = DialogMgr::GetLastDialogId();
-    s_dungeonLoopTelemetry.returned_to_sparkfly =
+    g_dungeonLoopTelemetry.final_map_id = result.final_map_id;
+    g_dungeonLoopTelemetry.last_dialog_id = DialogMgr::GetLastDialogId();
+    g_dungeonLoopTelemetry.returned_to_sparkfly =
         result.returned_to_entry_map &&
-        s_dungeonLoopTelemetry.final_map_id == MapIds::SPARKFLY_SWAMP;
+        g_dungeonLoopTelemetry.final_map_id == MapIds::SPARKFLY_SWAMP;
     return result.completed;
-}
-
-BotState HandleCharSelect(BotConfig& cfg) {
-    return DungeonStates::HandleCharSelect(cfg);
 }
 
 BotState HandleTownSetup(BotConfig& cfg) {
@@ -1157,7 +934,7 @@ BotState HandleTownSetup(BotConfig& cfg) {
     options.default_outpost_map_id = MapIds::GADDS_ENCAMPMENT;
     options.run_number = s_runCount + 1;
     options.log_prefix = "Froggy";
-    options.maintenance = MakeFroggyMaintenanceConfig(outpostMapId);
+    options.maintenance = DungeonVendor::BuildMaintenanceConfig(outpostMapId, MakeFroggyMaintenanceLocation());
     options.merchant_x = GADDS_MERCHANT.x;
     options.merchant_y = GADDS_MERCHANT.y;
     options.outpost.default_hero_config_file = "Standard.txt";
@@ -1180,7 +957,11 @@ BotState HandleTownSetup(BotConfig& cfg) {
         (void)DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(g_combatSession, "Froggy");
     };
     options.use_consumables = [](const BotConfig& botCfg) {
-        UseConsumables(botCfg);
+        (void)DungeonItemActions::UseConsetsForCurrentPlayerIfEnabled(
+            botCfg.use_consets,
+            &DungeonRuntime::WaitMs,
+            {},
+            "Froggy");
     };
     return DungeonStates::HandleTownSetup(cfg, options);
 }
@@ -1211,34 +992,44 @@ BotState HandleDungeon(BotConfig& cfg) {
         (void)DungeonCombatRoutine::RefreshCombatSkillbarForDebug(g_combatSession, "Froggy");
     };
     options.use_consumables = [](const BotConfig& botCfg) {
-        UseConsumables(botCfg);
+        (void)DungeonItemActions::UseConsetsForCurrentPlayerIfEnabled(
+            botCfg.use_consets,
+            &DungeonRuntime::WaitMs,
+            {},
+            "Froggy");
     };
     options.move_to_entry_npc = []() {
-        return MoveToTekksFromSparkflyCurrentSide();
+        return DungeonEntryRecovery::MoveToQuestGiverFromCurrentQuestMapSide(MakeFroggyTekksApproachPlan());
     };
     options.prepare_entry = []() {
         return PrepareTekksDungeonEntry();
     };
     options.enter_dungeon = []() {
-        return EnterBogrootFromSparkfly();
+        return DungeonEntryRecovery::EnterDungeonFromQuestMap(
+            MakeFroggyBogrootEntryPlan("Froggy transition"));
     };
     options.record_entry_failure = [](const char* context) {
-        (void)RecordTekksQuestEntryFailureAndMaybeResetDialog(context);
+        (void)DungeonEntryRecovery::RecordEntryFailureAndMaybeResetDialog(
+            s_tekksQuestEntryFailures,
+            MakeTekksDialogResetBouncePlan(),
+            context);
     };
     options.reset_entry_failures = [](const char* context) {
-        ResetTekksQuestEntryFailures(context);
+        DungeonEntryRecovery::ResetEntryFailureTracker(s_tekksQuestEntryFailures, context, "Froggy");
     };
     options.run_dungeon_loop = []() {
         const bool completed = RunDungeonLoopFromCurrentMap();
-        const DungeonLoopTelemetry telemetry = GetDungeonLoopTelemetry();
+        g_dungeonLoopTelemetry.final_map_id = MapMgr::GetMapId();
+        g_dungeonLoopTelemetry.last_dialog_id = DialogMgr::GetLastDialogId();
         return DungeonStates::DungeonLoopStateResult{
             completed,
-            telemetry.final_map_id,
+            g_dungeonLoopTelemetry.final_map_id,
         };
     };
     options.needs_maintenance = [&cfg]() {
-        MaintenanceMgr::Config maintenanceCfg = MakeFroggyMaintenanceConfig(
-            cfg.outpost_map_id ? cfg.outpost_map_id : MapIds::GADDS_ENCAMPMENT);
+        MaintenanceMgr::Config maintenanceCfg = DungeonVendor::BuildMaintenanceConfig(
+            cfg.outpost_map_id ? cfg.outpost_map_id : MapIds::GADDS_ENCAMPMENT,
+            MakeFroggyMaintenanceLocation());
         return MaintenanceMgr::NeedsMaintenance(maintenanceCfg);
     };
     options.resolve_post_entry_map_run_decision = [](bool maintenanceNeeded) {
@@ -1333,7 +1124,9 @@ BotState HandleMaintenance(BotConfig& cfg) {
 // ===== Registration =====
 
 void Register() {
-    Bot::RegisterStateHandler(BotState::CharSelect, HandleCharSelect);
+    Bot::RegisterStateHandler(BotState::CharSelect, [](BotConfig& cfg) {
+        return DungeonStates::HandleCharSelect(cfg);
+    });
     Bot::RegisterStateHandler(BotState::InTown, HandleTownSetup);
     Bot::RegisterStateHandler(BotState::Traveling, HandleTravel);
     Bot::RegisterStateHandler(BotState::InDungeon, HandleDungeon);
@@ -1386,7 +1179,7 @@ bool DebugClearAggroInPlace(float fightRange) {
     LogBot("DebugClearAggroInPlace start fightRange=%.0f nearestBefore=%.0f", fightRange, nearestBefore);
     AgentMgr::CancelAction();
     WaitMs(100);
-    FightEnemiesInAggro(fightRange, false, &s_sparkflyTraversalCombatStats);
+    FightEnemiesInAggro(fightRange, false, &g_sparkflyTraversalCombatStats);
     AgentMgr::CancelAction();
     WaitMs(250);
     const float nearestAfter = DungeonCombat::GetNearestLivingEnemyDistance(fightRange + 500.0f);
@@ -1406,7 +1199,8 @@ bool DebugRunSparkflyRouteToTekks() {
     static constexpr float kTekksReadyThreshold = 2500.0f;
 
     LogBot("DebugRunSparkflyRouteToTekks start");
-    const bool approached = MoveToTekksFromSparkflyCurrentSide();
+    const bool approached =
+        DungeonEntryRecovery::MoveToQuestGiverFromCurrentQuestMapSide(MakeFroggyTekksApproachPlan());
     if (!approached || !MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != MapIds::SPARKFLY_SWAMP) {
         LogBot("DebugRunSparkflyRouteToTekks aborted after approach: approached=%d map=%u loaded=%d",
                approached ? 1 : 0,
@@ -1418,7 +1212,9 @@ bool DebugRunSparkflyRouteToTekks() {
     const bool staged = MoveToAndWait(SPARKFLY_TEKKS_STAGE.x, SPARKFLY_TEKKS_STAGE.y, kTekksStageThreshold);
     const float stageRemaining = DungeonCombat::DistanceToPoint(SPARKFLY_TEKKS_STAGE.x, SPARKFLY_TEKKS_STAGE.y);
     const float searchRemaining = DungeonCombat::DistanceToPoint(SPARKFLY_TEKKS_SEARCH.x, SPARKFLY_TEKKS_SEARCH.y);
-    const bool ready = staged || IsSparkflyTekksApproachReady(kTekksReadyThreshold);
+    const bool ready =
+        staged ||
+        DungeonEntryRecovery::IsQuestMapApproachReady(MakeFroggyTekksApproachPlan(), kTekksReadyThreshold);
     LogBot("DebugRunSparkflyRouteToTekks end staged=%d stageRemaining=%.0f searchRemaining=%.0f ready=%d",
            staged ? 1 : 0,
            stageRemaining,
@@ -1486,43 +1282,6 @@ bool ExecuteBuiltinCombatStep(uint32_t targetId, bool quickStep) {
 
     cfg.combat_mode = originalMode;
     return executed;
-}
-
-const char* GetLastCombatStepDescription() {
-    return g_combatSession.last_step;
-}
-
-LastCombatStepInfo GetLastCombatStepInfo() {
-    return g_combatSession.last_action;
-}
-
-void ResetSparkflyTraversalCombatStats() {
-    s_sparkflyTraversalCombatStats = {};
-}
-
-SparkflyTraversalCombatStats GetSparkflyTraversalCombatStats() {
-    return s_sparkflyTraversalCombatStats;
-}
-
-bool DebugResolveSyntheticSkillTarget(uint32_t roleMask, uint8_t targetType,
-                                      uint32_t defaultFoeId, uint32_t& outTargetId) {
-    return DungeonCombatRoutine::ResolveSyntheticSkillTarget(
-        roleMask,
-        targetType,
-        defaultFoeId,
-        outTargetId);
-}
-
-bool DebugResolveUsableSkillTargetForSlot(uint32_t slot, uint32_t defaultFoeId,
-                                          uint32_t& outSkillId, uint32_t& outTargetId, uint8_t& outTargetType) {
-    return DungeonCombatRoutine::ResolveUsableSkillTargetForSlot(
-        g_combatSession,
-        slot,
-        defaultFoeId,
-        outSkillId,
-        outTargetId,
-        outTargetType,
-        "Froggy");
 }
 
 } // namespace GWA3::Bot::Froggy

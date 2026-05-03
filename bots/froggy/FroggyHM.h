@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bots/common/BotFramework.h>
+#include <gwa3/dungeon/DungeonCombat.h>
 #include <gwa3/dungeon/DungeonCombatRoutine.h>
 #include <gwa3/dungeon/DungeonQuest.h>
 #include <gwa3/dungeon/DungeonRoute.h>
@@ -225,14 +226,7 @@ namespace GWA3::Bot::Froggy {
 
     using LastCombatStepInfo = DungeonCombatRoutine::SkillActionResult;
 
-    struct SparkflyTraversalCombatStats {
-        uint32_t quick_step_attempts = 0;
-        uint32_t skill_steps = 0;
-        uint32_t auto_attack_steps = 0;
-        uint32_t settle_requests = 0;
-        uint32_t unsettled_skips = 0;
-        uint32_t last_target_id = 0;
-    };
+    using SparkflyTraversalCombatStats = DungeonCombat::RouteCombatStats;
 
     struct DungeonLoopTelemetry {
         bool started_in_lvl1 = false;
@@ -283,9 +277,10 @@ namespace GWA3::Bot::Froggy {
     void Register();
 
     extern DungeonCombatRoutine::CombatSessionState g_combatSession;
+    extern SparkflyTraversalCombatStats g_sparkflyTraversalCombatStats;
+    extern DungeonLoopTelemetry g_dungeonLoopTelemetry;
 
     // State handlers
-    BotState HandleCharSelect(BotConfig& cfg);
     BotState HandleTownSetup(BotConfig& cfg);
     BotState HandleTravel(BotConfig& cfg);
     BotState HandleDungeon(BotConfig& cfg);
@@ -305,25 +300,8 @@ namespace GWA3::Bot::Froggy {
     bool DebugRunSparkflyRouteToTekks();
     bool DebugPrepareTekksDungeonEntry();
 
-    // Retrieve a short description of the last builtin combat action chosen.
-    const char* GetLastCombatStepDescription();
-
-    // Read structured details for the most recent builtin combat step.
-    LastCombatStepInfo GetLastCombatStepInfo();
-
-    // Read/reset Sparkfly traversal combat telemetry for route validation.
-    void ResetSparkflyTraversalCombatStats();
-    SparkflyTraversalCombatStats GetSparkflyTraversalCombatStats();
-
     // Run/read the full Bogroot loop.
     bool RunDungeonLoopFromCurrentMap();
     void ResetDungeonLoopTelemetry();
-    DungeonLoopTelemetry GetDungeonLoopTelemetry();
-
-    // Debug helpers for validating target-selection branches.
-    bool DebugResolveSyntheticSkillTarget(uint32_t roleMask, uint8_t targetType,
-                                          uint32_t defaultFoeId, uint32_t& outTargetId);
-    bool DebugResolveUsableSkillTargetForSlot(uint32_t slot, uint32_t defaultFoeId,
-                                              uint32_t& outSkillId, uint32_t& outTargetId, uint8_t& outTargetType);
 
 } // namespace GWA3::Bot::Froggy

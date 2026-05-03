@@ -65,6 +65,7 @@ using LocalClearFightFn = void(*)(float clearRange,
                                   bool waitForSkillCompletion,
                                   uint32_t maxFightMs);
 using LocalClearPassFn = void(*)(void* userData, int pass, uint32_t targetId);
+using PostCombatLootSweepFn = int(*)(float maxRange, const char* reason);
 enum class AggroWaypointPhase : uint8_t;
 using AggroWaypointHookFn = bool(*)(const DungeonRoute::Waypoint& waypoint,
                                     int waypointIndex,
@@ -76,6 +77,8 @@ enum class LocalClearProfile : uint8_t {
     StandardTraversal,
     ShortTraversal,
 };
+
+using LocalClearProfileResolverFn = LocalClearProfile(*)(uint32_t mapId, void* userData);
 
 struct LocalClearPolicy {
     LocalClearProfile profile = LocalClearProfile::StandardTraversal;
@@ -195,6 +198,32 @@ struct SessionAggroFightProfile {
     const char* log_prefix = "DungeonCombat";
 };
 
+struct RouteCombatStats {
+    uint32_t quick_step_attempts = 0;
+    uint32_t skill_steps = 0;
+    uint32_t auto_attack_steps = 0;
+    uint32_t settle_requests = 0;
+    uint32_t unsettled_skips = 0;
+    uint32_t last_target_id = 0;
+};
+
+struct RouteCombatContext {
+    DungeonCombatRoutine::CombatSessionState* session = nullptr;
+    RouteCombatStats* stats = nullptr;
+    WaitFn wait_ms = nullptr;
+    BoolFn is_dead = nullptr;
+    BoolFn is_map_loaded = nullptr;
+    PostCombatLootSweepFn post_combat_loot = nullptr;
+    AggroAftercastResolverFn resolve_max_aftercast = nullptr;
+    LocalClearProfileResolverFn resolve_local_clear_profile = nullptr;
+    void* policy_user_data = nullptr;
+    float default_max_aftercast = 3.0f;
+    const char* log_prefix = "DungeonCombat";
+    const char* default_loot_reason = "combat-step";
+    const char* stats_loot_reason = "combat-step-stats";
+    const char* special_local_clear_label = "Route";
+};
+
 inline float ComputeLocalClearRange(float fightRange) {
     const float clearRange = fightRange + LOCAL_CLEAR_RANGE_PADDING;
     return clearRange > LOCAL_CLEAR_MIN_RANGE ? clearRange : LOCAL_CLEAR_MIN_RANGE;
@@ -248,6 +277,22 @@ bool FightEnemiesInAggro(float aggroRange,
 bool FightEnemiesInAggroWithSession(float aggroRange,
                                     const SessionAggroFightProfile& profile,
                                     const AggroFightOptions& options = {});
+void FightEnemiesInAggroFromRouteContext(float aggroRange,
+                                         bool careful,
+                                         void* userData,
+                                         bool waitForSkillCompletion,
+                                         uint32_t maxFightMs);
+void HoldRouteLocalClearFromContext(const char* label,
+                                    float waypointX,
+                                    float waypointY,
+                                    float fightRange,
+                                    uint32_t targetId,
+                                    void* userData);
+void HoldSpecialRouteLocalClearFromContext(float waypointX,
+                                           float waypointY,
+                                           float fightRange,
+                                           uint32_t targetId,
+                                           void* userData);
 DungeonNavigation::RouteFollowResult FollowWaypointsWithAggro(
     const DungeonRoute::Waypoint* waypoints,
     int count,

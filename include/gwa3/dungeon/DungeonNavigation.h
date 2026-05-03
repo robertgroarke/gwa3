@@ -233,6 +233,7 @@ struct AggroMoveCallbacks {
     HoldSpecialLocalClearFn hold_special_local_clear = nullptr;
     PickupNearbyLootFn pickup_nearby_loot = nullptr;
     void* special_stats = nullptr;
+    void* user_data = nullptr;
 };
 
 struct AggroMoveOptions {
@@ -261,6 +262,7 @@ struct AggroMoveProfileConfig {
     HoldSpecialLocalClearFn hold_special_local_clear = nullptr;
     PickupNearbyLootFn pickup_nearby_loot = nullptr;
     void* special_stats = nullptr;
+    void* user_data = nullptr;
     AggroMoveProfile profile = AggroMoveProfile::Standard;
     bool exact_move_target = false;
     bool use_special_local_clear = false;
