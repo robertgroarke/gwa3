@@ -20,6 +20,7 @@
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/Offsets.h>
+#include <gwa3/dungeon/DungeonCombatRoutine.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
 #include <gwa3/game/ItemModelIds.h>
 #include <gwa3/game/Agent.h>
@@ -164,7 +165,7 @@ namespace GWA3::LLM::ActionExecutor {
 
     static ActionResult HandleFroggyRefreshCombatSkillbar(const json&) {
         if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
-        const bool ok = Bot::Froggy::RefreshCombatSkillbar();
+        const bool ok = DungeonCombatRoutine::RefreshCombatSkillbarForDebug(Bot::Froggy::g_combatSession, "Froggy");
         return ok ? MakeOk() : MakeError("froggy_refresh_combat_skillbar_failed");
     }
 
@@ -183,7 +184,7 @@ namespace GWA3::LLM::ActionExecutor {
     static ActionResult HandleFroggyRunDungeonLoop(const json&) {
         if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
         Bot::Froggy::ResetDungeonLoopTelemetry();
-        const bool ok = Bot::Froggy::DebugRunDungeonLoopFromCurrentMap();
+        const bool ok = Bot::Froggy::RunDungeonLoopFromCurrentMap();
         return ok ? MakeOk() : MakeError("froggy_dungeon_loop_failed");
     }
 

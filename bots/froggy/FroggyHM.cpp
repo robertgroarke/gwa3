@@ -79,7 +79,7 @@ static DungeonEntryRecovery::EntryFailureTracker s_tekksQuestEntryFailures = {
     0,
     TEKKS_DIALOG_RESET_FAILURE_THRESHOLD,
 };
-static DungeonCombatRoutine::CombatSessionState s_combatSession = {};
+DungeonCombatRoutine::CombatSessionState g_combatSession = {};
 static SparkflyTraversalCombatStats s_sparkflyTraversalCombatStats = {};
 static DungeonLoopTelemetry s_dungeonLoopTelemetry = {};
 
@@ -224,7 +224,7 @@ static void FightEnemiesInAggro(float aggroRange, bool careful = false,
                                 bool waitForSkillCompletion = true,
                                 DWORD maxFightMs = 240000u) {
     DungeonCombat::SessionAggroFightProfile profile;
-    profile.session = &s_combatSession;
+    profile.session = &g_combatSession;
     profile.wait_ms = &DungeonRuntime::WaitMs;
     profile.is_dead = &IsDead;
     profile.post_loot = &FroggyAggroPostLoot;
@@ -1095,7 +1095,7 @@ static void LogBogrootLevelRouteResultForLoop(
     }
 }
 
-static bool RunDungeonLoopFromCurrentMap() {
+bool RunDungeonLoopFromCurrentMap() {
     DungeonRouteRunner::DungeonLoopLevel levels[2] = {};
     levels[0].map_id = MapIds::BOGROOT_GROWTHS_LVL1;
     levels[0].waypoints = BOGROOT_LVL1;
@@ -1177,7 +1177,7 @@ BotState HandleTownSetup(BotConfig& cfg) {
             vendorOptions);
     };
     options.refresh_skill_cache = []() {
-        (void)DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(s_combatSession, "Froggy");
+        (void)DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(g_combatSession, "Froggy");
     };
     options.use_consumables = [](const BotConfig& botCfg) {
         UseConsumables(botCfg);
@@ -1208,7 +1208,7 @@ BotState HandleDungeon(BotConfig& cfg) {
     options.entry_map_name = "Sparkfly Swamp";
     options.dungeon_name = "Bogroot";
     options.refresh_skill_cache = []() {
-        RefreshCombatSkillbar();
+        (void)DungeonCombatRoutine::RefreshCombatSkillbarForDebug(g_combatSession, "Froggy");
     };
     options.use_consumables = [](const BotConfig& botCfg) {
         UseConsumables(botCfg);
@@ -1367,8 +1367,8 @@ bool DebugAggroMoveTo(float x, float y, float fightRange) {
         return false;
     }
 
-    if (!s_combatSession.skills_cached) {
-        DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(s_combatSession, "Froggy");
+    if (!g_combatSession.skills_cached) {
+        DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(g_combatSession, "Froggy");
     }
 
     LogBot("DebugAggroMoveTo request target=(%.0f, %.0f) fightRange=%.0f", x, y, fightRange);
@@ -1478,7 +1478,7 @@ bool ExecuteBuiltinCombatStep(uint32_t targetId, bool quickStep) {
     options.auto_attack = &AgentMgr::Attack;
     options.log_prefix = "Froggy";
     const bool executed = DungeonCombatRoutine::ExecuteBuiltinDebugCombatStep(
-        s_combatSession,
+        g_combatSession,
         targetId,
         &DungeonRuntime::WaitMs,
         &IsDead,
@@ -1489,11 +1489,11 @@ bool ExecuteBuiltinCombatStep(uint32_t targetId, bool quickStep) {
 }
 
 const char* GetLastCombatStepDescription() {
-    return s_combatSession.last_step;
+    return g_combatSession.last_step;
 }
 
 LastCombatStepInfo GetLastCombatStepInfo() {
-    return s_combatSession.last_action;
+    return g_combatSession.last_action;
 }
 
 void ResetSparkflyTraversalCombatStats() {
@@ -1516,53 +1516,13 @@ bool DebugResolveSyntheticSkillTarget(uint32_t roleMask, uint8_t targetType,
 bool DebugResolveUsableSkillTargetForSlot(uint32_t slot, uint32_t defaultFoeId,
                                           uint32_t& outSkillId, uint32_t& outTargetId, uint8_t& outTargetType) {
     return DungeonCombatRoutine::ResolveUsableSkillTargetForSlot(
-        s_combatSession,
+        g_combatSession,
         slot,
         defaultFoeId,
         outSkillId,
         outTargetId,
         outTargetType,
         "Froggy");
-}
-
-uint32_t DebugGetCastingEnemy() {
-    return DungeonSkill::GetCastingBalledEnemy();
-}
-
-uint32_t DebugGetEnchantedEnemy() {
-    return DungeonSkill::GetEnchantedBalledEnemy();
-}
-
-uint32_t DebugGetMeleeRangeEnemy() {
-    return DungeonSkill::GetMeleeBalledEnemy();
-}
-
-bool RefreshCombatSkillbar() {
-    return DungeonCombatRoutine::RefreshCombatSkillbarForDebug(s_combatSession, "Froggy");
-}
-
-void DebugDumpBuiltinCombatDecision(uint32_t targetId) {
-    DungeonCombatRoutine::DumpBuiltinCombatDecision(s_combatSession, targetId, "Froggy");
-}
-
-int GetBuiltinCombatDecisionDumpCount() {
-    return DungeonCombatRoutine::GetDecisionDumpCount(s_combatSession);
-}
-
-const char* GetBuiltinCombatDecisionDumpLine(int index) {
-    return DungeonCombatRoutine::GetDecisionDumpLine(s_combatSession, index);
-}
-
-int GetCombatDebugTraceCount() {
-    return DungeonCombatRoutine::GetDebugTraceCount(s_combatSession);
-}
-
-const char* GetCombatDebugTraceLine(int index) {
-    return DungeonCombatRoutine::GetDebugTraceLine(s_combatSession, index);
-}
-
-bool DebugRunDungeonLoopFromCurrentMap() {
-    return RunDungeonLoopFromCurrentMap();
 }
 
 } // namespace GWA3::Bot::Froggy

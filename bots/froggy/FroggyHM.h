@@ -282,6 +282,8 @@ namespace GWA3::Bot::Froggy {
     // Register all Froggy HM state handlers with the bot framework.
     void Register();
 
+    extern DungeonCombatRoutine::CombatSessionState g_combatSession;
+
     // State handlers
     BotState HandleCharSelect(BotConfig& cfg);
     BotState HandleTownSetup(BotConfig& cfg);
@@ -306,18 +308,6 @@ namespace GWA3::Bot::Froggy {
     // Retrieve a short description of the last builtin combat action chosen.
     const char* GetLastCombatStepDescription();
 
-    // Refresh Froggy's cached player skillbar and role classification.
-    bool RefreshCombatSkillbar();
-
-    // Dump Froggy's builtin combat decision context for a target.
-    void DebugDumpBuiltinCombatDecision(uint32_t targetId);
-
-    // Read back the most recent builtin combat decision dump lines.
-    int GetBuiltinCombatDecisionDumpCount();
-    const char* GetBuiltinCombatDecisionDumpLine(int index);
-    int GetCombatDebugTraceCount();
-    const char* GetCombatDebugTraceLine(int index);
-
     // Read structured details for the most recent builtin combat step.
     LastCombatStepInfo GetLastCombatStepInfo();
 
@@ -326,7 +316,7 @@ namespace GWA3::Bot::Froggy {
     SparkflyTraversalCombatStats GetSparkflyTraversalCombatStats();
 
     // Run/read the full Bogroot loop.
-    bool DebugRunDungeonLoopFromCurrentMap();
+    bool RunDungeonLoopFromCurrentMap();
     void ResetDungeonLoopTelemetry();
     DungeonLoopTelemetry GetDungeonLoopTelemetry();
 
@@ -335,8 +325,5 @@ namespace GWA3::Bot::Froggy {
                                           uint32_t defaultFoeId, uint32_t& outTargetId);
     bool DebugResolveUsableSkillTargetForSlot(uint32_t slot, uint32_t defaultFoeId,
                                               uint32_t& outSkillId, uint32_t& outTargetId, uint8_t& outTargetType);
-    uint32_t DebugGetCastingEnemy();
-    uint32_t DebugGetEnchantedEnemy();
-    uint32_t DebugGetMeleeRangeEnemy();
 
 } // namespace GWA3::Bot::Froggy
