@@ -1,5 +1,7 @@
 #pragma once
 
+#include <gwa3/advanced/Loot.h>
+
 #include <cstdint>
 
 namespace GWA3 {
@@ -13,21 +15,21 @@ class OpenedChestTracker;
 
 namespace GWA3::DungeonLoot {
 
-inline constexpr uint8_t TYPE_USABLE = 9u;
-inline constexpr uint8_t TYPE_DYE = 10u;
-inline constexpr uint8_t TYPE_MATERIAL = 11u;
-inline constexpr uint8_t TYPE_KEY = 18u;
-inline constexpr uint8_t TYPE_GOLD = 20u;
-inline constexpr uint8_t TYPE_TROPHY = 30u;
-inline constexpr uint8_t TYPE_SCROLL = 31u;
-inline constexpr uint8_t TYPE_BUNDLE = 6u;
+inline constexpr uint8_t TYPE_USABLE = AdvancedLoot::TYPE_USABLE;
+inline constexpr uint8_t TYPE_DYE = AdvancedLoot::TYPE_DYE;
+inline constexpr uint8_t TYPE_MATERIAL = AdvancedLoot::TYPE_MATERIAL;
+inline constexpr uint8_t TYPE_KEY = AdvancedLoot::TYPE_KEY;
+inline constexpr uint8_t TYPE_GOLD = AdvancedLoot::TYPE_GOLD;
+inline constexpr uint8_t TYPE_TROPHY = AdvancedLoot::TYPE_TROPHY;
+inline constexpr uint8_t TYPE_SCROLL = AdvancedLoot::TYPE_SCROLL;
+inline constexpr uint8_t TYPE_BUNDLE = AdvancedLoot::TYPE_BUNDLE;
 
-using WaitFn = void(*)(uint32_t ms);
-using BoolFn = bool(*)();
+using WaitFn = AdvancedLoot::WaitFn;
+using BoolFn = AdvancedLoot::BoolFn;
 using MoveToPointFn = void(*)(float x, float y, float threshold);
 using MoveToPointResultFn = bool(*)(float x, float y, float threshold);
 using CombatMoveToFn = void(*)(float x, float y, float fightRange);
-using PickupNearbyLootFn = int(*)(float maxRange);
+using PickupNearbyLootFn = AdvancedLoot::PickupNearbyLootFn;
 using OpenChestAtFn = bool(*)(float x, float y, float searchRadius);
 using ChestBundleOpenFn = bool(*)(float chestX, float chestY, float searchRadius);
 using SignpostScanLogFn = void(*)(float x, float y, float maxDist, const char* label, bool chestOnly);
@@ -39,22 +41,8 @@ struct BossKeyModelSet {
     bool accept_type_key = true;
 };
 
-struct LootPickupOptions {
-    uint32_t general_loot_min_free_slots = 2u;
-    float interact_threshold = 200.0f;
-    uint32_t move_timeout_ms = 5000u;
-    uint32_t move_poll_ms = 100u;
-    uint32_t pickup_retry_limit = 10u;
-    uint32_t pickup_timeout_ms = 6000u;
-    uint32_t pickup_delay_ms = 250u;
-    uint32_t global_timeout_ms = 120000u;
-    uint32_t character_gold_cap = 100000u;
-    BoolFn is_world_ready = nullptr;
-    const char* log_prefix = nullptr;
-};
-
-LootPickupOptions MakeLootPickupOptions(const char* log_prefix = nullptr,
-                                        BoolFn is_world_ready = nullptr);
+using LootPickupOptions = AdvancedLoot::LootPickupOptions;
+using AdvancedLoot::MakeLootPickupOptions;
 
 struct ChestOpenOptions {
     float move_threshold = 200.0f;
@@ -157,34 +145,20 @@ struct BossKeyAcquireOptions {
     BossKeyPickupOptions force_pickup = {};
 };
 
-struct PostCombatLootSweepOptions {
-    int max_passes = 6;
-    int no_candidate_passes_before_stop = 3;
-    int quiet_passes_after_candidates = 2;
-    uint32_t pass_wait_ms = 250u;
-    const char* log_prefix = nullptr;
-    const char* reason = nullptr;
-    WaitFn wait_ms = nullptr;
-    BoolFn is_world_ready = nullptr;
-    PickupNearbyLootFn pickup_nearby_loot = nullptr;
-};
+using PostCombatLootSweepOptions = AdvancedLoot::PostCombatLootSweepOptions;
 
-bool IsAlwaysPickupModel(uint32_t modelId);
-bool IsQuestPickupModel(uint32_t modelId);
+using AdvancedLoot::IsAlwaysPickupModel;
+using AdvancedLoot::IsQuestPickupModel;
 bool IsModelInBossKeySet(uint32_t modelId, const BossKeyModelSet& modelSet);
 bool IsBossKeyLikeItem(const Item* item);
 bool IsBossKeyLikeItem(const Item* item, const BossKeyModelSet& modelSet);
-bool IsWorldReadyForLoot();
-bool IsWorldReadyForLootWithPlayerAgent();
-float ComputePostCombatLootRange(float aggroRange,
-                                 float minRange = 2200.0f,
-                                 float maxRange = 5000.0f);
-int SweepPostCombatLoot(float aggroRange, const PostCombatLootSweepOptions& options = {});
-bool ShouldPickUpItemAgent(const Agent* agent, uint32_t myAgentId, uint32_t freeSlots,
-                           const LootPickupOptions& options = {});
-uint32_t CountNearbyPickupCandidates(float maxRange, const LootPickupOptions& options = {});
-int PickUpNearbyLoot(float maxRange, WaitFn wait_ms = nullptr, BoolFn is_dead = nullptr,
-                     const LootPickupOptions& options = {});
+using AdvancedLoot::IsWorldReadyForLoot;
+using AdvancedLoot::IsWorldReadyForLootWithPlayerAgent;
+using AdvancedLoot::ComputePostCombatLootRange;
+using AdvancedLoot::SweepPostCombatLoot;
+using AdvancedLoot::ShouldPickUpItemAgent;
+using AdvancedLoot::CountNearbyPickupCandidates;
+using AdvancedLoot::PickUpNearbyLoot;
 uint32_t CountNearbyBossKeyCandidates(float x,
                                       float y,
                                       float maxRange,

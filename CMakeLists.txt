@@ -106,6 +106,8 @@ src/gwa3/managers/MerchantMgr.cpp
     src/gwa3/advanced/Inventory.cpp
     src/gwa3/advanced/ItemActions.cpp
     src/gwa3/advanced/ItemPolicy.cpp
+    src/gwa3/advanced/Loot.cpp
+    src/gwa3/advanced/Waypoint.cpp
     src/gwa3/dungeon/DungeonLoot.cpp
     src/gwa3/dungeon/DungeonOutpostSetup.cpp
     src/gwa3/dungeon/DungeonQuest.cpp

@@ -1,14 +1,15 @@
 #pragma once
 
+#include <gwa3/advanced/Waypoint.h>
 #include <gwa3/dungeon/DungeonRoute.h>
 
 #include <cstdint>
 
 namespace GWA3::DungeonNavigation {
 
-inline constexpr float MOVE_TO_DEFAULT_THRESHOLD = 250.0f;
-inline constexpr uint32_t MOVE_TO_TIMEOUT_MS = 30000u;
-inline constexpr uint32_t MOVE_TO_POLL_MS = 1000u;
+inline constexpr float MOVE_TO_DEFAULT_THRESHOLD = AdvancedWaypoint::MOVE_TO_DEFAULT_THRESHOLD;
+inline constexpr uint32_t MOVE_TO_TIMEOUT_MS = AdvancedWaypoint::MOVE_TO_TIMEOUT_MS;
+inline constexpr uint32_t MOVE_TO_POLL_MS = AdvancedWaypoint::MOVE_TO_POLL_MS;
 
 struct WaypointMoveResult {
     bool reached = false;
@@ -20,7 +21,7 @@ struct WaypointMoveResult {
     uint32_t final_map_id = 0u;
 };
 
-using MoveIssuerFn = void(*)(float x, float y);
+using MoveIssuerFn = AdvancedWaypoint::MoveIssuerFn;
 using WaypointMoveFn = void(*)(float x, float y, float value);
 using RouteWaypointMoveFn = WaypointMoveResult(*)(const DungeonRoute::Waypoint& waypoint);
 using DoorOpenAtFn = bool(*)(float x, float y);
@@ -43,30 +44,14 @@ using HoldSpecialLocalClearFn = void(*)(float x,
                                         float fightRange,
                                         uint32_t targetId,
                                         void* stats);
-using AgentResolverFn = uint32_t(*)(float x, float y, float radius);
+using AgentResolverFn = AdvancedWaypoint::AgentResolverFn;
 using IsMapLoadedFn = bool(*)();
-using BoolFn = bool(*)();
+using BoolFn = AdvancedWaypoint::BoolFn;
 using WaitFn = void(*)(uint32_t ms);
 
-struct MoveToResult {
-    bool arrived = false;
-    bool map_changed = false;
-    bool timed_out = false;
-};
-
-struct LoggedMoveOptions {
-    const char* log_prefix = "Dungeon";
-    BoolFn is_dead = nullptr;
-    uint32_t timeout_ms = MOVE_TO_TIMEOUT_MS;
-    uint32_t poll_ms = MOVE_TO_POLL_MS;
-};
-
-struct AgentApproachResult {
-    MoveToResult anchor_move;
-    uint32_t agent_id = 0u;
-    bool agent_found = false;
-    MoveToResult agent_move;
-};
+using MoveToResult = AdvancedWaypoint::MoveToResult;
+using LoggedMoveOptions = AdvancedWaypoint::LoggedMoveOptions;
+using AgentApproachResult = AdvancedWaypoint::AgentApproachResult;
 
 struct RouteFollowOptions {
     float default_tolerance = 250.0f;
@@ -84,19 +69,8 @@ struct RouteFollowResult {
     int retries_used = 0;
 };
 
-struct StuckMonitor {
-    float last_x = 0.0f;
-    float last_y = 0.0f;
-    int low_movement_count = 0;
-    bool initialized = false;
-};
-
-struct StuckResolution {
-    bool issue_recovery_move = false;
-    bool abort_move = false;
-    float recovery_x = 0.0f;
-    float recovery_y = 0.0f;
-};
+using StuckMonitor = AdvancedWaypoint::StuckMonitor;
+using StuckResolution = AdvancedWaypoint::StuckResolution;
 
 struct WaypointTelemetryOptions {
     const char* log_prefix = "Dungeon";
@@ -114,41 +88,14 @@ struct RouteWaypointCombatLootOptions {
     const char* log_prefix = "Dungeon";
 };
 
-bool IsWithinDistance(float currentX, float currentY, float targetX, float targetY, float threshold);
-float RandomizedCoordinate(float center, float radius);
-StuckMonitor MakeStuckMonitor(float startX, float startY);
-StuckResolution EvaluateStuckMonitor(
-    float currentX,
-    float currentY,
-    float targetX,
-    float targetY,
-    StuckMonitor& monitor,
-    uint32_t randomSeed,
-    float minimumProgress = 10.0f,
-    int recoveryThreshold = 15,
-    int abortThreshold = 30,
-    float recoveryRadius = 500.0f);
-MoveToResult MoveToAndWait(
-    float x,
-    float y,
-    float threshold = 250.0f,
-    uint32_t timeoutMs = 30000u,
-    uint32_t reissueMs = 1000u,
-    uint32_t expectedMapId = 0u);
-MoveToResult MoveToAndWait(
-    float x,
-    float y,
-    float threshold,
-    uint32_t timeoutMs,
-    uint32_t reissueMs,
-    uint32_t expectedMapId,
-    MoveIssuerFn moveIssuer);
-void MoveToPoint(float x, float y, float threshold);
-bool MoveToAndWaitLogged(
-    float x,
-    float y,
-    float threshold = MOVE_TO_DEFAULT_THRESHOLD,
-    const LoggedMoveOptions& options = {});
+using AdvancedWaypoint::IsWithinDistance;
+using AdvancedWaypoint::DistanceToPoint;
+using AdvancedWaypoint::RandomizedCoordinate;
+using AdvancedWaypoint::MakeStuckMonitor;
+using AdvancedWaypoint::EvaluateStuckMonitor;
+using AdvancedWaypoint::MoveToAndWait;
+using AdvancedWaypoint::MoveToPoint;
+using AdvancedWaypoint::MoveToAndWaitLogged;
 WaypointMoveResult MoveRouteWaypoint(
     const DungeonRoute::Waypoint& waypoint,
     WaypointMoveFn moveToPoint,
@@ -169,29 +116,9 @@ bool HandleOpenDungeonDoorWaypoint(
     const DungeonRoute::Waypoint& waypoint,
     WaypointMoveFn aggroMoveToPoint,
     DoorOpenAtFn openDoorAt);
-bool WaitForLocalPositionSettle(
-    uint32_t timeoutMs,
-    float maxDeltaPerSample = 20.0f,
-    uint32_t sampleMs = 150u,
-    int settledSamplesRequired = 3);
-MoveToResult MoveToAgent(
-    uint32_t agentId,
-    float threshold = 120.0f,
-    uint32_t timeoutMs = 30000u,
-    uint32_t reissueMs = 1000u,
-    uint32_t expectedMapId = 0u,
-    MoveIssuerFn moveIssuer = nullptr);
-AgentApproachResult MoveToNearestResolvedAgent(
-    float anchorX,
-    float anchorY,
-    float anchorThreshold,
-    float searchRadius,
-    float agentThreshold,
-    AgentResolverFn agentResolver,
-    MoveIssuerFn moveIssuer = nullptr,
-    uint32_t timeoutMs = 30000u,
-    uint32_t reissueMs = 1000u,
-    uint32_t expectedMapId = 0u);
+using AdvancedWaypoint::WaitForLocalPositionSettle;
+using AdvancedWaypoint::MoveToAgent;
+using AdvancedWaypoint::MoveToNearestResolvedAgent;
 RouteFollowResult FollowWaypoints(
     const DungeonRoute::Waypoint* waypoints,
     int count,
@@ -199,7 +126,7 @@ RouteFollowResult FollowWaypoints(
     const RouteFollowOptions& options = {},
     MoveIssuerFn moveIssuer = nullptr);
 int GetNearestWaypointIndex(const DungeonRoute::Waypoint* waypoints, int count);
-bool WaitForMapId(uint32_t targetMapId, uint32_t timeoutMs = 60000u);
+using AdvancedWaypoint::WaitForMapId;
 
 // ===== Aggro-move support =====
 
