@@ -1,13 +1,13 @@
-#include <gwa3/dungeon/DungeonDiagnostics.h>
+#include <gwa3/advanced/Diagnostics.h>
 
-#include <gwa3/dungeon/DungeonInteractions.h>
+#include <gwa3/advanced/Interactions.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/managers/AgentMgr.h>
 
 #include <Windows.h>
 #include <cmath>
 
-namespace GWA3::DungeonDiagnostics {
+namespace GWA3::AdvancedDiagnostics {
 
 std::size_t CollectNearbyNpcCandidates(
     float x,
@@ -80,7 +80,7 @@ void LogNearbyNpcCandidates(
     float maxDist,
     NearbyNpcCandidate* candidates,
     std::size_t count) {
-    Log::Info("DungeonDiagnostics: %s NPC candidates near (%.0f, %.0f) within %.0f: %u",
+    Log::Info("Diagnostics: %s NPC candidates near (%.0f, %.0f) within %.0f: %u",
               label,
               x,
               y,
@@ -88,7 +88,7 @@ void LogNearbyNpcCandidates(
               static_cast<unsigned>(count));
     for (std::size_t i = 0; i < count; ++i) {
         const auto& c = candidates[i];
-        Log::Info("DungeonDiagnostics:   cand[%u]: agent=%u player=%u npc_id=%u effects=0x%08X searchDist=%.0f playerDist=%.0f pos=(%.0f, %.0f)",
+        Log::Info("Diagnostics:   cand[%u]: agent=%u player=%u npc_id=%u effects=0x%08X searchDist=%.0f playerDist=%.0f pos=(%.0f, %.0f)",
                   static_cast<unsigned>(i),
                   c.agentId,
                   c.playerNumber,
@@ -104,12 +104,12 @@ void LogNearbyNpcCandidates(
 void LogAgentIdentity(const char* label, uint32_t agentId) {
     auto* agent = AgentMgr::GetAgentByID(agentId);
     if (!agent) {
-        Log::Info("DungeonDiagnostics: %s agent=%u <null>", label, agentId);
+        Log::Info("Diagnostics: %s agent=%u <null>", label, agentId);
         return;
     }
 
     __try {
-        Log::Info("DungeonDiagnostics: %s agent=%u type=0x%X pos=(%.0f, %.0f)",
+        Log::Info("Diagnostics: %s agent=%u type=0x%X pos=(%.0f, %.0f)",
                   label,
                   agentId,
                   agent->type,
@@ -117,7 +117,7 @@ void LogAgentIdentity(const char* label, uint32_t agentId) {
                   agent->y);
         if (agent->type == 0xDB) {
             auto* living = static_cast<AgentLiving*>(agent);
-            Log::Info("DungeonDiagnostics: %s living agent=%u allegiance=%u hp=%.2f effects=0x%08X player=%u npc_id=%u model_type=%u",
+            Log::Info("Diagnostics: %s living agent=%u allegiance=%u hp=%.2f effects=0x%08X player=%u npc_id=%u model_type=%u",
                       label,
                       agentId,
                       living->allegiance,
@@ -128,21 +128,21 @@ void LogAgentIdentity(const char* label, uint32_t agentId) {
                       living->agent_model_type);
         } else if (agent->type == 0x200) {
             auto* gadget = static_cast<AgentGadget*>(agent);
-            Log::Info("DungeonDiagnostics: %s gadget agent=%u gadget_id=%u extra_type=%u",
+            Log::Info("Diagnostics: %s gadget agent=%u gadget_id=%u extra_type=%u",
                       label,
                       agentId,
                       gadget->gadget_id,
                       gadget->extra_type);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log::Info("DungeonDiagnostics: %s agent=%u <read fault>", label, agentId);
+        Log::Info("Diagnostics: %s agent=%u <read fault>", label, agentId);
     }
 }
 
 void LogNearbySignposts(float x, float y, float maxDist, const char* label, bool chestOnly) {
     uint32_t maxAgents = AgentMgr::GetMaxAgents();
     if (maxAgents == 0) {
-        Log::Info("DungeonDiagnostics: %s maxAgents=0", label);
+        Log::Info("Diagnostics: %s maxAgents=0", label);
         return;
     }
 
@@ -153,12 +153,12 @@ void LogNearbySignposts(float x, float y, float maxDist, const char* label, bool
         auto* a = AgentMgr::GetAgentByID(i);
         if (!a || a->type != 0x200) continue;
         auto* gadget = static_cast<const AgentGadget*>(a);
-        if (chestOnly && !DungeonInteractions::IsChestGadgetId(gadget->gadget_id)) continue;
+        if (chestOnly && !AdvancedInteractions::IsChestGadgetId(gadget->gadget_id)) continue;
         const float distSq = AgentMgr::GetSquaredDistance(x, y, a->x, a->y);
         if (distSq > maxDistSq) continue;
         ++matches;
         if (logged < 12) {
-            Log::Info("DungeonDiagnostics: %s agent=%u pos=(%.0f, %.0f) dist=%.0f gadget=%u extra=%u chest=%d",
+            Log::Info("Diagnostics: %s agent=%u pos=(%.0f, %.0f) dist=%.0f gadget=%u extra=%u chest=%d",
                       label,
                       a->agent_id,
                       a->x,
@@ -166,12 +166,12 @@ void LogNearbySignposts(float x, float y, float maxDist, const char* label, bool
                       sqrtf(distSq),
                       gadget->gadget_id,
                       gadget->extra_type,
-                      DungeonInteractions::IsChestGadgetId(gadget->gadget_id) ? 1 : 0);
+                      AdvancedInteractions::IsChestGadgetId(gadget->gadget_id) ? 1 : 0);
             ++logged;
         }
     }
 
-    Log::Info("DungeonDiagnostics: %s matches=%u logged=%u radius=%.0f chestOnly=%d",
+    Log::Info("Diagnostics: %s matches=%u logged=%u radius=%.0f chestOnly=%d",
               label,
               matches,
               logged,
@@ -179,4 +179,4 @@ void LogNearbySignposts(float x, float y, float maxDist, const char* label, bool
               chestOnly ? 1 : 0);
 }
 
-} // namespace GWA3::DungeonDiagnostics
+} // namespace GWA3::AdvancedDiagnostics

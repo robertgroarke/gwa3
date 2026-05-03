@@ -98,7 +98,7 @@ src/gwa3/managers/MerchantMgr.cpp
     src/gwa3/dungeon/DungeonCombat.cpp
     src/gwa3/advanced/CombatRoutine.cpp
     src/gwa3/dungeon/DungeonCheckpoint.cpp
-    src/gwa3/dungeon/DungeonDiagnostics.cpp
+    src/gwa3/advanced/Diagnostics.cpp
     src/gwa3/advanced/Dialog.cpp
     src/gwa3/advanced/Effects.cpp
     src/gwa3/dungeon/DungeonEntryRecovery.cpp
