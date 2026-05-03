@@ -102,7 +102,7 @@ src/gwa3/managers/MerchantMgr.cpp
     src/gwa3/advanced/Dialog.cpp
     src/gwa3/advanced/Effects.cpp
     src/gwa3/dungeon/DungeonEntryRecovery.cpp
-    src/gwa3/dungeon/DungeonInteractions.cpp
+    src/gwa3/advanced/Interactions.cpp
     src/gwa3/advanced/Inventory.cpp
     src/gwa3/advanced/ItemActions.cpp
     src/gwa3/advanced/ItemPolicy.cpp

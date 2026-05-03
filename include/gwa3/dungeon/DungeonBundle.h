@@ -1,10 +1,8 @@
 #pragma once
 
-#include <cstdint>
+#include <gwa3/dungeon/DungeonInteractions.h>
 
-namespace GWA3::DungeonInteractions {
-class OpenedChestTracker;
-}
+#include <cstdint>
 
 namespace GWA3::DungeonBundle {
 

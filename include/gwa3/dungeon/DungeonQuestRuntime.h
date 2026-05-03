@@ -3,14 +3,11 @@
 #include <gwa3/dungeon/DungeonQuest.h>
 #include <gwa3/dungeon/DungeonBundle.h>
 #include <gwa3/dungeon/DungeonDialog.h>
+#include <gwa3/dungeon/DungeonInteractions.h>
 #include <gwa3/dungeon/DungeonLoot.h>
 #include <gwa3/dungeon/DungeonRuntime.h>
 
 #include <cstdint>
-
-namespace GWA3::DungeonInteractions {
-class OpenedChestTracker;
-}
 
 namespace GWA3::DungeonQuestRuntime {
 

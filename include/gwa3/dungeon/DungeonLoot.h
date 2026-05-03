@@ -1,16 +1,13 @@
 #pragma once
 
 #include <gwa3/advanced/Loot.h>
+#include <gwa3/dungeon/DungeonInteractions.h>
 
 #include <cstdint>
 
 namespace GWA3 {
 struct Agent;
 struct Item;
-}
-
-namespace GWA3::DungeonInteractions {
-class OpenedChestTracker;
 }
 
 namespace GWA3::DungeonLoot {

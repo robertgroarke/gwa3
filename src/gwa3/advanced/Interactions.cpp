@@ -1,4 +1,4 @@
-#include <gwa3/dungeon/DungeonInteractions.h>
+#include <gwa3/advanced/Interactions.h>
 
 #include <gwa3/core/Log.h>
 #include <gwa3/managers/AgentMgr.h>
@@ -12,7 +12,7 @@
 
 #include <Windows.h>
 
-namespace GWA3::DungeonInteractions {
+namespace GWA3::AdvancedInteractions {
 
 namespace {
 
@@ -805,4 +805,4 @@ bool OpenDoorAtWithProbe(float doorX,
         options);
 }
 
-} // namespace GWA3::DungeonInteractions
+} // namespace GWA3::AdvancedInteractions
