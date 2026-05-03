@@ -1266,6 +1266,10 @@ void MoveItem(uint32_t itemId, uint32_t bagId, uint32_t slot) {
     SendPacket(4, Packets::ITEM_MOVE, itemId, bagId, slot);
 }
 
+void AcceptAllUnclaimedItems(uint32_t bagId) {
+    SendPacket(2, Packets::ITEMS_ACCEPT_UNCLAIMED, bagId);
+}
+
 void QuestAbandon(uint32_t questId) {
     SendPacket(2, Packets::QUEST_ABANDON, questId);
 }

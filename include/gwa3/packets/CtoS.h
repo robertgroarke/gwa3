@@ -86,6 +86,7 @@ void SendPacketDirectRaw(uint32_t size, uint32_t header, ...);
     void DropItem(uint32_t itemId);
     void PickUpItem(uint32_t itemAgentId);
     void MoveItem(uint32_t itemId, uint32_t bagId, uint32_t slot);
+    void AcceptAllUnclaimedItems(uint32_t bagId);
 
     // Quest
     void QuestAbandon(uint32_t questId);

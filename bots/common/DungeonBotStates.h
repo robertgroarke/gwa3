@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bots/common/BotFramework.h>
+#include <gwa3/dungeon/DungeonInventory.h>
 #include <gwa3/dungeon/DungeonOutpostSetup.h>
 #include <gwa3/dungeon/DungeonQuest.h>
 #include <gwa3/dungeon/DungeonVendor.h>
@@ -35,6 +36,7 @@ struct TownSetupOptions {
     uint32_t town_wait_ms = 500u;
     uint32_t post_maintenance_wait_ms = 500u;
     uint32_t critical_free_slots = 3u;
+    DungeonInventory::UnclaimedItemClaimOptions unclaimed_items = {};
 
     MaintenanceMgr::Config maintenance = {};
     float merchant_x = 0.0f;

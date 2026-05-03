@@ -35,6 +35,15 @@ void MoveItem(uint32_t itemId, uint32_t bagId, uint32_t slot) {
     CtoS::MoveItem(itemId, packetBagId, slot);
 }
 
+void AcceptAllUnclaimedItems(uint32_t unclaimedBagIndex) {
+    uint32_t packetBagId = unclaimedBagIndex;
+    Bag* bag = GetBag(unclaimedBagIndex);
+    if (bag) {
+        packetBagId = bag->h0008;
+    }
+    CtoS::AcceptAllUnclaimedItems(packetBagId);
+}
+
 void IdentifyItem(uint32_t itemId, uint32_t kitId) {
     CtoS::SendPacket(3, Packets::ITEM_IDENTIFY, kitId, itemId);
 }

@@ -172,6 +172,7 @@ inline constexpr uint32_t UNHOLY_TEXT = 2619u;
 inline constexpr uint32_t MINISTERIAL_COMMENDATION = 36985u;
 inline constexpr uint32_t BLOB_OF_OOZE = 27067u;
 inline constexpr uint32_t VAETTIR_ESSENCE = 27071u;
+inline constexpr uint32_t AMPHIBIAN_TONGUE = 27036u;
 inline constexpr uint32_t DESTROYER_CORE = 27033u;
 inline constexpr uint32_t SUPERB_CHARR_CARVING = 27052u;
 inline constexpr uint32_t SUPREME_VIGOR_RUNE = 5551u;

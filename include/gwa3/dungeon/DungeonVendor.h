@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <gwa3/dungeon/DungeonInventory.h>
 #include <gwa3/dungeon/DungeonItemActions.h>
 #include <gwa3/managers/MaintenanceMgr.h>
 
@@ -70,6 +71,7 @@ struct MaintenanceStateOptions {
     uint32_t critical_free_slots = 3u;
     uint32_t deposit_gold_keep_on_char = 10000u;
     DungeonItemActions::UseItemOptions dp_removal = {5000u};
+    DungeonInventory::UnclaimedItemClaimOptions unclaimed_items = {};
     const char* log_prefix = nullptr;
     MoveToPointResultFn move_to_point = nullptr;
     WaitFn wait_ms = nullptr;

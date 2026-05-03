@@ -63,6 +63,21 @@ using DungeonDiagnostics::LogNearbySignposts;
 using DungeonDiagnostics::NearbyNpcCandidate;
 
 using Waypoint = DungeonRoute::Waypoint;
+
+static constexpr uint32_t kFroggyUnclaimedTownModels[] = {
+    ItemModelIds::AMPHIBIAN_TONGUE,
+};
+
+static DungeonInventory::UnclaimedItemClaimOptions MakeFroggyUnclaimedItemClaimOptions() {
+    DungeonInventory::UnclaimedItemClaimOptions options;
+    options.model_ids = kFroggyUnclaimedTownModels;
+    options.model_id_count =
+        sizeof(kFroggyUnclaimedTownModels) / sizeof(kFroggyUnclaimedTownModels[0]);
+    options.log_prefix = "Froggy";
+    options.wait_ms = &DungeonRuntime::WaitMs;
+    return options;
+}
+
 using CachedSkill = DungeonSkill::CachedSkill;
 using DungeonSkill::CanUseSkill;
 using DungeonSkill::ExplainCanUseSkillFailure;
@@ -762,6 +777,7 @@ static DungeonVendor::MaintenanceStateOptions MakeFroggyMaintenanceStateOptions(
     options.log_prefix = "Froggy";
     options.move_to_point = &MoveToAndWait;
     options.wait_ms = &DungeonRuntime::WaitMs;
+    options.unclaimed_items = MakeFroggyUnclaimedItemClaimOptions();
     return options;
 }
 
@@ -888,6 +904,7 @@ BotState HandleTownSetup(BotConfig& cfg) {
     options.default_outpost_map_id = MapIds::GADDS_ENCAMPMENT;
     options.run_number = s_runCount + 1;
     options.log_prefix = "Froggy";
+    options.unclaimed_items = MakeFroggyUnclaimedItemClaimOptions();
     options.maintenance = DungeonVendor::BuildMaintenanceConfig(outpostMapId, MakeFroggyMaintenanceLocation());
     options.merchant_x = GADDS_MERCHANT.x;
     options.merchant_y = GADDS_MERCHANT.y;

@@ -155,6 +155,27 @@ void LogMaintenanceInventorySnapshot(const char* prefix) {
               has_conset ? "yes" : "no");
 }
 
+void ClaimConfiguredUnclaimedItems(const MaintenanceStateOptions& options) {
+    if (!options.unclaimed_items.model_ids || options.unclaimed_items.model_id_count == 0u) {
+        return;
+    }
+
+    DungeonInventory::UnclaimedItemClaimOptions claim_options = options.unclaimed_items;
+    if (!claim_options.log_prefix) {
+        claim_options.log_prefix = options.log_prefix;
+    }
+    if (!claim_options.wait_ms) {
+        claim_options.wait_ms = options.wait_ms;
+    }
+
+    const auto result = DungeonInventory::ClaimUnclaimedItemsByModel(claim_options);
+    if (result.accepted) {
+        Log::Info("%s: claimed unclaimed town items quantity=%u",
+                  Prefix(options.log_prefix),
+                  result.matching_quantity);
+    }
+}
+
 bool PerformMaintenanceAtMerchant(const MaintenanceLocation& location,
                                   const MaintenanceStateOptions& options,
                                   const MaintenanceMgr::Config& maintenance_cfg,
@@ -431,6 +452,7 @@ MaintenanceStateResult RunMerchantMaintenanceState(uint32_t configured_outpost_m
     if (!EnsureMaintenanceOutpost(outpost_map_id, options, "Merchant")) {
         return MapMgr::GetMapId() == outpost_map_id ? MaintenanceStateResult::Retry : MaintenanceStateResult::Stop;
     }
+    ClaimConfiguredUnclaimedItems(options);
 
     const MaintenanceMgr::Config maintenance_cfg = BuildMaintenanceConfig(outpost_map_id, location);
     PerformMaintenanceAtMerchant(
@@ -457,6 +479,7 @@ MaintenanceStateResult RunFullMaintenanceState(uint32_t configured_outpost_map_i
     if (!EnsureMaintenanceOutpost(outpost_map_id, options, "Maintenance")) {
         return MapMgr::GetMapId() == outpost_map_id ? MaintenanceStateResult::Retry : MaintenanceStateResult::Stop;
     }
+    ClaimConfiguredUnclaimedItems(options);
 
     const auto dp_result =
         DungeonItemActions::UseDpRemovalSweetIfNeeded(wipe_count, options.wait_ms, options.dp_removal);

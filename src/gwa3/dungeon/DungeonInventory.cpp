@@ -1,5 +1,6 @@
 #include <gwa3/dungeon/DungeonInventory.h>
 
+#include <gwa3/core/Log.h>
 #include <gwa3/managers/ItemMgr.h>
 
 #include <Windows.h>
@@ -70,6 +71,51 @@ Item* FindItemByModel(uint32_t modelId, uint32_t firstBag, uint32_t lastBag) {
         }
     }
     return nullptr;
+}
+
+namespace {
+
+const char* Prefix(const char* prefix) {
+    return prefix ? prefix : "DungeonInventory";
+}
+
+void CallWait(WaitFn wait_fn, uint32_t ms) {
+    if (wait_fn) {
+        wait_fn(ms);
+        return;
+    }
+    Sleep(ms);
+}
+
+} // namespace
+
+UnclaimedItemClaimResult ClaimUnclaimedItemsByModel(const UnclaimedItemClaimOptions& options) {
+    UnclaimedItemClaimResult result;
+    if (!options.model_ids || options.model_id_count == 0u) {
+        return result;
+    }
+
+    for (std::size_t i = 0u; i < options.model_id_count; ++i) {
+        const uint32_t modelId = options.model_ids[i];
+        if (modelId == 0u) continue;
+        result.matching_quantity += CountItemByModel(
+            modelId,
+            options.unclaimed_bag_index,
+            options.unclaimed_bag_index);
+    }
+
+    if (result.matching_quantity == 0u) {
+        return result;
+    }
+
+    Log::Info("%s: accepting %u configured unclaimed item(s) from bag %u",
+              Prefix(options.log_prefix),
+              result.matching_quantity,
+              options.unclaimed_bag_index);
+    ItemMgr::AcceptAllUnclaimedItems(options.unclaimed_bag_index);
+    result.accepted = true;
+    CallWait(options.wait_ms, options.post_accept_wait_ms);
+    return result;
 }
 
 } // namespace GWA3::DungeonInventory

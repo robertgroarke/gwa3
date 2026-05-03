@@ -97,6 +97,17 @@ BotState HandleTownSetup(BotConfig& cfg, const TownSetupOptions& options) {
         return BotState::InTown;
     }
 
+    if (options.unclaimed_items.model_ids && options.unclaimed_items.model_id_count > 0u) {
+        DungeonInventory::UnclaimedItemClaimOptions claimOptions = options.unclaimed_items;
+        if (!claimOptions.log_prefix) {
+            claimOptions.log_prefix = prefix;
+        }
+        if (!claimOptions.wait_ms) {
+            claimOptions.wait_ms = &DungeonRuntime::WaitMs;
+        }
+        (void)DungeonInventory::ClaimUnclaimedItemsByModel(claimOptions);
+    }
+
     if (MaintenanceMgr::NeedsMaintenance(options.maintenance)) {
         LogBot("%s: Maintenance needed - running before dungeon entry", prefix);
 

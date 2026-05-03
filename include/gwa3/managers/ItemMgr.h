@@ -13,6 +13,7 @@ namespace GWA3::ItemMgr {
     void DropItem(uint32_t itemId);
     void MoveItem(uint32_t itemId, uint32_t bagId, uint32_t slot);
     void PickUpItem(uint32_t itemAgentId);
+    void AcceptAllUnclaimedItems(uint32_t unclaimedBagIndex = 7u);
     void IdentifyItem(uint32_t itemId, uint32_t kitId);
 
     // Salvage session
