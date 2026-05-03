@@ -126,7 +126,6 @@ src/gwa3/managers/MerchantMgr.cpp
     bots/rragars_menagerie/RragarsMenagerie.cpp
     bots/rragars_menagerie/RragarsMenagerieBot.cpp
     bots/froggy/FroggyHM.cpp
-    bots/froggy/FroggyHMRoutes.cpp
     src/gwa3/llm/IpcServer.cpp
     src/gwa3/llm/GameSnapshot.cpp
     src/gwa3/llm/ActionExecutor.cpp
@@ -178,4 +177,3 @@ set_target_properties(injector PROPERTIES
     OUTPUT_NAME "injector"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
-
