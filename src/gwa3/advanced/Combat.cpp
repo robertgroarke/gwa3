@@ -1,10 +1,10 @@
-#include <gwa3/dungeon/DungeonCombat.h>
+#include <gwa3/advanced/Combat.h>
 
-#include <gwa3/dungeon/DungeonCombatRoutine.h>
+#include <gwa3/advanced/CombatRoutine.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
-#include <gwa3/dungeon/DungeonSkill.h>
+#include <gwa3/advanced/CombatSkill.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/PartyMgr.h>
@@ -13,7 +13,7 @@
 #include <Windows.h>
 #include <cmath>
 
-namespace GWA3::DungeonCombat {
+namespace GWA3::AdvancedCombat {
 
 namespace {
 
@@ -58,7 +58,7 @@ void RecordSessionAggroTarget(void* userData, uint32_t targetId) {
     return;
   }
 
-  DungeonCombatRoutine::ResetUsedSkills(*profile->session);
+  AdvancedCombatRoutine::ResetUsedSkills(*profile->session);
   if (profile->on_target != nullptr) {
     profile->on_target(profile->user_data, targetId);
   }
@@ -72,10 +72,10 @@ void RecordSessionFallbackAutoAttack(void* userData,
     return;
   }
 
-  DungeonCombatRoutine::RecordAutoAttackAction(
+  AdvancedCombatRoutine::RecordAutoAttackAction(
       *profile->session,
       targetId,
-      DungeonSkill::ROLE_ATTACK | DungeonSkill::ROLE_OFFENSIVE,
+      AdvancedSkill::ROLE_ATTACK | AdvancedSkill::ROLE_OFFENSIVE,
       actionStartMs);
 }
 
@@ -110,7 +110,7 @@ void RecordRouteCombatTargetStats(void* userData, uint32_t targetId) {
 
 void RecordRouteCombatActionStats(
     void* userData,
-    const DungeonCombatRoutine::SkillActionResult& action,
+    const AdvancedCombatRoutine::SkillActionResult& action,
     uint32_t actionStartMs) {
   auto* stats = static_cast<RouteCombatStats*>(userData);
   if (stats == nullptr || !action.valid || action.started_at_ms < actionStartMs) {
@@ -165,14 +165,14 @@ int UseSessionSkillsInAggro(uint32_t targetId,
     return 0;
   }
 
-  DungeonCombatRoutine::AggroSkillUseOptions skill_options;
+  AdvancedCombatRoutine::AggroSkillUseOptions skill_options;
   skill_options.wait_for_completion = waitForCompletion;
   skill_options.aggro_range = aggroRange;
   skill_options.max_aftercast = profile.resolve_max_aftercast
       ? profile.resolve_max_aftercast(MapMgr::GetMapId(), profile.user_data)
       : profile.default_max_aftercast;
   skill_options.log_prefix = profile.log_prefix;
-  return DungeonCombatRoutine::UseSkillsInAggroTracked(
+  return AdvancedCombatRoutine::UseSkillsInAggroTracked(
       *profile.session,
       targetId,
       profile.wait_ms,
@@ -205,7 +205,7 @@ void PrepareForLocalClear(float routeX, float routeY, float foeDistance,
     return;
   }
 
-  Log::Info("DungeonCombat: holding movement for local clear target=(%.0f, "
+  Log::Info("Combat: holding movement for local clear target=(%.0f, "
             "%.0f) foeDist=%.0f clearRange=%.0f",
             routeX, routeY, foeDistance, clearRange);
   AgentMgr::CancelAction();
@@ -226,7 +226,7 @@ void ResumeAfterLocalClear(float routeX, float routeY,
     CallWait(callbacks.wait_ms, options.post_clear_cancel_wait_ms);
   }
   Log::Info(
-      "DungeonCombat: resuming movement after local clear target=(%.0f, %.0f)",
+      "Combat: resuming movement after local clear target=(%.0f, %.0f)",
       routeX, routeY);
 }
 
@@ -383,7 +383,7 @@ bool HoldForLocalClear(float waypointX,
   dwellCallbacks.is_map_loaded = callbacks.is_map_loaded;
   dwellCallbacks.wait_ms = callbacks.wait_ms;
 
-  const char* prefix = options.log_prefix ? options.log_prefix : "DungeonCombat";
+  const char* prefix = options.log_prefix ? options.log_prefix : "Combat";
   const char* clearLabel = policy.clear_label ? policy.clear_label : "Route";
   const char* lootReason = policy.loot_reason ? policy.loot_reason : "local-clear";
   const uint32_t targetId = options.target_id;
@@ -717,7 +717,7 @@ bool FightEnemiesInAggro(float aggroRange,
       AgentMgr::CancelAction();
     }
 
-    const uint32_t bestTarget = DungeonSkill::GetBestBalledEnemy(aggroRange);
+    const uint32_t bestTarget = AdvancedSkill::GetBestBalledEnemy(aggroRange);
     if (bestTarget == 0u) {
       break;
     }
@@ -726,7 +726,7 @@ bool FightEnemiesInAggro(float aggroRange,
     }
 
     bool attacked = false;
-    if (DungeonSkill::CanBasicAttack()) {
+    if (AdvancedSkill::CanBasicAttack()) {
       AgentMgr::Attack(bestTarget);
       attacked = true;
     }
@@ -762,7 +762,7 @@ bool FightEnemiesInAggro(float aggroRange,
       MapMgr::GetIsMapLoaded()) {
     auto* me = AgentMgr::GetMyAgent();
     Log::Warn("%s: FightEnemiesInAggro budget hit elapsed=%lums aggroRange=%.0f player=(%.0f, %.0f) nearestEnemy=%.0f target=%u",
-              options.log_prefix ? options.log_prefix : "DungeonCombat",
+              options.log_prefix ? options.log_prefix : "Combat",
               static_cast<unsigned long>(elapsedFightMs),
               aggroRange,
               me ? me->x : 0.0f,
@@ -999,4 +999,4 @@ FollowWaypointsWithAggro(const DungeonRoute::Waypoint *waypoints, int count,
   return result;
 }
 
-} // namespace GWA3::DungeonCombat
+} // namespace GWA3::AdvancedCombat
