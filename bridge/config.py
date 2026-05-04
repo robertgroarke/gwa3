@@ -8,7 +8,7 @@ PIPE_NAME = os.environ.get("GWA3_PIPE_NAME", r"\\.\pipe\gwa3_llm")
 
 # Default LLM settings
 DEFAULT_LLM_URL = "http://localhost:8000/v1"
-DEFAULT_MODEL = "gemma-4-32b-it"
+DEFAULT_MODEL = "deepseek-v4-pro:cloud"
 
 # Agent loop settings
 MAX_HISTORY_MESSAGES = 50
@@ -22,7 +22,7 @@ AUTONOMY_FULL = "full"
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="GWA3 LLM Bridge — Gemma 4 Agent")
+    parser = argparse.ArgumentParser(description="GWA3 LLM Bridge autonomous agent")
     parser.add_argument(
         "--llm-url",
         default=DEFAULT_LLM_URL,

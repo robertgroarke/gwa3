@@ -14,12 +14,13 @@ namespace GWA3::MaintenanceMgr {
 
     // ===== Configuration =====
     struct Config {
-        uint32_t minFreeSlots                = 7;
+        uint32_t minFreeSlots                = 5;
         uint32_t minIdKits                   = 1;
         uint32_t minSalvageKits              = 1;
         uint32_t maxCharacterGold            = 95000;
         uint32_t targetIdKits                = 3;
-        uint32_t targetSalvageKits           = 10;
+        uint32_t targetSalvageKits           = 8;  // Regular/basic salvage kits.
+        uint32_t targetExpertSalvageKits     = 1;  // Superior/expert salvage kit for gold salvage.
         // Owned by the dungeon module. When 0, conversion paths return to the
         // map they started from instead of assuming a shared maintenance town.
         uint32_t maintenanceTown             = 0;

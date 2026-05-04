@@ -1,7 +1,7 @@
 """Entry point for the GWA3 LLM Bridge.
 
 Usage:
-    python -m bridge --llm-url http://localhost:11434/v1 --model gemma4:27b
+    python -m bridge --llm-url http://localhost:11434/v1 --model deepseek-v4-pro:cloud
     python -m bridge --objective "Farm Bogroot Growths HM repeatedly"
     python -m bridge --objective "Go to Kamadan and buy 10 Iron Ingots"
 """
@@ -21,7 +21,7 @@ async def main():
     args = parse_args()
 
     print("=" * 60)
-    print("  GWA3 LLM Bridge — Gemma 4 Autonomous Agent")
+    print("  GWA3 LLM Bridge - Autonomous Agent")
     print("=" * 60)
     print(f"  LLM:       {args.llm_url}")
     print(f"  Model:     {args.model}")
@@ -30,7 +30,7 @@ async def main():
     if args.objective:
         print(f"  Objective: {args.objective}")
     else:
-        print(f"  Objective: (default — farm continuously)")
+        print(f"  Objective: (default - farm continuously)")
     print("=" * 60)
 
     # Connect to gwa3 named pipe

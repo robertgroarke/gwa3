@@ -37,8 +37,9 @@ static constexpr float kEmbarkXunlaiY = -2134.0f;
 static constexpr float kEmbarkMaterialTraderX = 2933.0f;
 static constexpr float kEmbarkMaterialTraderY = -2236.0f;
 static constexpr uint16_t kEmbarkMaterialTraderNpcId = 3285;
+static constexpr uint32_t kCriticalFreeSlots = 3;
 
-// ===== Rare Skin Detection =====
+// ===== Rare Skin Detection (GWA3-176) =====
 // Ported from AutoIt RareSkins.au3 ??? ~200 model IDs that should never be sold or salvaged.
 bool IsRareSkin(uint32_t modelId) {
     // Sorted array of rare skin model IDs for binary search
@@ -399,12 +400,13 @@ static uint32_t CountAllSalvageKits() {
            CountItemByModel(ItemModelIds::ALT_SALVAGE_KIT);
 }
 
-static bool IsSalvageKitModel(uint32_t modelId) {
-    return modelId == ItemModelIds::SUPERIOR_SALVAGE_KIT ||
-           modelId == ItemModelIds::SALVAGE_KIT ||
-           modelId == ItemModelIds::EXPERT_SALVAGE_KIT ||
-           modelId == ItemModelIds::RARE_SALVAGE_KIT ||
-           modelId == ItemModelIds::ALT_SALVAGE_KIT;
+static uint32_t CountRegularSalvageKits() {
+    return CountItemByModel(ItemModelIds::SALVAGE_KIT);
+}
+
+static uint32_t CountHighGradeSalvageKits() {
+    return CountItemByModel(ItemModelIds::SUPERIOR_SALVAGE_KIT) +
+           CountItemByModel(ItemModelIds::EXPERT_SALVAGE_KIT);
 }
 
 static uint32_t CountInventoryEventStorageStacks() {
@@ -451,13 +453,115 @@ static uint32_t CountInventoryConsetCraftMaterialStacks() {
     return stacks;
 }
 
+static int GetMaterialStorageSlot(uint32_t modelId);
+
+static uint32_t CountLooseConsetStacks() {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    uint32_t stacks = 0;
+    for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
+        Bag* bag = inv->bags[bagIdx];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t i = 0; i < bag->items.size; ++i) {
+            Item* item = bag->items.buffer[i];
+            if (!item) continue;
+            if (item->model_id == ItemModelIds::GRAIL_OF_MIGHT ||
+                item->model_id == ItemModelIds::ESSENCE_OF_CELERITY ||
+                item->model_id == ItemModelIds::ARMOR_OF_SALVATION) {
+                ++stacks;
+            }
+        }
+    }
+    return stacks;
+}
+
+static bool HasMaterialStorageCandidate() {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return false;
+
+    for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
+        Bag* bag = inv->bags[bagIdx];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t i = 0; i < bag->items.size; ++i) {
+            Item* item = bag->items.buffer[i];
+            if (item && item->type == 11 && GetMaterialStorageSlot(item->model_id) >= 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static uint32_t CountVendorSellableItems() {
+    Inventory* inv = ItemMgr::GetInventory();
+    if (!inv) return 0;
+
+    uint32_t count = 0;
+    for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
+        Bag* bag = inv->bags[bagIdx];
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t i = 0; i < bag->items.size; ++i) {
+            Item* item = bag->items.buffer[i];
+            if (item && item->value > 0 && ShouldSellItem(item)) {
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
+static bool HasFreeSlotMaintenanceAction(const Config& cfg, uint32_t freeSlots) {
+    const uint32_t sellable = CountVendorSellableItems();
+    if (sellable > 0) {
+        Log::Info("MaintenanceMgr: Free-slot action available - sellableItems=%u", sellable);
+        return true;
+    }
+
+    uint32_t storageBag = 0;
+    uint32_t storageSlot = 0;
+    if (FindEmptyStorageSlot(storageBag, storageSlot)) {
+        if (HasMaterialStorageCandidate()) {
+            Log::Info("MaintenanceMgr: Free-slot action available - material storage slot=%u/%u",
+                      storageBag, storageSlot);
+            return true;
+        }
+        const uint32_t looseConsets = CountLooseConsetStacks();
+        if (looseConsets > 0) {
+            Log::Info("MaintenanceMgr: Free-slot action available - looseConsets=%u storage slot=%u/%u",
+                      looseConsets, storageBag, storageSlot);
+            return true;
+        }
+        const uint32_t eventStacks = CountInventoryEventStorageStacks();
+        if (eventStacks > 0) {
+            Log::Info("MaintenanceMgr: Free-slot action available - eventStacks=%u storage slot=%u/%u",
+                      eventStacks, storageBag, storageSlot);
+            return true;
+        }
+    }
+
+    const uint32_t consetMatStacks = CountInventoryConsetCraftMaterialStacks();
+    if (cfg.enableConsetRestock && freeSlots <= cfg.consetMaterialPressureFreeSlots &&
+        consetMatStacks > cfg.consetMaterialStackTrigger) {
+        Log::Info("MaintenanceMgr: Free-slot action available - consetMatStacks=%u", consetMatStacks);
+        return true;
+    }
+
+    return false;
+}
+
 // ===== Diagnostics =====
 
 bool NeedsMaintenance(const Config& cfg) {
     uint32_t freeSlots = CountFreeSlots();
-    if (freeSlots < cfg.minFreeSlots) {
+    if (freeSlots < kCriticalFreeSlots ||
+        (freeSlots < cfg.minFreeSlots && HasFreeSlotMaintenanceAction(cfg, freeSlots))) {
         Log::Info("MaintenanceMgr: Needs maintenance ??? freeSlots=%u < %u", freeSlots, cfg.minFreeSlots);
         return true;
+    }
+    if (freeSlots < cfg.minFreeSlots) {
+        Log::Info("MaintenanceMgr: Low freeSlots=%u < %u but no actionable safe cleanup remains; allowing run",
+                  freeSlots, cfg.minFreeSlots);
     }
 
     uint32_t idKits = CountItemByModel(ItemModelIds::SUPERIOR_IDENTIFICATION_KIT);
@@ -466,9 +570,21 @@ bool NeedsMaintenance(const Config& cfg) {
         return true;
     }
 
-    uint32_t salvKits = CountAllSalvageKits();
+    uint32_t salvKits = CountRegularSalvageKits();
     if (salvKits < cfg.targetSalvageKits) {
         Log::Info("MaintenanceMgr: Needs maintenance ??? salvageKits=%u < target %u", salvKits, cfg.targetSalvageKits);
+        return true;
+    }
+
+    uint32_t highGradeSalvKits = CountHighGradeSalvageKits();
+    if (highGradeSalvKits < cfg.targetExpertSalvageKits) {
+        Log::Info("MaintenanceMgr: Needs maintenance - highGradeSalvageKits=%u < target %u",
+                  highGradeSalvKits, cfg.targetExpertSalvageKits);
+        return true;
+    }
+    if (CountItemByModel(ItemModelIds::EXPERT_SALVAGE_KIT) > 0 &&
+        CountItemByModel(ItemModelIds::SUPERIOR_SALVAGE_KIT) == 0) {
+        Log::Info("MaintenanceMgr: Needs maintenance - replacing expert salvage fallback with superior kit");
         return true;
     }
 
@@ -870,7 +986,7 @@ uint32_t SellJunkItems() {
     return soldCount;
 }
 
-// ===== Item Identification =====
+// ===== Item Identification (GWA3-178) =====
 // Mirrors AutoIt IdentifyUnidentifiedItemsForMaintenance():
 // scan bags 1-4, skip rare skins, identify with ID kit.
 
@@ -906,6 +1022,16 @@ static Item* FindSalvageKit() {
     item = ItemMgr::FindItemByModelId(ItemModelIds::EXPERT_SALVAGE_KIT);
     if (item) return item;
     return ItemMgr::FindItemByModelId(ItemModelIds::SUPERIOR_SALVAGE_KIT);
+}
+
+static Item* FindExpertSalvageKit() {
+    Item* item = ItemMgr::FindItemByModelId(ItemModelIds::SUPERIOR_SALVAGE_KIT);
+    if (item) return item;
+    item = ItemMgr::FindItemByModelId(ItemModelIds::EXPERT_SALVAGE_KIT);
+    if (item) return item;
+    item = ItemMgr::FindItemByModelId(ItemModelIds::RARE_SALVAGE_KIT);
+    if (item) return item;
+    return ItemMgr::FindItemByModelId(ItemModelIds::SALVAGE_KIT);
 }
 
 uint32_t IdentifyAllItems() {
@@ -948,7 +1074,7 @@ uint32_t IdentifyAllItems() {
     return identified;
 }
 
-// ===== Salvage =====
+// ===== Salvage (GWA3-179) =====
 // Uses the native Salvage function directly, matching AutoIt's CommandSalvage shellcode.
 // AutoIt: writes item_id + kit_id to SalvageGlobal, calls Salvage(session_id, kit_id, item_id).
 // This avoids the kPreStartSalvage UI message which corrupts game state.
@@ -1877,7 +2003,7 @@ uint32_t IdentifyAndSalvageGoldItems() {
     // gold weapon-like items that are safe to liquidate.
     IdentifyAllItems();
 
-    Item* kit = FindSalvageKit();
+    Item* kit = FindExpertSalvageKit();
     if (!kit) {
         Log::Warn("MaintenanceMgr: No salvage kit found for gold salvage pass");
         return 0;
@@ -1967,13 +2093,13 @@ uint32_t IdentifyAndSalvageGoldItems() {
 
 // ===== Kit Management =====
 
-static uint32_t SellExcessSalvageKits(uint32_t targetSalvageKits) {
-    uint32_t currentSalvKits = CountAllSalvageKits();
-    if (currentSalvKits <= targetSalvageKits) return 0;
+static uint32_t SellSalvageKitModelDownTo(uint32_t modelId, uint32_t keepCount, const char* label) {
+    uint32_t currentCount = CountItemByModel(modelId);
+    if (currentCount <= keepCount) return 0;
 
     uint32_t merchantItems = MerchantMgr::GetMerchantItemCount();
     if (merchantItems == 0) {
-        Log::Warn("MaintenanceMgr: SellExcessSalvageKits - merchant not open");
+        Log::Warn("MaintenanceMgr: SellSalvageKitModelDownTo - merchant not open for %s", label);
         return 0;
     }
 
@@ -1981,31 +2107,78 @@ static uint32_t SellExcessSalvageKits(uint32_t targetSalvageKits) {
     if (!inv) return 0;
 
     uint32_t soldCount = 0;
-    for (uint32_t bagIdx = 1; bagIdx <= 4 && currentSalvKits > targetSalvageKits; bagIdx++) {
+    for (uint32_t bagIdx = 1; bagIdx <= 4 && currentCount > keepCount; bagIdx++) {
         Bag* bag = inv->bags[bagIdx];
         if (!bag || !bag->items.buffer) continue;
-        for (uint32_t i = 0; i < bag->items.size && currentSalvKits > targetSalvageKits; i++) {
+        for (uint32_t i = 0; i < bag->items.size && currentCount > keepCount; i++) {
             Item* item = bag->items.buffer[i];
-            if (!item || item->item_id == 0 || !IsSalvageKitModel(item->model_id)) continue;
+            if (!item || item->item_id == 0 || item->model_id != modelId) continue;
 
-            const uint32_t qty = (item->quantity > 0) ? item->quantity : 1u;
-            Log::Info("MaintenanceMgr: Selling excess salvage kit item=%u model=%u qty=%u count=%u target=%u",
-                      item->item_id, item->model_id, qty, currentSalvKits, targetSalvageKits);
-            MerchantMgr::SellInventoryItem(item->item_id, qty);
+            Log::Info("MaintenanceMgr: Selling excess %s salvage kit item=%u model=%u count=%u keep=%u",
+                      label, item->item_id, item->model_id, currentCount, keepCount);
+            MerchantMgr::SellInventoryItem(item->item_id, 1u);
             WaitMs(300);
             soldCount++;
-            currentSalvKits = CountAllSalvageKits();
+            currentCount = CountItemByModel(modelId);
         }
     }
 
-    Log::Info("MaintenanceMgr: Sold %u excess salvage kits; salvage count now %u/%u",
-              soldCount, currentSalvKits, targetSalvageKits);
+    if (soldCount > 0) {
+        Log::Info("MaintenanceMgr: Sold %u excess %s salvage kits; count now %u/%u",
+                  soldCount, label, currentCount, keepCount);
+    }
     return soldCount;
+}
+
+static uint32_t SellExcessSalvageKits(const Config& cfg) {
+    uint32_t sold = 0;
+    sold += SellSalvageKitModelDownTo(ItemModelIds::RARE_SALVAGE_KIT, 0, "rare");
+    sold += SellSalvageKitModelDownTo(ItemModelIds::ALT_SALVAGE_KIT, 0, "alt");
+    const bool preferSuperior =
+        CountItemByModel(ItemModelIds::SUPERIOR_SALVAGE_KIT) > 0 ||
+        MerchantMgr::GetMerchantItemIdByModelId(ItemModelIds::SUPERIOR_SALVAGE_KIT) != 0;
+    if (preferSuperior) {
+        sold += SellSalvageKitModelDownTo(ItemModelIds::EXPERT_SALVAGE_KIT, 0, "expert");
+        sold += SellSalvageKitModelDownTo(ItemModelIds::SUPERIOR_SALVAGE_KIT,
+                                          cfg.targetExpertSalvageKits,
+                                          "superior");
+    } else {
+        sold += SellSalvageKitModelDownTo(ItemModelIds::EXPERT_SALVAGE_KIT,
+                                          cfg.targetExpertSalvageKits,
+                                          "expert");
+    }
+    sold += SellSalvageKitModelDownTo(ItemModelIds::SALVAGE_KIT, cfg.targetSalvageKits, "regular");
+    return sold;
+}
+
+static bool BuyMerchantModel(uint32_t modelId, uint32_t quantity, const char* label) {
+    const uint32_t itemId = MerchantMgr::GetMerchantItemIdByModelId(modelId);
+    if (!itemId) {
+        Log::Warn("MaintenanceMgr: Merchant does not sell %s model=%u", label, modelId);
+        return false;
+    }
+    if (!MerchantMgr::BuyMerchantItem(itemId, quantity)) {
+        Log::Warn("MaintenanceMgr: Could not buy %u %s model=%u item=%u",
+                  quantity, label, modelId, itemId);
+        return false;
+    }
+    Log::Info("MaintenanceMgr: Bought %u %s model=%u item=%u",
+              quantity, label, modelId, itemId);
+    WaitMs(1000);
+    return true;
+}
+
+static bool BuyHighGradeSalvageKits(uint32_t quantity) {
+    if (MerchantMgr::GetMerchantItemIdByModelId(ItemModelIds::SUPERIOR_SALVAGE_KIT) != 0) {
+        return BuyMerchantModel(ItemModelIds::SUPERIOR_SALVAGE_KIT, quantity, "superior salvage kit");
+    }
+    return BuyMerchantModel(ItemModelIds::EXPERT_SALVAGE_KIT, quantity, "expert salvage kit");
 }
 
 void BuyKitsToTarget(const Config& cfg) {
     uint32_t currentIdKits = CountItemByModel(ItemModelIds::SUPERIOR_IDENTIFICATION_KIT);
-    uint32_t currentSalvKits = CountAllSalvageKits();
+    uint32_t currentRegularSalvKits = CountRegularSalvageKits();
+    uint32_t currentHighGradeSalvKits = CountHighGradeSalvageKits();
 
     // Check merchant is open
     uint32_t merchantItems = MerchantMgr::GetMerchantItemCount();
@@ -2014,41 +2187,37 @@ void BuyKitsToTarget(const Config& cfg) {
         return;
     }
 
-    if (currentSalvKits > cfg.targetSalvageKits) {
-        SellExcessSalvageKits(cfg.targetSalvageKits);
-        currentSalvKits = CountAllSalvageKits();
-    }
+    SellExcessSalvageKits(cfg);
+    currentRegularSalvKits = CountRegularSalvageKits();
+    currentHighGradeSalvKits = CountHighGradeSalvageKits();
 
-    if (currentIdKits >= cfg.targetIdKits && currentSalvKits >= cfg.targetSalvageKits) {
-        Log::Info("MaintenanceMgr: Kits sufficient (id=%u/%u salv=%u/%u)",
-                  currentIdKits, cfg.targetIdKits, currentSalvKits, cfg.targetSalvageKits);
+    if (currentIdKits >= cfg.targetIdKits &&
+        currentRegularSalvKits >= cfg.targetSalvageKits &&
+        currentHighGradeSalvKits >= cfg.targetExpertSalvageKits) {
+        Log::Info("MaintenanceMgr: Kits sufficient (id=%u/%u regularSalv=%u/%u highGradeSalv=%u/%u totalSalv=%u)",
+                  currentIdKits, cfg.targetIdKits,
+                  currentRegularSalvKits, cfg.targetSalvageKits,
+                  currentHighGradeSalvKits, cfg.targetExpertSalvageKits,
+                  CountAllSalvageKits());
         return;
     }
 
     // Buy ID kits if needed
     if (currentIdKits < cfg.targetIdKits) {
         uint32_t need = cfg.targetIdKits - currentIdKits;
-        // Standard merchant slot 6 carries superior ID kits at 500g each.
-        bool bought = MerchantMgr::BuyMerchantItemByPosition(6, need, 500);
-        if (bought) {
-            Log::Info("MaintenanceMgr: Bought %u superior ID kits", need);
-            WaitMs(1000);
-        } else {
-            Log::Warn("MaintenanceMgr: Could not buy superior ID kits");
-        }
+        BuyMerchantModel(ItemModelIds::SUPERIOR_IDENTIFICATION_KIT, need, "superior ID kit");
     }
 
-    // Buy salvage kits if needed
-    if (currentSalvKits < cfg.targetSalvageKits) {
-        uint32_t need = cfg.targetSalvageKits - currentSalvKits;
-        // Standard merchant slot 4 carries salvage kits at 2000g each.
-        bool bought = MerchantMgr::BuyMerchantItemByPosition(4, need, 2000);
-        if (bought) {
-            Log::Info("MaintenanceMgr: Bought %u salvage kits", need);
-            WaitMs(1000);
-        } else {
-            Log::Warn("MaintenanceMgr: Could not buy salvage kits");
-        }
+    currentRegularSalvKits = CountRegularSalvageKits();
+    if (currentRegularSalvKits < cfg.targetSalvageKits) {
+        uint32_t need = cfg.targetSalvageKits - currentRegularSalvKits;
+        BuyMerchantModel(ItemModelIds::SALVAGE_KIT, need, "regular salvage kit");
+    }
+
+    currentHighGradeSalvKits = CountHighGradeSalvageKits();
+    if (currentHighGradeSalvKits < cfg.targetExpertSalvageKits) {
+        uint32_t need = cfg.targetExpertSalvageKits - currentHighGradeSalvKits;
+        BuyHighGradeSalvageKits(need);
     }
 }
 
@@ -2626,9 +2795,13 @@ bool ConvertExcessStorageGoldToConsets(const Config& cfg) {
 // ===== Full Maintenance =====
 
 void PerformMaintenance(const Config& cfg) {
-    Log::Info("MaintenanceMgr: Starting maintenance (freeSlots=%u superiorIdKits=%u salvKits=%u targets=%u/%u gold=%u/%u consetTrigger=%u floor=%u)",
-              CountFreeSlots(), CountItemByModel(ItemModelIds::SUPERIOR_IDENTIFICATION_KIT), CountAllSalvageKits(),
-              cfg.targetIdKits, cfg.targetSalvageKits,
+    Log::Info("MaintenanceMgr: Starting maintenance (freeSlots=%u superiorIdKits=%u regularSalvKits=%u highGradeSalvKits=%u totalSalvKits=%u targets=%u/%u/%u gold=%u/%u consetTrigger=%u floor=%u)",
+              CountFreeSlots(),
+              CountItemByModel(ItemModelIds::SUPERIOR_IDENTIFICATION_KIT),
+              CountRegularSalvageKits(),
+              CountHighGradeSalvageKits(),
+              CountAllSalvageKits(),
+              cfg.targetIdKits, cfg.targetSalvageKits, cfg.targetExpertSalvageKits,
               ItemMgr::GetGoldCharacter(), ItemMgr::GetGoldStorage(),
               cfg.consetStorageGoldTrigger, cfg.consetStorageGoldFloor);
 
@@ -2652,7 +2825,7 @@ void PerformMaintenance(const Config& cfg) {
     // The old bags pointer at p2+0xF8 is NULLed because the memory is freed.
     // The game rebuilds it via StoC response, but that response never arrives
     // because our PacketSend dispatch path doesn't trigger the correct
-    // server-side processing. Requires AutoIt SafeEnqueue.
+    // server-side processing. Requires AutoIt SafeEnqueue (GWA3-184/185).
 
     // Step 5: Buy kits to target while the merchant is still open.
     BuyKitsToTarget(cfg);
@@ -2757,9 +2930,13 @@ void PerformMaintenance(const Config& cfg) {
     // Step 9: Convert excess Xunlai gold into stored consets.
     ConvertExcessStorageGoldToConsets(cfg);
 
-    Log::Info("MaintenanceMgr: Maintenance complete (freeSlots=%u superiorIdKits=%u salvKits=%u targets=%u/%u gold=%u/%u storedConsets=%u/%u/%u)",
-              CountFreeSlots(), CountItemByModel(ItemModelIds::SUPERIOR_IDENTIFICATION_KIT), CountAllSalvageKits(),
-              cfg.targetIdKits, cfg.targetSalvageKits,
+    Log::Info("MaintenanceMgr: Maintenance complete (freeSlots=%u superiorIdKits=%u regularSalvKits=%u highGradeSalvKits=%u totalSalvKits=%u targets=%u/%u/%u gold=%u/%u storedConsets=%u/%u/%u)",
+              CountFreeSlots(),
+              CountItemByModel(ItemModelIds::SUPERIOR_IDENTIFICATION_KIT),
+              CountRegularSalvageKits(),
+              CountHighGradeSalvageKits(),
+              CountAllSalvageKits(),
+              cfg.targetIdKits, cfg.targetSalvageKits, cfg.targetExpertSalvageKits,
               ItemMgr::GetGoldCharacter(), ItemMgr::GetGoldStorage(),
               CountItemByModelInStorage(ItemModelIds::GRAIL_OF_MIGHT),
               CountItemByModelInStorage(ItemModelIds::ESSENCE_OF_CELERITY),

@@ -33,6 +33,7 @@ static volatile LONG s_allowRestrictedMapPlayerUseSkill = 0;
 static volatile LONG s_restrictedMapPlayerUseSkillCount = 0;
 static volatile LONG s_lastUnsafePlayerUseSkillTick = 0;
 static constexpr DWORD kPlayerUseSkillSettleMs = 300u;
+static constexpr uint32_t kSkillbarTravelSettleMs = 5000u;
 
 static uintptr_t GetSkillbarArrayBase() {
     if (!Offsets::BasePointer) return 0;
@@ -303,6 +304,9 @@ void ToggleHeroSkillSlot(uint32_t heroIndex, uint32_t slot) {
 }
 
 Skillbar* GetPlayerSkillbar() {
+    if (!MapMgr::GetIsMapLoaded()) return nullptr;
+    if (MapMgr::IsTravelSettling(kSkillbarTravelSettleMs)) return nullptr;
+
     const uint32_t myId = AgentMgr::GetMyId();
     if (!myId) return nullptr;
 

@@ -850,6 +850,66 @@ SET_BOT_STATE = _tool(
     },
 )
 
+FROGGY_REFRESH_COMBAT_SKILLBAR = _tool(
+    "froggy_refresh_combat_skillbar",
+    "Refresh Froggy's cached combat skillbar. Use after zoning or changing builds.",
+    {"properties": {}, "required": []},
+)
+
+FROGGY_RUN_TOWN_SETUP = _tool(
+    "froggy_run_town_setup",
+    "Run Froggy's quick Gadd's Encampment outpost setup: set hard mode, add/load "
+    "heroes, set hero behavior, and refresh the combat cache. This intentionally "
+    "does not run full merchant/conset maintenance; use explicit maintenance tools "
+    "for that. Use this before froggy_travel_to_sparkfly.",
+    {"properties": {}, "required": []},
+)
+
+FROGGY_TRAVEL_TO_SPARKFLY = _tool(
+    "froggy_travel_to_sparkfly",
+    "Run Froggy's validated Gadd's Encampment waypoint path and zone transition "
+    "to Sparkfly Swamp. Do not use generic travel for Froggy dungeon entry.",
+    {"properties": {}, "required": []},
+)
+
+FROGGY_RUN_SPARKFLY_ROUTE_TO_TEKKS = _tool(
+    "froggy_run_sparkfly_route_to_tekks",
+    "Run the Sparkfly Swamp route from spawn toward Tekks. This is a blocking "
+    "high-level Froggy helper that handles waypoint movement and local combat.",
+    {"properties": {}, "required": []},
+)
+
+FROGGY_PREPARE_TEKKS_DUNGEON_ENTRY = _tool(
+    "froggy_prepare_tekks_dungeon_entry",
+    "Interact with Tekks and prepare Bogroot Growths entry. Use this in Sparkfly "
+    "near Tekks before entering Bogroot.",
+    {"properties": {}, "required": []},
+)
+
+FROGGY_RUN_DUNGEON_LOOP = _tool(
+    "froggy_run_dungeon_loop",
+    "Run one complete Bogroot Growths HM loop from Sparkfly Swamp or the current "
+    "Bogroot map. From Sparkfly it first follows Froggy's route to Tekks, then "
+    "refreshes Tekks/entry and enters the dungeon; inside Bogroot it runs Froggy's "
+    "route, combat, key, door, boss, reward, and post-run return logic.",
+    {"properties": {}, "required": []},
+)
+
+FROGGY_RUN_MAINTENANCE_CYCLE = _tool(
+    "froggy_run_maintenance_cycle",
+    "Run Froggy maintenance after a merchant window is open: identify, sell junk, "
+    "restock kits/consumables, and maintain gold according to Froggy settings.",
+    {
+        "properties": {
+            "include_salvage": {
+                "type": "boolean",
+                "description": "Whether to attempt salvage during maintenance. Defaults true.",
+            },
+        },
+        "required": [],
+    },
+)
+
 RESIGN = _tool(
     "resign",
     "Resign from the current mission/explorable area. Sends /resign in chat. "
@@ -1114,6 +1174,13 @@ ALL_TOOLS = [
     # Bot control (advisory mode)
     SET_COMBAT_MODE,
     SET_BOT_STATE,
+    FROGGY_REFRESH_COMBAT_SKILLBAR,
+    FROGGY_RUN_TOWN_SETUP,
+    FROGGY_TRAVEL_TO_SPARKFLY,
+    FROGGY_RUN_SPARKFLY_ROUTE_TO_TEKKS,
+    FROGGY_PREPARE_TEKKS_DUNGEON_ENTRY,
+    FROGGY_RUN_DUNGEON_LOOP,
+    FROGGY_RUN_MAINTENANCE_CYCLE,
     # Utility
     SEND_CHAT,
     SEND_WHISPER,

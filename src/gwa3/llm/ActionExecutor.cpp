@@ -22,7 +22,10 @@
 #include <gwa3/core/Offsets.h>
 #include <gwa3/dungeon/DungeonCombatRoutine.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
+#include <gwa3/dungeon/DungeonOutpostSetup.h>
+#include <gwa3/dungeon/DungeonRuntime.h>
 #include <gwa3/game/ItemModelIds.h>
+#include <gwa3/game/MapIds.h>
 #include <gwa3/game/Agent.h>
 #include <bots/common/BotFramework.h>
 #include <bots/froggy/FroggyHM.h>
@@ -58,6 +61,21 @@ namespace GWA3::LLM::ActionExecutor {
         }
         g_rateCount++;
         return true;
+    }
+
+    static bool ShouldPauseSnapshotsDuringAction(const char* actionName) {
+        if (!actionName) return false;
+        return strcmp(actionName, "froggy_run_dungeon_loop") == 0 ||
+               strcmp(actionName, "froggy_run_sparkfly_route_to_tekks") == 0 ||
+               strcmp(actionName, "froggy_prepare_tekks_dungeon_entry") == 0 ||
+               strcmp(actionName, "froggy_travel_to_sparkfly") == 0 ||
+               strcmp(actionName, "froggy_run_town_setup") == 0;
+    }
+
+    static unsigned long SnapshotPauseBudgetForAction(const char* actionName) {
+        if (!actionName) return 0u;
+        if (strcmp(actionName, "froggy_run_dungeon_loop") == 0) return 7200000u;
+        return 600000u;
     }
 
     static ActionResult MakeOk() {
@@ -146,21 +164,57 @@ namespace GWA3::LLM::ActionExecutor {
                MaintenanceMgr::CountItemByModel(ItemModelIds::ALT_SALVAGE_KIT);
     }
 
-    static bool WaitForFroggyMaintenanceRestock(const MaintenanceMgr::Config& cfg, uint32_t timeoutMs) {
+    static bool HasReadableBackpackInventory() {
+        Inventory* inv = ItemMgr::GetInventory();
+        if (!inv) return false;
+
+        for (uint32_t bagIdx = 1; bagIdx <= 4; ++bagIdx) {
+            Bag* bag = inv->bags[bagIdx];
+            if (!bag) continue;
+            if (bag->items_count == 0 || bag->items_count > 64) continue;
+            if (!bag->items.buffer) continue;
+            return true;
+        }
+        return false;
+    }
+
+    static bool WaitForReadableBackpackInventory(uint32_t timeoutMs, const char* label) {
         const DWORD start = GetTickCount();
         while ((GetTickCount() - start) < timeoutMs) {
-            const uint32_t salvageKits = CountFroggySalvageKitFamily();
-            if (MaintenanceMgr::CountItemByModel(ItemModelIds::SUPERIOR_IDENTIFICATION_KIT) >= cfg.targetIdKits &&
-                salvageKits >= cfg.targetSalvageKits &&
-                salvageKits <= cfg.targetSalvageKits) {
+            if (MapMgr::GetMapId() != 0 && AgentMgr::GetMyId() != 0 && HasReadableBackpackInventory()) {
                 return true;
             }
             Sleep(250);
         }
-        const uint32_t salvageKits = CountFroggySalvageKitFamily();
+        Log::Warn("[LLM-Action] %s inventory not readable after %u ms",
+                  label ? label : "maintenance",
+                  timeoutMs);
+        return false;
+    }
+
+    static bool WaitForFroggyMaintenanceRestock(const MaintenanceMgr::Config& cfg, uint32_t timeoutMs) {
+        const DWORD start = GetTickCount();
+        while ((GetTickCount() - start) < timeoutMs) {
+            const uint32_t regularSalvageKits =
+                MaintenanceMgr::CountItemByModel(ItemModelIds::SALVAGE_KIT);
+            const uint32_t highGradeSalvageKits =
+                MaintenanceMgr::CountItemByModel(ItemModelIds::EXPERT_SALVAGE_KIT) +
+                MaintenanceMgr::CountItemByModel(ItemModelIds::SUPERIOR_SALVAGE_KIT);
+            if (MaintenanceMgr::CountItemByModel(ItemModelIds::SUPERIOR_IDENTIFICATION_KIT) >= cfg.targetIdKits &&
+                regularSalvageKits >= cfg.targetSalvageKits &&
+                highGradeSalvageKits == cfg.targetExpertSalvageKits) {
+                return true;
+            }
+            Sleep(250);
+        }
+        const uint32_t regularSalvageKits =
+            MaintenanceMgr::CountItemByModel(ItemModelIds::SALVAGE_KIT);
+        const uint32_t highGradeSalvageKits =
+            MaintenanceMgr::CountItemByModel(ItemModelIds::EXPERT_SALVAGE_KIT) +
+            MaintenanceMgr::CountItemByModel(ItemModelIds::SUPERIOR_SALVAGE_KIT);
         return MaintenanceMgr::CountItemByModel(ItemModelIds::SUPERIOR_IDENTIFICATION_KIT) >= cfg.targetIdKits &&
-               salvageKits >= cfg.targetSalvageKits &&
-               salvageKits <= cfg.targetSalvageKits;
+               regularSalvageKits >= cfg.targetSalvageKits &&
+               highGradeSalvageKits == cfg.targetExpertSalvageKits;
     }
 
     static ActionResult HandleFroggyRefreshCombatSkillbar(const json&) {
@@ -175,6 +229,40 @@ namespace GWA3::LLM::ActionExecutor {
         return ok ? MakeOk() : MakeError("froggy_sparkfly_route_to_tekks_failed");
     }
 
+    static ActionResult HandleFroggyRunTownSetup(const json&) {
+        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
+        Bot::BotConfig& cfg = Bot::GetConfig();
+        const uint32_t outpostMapId = cfg.outpost_map_id ? cfg.outpost_map_id : MapIds::GADDS_ENCAMPMENT;
+        if (MapMgr::GetMapId() != outpostMapId) {
+            return MakeError("froggy_town_setup_requires_gadds");
+        }
+
+        if (!DungeonRuntime::WaitForTownRuntimeReady(outpostMapId, 10000u)) {
+            return MakeError("town_runtime_not_ready");
+        }
+
+        DungeonOutpostSetup::Options options = {};
+        options.default_hero_config_file = "Standard.txt";
+        if (!DungeonOutpostSetup::ApplyOutpostSetup(cfg, options)) {
+            return MakeError("froggy_outpost_setup_failed");
+        }
+
+        (void)DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(Bot::Froggy::g_combatSession, "Froggy");
+        Bot::SetState(Bot::BotState::Traveling);
+        return MakeOk();
+    }
+
+    static ActionResult HandleFroggyTravelToSparkfly(const json&) {
+        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
+        Bot::BotConfig& cfg = Bot::GetConfig();
+        const Bot::BotState next = Bot::Froggy::HandleTravel(cfg);
+        Bot::SetState(next);
+        if (next == Bot::BotState::Error || next == Bot::BotState::Stopping) {
+            return MakeError("froggy_travel_to_sparkfly_failed");
+        }
+        return MakeOk();
+    }
+
     static ActionResult HandleFroggyPrepareTekksDungeonEntry(const json&) {
         if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
         const bool ok = Bot::Froggy::DebugPrepareTekksDungeonEntry();
@@ -183,6 +271,12 @@ namespace GWA3::LLM::ActionExecutor {
 
     static ActionResult HandleFroggyRunDungeonLoop(const json&) {
         if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
+        if (MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP) {
+            Log::Info("[LLM-Action] froggy_run_dungeon_loop: routing from Sparkfly spawn toward Tekks before entry");
+            if (!Bot::Froggy::DebugRunSparkflyRouteToTekks()) {
+                return MakeError("froggy_sparkfly_route_to_tekks_failed");
+            }
+        }
         Bot::Froggy::ResetDungeonLoopTelemetry();
         const bool ok = Bot::Froggy::RunDungeonLoopFromCurrentMap();
         return ok ? MakeOk() : MakeError("froggy_dungeon_loop_failed");
@@ -191,6 +285,9 @@ namespace GWA3::LLM::ActionExecutor {
     static ActionResult HandleFroggyRunMaintenanceCycle(const json& p) {
         if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
         const bool includeSalvage = p.value("include_salvage", true);
+        if (!WaitForReadableBackpackInventory(15000u, "froggy_run_maintenance_cycle pre")) {
+            return MakeError("inventory_not_ready");
+        }
         if (MerchantMgr::GetMerchantItemCount() == 0) {
             return MakeError("merchant_not_open_call_open_merchant_first");
         }
@@ -205,24 +302,34 @@ namespace GWA3::LLM::ActionExecutor {
         const uint32_t identified = MaintenanceMgr::IdentifyAllItems();
         uint32_t salvaged = 0;
         if (includeSalvage) {
-            salvaged = MaintenanceMgr::SalvageJunkItems();
+            Log::Info("[LLM-Action] froggy_run_maintenance_cycle: skipping maintenance salvage; native Froggy disables this path because salvage invalidates inventory roots");
         }
         const uint32_t sold = MaintenanceMgr::SellJunkItems();
 
         MaintenanceMgr::Config cfg = {};
         cfg.targetIdKits = 3;
-        cfg.targetSalvageKits = 10;
+        cfg.targetSalvageKits = 9;
+        cfg.targetExpertSalvageKits = 1;
         MaintenanceMgr::BuyKitsToTarget(cfg);
         const bool restocked = WaitForFroggyMaintenanceRestock(cfg, 6000u);
         AgentMgr::CancelAction();
         Sleep(500);
+        if (!WaitForReadableBackpackInventory(10000u, "froggy_run_maintenance_cycle post")) {
+            return MakeError("inventory_not_ready_after_maintenance");
+        }
 
         const uint32_t superiorAfter = MaintenanceMgr::CountItemByModel(ItemModelIds::SUPERIOR_IDENTIFICATION_KIT);
+        const uint32_t regularSalvageAfter = MaintenanceMgr::CountItemByModel(ItemModelIds::SALVAGE_KIT);
+        const uint32_t highGradeSalvageAfter =
+            MaintenanceMgr::CountItemByModel(ItemModelIds::EXPERT_SALVAGE_KIT) +
+            MaintenanceMgr::CountItemByModel(ItemModelIds::SUPERIOR_SALVAGE_KIT);
         const uint32_t salvageAfter = CountFroggySalvageKitFamily();
-        Log::Info("[LLM-Action] froggy_run_maintenance_cycle: after free=%u gold=%u superiorId=%u salvage=%u identified=%u salvaged=%u sold=%u restocked=%d",
+        Log::Info("[LLM-Action] froggy_run_maintenance_cycle: after free=%u gold=%u superiorId=%u regularSalv=%u highGradeSalv=%u totalSalv=%u identified=%u salvaged=%u sold=%u restocked=%d",
                   MaintenanceMgr::CountFreeSlots(),
                   ItemMgr::GetGoldCharacter(),
                   superiorAfter,
+                  regularSalvageAfter,
+                  highGradeSalvageAfter,
                   salvageAfter,
                   identified,
                   salvaged,
@@ -230,7 +337,8 @@ namespace GWA3::LLM::ActionExecutor {
                   restocked ? 1 : 0);
 
         if (!restocked || superiorAfter < cfg.targetIdKits ||
-            salvageAfter < cfg.targetSalvageKits || salvageAfter > cfg.targetSalvageKits) {
+            regularSalvageAfter < cfg.targetSalvageKits ||
+            highGradeSalvageAfter != cfg.targetExpertSalvageKits) {
             return MakeError("froggy_maintenance_restock_failed");
         }
         return MakeOk();
@@ -1225,6 +1333,8 @@ namespace GWA3::LLM::ActionExecutor {
         // Skillbar
         g_dispatch["load_skillbar"] = HandleLoadSkillbar;
         g_dispatch["froggy_refresh_combat_skillbar"] = HandleFroggyRefreshCombatSkillbar;
+        g_dispatch["froggy_run_town_setup"] = HandleFroggyRunTownSetup;
+        g_dispatch["froggy_travel_to_sparkfly"] = HandleFroggyTravelToSparkfly;
         g_dispatch["froggy_run_sparkfly_route_to_tekks"] = HandleFroggyRunSparkflyRouteToTekks;
         g_dispatch["froggy_prepare_tekks_dungeon_entry"] = HandleFroggyPrepareTekksDungeonEntry;
         g_dispatch["froggy_run_dungeon_loop"] = HandleFroggyRunDungeonLoop;
@@ -1281,8 +1391,16 @@ namespace GWA3::LLM::ActionExecutor {
             }
         }
 
+        const bool pauseSnapshots = ShouldPauseSnapshotsDuringAction(actionName);
+        if (pauseSnapshots) {
+            GWA3::LLM::PauseSnapshotsFor(SnapshotPauseBudgetForAction(actionName));
+        }
+
         GWA3::Log::Info("[LLM-Action] Executing: %s", actionName);
         ActionResult result = it->second(params);
+        if (pauseSnapshots) {
+            GWA3::LLM::PauseSnapshotsFor(0);
+        }
         GWA3::Log::Info("[LLM-Action] Handler returned: %s success=%d error=%s",
                         actionName, result.success ? 1 : 0, result.error[0] ? result.error : "(none)");
         const bool fireAndForget = !requestId || !requestId[0];

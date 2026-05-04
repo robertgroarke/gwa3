@@ -29,6 +29,7 @@ namespace GWA3::MapMgr {
 
     // 3-state loading: 0=loading/not loaded, 1=loaded, 2=disconnected/no map
     uint32_t GetLoadingState();
+    bool IsTravelSettling(uint32_t settleMs);
 
     // Area info
     const AreaInfo* GetAreaInfo(uint32_t mapId);

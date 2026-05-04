@@ -1,6 +1,6 @@
 """Core agent loop: observe game state, think via LLM, act via gwa3.
 
-Designed for long-running autonomous play. Gemma receives a standing objective
+Designed for long-running autonomous play. The LLM receives a standing objective
 at startup and pursues it indefinitely. The user can optionally send messages
 to adjust behavior, but no input is required.
 """
@@ -71,6 +71,16 @@ act on your own judgment to pursue your current objective.
 - If a skill keeps failing, skip it and try another
 - If party wipes, return to outpost and restart the run
 - If disconnected (map not loaded), stop acting and wait
+
+## Froggy HM Control
+When the objective is Froggy HM / Bogroot Growths, prefer high-level Froggy tools
+over generic travel or individual movement:
+- In Gadd's Encampment, call froggy_run_town_setup, then froggy_travel_to_sparkfly.
+- In Sparkfly Swamp, call froggy_run_dungeon_loop. It handles Tekks entry and
+  dungeon entry refresh from Sparkfly.
+- In Bogroot Growths level 1 or 2, call froggy_run_dungeon_loop.
+- Do not use generic travel to enter Sparkfly/Bogroot for Froggy. Use the Froggy
+  route tools because explorable entry requires the validated waypoint/zone path.
 
 ## Communication
 If the user sends a message, respond briefly and adjust your objective if asked. \
@@ -189,7 +199,7 @@ class AgentLoop:
             elif msg_type == "event":
                 self.observations.add_event(msg)
             elif msg_type == "action_result":
-                pass  # logged but not blocking
+                pass  # action results are collected by _wait_for_action_result
             elif msg_type == "heartbeat":
                 pass
 
@@ -228,6 +238,50 @@ class AgentLoop:
         })
 
         return messages
+
+    async def _wait_for_action_result(self, request_id: str, timeout: float) -> dict:
+        """Wait for a specific action_result while keeping snapshots/events fresh."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            remaining = max(0.05, min(1.0, deadline - time.monotonic()))
+            try:
+                msg = await asyncio.wait_for(self.ipc.read_message(), timeout=remaining)
+            except asyncio.TimeoutError:
+                continue
+            if msg is None:
+                return {"success": False, "error": "pipe_disconnected"}
+
+            msg_type = msg.get("type", "")
+            if msg_type == "snapshot":
+                self.observations.add_snapshot(msg)
+            elif msg_type == "event":
+                self.observations.add_event(msg)
+            elif msg_type == "action_result":
+                if msg.get("request_id") == request_id:
+                    return {
+                        "success": bool(msg.get("success")),
+                        "error": msg.get("error"),
+                    }
+            elif msg_type == "heartbeat":
+                pass
+
+        return {"success": False, "error": "action_timeout"}
+
+    @staticmethod
+    def _tool_timeout_seconds(tool_name: str) -> float:
+        """Long-running route helpers need much longer than ordinary actions."""
+        if tool_name == "froggy_run_dungeon_loop":
+            return 7200.0
+        if tool_name in {
+            "froggy_run_town_setup",
+            "froggy_travel_to_sparkfly",
+            "froggy_run_sparkfly_route_to_tekks",
+            "froggy_prepare_tekks_dungeon_entry",
+            "froggy_run_maintenance_cycle",
+            "aggro_move_to",
+        }:
+            return 600.0
+        return 30.0
 
     async def _execute_tool_calls(self, response: LLMResponse):
         """Send tool calls to gwa3 and collect results."""
@@ -319,14 +373,15 @@ class AgentLoop:
             await self.ipc.send_action(tc.name, params, req_id)
             self._last_action_time = time.monotonic()
 
-            # Brief pause between sequential actions
-            await asyncio.sleep(0.1)
-            await self._collect_observations_safe()
+            result = await self._wait_for_action_result(
+                req_id,
+                self._tool_timeout_seconds(tc.name),
+            )
 
             self.history.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "content": json.dumps({"success": True, "action": tc.name}),
+                "content": json.dumps({"action": tc.name, **result}),
             })
 
     def _trim_history(self):
@@ -372,9 +427,9 @@ class AgentLoop:
                     tool_choice="auto",
                 )
 
-                # 5. Handle text response (Gemma explains something important)
+                # 5. Handle text response
                 if response.content:
-                    print(f"[Gemma] {response.content}")
+                    print(f"[LLM] {response.content}")
                     self.history.append({
                         "role": "assistant",
                         "content": response.content,
@@ -383,7 +438,7 @@ class AgentLoop:
                 # 6. Handle tool calls
                 if response.tool_calls:
                     tc_names = [tc.name for tc in response.tool_calls]
-                    print(f"[Gemma -> GW] {', '.join(tc_names)}")
+                    print(f"[LLM -> GW] {', '.join(tc_names)}")
                     self._consecutive_no_action = 0
 
                     self.history.append({
@@ -404,10 +459,10 @@ class AgentLoop:
 
                     await self._execute_tool_calls(response)
                 else:
-                    # No tool calls — Gemma chose not to act this cycle
+                    # No tool calls - the LLM chose not to act this cycle
                     self._consecutive_no_action += 1
                     if self._consecutive_no_action >= 10:
-                        # Gemma has been idle too long, nudge it
+                        # The LLM has been idle too long, nudge it
                         self._consecutive_no_action = 0
                         self.history.append({
                             "role": "user",

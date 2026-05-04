@@ -1,6 +1,7 @@
 """OpenAI-compatible async HTTP client for local LLM inference (vLLM/Ollama)."""
 
 import json
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,10 +33,12 @@ class LLMResponse:
 class LLMClient:
     """Async client for OpenAI-compatible chat completion API."""
 
+    RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
     def __init__(self, base_url: str, model: str):
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self._client = httpx.AsyncClient(timeout=120.0)
+        self._client = httpx.AsyncClient(timeout=300.0)
 
     async def chat_completion(
         self,
@@ -57,7 +60,7 @@ class LLMClient:
             payload["tool_choice"] = tool_choice
 
         url = f"{self.base_url}/chat/completions"
-        resp = await self._client.post(url, json=payload)
+        resp = await self._post_with_retries(url, payload)
         resp.raise_for_status()
         data = resp.json()
 
@@ -81,6 +84,23 @@ class LLMClient:
             )
 
         return result
+
+    async def _post_with_retries(self, url: str, payload: dict[str, Any]) -> httpx.Response:
+        last_response: httpx.Response | None = None
+        for attempt in range(4):
+            try:
+                resp = await self._client.post(url, json=payload)
+                if resp.status_code not in self.RETRYABLE_STATUS_CODES:
+                    return resp
+                last_response = resp
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError):
+                if attempt == 3:
+                    raise
+            await asyncio.sleep(2.0 * (attempt + 1))
+
+        if last_response is not None:
+            return last_response
+        return await self._client.post(url, json=payload)
 
     async def close(self):
         await self._client.aclose()

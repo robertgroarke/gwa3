@@ -29,6 +29,7 @@ struct PendingTravelRequest {
 };
 
 static PendingTravelRequest s_pendingTravel = {};
+static DWORD s_lastTravelRequestAt = 0u;
 
 static bool IsSameTravelRequest(const PendingTravelRequest& pending,
                                 uint32_t mapId,
@@ -74,6 +75,7 @@ bool Initialize() {
 bool Travel(uint32_t mapId, uint32_t region, uint32_t district, uint32_t language) {
     Log::Info("MapMgr: Travel request map=%u region=%u district=%u language=%u", mapId, region, district, language);
     RefreshPendingTravelState();
+    s_lastTravelRequestAt = GetTickCount();
     if (GameThread::IsOnGameThread()) {
         s_pendingTravel = {};
         Log::Info("MapMgr: Travel using direct game-thread packet send");
@@ -121,6 +123,7 @@ bool Travel(uint32_t mapId, uint32_t region, uint32_t district, uint32_t languag
 }
 
 void ReturnToOutpost() {
+    s_lastTravelRequestAt = GetTickCount();
     uint32_t mapId = GetMapId();
     if (mapId != 0 && !GetIsMapLoaded()) {
         // Natural post-reward transitions out of Bogroot can leave the
@@ -270,6 +273,12 @@ uint32_t GetLoadingState() {
     if (myId == 0) return 0;
     if (AgentMgr::GetAgentByID(myId) == nullptr) return 0;
     return 1;
+}
+
+bool IsTravelSettling(uint32_t settleMs) {
+    const DWORD lastTravel = s_lastTravelRequestAt;
+    if (lastTravel == 0u || settleMs == 0u) return false;
+    return (GetTickCount() - lastTravel) < settleMs;
 }
 
 // GameContext resolution delegated to Offsets::ResolveGameContext()

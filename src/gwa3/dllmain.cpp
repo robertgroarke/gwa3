@@ -376,6 +376,9 @@ DWORD WINAPI InitThread(LPVOID hModule) {
 
     if (llmMode) {
         GWA3::Log::Info("=== LLM AGENT MODE ===");
+        GWA3::Bot::Froggy::Register();
+        GWA3::Bot::SetState(IsInGame() ? GWA3::Bot::BotState::Idle
+                                       : GWA3::Bot::BotState::CharSelect);
         if (!GWA3::LLM::Initialize()) {
             GWA3::Log::Error("LLM bridge initialization failed");
             return 1;
