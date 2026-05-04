@@ -37,6 +37,25 @@ struct UnclaimedItemClaimResult {
     bool accepted = false;
 };
 
+struct EmergencyFreeSlotOptions {
+    uint32_t first_bag = 1u;
+    uint32_t last_bag = 4u;
+    uint32_t post_drop_wait_ms = 500u;
+    const char* log_prefix = nullptr;
+    WaitFn wait_ms = nullptr;
+};
+
+struct EmergencyFreeSlotDropResult {
+    bool dropped = false;
+    uint32_t item_id = 0u;
+    uint32_t model_id = 0u;
+    uint8_t item_type = 0u;
+    uint16_t rarity = 0u;
+    const char* reason = nullptr;
+};
+
 UnclaimedItemClaimResult ClaimUnclaimedItemsByModel(const UnclaimedItemClaimOptions& options);
+EmergencyFreeSlotDropResult DropEmergencyInventoryItemForFreeSlot(
+    const EmergencyFreeSlotOptions& options = {});
 
 } // namespace GWA3::AdvancedInventory

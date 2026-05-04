@@ -53,6 +53,30 @@ bool IsBossKeyCandidate(const Item* item,
     return IsBossKeyLikeItem(item, modelSet);
 }
 
+bool EnsureFreeSlotForBossKeyPickup(WaitFn wait_ms, const char* prefix) {
+    if (DungeonInventory::CountFreeSlots() > 0u) {
+        return true;
+    }
+
+    DungeonInventory::EmergencyFreeSlotOptions options;
+    options.log_prefix = prefix;
+    options.wait_ms = wait_ms;
+    const auto result = DungeonInventory::DropEmergencyInventoryItemForFreeSlot(options);
+    if (!result.dropped) {
+        Log::Warn("%s: Boss key pickup blocked by full inventory and no emergency drop candidate",
+                  prefix ? prefix : "DungeonLoot");
+        return false;
+    }
+
+    const uint32_t freeSlots = DungeonInventory::CountFreeSlots();
+    Log::Info("%s: Boss key emergency slot result dropped=%u model=%u freeSlots=%u",
+              prefix ? prefix : "DungeonLoot",
+              result.item_id,
+              result.model_id,
+              freeSlots);
+    return freeSlots > 0u;
+}
+
 } // namespace
 
 ChestAtOpenOptions MakeChestAtOpenOptions(
@@ -185,6 +209,10 @@ bool ForcePickUpBossKeyCandidates(float centerX,
             if (distFromCenter > scanRange) continue;
             auto* item = ItemMgr::GetItemById(itemAgent->item_id);
             if (!IsBossKeyCandidate(item, options.is_boss_key, options.boss_key_models)) continue;
+
+            if (!EnsureFreeSlotForBossKeyPickup(wait_ms, prefix)) {
+                return pickedAny;
+            }
 
             me = AgentMgr::GetMyAgent();
             if (!me) return pickedAny;
