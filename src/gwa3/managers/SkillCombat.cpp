@@ -1,16 +1,15 @@
-#include <gwa3/advanced/CombatSkill.h>
+#include <gwa3/managers/SkillMgr.h>
 
 #include <gwa3/game/SkillIds.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/EffectMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/PartyMgr.h>
-#include <gwa3/managers/SkillMgr.h>
 
 #include <cstddef>
 #include <cstring>
 
-namespace GWA3::AdvancedSkill {
+namespace GWA3::SkillMgr {
 
 namespace {
 
@@ -877,4 +876,4 @@ bool CanUseSkill(const CachedSkill& skill, uint32_t targetId, float aggroRange) 
     return ExplainCanUseSkillFailure(skill, targetId, aggroRange) == nullptr;
 }
 
-} // namespace GWA3::AdvancedSkill
+} // namespace GWA3::SkillMgr

@@ -77,7 +77,7 @@ add_library(gwa3_core OBJECT
     src/gwa3/managers/UIMgr.cpp
     src/gwa3/managers/ChatMgr.cpp
     src/gwa3/managers/TradeMgr.cpp
-src/gwa3/managers/MerchantMgr.cpp
+    src/gwa3/managers/MerchantMgr.cpp
     src/gwa3/managers/MaintenanceMgr.cpp
     src/gwa3/managers/FriendListMgr.cpp
     src/gwa3/managers/PlayerMgr.cpp
@@ -94,7 +94,7 @@ src/gwa3/managers/MerchantMgr.cpp
     bots/common/BotModuleRegistry.cpp
     bots/common/BotModuleSelector.cpp
     src/gwa3/dungeon/DungeonBundle.cpp
-    src/gwa3/dungeon/DungeonBuiltinCombat.cpp
+    src/gwa3/managers/CombatMgr.cpp
     src/gwa3/dungeon/DungeonCombat.cpp
     src/gwa3/advanced/Combat.cpp
     src/gwa3/advanced/CombatRoutine.cpp
@@ -115,15 +115,15 @@ src/gwa3/managers/MerchantMgr.cpp
     src/gwa3/dungeon/DungeonQuestRuntime.cpp
     src/gwa3/dungeon/DungeonRouteRunner.cpp
     src/gwa3/advanced/Runtime.cpp
-    src/gwa3/advanced/CombatSkill.cpp
-    src/gwa3/advanced/Merchant.cpp
+    src/gwa3/managers/SkillCombat.cpp
+    src/gwa3/managers/MerchantServices.cpp
     bots/frostmaws_burrows/FrostmawsBurrows.cpp
     bots/frostmaws_burrows/FrostmawsBurrowsBot.cpp
     bots/kathandrax/Kathandrax.cpp
     bots/kathandrax/KathandraxBot.cpp
     src/gwa3/dungeon/DungeonNavigation.cpp
     src/gwa3/dungeon/DungeonRoute.cpp
-    src/gwa3/advanced/Travel.cpp
+    src/gwa3/managers/TravelMgr.cpp
     bots/ravens_point/RavensPoint.cpp
     bots/ravens_point/RavensPointBot.cpp
     bots/rragars_menagerie/RragarsMenagerie.cpp

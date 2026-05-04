@@ -1,4 +1,4 @@
-#include <gwa3/dungeon/DungeonBuiltinCombat.h>
+#include <gwa3/managers/CombatMgr.h>
 
 #include <gwa3/dungeon/DungeonCombatRoutine.h>
 #include <gwa3/dungeon/DungeonLoot.h>
@@ -10,7 +10,7 @@
 
 #include <Windows.h>
 
-namespace GWA3::DungeonBuiltinCombat {
+namespace GWA3::CombatMgr {
 
 namespace {
 
@@ -46,8 +46,8 @@ int PickUpNearbyLoot(float maxRange) {
     options.pickup_delay_ms = 250u;
     return DungeonLoot::PickUpNearbyLoot(
         maxRange,
-        &GWA3::DungeonBuiltinCombat::WaitMs,
-        &GWA3::DungeonBuiltinCombat::IsPlayerOrPartyDead,
+        &GWA3::CombatMgr::WaitMs,
+        &GWA3::CombatMgr::IsPlayerOrPartyDead,
         options);
 }
 
@@ -233,4 +233,4 @@ bool FollowTravelPathWithAggro(
     return true;
 }
 
-} // namespace GWA3::DungeonBuiltinCombat
+} // namespace GWA3::CombatMgr

@@ -1,4 +1,4 @@
-#include <gwa3/advanced/Merchant.h>
+#include <gwa3/managers/MerchantMgr.h>
 
 #include <gwa3/advanced/Diagnostics.h>
 #include <gwa3/advanced/Effects.h>
@@ -12,14 +12,13 @@
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/TradeMgr.h>
-#include <gwa3/managers/MerchantMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 
 #include <Windows.h>
 
-namespace GWA3::AdvancedMerchant {
+namespace GWA3::MerchantMgr {
 
 namespace {
 
@@ -57,7 +56,7 @@ uint32_t MoveToNearestNpc(float anchorX, float anchorY, MoveToPointFn move_to_po
 }
 
 const char* Prefix(const char* prefix) {
-    return prefix ? prefix : "AdvancedMerchant";
+    return prefix ? prefix : "MerchantMgr";
 }
 
 void LogMerchantOpenSnapshot(const char* label, uint32_t npcId, float npcX, float npcY, const char* prefix) {
@@ -526,4 +525,4 @@ MaintenanceStateResult RunFullMaintenanceState(uint32_t configured_outpost_map_i
     return MaintenanceStateResult::Done;
 }
 
-} // namespace GWA3::AdvancedMerchant
+} // namespace GWA3::MerchantMgr
