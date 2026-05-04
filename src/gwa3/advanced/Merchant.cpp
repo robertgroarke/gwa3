@@ -1,11 +1,11 @@
 #include <gwa3/advanced/Merchant.h>
 
+#include <gwa3/advanced/Diagnostics.h>
 #include <gwa3/advanced/Effects.h>
 #include <gwa3/advanced/Inventory.h>
-#include <gwa3/dungeon/DungeonDiagnostics.h>
-#include <gwa3/dungeon/DungeonInteractions.h>
-#include <gwa3/dungeon/DungeonNavigation.h>
-#include <gwa3/dungeon/DungeonRuntime.h>
+#include <gwa3/advanced/Interactions.h>
+#include <gwa3/advanced/Runtime.h>
+#include <gwa3/advanced/Waypoint.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/game/ItemModelIds.h>
 #include <gwa3/managers/AgentMgr.h>
@@ -36,7 +36,7 @@ void MoveToPoint(float x, float y, float threshold, MoveToPointFn move_to_point)
         move_to_point(x, y, threshold);
         return;
     }
-    (void)DungeonNavigation::MoveToAndWait(x, y, threshold);
+    (void)AdvancedWaypoint::MoveToAndWait(x, y, threshold);
 }
 
 uint32_t MoveToNearestNpc(float anchorX, float anchorY, MoveToPointFn move_to_point,
@@ -44,7 +44,7 @@ uint32_t MoveToNearestNpc(float anchorX, float anchorY, MoveToPointFn move_to_po
     MoveToPoint(anchorX, anchorY, options.anchor_threshold, move_to_point);
 
     const uint32_t npcId =
-        DungeonInteractions::FindNearestNpc(anchorX, anchorY, options.search_radius);
+        AdvancedInteractions::FindNearestNpc(anchorX, anchorY, options.search_radius);
     if (npcId == 0u) {
         return 0u;
     }
@@ -81,7 +81,7 @@ bool MoveToPointWithResult(float x, float y, float threshold, MoveToPointResultF
     if (move_to_point) {
         return move_to_point(x, y, threshold);
     }
-    return DungeonNavigation::MoveToAndWait(x, y, threshold).arrived;
+    return AdvancedWaypoint::MoveToAndWait(x, y, threshold).arrived;
 }
 
 uint32_t ResolveOutpostMapId(uint32_t configured_outpost_map_id,
@@ -108,7 +108,7 @@ bool EnsureMaintenanceOutpost(uint32_t outpost_map_id,
                   state_label,
                   outpost_map_id,
                   map_id);
-        if (!DungeonRuntime::EnsureOutpostReady(
+        if (!AdvancedRuntime::EnsureOutpostReady(
                 outpost_map_id,
                 options.outpost_ready_timeout_ms,
                 state_label)) {
@@ -120,7 +120,7 @@ bool EnsureMaintenanceOutpost(uint32_t outpost_map_id,
         }
     }
 
-    if (!DungeonRuntime::WaitForTownRuntimeReady(outpost_map_id, options.town_runtime_timeout_ms)) {
+    if (!AdvancedRuntime::WaitForTownRuntimeReady(outpost_map_id, options.town_runtime_timeout_ms)) {
         Log::Info("%s: %s outpost runtime not ready after travel; waiting for next tick",
                   prefix,
                   state_label);
@@ -248,7 +248,7 @@ bool TryOpenMerchantContextCandidate(uint32_t npcId,
     return false;
 }
 
-bool TryMerchantCandidate(const DungeonDiagnostics::NearbyNpcCandidate& candidate,
+bool TryMerchantCandidate(const AdvancedDiagnostics::NearbyNpcCandidate& candidate,
                           std::size_t index,
                           std::size_t candidateCount,
                           bool fallback,
@@ -338,10 +338,10 @@ bool OpenMerchantContextNearCoords(float searchX,
                                    MoveToPointResultFn move_to_point,
                                    WaitFn wait_ms,
                                    const MerchantContextNearCoordsOptions& options) {
-    DungeonDiagnostics::NearbyNpcCandidate candidates[8]{};
+    AdvancedDiagnostics::NearbyNpcCandidate candidates[8]{};
     const std::size_t candidateCount =
-        DungeonDiagnostics::CollectNearbyNpcCandidates(searchX, searchY, searchRadius, candidates, _countof(candidates));
-    DungeonDiagnostics::LogNearbyNpcCandidates("Merchant", searchX, searchY, searchRadius, candidates, candidateCount);
+        AdvancedDiagnostics::CollectNearbyNpcCandidates(searchX, searchY, searchRadius, candidates, _countof(candidates));
+    AdvancedDiagnostics::LogNearbyNpcCandidates("Merchant", searchX, searchY, searchRadius, candidates, candidateCount);
     if (candidateCount == 0u) {
         Log::Info("%s: No merchant candidates found near target coords", Prefix(options.log_prefix));
         return false;

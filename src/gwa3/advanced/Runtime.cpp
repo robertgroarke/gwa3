@@ -7,7 +7,7 @@
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/advanced/Combat.h>
-#include <gwa3/dungeon/DungeonNavigation.h>
+#include <gwa3/advanced/Waypoint.h>
 
 #include <Windows.h>
 
@@ -327,7 +327,7 @@ LevelTransitionResult ExecuteLevelTransition(const LevelTransitionOptions& optio
                       me ? me->x : 0.0f,
                       me ? me->y : 0.0f);
             if (options.spawn_settle_timeout_ms > 0u && options.spawn_settle_distance > 0.0f) {
-                DungeonNavigation::WaitForLocalPositionSettle(
+                AdvancedWaypoint::WaitForLocalPositionSettle(
                     options.spawn_settle_timeout_ms,
                     options.spawn_settle_distance);
             }

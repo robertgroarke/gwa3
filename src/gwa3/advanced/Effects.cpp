@@ -2,8 +2,8 @@
 
 #include <gwa3/core/Log.h>
 #include <gwa3/advanced/Dialog.h>
-#include <gwa3/dungeon/DungeonInteractions.h>
-#include <gwa3/dungeon/DungeonNavigation.h>
+#include <gwa3/advanced/Interactions.h>
+#include <gwa3/advanced/Waypoint.h>
 #include <gwa3/game/SkillIds.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/DialogMgr.h>
@@ -127,7 +127,7 @@ BlessingAcquireResult TryAcquireBlessingAt(
         result.final_title_id = titleResult.final_title_id;
     }
 
-    result.npc_id = DungeonInteractions::FindNearestNpc(shrineX, shrineY, options.npc_search_radius);
+    result.npc_id = AdvancedInteractions::FindNearestNpc(shrineX, shrineY, options.npc_search_radius);
     result.npc_found = result.npc_id != 0u;
     if (!result.npc_found) {
         return result;
@@ -195,8 +195,8 @@ BlessingAcquireResult AcquireDungeonBlessingAt(
             false);
     }
 
-    DungeonInteractions::InteractCandidate interactCandidates[2] = {};
-    const size_t interactCandidateCount = DungeonInteractions::CollectNearestInteractCandidates(
+    AdvancedInteractions::InteractCandidate interactCandidates[2] = {};
+    const size_t interactCandidateCount = AdvancedInteractions::CollectNearestInteractCandidates(
         shrineX,
         shrineY,
         options.primary_search_radius,
@@ -238,16 +238,16 @@ BlessingAcquireResult AcquireDungeonBlessingAt(
         }
         const bool settled = options.wait_for_position_settle != nullptr
             ? options.wait_for_position_settle(options.settle_timeout_ms, options.settle_distance)
-            : DungeonNavigation::WaitForLocalPositionSettle(options.settle_timeout_ms, options.settle_distance);
+            : AdvancedWaypoint::WaitForLocalPositionSettle(options.settle_timeout_ms, options.settle_distance);
         (void)settled;
 
-        DungeonInteractions::CandidateDialogOptions dialogOptions;
+        AdvancedInteractions::CandidateDialogOptions dialogOptions;
         dialogOptions.dialog_id = options.accept_dialog_id;
         dialogOptions.candidate_index = candidateIndex;
         dialogOptions.log_prefix = prefix;
         dialogOptions.wait_ms = options.wait_ms;
         dialogOptions.stop_condition = &AdvancedEffects::HasBlessing;
-        const auto dialogResult = DungeonInteractions::InteractCandidateAndSendDialog(candidate, dialogOptions);
+        const auto dialogResult = AdvancedInteractions::InteractCandidateAndSendDialog(candidate, dialogOptions);
         result.interacted = dialogResult.interacted || result.interacted;
         result.dialog_sent = dialogResult.dialog_sent || result.dialog_sent;
     }

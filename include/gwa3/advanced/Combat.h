@@ -1,7 +1,6 @@
 #pragma once
 
 #include <gwa3/advanced/CombatRoutine.h>
-#include <gwa3/dungeon/DungeonNavigation.h>
 
 #include <cstdint>
 
@@ -62,12 +61,6 @@ using LocalClearFightFn = void(*)(float clearRange,
                                   uint32_t maxFightMs);
 using LocalClearPassFn = void(*)(void* userData, int pass, uint32_t targetId);
 using PostCombatLootSweepFn = int(*)(float maxRange, const char* reason);
-enum class AggroWaypointPhase : uint8_t;
-using AggroWaypointHookFn = bool(*)(const DungeonRoute::Waypoint& waypoint,
-                                    int waypointIndex,
-                                    DungeonRoute::WaypointLabelKind labelKind,
-                                    AggroWaypointPhase phase,
-                                    void* userData);
 
 enum class LocalClearProfile : uint8_t {
     StandardTraversal,
@@ -149,16 +142,6 @@ struct AggroAdvanceOptions {
     int stuck_abort_threshold = 30;
     float stuck_recovery_radius = 500.0f;
     ClearEnemiesOptions clear_options = {};
-};
-
-enum class AggroWaypointPhase : uint8_t {
-    BeforeAdvance,
-    AfterAdvance,
-};
-
-struct AggroWaypointCallbacks {
-    AggroWaypointHookFn on_waypoint = nullptr;
-    void* user_data = nullptr;
 };
 
 struct AggroFightCallbacks {
@@ -290,13 +273,5 @@ void HoldSpecialRouteLocalClearFromContext(float waypointX,
                                            float fightRange,
                                            uint32_t targetId,
                                            void* userData);
-DungeonNavigation::RouteFollowResult FollowWaypointsWithAggro(
-    const DungeonRoute::Waypoint* waypoints,
-    int count,
-    uint32_t mapId,
-    const CombatCallbacks& callbacks,
-    const DungeonNavigation::RouteFollowOptions& options = {},
-    const AggroAdvanceOptions& aggroOptions = {},
-    const AggroWaypointCallbacks& waypointCallbacks = {});
 
 } // namespace GWA3::AdvancedCombat
