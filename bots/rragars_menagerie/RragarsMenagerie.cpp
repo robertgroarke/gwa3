@@ -191,6 +191,8 @@ constexpr ZoneTransitionPoint kZoneTransitionPoints[] = {
     {RouteId::RunDaladaToGrothmar, -20600.0f, 430.0f},
     {RouteId::RunGrothmarToSacnoth, 23320.0f, -13476.0f},
     {RouteId::RunSacnothToDungeon, -19600.0f, -15945.0f},
+    {RouteId::Level1, -17934.0f, -439.0f},
+    {RouteId::Level2, 11560.0f, -19000.0f},
 };
 
 } // namespace
