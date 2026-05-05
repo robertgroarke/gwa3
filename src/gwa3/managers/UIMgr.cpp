@@ -51,7 +51,7 @@ action_type_1:
 action_type_2:
         mov ecx, dword ptr [ecx+4]
 action_common:
-        add ecx, 0A8h
+        add ecx, 0A0h
         push 0
         lea eax, dword ptr [eax+4]
         push eax
@@ -647,7 +647,7 @@ uintptr_t GetFrameContext(uintptr_t frame) {
 }
 
 // BotsHub-compatible context resolution for UI toggle actions:
-//   ctx = *(ActionBase + 0xC) + 0xA8
+//   ctx = *(ActionBase + 0xC) + 0xA0
 // (type == 0 branch in BotsHub's CommandAction assembly). The type != 0
 // branch uses +0x4 instead; we don't drive that path yet.
 // Dump the first 0x40 bytes of ActionBase (as uintptr_t slots) so we can
@@ -785,7 +785,7 @@ static uintptr_t GetUiActionContextRaw(uintptr_t* outTyped, uintptr_t* outTyped2
         return 0;
     }
     if (*outTyped < 0x10000) return 0;
-    return *outTyped + 0xA8;
+    return *outTyped + 0xA0;
 }
 
 static uintptr_t GetUiActionContext() {
@@ -793,12 +793,12 @@ static uintptr_t GetUiActionContext() {
     return GetUiActionContextRaw(&t0, &t1);
 }
 
-static bool TryDispatchUiAction(uintptr_t ctx, uint32_t action, const char* modeLabel) {
+static bool TryDispatchUiAction(uintptr_t ctx, uint32_t action, uint32_t flag, const char* modeLabel) {
     if (!s_doActionFn || ctx < 0x10000) {
         return false;
     }
 
-    uint32_t payload[3] = { action, kPerformActionActivateFlag, kPerformActionTypeDefault };
+    uint32_t payload[3] = { action, flag, kPerformActionTypeDefault };
     __try {
         s_doActionFn(reinterpret_cast<void*>(ctx), nullptr,
                      payload[1], payload, nullptr);
@@ -812,14 +812,16 @@ static bool TryDispatchUiAction(uintptr_t ctx, uint32_t action, const char* mode
     }
 }
 
-static bool PerformUiActionImpl(uint32_t action, bool preferEngineLane) {
+static bool PerformUiActionImpl(uint32_t action, bool preferEngineLane, uint32_t flag) {
     if (!s_doActionFn) {
         Log::Warn("UIMgr: PerformUiAction no DoActionFn action=0x%X", action);
         return false;
     }
 
     if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
-        GameThread::EnqueuePost([action, preferEngineLane]() { PerformUiActionImpl(action, preferEngineLane); });
+        GameThread::EnqueuePost([action, preferEngineLane, flag]() {
+            PerformUiActionImpl(action, preferEngineLane, flag);
+        });
         return true;
     }
 
@@ -834,14 +836,15 @@ static bool PerformUiActionImpl(uint32_t action, bool preferEngineLane) {
             Log::Info("UIMgr: PerformUiAction using engine command lane");
             s_loggedPerformUiActionEngineLane = true;
         }
-        Log::Info("UIMgr: PerformUiAction engine lane action=0x%X base=0x%08X source=%s",
+        Log::Info("UIMgr: PerformUiAction engine lane action=0x%X flag=0x%X base=0x%08X source=%s",
                   action,
+                  flag,
                   static_cast<unsigned>(preferredActionBase),
                   usedBotsHubScan ? "botshub-scan" : "offsets");
         PerformActionCommand cmd{};
         cmd.fn = reinterpret_cast<uintptr_t>(&BotshubActionCommandStub);
         cmd.action = action;
-        cmd.flag = kPerformActionActivateFlag;
+        cmd.flag = flag;
         cmd.type = kPerformActionTypeDefault;
         cmd.action_base = preferredActionBase;
         if (CtoS::EnqueueBotshubCommand(&cmd, sizeof(cmd))) {
@@ -857,9 +860,9 @@ static bool PerformUiActionImpl(uint32_t action, bool preferEngineLane) {
     }
 
     // BotsHub's Action command dereferences a pointer slot from ActionBase and
-    // then adds 0xA8 before calling Action(). In this GW build the usable slot
+    // then adds 0xA0 before calling Action(). In this GW build the usable slot
     // is not consistently at +0xC, so pick the first plausible pointer from
-    // the preferred ActionBase dump and still honor the original +0xA8 offset.
+    // the preferred ActionBase dump and still honor the original +0xA0 offset.
     ActionBaseDump dump{};
     const uintptr_t base = GetPreferredActionBase(&dump, &usedBotsHubScan, preferEngineLane);
     if (base < 0x10000) {
@@ -879,7 +882,7 @@ static bool PerformUiActionImpl(uint32_t action, bool preferEngineLane) {
                   line);
     }
 
-    // BotsHub's ASM: `mov ecx, dword[ActionBase]; mov ecx, dword[ecx+C]; add ecx, A8`.
+    // BotsHub's ASM: `mov ecx, dword[ActionBase]; mov ecx, dword[ecx+C]; add ecx, A0`.
     // Use slot +0xC (index 3) with the BotsHub base. Falls back to +0x4
     // (index 1) if that doesn't look like a heap pointer.
     uintptr_t p = dump.slots[3];
@@ -895,11 +898,13 @@ static bool PerformUiActionImpl(uint32_t action, bool preferEngineLane) {
         Log::Warn("UIMgr: PerformUiAction no ActionBase context action=0x%X", action);
         return false;
     }
-    const uintptr_t fallbackCtx = p + 0xA8;
-    Log::Info("UIMgr: PerformUiAction (ActionBase-slot fallback) ptr=0x%08X ctx=0x%08X action=0x%X",
+    const uintptr_t fallbackCtx = p + 0xA0;
+    Log::Info("UIMgr: PerformUiAction (ActionBase-slot fallback) ptr=0x%08X ctx=0x%08X action=0x%X flag=0x%X",
               static_cast<unsigned>(p),
-              static_cast<unsigned>(fallbackCtx), action);
-    if (TryDispatchUiAction(fallbackCtx, action, "ActionBase-slot")) {
+              static_cast<unsigned>(fallbackCtx),
+              action,
+              flag);
+    if (TryDispatchUiAction(fallbackCtx, action, flag, "ActionBase-slot")) {
         return true;
     }
 
@@ -907,9 +912,9 @@ static bool PerformUiActionImpl(uint32_t action, bool preferEngineLane) {
     // present in this build.
     const uintptr_t ctx = GetActionContext();
     if (ctx >= 0x10000) {
-        if (TryDispatchUiAction(ctx, action, "frame-ctx")) {
+        if (TryDispatchUiAction(ctx, action, flag, "frame-ctx")) {
             Log::Info("UIMgr: PerformUiAction (frame-ctx) ctx=0x%08X flag=0x%X action=0x%X",
-                      static_cast<unsigned>(ctx), kPerformActionActivateFlag, action);
+                      static_cast<unsigned>(ctx), flag, action);
             return true;
         }
     }
@@ -917,11 +922,19 @@ static bool PerformUiActionImpl(uint32_t action, bool preferEngineLane) {
 }
 
 bool PerformUiAction(uint32_t action) {
-    return PerformUiActionImpl(action, true);
+    return PerformUiActionImpl(action, true, kPerformActionActivateFlag);
 }
 
 bool PerformUiActionDirect(uint32_t action) {
-    return PerformUiActionImpl(action, false);
+    return PerformUiActionImpl(action, false, kPerformActionActivateFlag);
+}
+
+bool PerformUiActionWithFlag(uint32_t action, uint32_t flag) {
+    return PerformUiActionImpl(action, true, flag);
+}
+
+bool PerformUiActionDirectWithFlag(uint32_t action, uint32_t flag) {
+    return PerformUiActionImpl(action, false, flag);
 }
 
 void SendUIMessage(uint32_t msgId, void* wParam, void* lParam) {

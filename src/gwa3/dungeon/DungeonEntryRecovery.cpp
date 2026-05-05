@@ -214,7 +214,27 @@ bool WaitForQuestMapApproachDeathRecovery(const QuestMapApproachPlan& plan, cons
 bool MoveToQuestGiverFromCurrentQuestMapSide(const QuestMapApproachPlan& plan) {
     const char* prefix = PrefixOrDefault(plan.log_prefix);
     const char* label = LabelOrDefault(plan.label, "quest approach");
-    if (MapMgr::GetMapId() != plan.quest_map_id || !MapMgr::GetIsMapLoaded() || !plan.move_to_point) {
+    if (!plan.move_to_point) {
+        Log::Info("%s: %s failed because no move function is configured", prefix, label);
+        return false;
+    }
+
+    if (MapMgr::GetMapId() == plan.quest_map_id && !MapMgr::GetIsMapLoaded()) {
+        Log::Info("%s: %s waiting for quest map runtime before approach", prefix, label);
+        (void)DungeonRuntime::WaitForCondition(
+            30000u,
+            [&plan]() {
+                return MapMgr::GetMapId() != plan.quest_map_id || MapMgr::GetIsMapLoaded();
+            },
+            250u);
+    }
+
+    if (!WaitForQuestMapApproachDeathRecovery(plan, "approach-precheck")) {
+        return false;
+    }
+
+    if (MapMgr::GetMapId() != plan.quest_map_id || !MapMgr::GetIsMapLoaded()) {
+        LogQuestMapApproachStatus(plan, "precondition-failed");
         return false;
     }
 

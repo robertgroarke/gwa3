@@ -164,11 +164,11 @@ constexpr Waypoint kLevel2BossKeyBacktrack[] = {
     {-3701.0f, 9734.0f, 1300.0f, "4"},
     {-5179.0f, 12349.0f, 1300.0f, "3"},
     {-10223.0f, 16032.0f, 1300.0f, "2"},
-    {-129581.0f, 15239.0f, 1200.0f, "Dungeon Key"},
+    {-12958.0f, 15239.0f, 1200.0f, "Dungeon Key"},
 };
 
 constexpr Waypoint kLevel2Door[] = {
-    {-129581.0f, 15239.0f, 1200.0f, "1"},
+    {-12958.0f, 15239.0f, 1200.0f, "1"},
     {-10223.0f, 16032.0f, 1300.0f, "2"},
     {-5179.0f, 12349.0f, 1300.0f, "3"},
     {-3701.0f, 9734.0f, 1300.0f, "4"},
@@ -327,8 +327,8 @@ constexpr DoorObjective kDoorObjectives[] = {
 
 constexpr LootObjective kLootObjectives[] = {
     {RouteId::Level1DoorKey, {-6174.0f, 6594.0f}, 3},
-    {RouteId::Level2BossKey, {-129581.0f, 15239.0f}, 1},
-    {RouteId::Level2BossKeyBacktrack, {-129581.0f, 15239.0f}, 1},
+    {RouteId::Level2BossKey, {-12958.0f, 15239.0f}, 1},
+    {RouteId::Level2BossKeyBacktrack, {-12958.0f, 15239.0f}, 1},
 };
 
 constexpr RewardChestObjective kRewardChest = {

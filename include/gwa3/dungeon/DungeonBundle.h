@@ -129,5 +129,8 @@ bool OpenChestAndAcquireHeldBundleByModelLegacy(
     int pickupAttempts = 3,
     uint32_t interactDelayMs = 500u,
     uint32_t pickupDelayMs = 500u);
+uint32_t GetHeldOrEquippedBundleItemIdByModel(uint32_t modelId);
+bool DropHeldOrEquippedBundleItem(uint32_t itemId);
+bool DropHeldOrEquippedBundleByModel(uint32_t modelId);
 
 } // namespace GWA3::DungeonBundle

@@ -86,6 +86,12 @@ FollowWaypointsWithAggro(const DungeonRoute::Waypoint* waypoints,
       return result;
     }
 
+    if (callbacks.is_dead != nullptr && callbacks.is_dead()) {
+      result.failed_index = i;
+      result.retries_used = retriesUsed;
+      return result;
+    }
+
     if (retriesUsed >= options.max_backtrack_retries) {
       result.failed_index = i;
       result.retries_used = retriesUsed;

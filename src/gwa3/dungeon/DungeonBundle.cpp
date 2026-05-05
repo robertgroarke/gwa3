@@ -10,10 +10,13 @@
 #include <gwa3/managers/EffectMgr.h>
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/MapMgr.h>
+#include <gwa3/managers/UIMgr.h>
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 
 #include <Windows.h>
+
+#include <cmath>
 
 namespace GWA3::DungeonBundle {
 
@@ -30,8 +33,12 @@ constexpr uint32_t kSignpostMoveTimeoutMs = 15000u;
 constexpr uint32_t kChestPickupMoveTimeoutMs = 15000u;
 constexpr float kChestPickupFightRange = 1200.0f;
 constexpr uint32_t kChestInteractSettleMs = 5000u;
+constexpr uint32_t kActionInteractCode = 0x80u;
+constexpr uint32_t kDropBundleActionCode = 0xCDu;
+constexpr uint32_t kDropBundleActionDownFlag = 0x1Eu;
 constexpr float kBundleChestExactSignpostTolerance = 150.0f;
-constexpr float kBundleChestFollowupTolerance = 250.0f;
+constexpr float kBundleChestFollowupTolerance = 400.0f;
+constexpr float kBundleChestLoosePreferredTolerance = 650.0f;
 constexpr uint32_t kMaxLoggedNearbyItems = 12u;
 constexpr uint32_t kMaxLoggedNearbyGadgets = 12u;
 constexpr uint32_t kMaxLoggedPlayerEffects = 12u;
@@ -60,6 +67,55 @@ void LogHeldBundleSnapshot(const char* label) {
         heldBundle ? heldBundle->model_id : 0u,
         heldBundle ? heldBundle->type : 0u,
         heldBundle ? static_cast<const void*>(heldBundle->bag) : nullptr);
+}
+
+bool ItemMatchesModel(const Item* item, uint32_t modelId) {
+    return item != nullptr && modelId != 0u && item->model_id == modelId;
+}
+
+uint32_t GetHeldOrEquippedBundleItemIdByModelImpl(uint32_t modelId, uint32_t knownMatchingItemId = 0u) {
+    if (modelId == 0u) {
+        return 0u;
+    }
+
+    const auto* inventory = ItemMgr::GetInventory();
+    const Item* heldBundle = inventory ? inventory->bundle : nullptr;
+    if (heldBundle && (heldBundle->model_id == 0u || ItemMatchesModel(heldBundle, modelId))) {
+        return heldBundle->item_id;
+    }
+
+    if (inventory && inventory->active_weapon_set < 4u) {
+        const WeaponSet& weaponSet = inventory->weapon_sets[inventory->active_weapon_set];
+        if (ItemMatchesModel(weaponSet.weapon, modelId)) {
+            return weaponSet.weapon->item_id;
+        }
+        if (ItemMatchesModel(weaponSet.offhand, modelId)) {
+            return weaponSet.offhand->item_id;
+        }
+    }
+
+    auto* me = AgentMgr::GetMyAgent();
+    const uint32_t equippedIds[] = {
+        me ? static_cast<uint32_t>(me->weapon_item_id) : 0u,
+        me ? static_cast<uint32_t>(me->offhand_item_id) : 0u,
+    };
+    for (const uint32_t itemId : equippedIds) {
+        if (itemId == 0u) {
+            continue;
+        }
+        if (knownMatchingItemId != 0u && itemId == knownMatchingItemId) {
+            return itemId;
+        }
+        if (ItemMatchesModel(ItemMgr::GetItemById(itemId), modelId)) {
+            return itemId;
+        }
+    }
+
+    return 0u;
+}
+
+bool HasHeldOrEquippedBundleByModel(uint32_t modelId, uint32_t knownMatchingItemId = 0u) {
+    return GetHeldOrEquippedBundleItemIdByModelImpl(modelId, knownMatchingItemId) != 0u;
 }
 
 void LogPlayerEffectSnapshot(const char* label) {
@@ -504,6 +560,8 @@ uint32_t ResolveBundleChestSignpostNearPoint(
     float searchRadius,
     bool preferLooseChestSignpost = false) {
     const uint32_t chestSignpostId = DungeonInteractions::FindNearestChestSignpost(x, y, searchRadius);
+    uint32_t looseChestCandidateId = 0u;
+    float looseChestCandidateDist = 0.0f;
     LogResolvedSignpost("resolve-bundle-signpost chest-only", chestSignpostId, x, y, searchRadius);
     if (chestSignpostId != 0u) {
         auto* chestAgent = AgentMgr::GetAgentByID(chestSignpostId);
@@ -518,39 +576,95 @@ uint32_t ResolveBundleChestSignpostNearPoint(
                 return chestSignpostId;
             }
             if (preferLooseChestSignpost) {
+                looseChestCandidateId = chestSignpostId;
+                looseChestCandidateDist = chestDistToPoint;
                 Log::Info(
-                    "DungeonBundle: resolve-bundle-signpost chest-preferred signpost=%u distToPoint=%.0f searchRadius=%.0f",
+                    "DungeonBundle: resolve-bundle-signpost loose chest candidate signpost=%u distToPoint=%.0f searchRadius=%.0f",
                     chestSignpostId,
                     chestDistToPoint,
                     searchRadius);
-                return chestSignpostId;
+            } else {
+                Log::Info(
+                    "DungeonBundle: resolve-bundle-signpost rejected chest signpost=%u distToPoint=%.0f tolerance=%.0f",
+                    chestSignpostId,
+                    chestDistToPoint,
+                    kBundleChestExactSignpostTolerance);
             }
-            Log::Info(
-                "DungeonBundle: resolve-bundle-signpost rejected chest signpost=%u distToPoint=%.0f tolerance=%.0f",
-                chestSignpostId,
-                chestDistToPoint,
-                kBundleChestExactSignpostTolerance);
         }
     }
 
     const uint32_t signpostId = DungeonInteractions::FindNearestSignpost(x, y, searchRadius);
     LogResolvedSignpost("resolve-bundle-signpost generic", signpostId, x, y, searchRadius);
     if (signpostId == 0u) {
+        if (looseChestCandidateId != 0u) {
+            Log::Info(
+                "DungeonBundle: resolve-bundle-signpost using loose chest signpost=%u distToPoint=%.0f because no generic signpost resolved",
+                looseChestCandidateId,
+                looseChestCandidateDist);
+            return looseChestCandidateId;
+        }
         return 0u;
     }
 
     auto* agent = AgentMgr::GetAgentByID(signpostId);
     if (!agent || agent->type != 0x200u) {
+        if (looseChestCandidateId != 0u) {
+            Log::Info(
+                "DungeonBundle: resolve-bundle-signpost using loose chest signpost=%u distToPoint=%.0f because generic signpost was invalid",
+                looseChestCandidateId,
+                looseChestCandidateDist);
+            return looseChestCandidateId;
+        }
         return 0u;
     }
 
     const float distToPoint = AgentMgr::GetDistance(x, y, agent->x, agent->y);
+    const auto* gadget = static_cast<const AgentGadget*>(agent);
+    if (preferLooseChestSignpost &&
+        looseChestCandidateId != 0u &&
+        looseChestCandidateDist <= kBundleChestLoosePreferredTolerance) {
+        Log::Info(
+            "DungeonBundle: resolve-bundle-signpost using loose chest signpost=%u over generic=%u "
+            "chestDist=%.0f genericDist=%.0f tolerance=%.0f",
+            looseChestCandidateId,
+            signpostId,
+            looseChestCandidateDist,
+            distToPoint,
+            kBundleChestLoosePreferredTolerance);
+        return looseChestCandidateId;
+    }
+
+    if (gadget->gadget_id == 3u && chestSignpostId != 0u) {
+        auto* chestAgent = AgentMgr::GetAgentByID(chestSignpostId);
+        if (chestAgent && chestAgent->type == 0x200u) {
+            const float chestDistToPoint = AgentMgr::GetDistance(x, y, chestAgent->x, chestAgent->y);
+            if (chestDistToPoint <= kBundleChestFollowupTolerance) {
+                Log::Info(
+                    "DungeonBundle: resolve-bundle-signpost using nearby chest signpost=%u over marker=%u "
+                    "chestDist=%.0f markerDist=%.0f tolerance=%.0f",
+                    chestSignpostId,
+                    signpostId,
+                    chestDistToPoint,
+                    distToPoint,
+                    kBundleChestFollowupTolerance);
+                return chestSignpostId;
+            }
+        }
+    }
+
     if (distToPoint > kBundleChestExactSignpostTolerance) {
         Log::Info(
             "DungeonBundle: resolve-bundle-signpost rejected generic signpost=%u distToPoint=%.0f tolerance=%.0f",
             signpostId,
             distToPoint,
             kBundleChestExactSignpostTolerance);
+        if (looseChestCandidateId != 0u) {
+            Log::Info(
+                "DungeonBundle: resolve-bundle-signpost using loose chest signpost=%u distToPoint=%.0f because generic signpost was outside exact tolerance",
+                looseChestCandidateId,
+                looseChestCandidateDist);
+            return looseChestCandidateId;
+        }
         return 0u;
     }
 
@@ -559,6 +673,71 @@ uint32_t ResolveBundleChestSignpostNearPoint(
         signpostId,
         distToPoint,
         kBundleChestExactSignpostTolerance);
+    return signpostId;
+}
+
+uint32_t ResolveBundleNearbyObjectSignpostNearPoint(float x, float y, float searchRadius) {
+    const float objectRadius = searchRadius < 400.0f ? searchRadius : 400.0f;
+    float bestDistSq = objectRadius * objectRadius;
+    uint32_t bestId = 0u;
+    uint32_t bestGadgetId = 0u;
+
+    const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1u; i < maxAgents; ++i) {
+        auto* agent = AgentMgr::GetAgentByID(i);
+        if (!agent || agent->type != 0x200u) {
+            continue;
+        }
+
+        const auto* gadget = static_cast<const AgentGadget*>(agent);
+        if (gadget->gadget_id == 3u || DungeonInteractions::IsChestGadgetId(gadget->gadget_id)) {
+            continue;
+        }
+
+        const float distSq = AgentMgr::GetSquaredDistance(x, y, gadget->x, gadget->y);
+        if (distSq < bestDistSq) {
+            bestDistSq = distSq;
+            bestId = i;
+            bestGadgetId = gadget->gadget_id;
+        }
+    }
+
+    if (bestId != 0u) {
+        Log::Info(
+            "DungeonBundle: resolve-bundle-object-signpost selected signpost=%u gadget=%u distToPoint=%.0f radius=%.0f",
+            bestId,
+            bestGadgetId,
+            sqrtf(bestDistSq),
+            objectRadius);
+    }
+    return bestId;
+}
+
+uint32_t ResolveBundleChestOrObjectSignpostNearPoint(
+    float x,
+    float y,
+    float searchRadius,
+    bool preferLooseChestSignpost = false) {
+    const uint32_t signpostId =
+        ResolveBundleChestSignpostNearPoint(x, y, searchRadius, preferLooseChestSignpost);
+    auto* agent = signpostId != 0u ? AgentMgr::GetAgentByID(signpostId) : nullptr;
+    if (agent && agent->type == 0x200u) {
+        const auto* gadget = static_cast<const AgentGadget*>(agent);
+        if (gadget->gadget_id != 3u) {
+            return signpostId;
+        }
+    }
+
+    const uint32_t objectSignpostId =
+        ResolveBundleNearbyObjectSignpostNearPoint(x, y, searchRadius);
+    if (objectSignpostId != 0u) {
+        Log::Info(
+            "DungeonBundle: resolve-bundle-signpost using nearby object signpost=%u instead of marker=%u",
+            objectSignpostId,
+            signpostId);
+        return objectSignpostId;
+    }
+
     return signpostId;
 }
 
@@ -721,6 +900,30 @@ bool WaitForHeldBundle(uint32_t timeoutMs, uint32_t pollMs = 100u) {
     return DungeonInteractions::GetHeldBundleItemId() != 0u;
 }
 
+bool PressActionInteractKeyAtPoint(float x, float y, int interactCount, uint32_t delayMs) {
+    if (interactCount <= 0) {
+        return false;
+    }
+
+    (void)MoveToPickupPointIfPossible(x, y);
+    ClearTargetAndStop();
+    bool queuedAny = false;
+    for (int i = 0; i < interactCount; ++i) {
+        const bool queued = UIMgr::ActionKeyPress(kActionInteractCode);
+        Log::Info(
+            "DungeonBundle: bundle-open action-key center=(%.0f, %.0f) press=%d action=0x%X queued=%d target=%u",
+            x,
+            y,
+            i + 1,
+            kActionInteractCode,
+            queued ? 1 : 0,
+            AgentMgr::GetTargetId());
+        queuedAny = queued || queuedAny;
+        Sleep(delayMs);
+    }
+    return queuedAny;
+}
+
 bool InteractResolvedSignpost(uint32_t signpostId, int interactCount, uint32_t delayMs) {
     if (signpostId == 0u || interactCount <= 0) {
         return false;
@@ -776,11 +979,25 @@ bool OpenBundleChestAtPoint(uint32_t signpostId, float x, float y, int interactC
         return false;
     }
 
+    const bool isChestSignpost = IsResolvedChestSignpost(signpostId);
+    uint32_t resolvedGadgetId = 0u;
+    if (auto* signpost = AgentMgr::GetAgentByID(signpostId);
+        signpost && signpost->type == 0x200u) {
+        resolvedGadgetId = static_cast<const AgentGadget*>(signpost)->gadget_id;
+    }
     (void)MoveToPickupPointIfPossible(x, y);
     MoveNearSignpostIfPossible(signpostId);
     ClearTargetAndStop();
     AgentMgr::ChangeTarget(signpostId);
     Sleep(150u);
+    Log::Info(
+        "DungeonBundle: bundle-open begin signpost=%u gadget=%u chest=%d target=%u center=(%.0f, %.0f)",
+        signpostId,
+        resolvedGadgetId,
+        isChestSignpost ? 1 : 0,
+        AgentMgr::GetTargetId(),
+        x,
+        y);
 
     bool interacted = false;
     for (int i = 0; i < interactCount; ++i) {
@@ -814,6 +1031,52 @@ bool OpenBundleChestAtPoint(uint32_t signpostId, float x, float y, int interactC
         }
     }
 
+    if (!isChestSignpost) {
+        MoveNearSignpostIfPossible(signpostId);
+        AgentMgr::ChangeTarget(signpostId);
+        Sleep(150u);
+        for (int i = 0; i < interactCount; ++i) {
+            AgentMgr::InteractSignpost(signpostId);
+            Log::Info(
+                "DungeonBundle: bundle-open generic-signpost signpost=%u press=%d center=(%.0f, %.0f)",
+                signpostId,
+                i + 1,
+                x,
+                y);
+            interacted = true;
+            Sleep(delayMs);
+        }
+
+        if (resolvedGadgetId != 0u && resolvedGadgetId != 3u) {
+            AgentMgr::ChangeTarget(signpostId);
+            Sleep(150u);
+            CtoS::SendPacket(2, Packets::OPEN_CHEST, 2u);
+            Log::Info(
+                "DungeonBundle: bundle-open generic-object open-chest signpost=%u gadget=%u target=%u header=0x%X mode=%u center=(%.0f, %.0f)",
+                signpostId,
+                resolvedGadgetId,
+                AgentMgr::GetTargetId(),
+                Packets::OPEN_CHEST,
+                2u,
+                x,
+                y);
+            Sleep(delayMs);
+        }
+
+        const bool actionKeyQueued = PressActionInteractKeyAtPoint(x, y, interactCount, delayMs);
+        interacted = actionKeyQueued || interacted;
+
+        Log::Info(
+            "DungeonBundle: bundle-open generic complete signpost=%u gadget=%u actionKey=%d center=(%.0f, %.0f)",
+            signpostId,
+            resolvedGadgetId,
+            actionKeyQueued ? 1 : 0,
+            x,
+            y);
+        (void)MoveToPickupPointIfPossible(x, y);
+        return interacted;
+    }
+
     CtoS::SendPacket(2, Packets::OPEN_CHEST, 2u);
     Log::Info(
         "DungeonBundle: bundle-open open-chest signpost=%u target=%u header=0x%X mode=%u center=(%.0f, %.0f)",
@@ -824,6 +1087,16 @@ bool OpenBundleChestAtPoint(uint32_t signpostId, float x, float y, int interactC
         x,
         y);
     Sleep(delayMs);
+
+    const bool actionKeyQueued = PressActionInteractKeyAtPoint(x, y, interactCount, delayMs);
+    Log::Info(
+        "DungeonBundle: bundle-open chest action-key fallback signpost=%u gadget=%u actionKey=%d center=(%.0f, %.0f)",
+        signpostId,
+        resolvedGadgetId,
+        actionKeyQueued ? 1 : 0,
+        x,
+        y);
+    interacted = actionKeyQueued || interacted;
 
     (void)MoveToPickupPointIfPossible(x, y);
     return interacted;
@@ -857,6 +1130,20 @@ bool PickUpResolvedItem(uint32_t itemAgentId, int pickupAttempts, uint32_t delay
     return pickedAny;
 }
 
+uint32_t GetMatchingGroundItemId(uint32_t itemAgentId, uint32_t modelId) {
+    auto* agent = AgentMgr::GetAgentByID(itemAgentId);
+    if (!agent || agent->type != 0x400u) {
+        return 0u;
+    }
+
+    auto* itemAgent = static_cast<const AgentItem*>(agent);
+    auto* item = ItemMgr::GetItemById(itemAgent->item_id);
+    if (!ItemMatchesModel(item, modelId)) {
+        return 0u;
+    }
+    return itemAgent->item_id;
+}
+
 bool PickUpHeldBundleByModelNearPoint(
     float x,
     float y,
@@ -869,7 +1156,7 @@ bool PickUpHeldBundleByModelNearPoint(
     }
 
     for (int i = 0; i < pickupAttempts; ++i) {
-        if (DungeonInteractions::GetHeldBundleItemId() != 0u) {
+        if (HasHeldOrEquippedBundleByModel(modelId)) {
             return true;
         }
 
@@ -882,13 +1169,14 @@ bool PickUpHeldBundleByModelNearPoint(
             continue;
         }
 
+        const uint32_t itemId = GetMatchingGroundItemId(itemAgentId, modelId);
         if (PickUpResolvedItem(itemAgentId, 1, delayMs) &&
-            DungeonInteractions::GetHeldBundleItemId() != 0u) {
+            HasHeldOrEquippedBundleByModel(modelId, itemId)) {
             return true;
         }
     }
 
-    return DungeonInteractions::GetHeldBundleItemId() != 0u;
+    return HasHeldOrEquippedBundleByModel(modelId);
 }
 
 int PickUpNearbyLootAtPoint(float x, float y, float searchRadius, uint32_t delayMs) {
@@ -1231,7 +1519,7 @@ bool OpenChestAndAcquireHeldBundleByModelImpl(
         ? 0u
         : (pickupDelayMs > 1000u ? pickupDelayMs : 1000u);
 
-    if (DungeonInteractions::GetHeldBundleItemId() != 0u) {
+    if (HasHeldOrEquippedBundleByModel(modelId)) {
         LogBundleAcquireSnapshot("bundle-acquire already-held", x, y, itemSearchRadius, modelId);
         return true;
     }
@@ -1266,7 +1554,7 @@ bool OpenChestAndAcquireHeldBundleByModelImpl(
         }
         LogBundleAcquireSnapshot("bundle-acquire after-legacy-open", x, y, itemSearchRadius, modelId);
         LogNearbyGadgets("bundle-acquire after-legacy-open", x, y, signpostSearchRadius);
-        if (DungeonInteractions::GetHeldBundleItemId() != 0u) {
+        if (HasHeldOrEquippedBundleByModel(modelId)) {
             return true;
         }
         if (PickUpHeldBundleByModelNearPoint(
@@ -1277,24 +1565,26 @@ bool OpenChestAndAcquireHeldBundleByModelImpl(
                 pickupAttempts,
                 pickupDelayMs)) {
             Log::Info(
-                "DungeonBundle: bundle-acquire legacy pickup succeeded heldBundle=%u",
+                "DungeonBundle: bundle-acquire legacy pickup succeeded acquiredItem=%u heldBundle=%u",
+                GetHeldOrEquippedBundleItemIdByModelImpl(modelId),
                 DungeonInteractions::GetHeldBundleItemId());
             return true;
         }
         const int legacyNearbyPicked = PickUpNearbyLootAtPoint(x, y, itemSearchRadius, pickupDelayMs);
         Log::Info(
-            "DungeonBundle: bundle-acquire legacy nearby loot result picked=%d heldBundle=%u",
+            "DungeonBundle: bundle-acquire legacy nearby loot result picked=%d acquiredItem=%u heldBundle=%u",
             legacyNearbyPicked,
+            GetHeldOrEquippedBundleItemIdByModelImpl(modelId),
             DungeonInteractions::GetHeldBundleItemId());
         LogBundleAcquireSnapshot("bundle-acquire after-legacy-pickup", x, y, itemSearchRadius, modelId);
-        if (DungeonInteractions::GetHeldBundleItemId() != 0u) {
+        if (HasHeldOrEquippedBundleByModel(modelId)) {
             return true;
         }
     }
 
     const uint32_t signpostId = settledPreferredSignpostId != 0u
         ? settledPreferredSignpostId
-        : ResolveBundleChestSignpostNearPoint(x, y, signpostSearchRadius, preferLooseChestSignpost);
+        : ResolveBundleChestOrObjectSignpostNearPoint(x, y, signpostSearchRadius, preferLooseChestSignpost);
     if (!OpenBundleChestAtPoint(signpostId, x, y, interactCount, interactDelayMs)) {
         return false;
     }
@@ -1302,7 +1592,7 @@ bool OpenChestAndAcquireHeldBundleByModelImpl(
     LogBundleAcquireSnapshot("bundle-acquire after-open", x, y, itemSearchRadius, modelId);
     LogNearbyGadgets("bundle-acquire after-open", x, y, signpostSearchRadius);
 
-    if (DungeonInteractions::GetHeldBundleItemId() == 0u &&
+    if (!HasHeldOrEquippedBundleByModel(modelId) &&
         DungeonInteractions::FindNearestItemByModel(x, y, itemSearchRadius, modelId) == 0u) {
         if (preferLooseChestSignpost) {
             const uint32_t centerSignpostId =
@@ -1345,36 +1635,45 @@ bool OpenChestAndAcquireHeldBundleByModelImpl(
         (void)MoveToPickupPointIfPossible(x, y);
         if (PickUpHeldBundleByModelNearPoint(x, y, modelId, itemSearchRadius, 1, pickupDelayMs)) {
             Log::Info(
-                "DungeonBundle: bundle-acquire direct pickup succeeded attempt=%d heldBundle=%u",
+                "DungeonBundle: bundle-acquire direct pickup succeeded attempt=%d acquiredItem=%u heldBundle=%u",
                 attempt + 1,
+                GetHeldOrEquippedBundleItemIdByModelImpl(modelId),
                 DungeonInteractions::GetHeldBundleItemId());
             return true;
         }
         Log::Info(
-            "DungeonBundle: bundle-acquire direct pickup failed attempt=%d heldBundle=%u",
+            "DungeonBundle: bundle-acquire direct pickup failed attempt=%d acquiredItem=%u heldBundle=%u",
             attempt + 1,
+            GetHeldOrEquippedBundleItemIdByModelImpl(modelId),
             DungeonInteractions::GetHeldBundleItemId());
         LogBundleAcquireSnapshot("bundle-acquire after-direct-fail", x, y, itemSearchRadius, modelId);
 
+        const uint32_t nearbyCandidateAgentId =
+            DungeonInteractions::FindNearestItemByModel(x, y, itemSearchRadius, modelId);
+        const uint32_t nearbyCandidateItemId =
+            GetMatchingGroundItemId(nearbyCandidateAgentId, modelId);
         const int nearbyPicked = PickUpNearbyLootAtPoint(x, y, itemSearchRadius, pickupDelayMs);
-        if (nearbyPicked > 0 && DungeonInteractions::GetHeldBundleItemId() != 0u) {
+        if (nearbyPicked > 0 && HasHeldOrEquippedBundleByModel(modelId, nearbyCandidateItemId)) {
             Log::Info(
-                "DungeonBundle: bundle-acquire nearby loot succeeded attempt=%d picked=%d heldBundle=%u",
+                "DungeonBundle: bundle-acquire nearby loot succeeded attempt=%d picked=%d acquiredItem=%u heldBundle=%u",
                 attempt + 1,
                 nearbyPicked,
+                GetHeldOrEquippedBundleItemIdByModelImpl(modelId, nearbyCandidateItemId),
                 DungeonInteractions::GetHeldBundleItemId());
             return true;
         }
         Log::Info(
-            "DungeonBundle: bundle-acquire nearby loot result attempt=%d picked=%d heldBundle=%u",
+            "DungeonBundle: bundle-acquire nearby loot result attempt=%d picked=%d candidateItem=%u acquiredItem=%u heldBundle=%u",
             attempt + 1,
             nearbyPicked,
+            nearbyCandidateItemId,
+            GetHeldOrEquippedBundleItemIdByModelImpl(modelId, nearbyCandidateItemId),
             DungeonInteractions::GetHeldBundleItemId());
         LogBundleAcquireSnapshot("bundle-acquire after-nearby-pass", x, y, itemSearchRadius, modelId);
     }
 
     LogBundleAcquireSnapshot("bundle-acquire final", x, y, itemSearchRadius, modelId);
-    return DungeonInteractions::GetHeldBundleItemId() != 0u;
+    return HasHeldOrEquippedBundleByModel(modelId);
 }
 
 bool OpenChestAndAcquireHeldBundleByModel(
@@ -1438,7 +1737,7 @@ bool OpenChestAndAcquireHeldBundleByModelActionInteract(
         return false;
     }
 
-    if (DungeonInteractions::GetHeldBundleItemId() != 0u) {
+    if (HasHeldOrEquippedBundleByModel(modelId)) {
         LogBundleAcquireSnapshot("bundle-acquire action-interact already-held", x, y, itemSearchRadius, modelId);
         return true;
     }
@@ -1477,36 +1776,45 @@ bool OpenChestAndAcquireHeldBundleByModelActionInteract(
 
         if (PickUpHeldBundleByModelNearPoint(x, y, modelId, itemSearchRadius, 1, pickupDelayMs)) {
             Log::Info(
-                "DungeonBundle: bundle-acquire action-interact direct pickup succeeded attempt=%d heldBundle=%u",
+                "DungeonBundle: bundle-acquire action-interact direct pickup succeeded attempt=%d acquiredItem=%u heldBundle=%u",
                 attempt + 1,
+                GetHeldOrEquippedBundleItemIdByModelImpl(modelId),
                 DungeonInteractions::GetHeldBundleItemId());
             return true;
         }
 
         Log::Info(
-            "DungeonBundle: bundle-acquire action-interact direct pickup failed attempt=%d heldBundle=%u",
+            "DungeonBundle: bundle-acquire action-interact direct pickup failed attempt=%d acquiredItem=%u heldBundle=%u",
             attempt + 1,
+            GetHeldOrEquippedBundleItemIdByModelImpl(modelId),
             DungeonInteractions::GetHeldBundleItemId());
 
+        const uint32_t nearbyCandidateAgentId =
+            DungeonInteractions::FindNearestItemByModel(x, y, itemSearchRadius, modelId);
+        const uint32_t nearbyCandidateItemId =
+            GetMatchingGroundItemId(nearbyCandidateAgentId, modelId);
         const int nearbyPicked = PickUpNearbyLootAtPoint(x, y, itemSearchRadius, pickupDelayMs);
-        if (nearbyPicked > 0 && DungeonInteractions::GetHeldBundleItemId() != 0u) {
+        if (nearbyPicked > 0 && HasHeldOrEquippedBundleByModel(modelId, nearbyCandidateItemId)) {
             Log::Info(
-                "DungeonBundle: bundle-acquire action-interact nearby loot succeeded attempt=%d picked=%d heldBundle=%u",
+                "DungeonBundle: bundle-acquire action-interact nearby loot succeeded attempt=%d picked=%d acquiredItem=%u heldBundle=%u",
                 attempt + 1,
                 nearbyPicked,
+                GetHeldOrEquippedBundleItemIdByModelImpl(modelId, nearbyCandidateItemId),
                 DungeonInteractions::GetHeldBundleItemId());
             return true;
         }
 
         Log::Info(
-            "DungeonBundle: bundle-acquire action-interact nearby loot result attempt=%d picked=%d heldBundle=%u",
+            "DungeonBundle: bundle-acquire action-interact nearby loot result attempt=%d picked=%d candidateItem=%u acquiredItem=%u heldBundle=%u",
             attempt + 1,
             nearbyPicked,
+            nearbyCandidateItemId,
+            GetHeldOrEquippedBundleItemIdByModelImpl(modelId, nearbyCandidateItemId),
             DungeonInteractions::GetHeldBundleItemId());
     }
 
     LogBundleAcquireSnapshot("bundle-acquire action-interact final", x, y, itemSearchRadius, modelId);
-    return DungeonInteractions::GetHeldBundleItemId() != 0u;
+    return HasHeldOrEquippedBundleByModel(modelId);
 }
 
 bool OpenChestAndAcquireHeldBundleByModelLegacy(
@@ -1531,6 +1839,39 @@ bool OpenChestAndAcquireHeldBundleByModelLegacy(
         pickupDelayMs,
         true,
         false);
+}
+
+uint32_t GetHeldOrEquippedBundleItemIdByModel(uint32_t modelId) {
+    return GetHeldOrEquippedBundleItemIdByModelImpl(modelId);
+}
+
+bool DropHeldOrEquippedBundleItem(uint32_t itemId) {
+    if (itemId == 0u) {
+        Log::Info("DungeonBundle: drop held-or-equipped bundle item skipped item=0");
+        return false;
+    }
+
+    Log::Info(
+        "DungeonBundle: drop held-or-equipped bundle item=%u path=action-key-press action=0x%X",
+        itemId,
+        kDropBundleActionCode);
+    if (!UIMgr::ActionKeyPress(kDropBundleActionCode)) {
+        Log::Info("DungeonBundle: drop held-or-equipped bundle action-key failed item=%u", itemId);
+        return false;
+    }
+    Sleep(500u);
+    return true;
+}
+
+bool DropHeldOrEquippedBundleByModel(uint32_t modelId) {
+    const uint32_t itemId = GetHeldOrEquippedBundleItemIdByModelImpl(modelId);
+    if (itemId == 0u) {
+        Log::Info("DungeonBundle: drop held-or-equipped bundle no matching item model=%u", modelId);
+        return true;
+    }
+
+    Log::Info("DungeonBundle: drop held-or-equipped bundle resolved item=%u model=%u", itemId, modelId);
+    return DropHeldOrEquippedBundleItem(itemId);
 }
 
 } // namespace GWA3::DungeonBundle
