@@ -1119,7 +1119,7 @@
 
                             <Border Grid.Column="1" Style="{StaticResource SectionBorder}" Margin="8,0,0,0">
                                 <StackPanel>
-                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Py4GW-style runtime" />
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Runtime telemetry" />
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="104" />
@@ -1138,40 +1138,40 @@
                                         </Grid.RowDefinitions>
 
                                         <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Previous" />
-                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedSession.Py4GwPreviousStep}" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedSession.RuntimePreviousStep}" TextWrapping="Wrap" />
                                         <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Current" />
-                                        <TextBlock Grid.Row="0" Grid.Column="3" Text="{Binding SelectedSession.Py4GwCurrentStep}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Row="0" Grid.Column="3" Text="{Binding SelectedSession.RuntimeCurrentStep}" FontWeight="SemiBold" TextWrapping="Wrap" />
 
                                         <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Next" />
-                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedSession.Py4GwNextStep}" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedSession.RuntimeNextStep}" TextWrapping="Wrap" />
                                         <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="FSM" />
-                                        <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding SelectedSession.Py4GwStateMachine}" />
+                                        <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding SelectedSession.RuntimeStateMachine}" />
 
                                         <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Map" />
-                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedSession.Py4GwMap}" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedSession.RuntimeMap}" TextWrapping="Wrap" />
                                         <TextBlock Grid.Row="2" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Updated" />
-                                        <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding SelectedSession.Py4GwLastUpdate}" />
+                                        <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding SelectedSession.RuntimeLastUpdate}" />
 
                                         <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Health" Margin="0,8,0,0" />
-                                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedSession.Py4GwHealth}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedSession.RuntimeHealth}" TextWrapping="Wrap" Margin="0,8,0,0" />
                                         <TextBlock Grid.Row="3" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Skillbar" Margin="0,8,0,0" />
-                                        <TextBlock Grid.Row="3" Grid.Column="3" Text="{Binding SelectedSession.Py4GwSkillbar}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                                        <TextBlock Grid.Row="3" Grid.Column="3" Text="{Binding SelectedSession.RuntimeSkillbar}" TextWrapping="Wrap" Margin="0,8,0,0" />
 
                                         <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Position" Margin="0,8,0,0" />
-                                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding SelectedSession.Py4GwPosition}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding SelectedSession.RuntimePosition}" TextWrapping="Wrap" Margin="0,8,0,0" />
                                         <TextBlock Grid.Row="4" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Target" Margin="0,8,0,0" />
-                                        <TextBlock Grid.Row="4" Grid.Column="3" Text="{Binding SelectedSession.Py4GwTarget}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                                        <TextBlock Grid.Row="4" Grid.Column="3" Text="{Binding SelectedSession.RuntimeTarget}" TextWrapping="Wrap" Margin="0,8,0,0" />
 
                                         <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Pathing" Margin="0,8,0,0" />
-                                        <TextBlock Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="3" Text="{Binding SelectedSession.Py4GwPathing}" TextWrapping="Wrap" MaxHeight="42" Margin="0,8,0,0" />
+                                        <TextBlock Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="3" Text="{Binding SelectedSession.RuntimePathing}" TextWrapping="Wrap" MaxHeight="42" Margin="0,8,0,0" />
 
                                         <StackPanel Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="4" Margin="0,10,0,0">
                                             <TextBlock Style="{StaticResource FieldLabel}" Text="Casting" />
-                                            <TextBlock Text="{Binding SelectedSession.Py4GwCasting}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" />
+                                            <TextBlock Text="{Binding SelectedSession.RuntimeCasting}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" />
                                             <TextBlock Style="{StaticResource FieldLabel}" Text="Action queue" Margin="0,8,0,0" />
-                                            <TextBlock Text="{Binding SelectedSession.Py4GwActionQueue}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" />
+                                            <TextBlock Text="{Binding SelectedSession.RuntimeActionQueue}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" />
                                             <TextBlock Style="{StaticResource FieldLabel}" Text="Overwatch" Margin="0,8,0,0" />
-                                            <TextBlock Text="{Binding SelectedSession.Py4GwOverwatch}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" />
+                                            <TextBlock Text="{Binding SelectedSession.RuntimeOverwatch}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" />
                                         </StackPanel>
                                     </Grid>
                                 </StackPanel>
@@ -1249,7 +1249,7 @@
                                             <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Script" Margin="0,6,0,0" />
                                             <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedSession.BotshubScript}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
                                             <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Skillbar" Margin="0,6,0,0" />
-                                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedSession.Py4GwSkillbar}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.Py4GwSkillbar}" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedSession.RuntimeSkillbar}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.RuntimeSkillbar}" FontSize="12" Margin="0,6,0,0" />
                                         </Grid>
                                     </StackPanel>
 
@@ -1271,24 +1271,24 @@
                                             </Grid.RowDefinitions>
 
                                             <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Map" />
-                                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedSession.Py4GwMap}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedSession.RuntimeMap}" FontWeight="SemiBold" TextWrapping="Wrap" />
                                             <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Updated" Margin="0,6,0,0" />
-                                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedSession.Py4GwLastUpdate}" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedSession.RuntimeLastUpdate}" Margin="0,6,0,0" />
                                             <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Health" Margin="0,6,0,0" />
-                                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedSession.Py4GwHealth}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedSession.RuntimeHealth}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
                                             <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Position" Margin="0,6,0,0" />
-                                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedSession.Py4GwPosition}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedSession.RuntimePosition}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
                                             <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Target" Margin="0,6,0,0" />
-                                            <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding SelectedSession.Py4GwTarget}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding SelectedSession.RuntimeTarget}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
                                             <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Pathing" Margin="0,6,0,0" />
-                                            <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding SelectedSession.Py4GwPathing}" TextWrapping="Wrap" MaxHeight="38" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding SelectedSession.RuntimePathing}" TextWrapping="Wrap" MaxHeight="38" FontSize="12" Margin="0,6,0,0" />
                                             <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Casting" Margin="0,6,0,0" />
-                                            <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding SelectedSession.Py4GwCasting}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding SelectedSession.RuntimeCasting}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
                                         </Grid>
                                         <TextBlock Style="{StaticResource FieldLabel}" Text="Queue" Margin="0,10,0,0" />
-                                        <TextBlock Text="{Binding SelectedSession.Py4GwActionQueue}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.Py4GwActionQueue}" FontSize="12" />
+                                        <TextBlock Text="{Binding SelectedSession.RuntimeActionQueue}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.RuntimeActionQueue}" FontSize="12" />
                                         <TextBlock Style="{StaticResource FieldLabel}" Text="Overwatch" Margin="0,8,0,0" />
-                                        <TextBlock Text="{Binding SelectedSession.Py4GwOverwatch}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.Py4GwOverwatch}" FontSize="12" />
+                                        <TextBlock Text="{Binding SelectedSession.RuntimeOverwatch}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.RuntimeOverwatch}" FontSize="12" />
                                     </StackPanel>
 
                                     <StackPanel Grid.Column="2">

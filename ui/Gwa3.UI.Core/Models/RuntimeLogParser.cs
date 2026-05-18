@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 
 namespace Gwa3.UI.Core.Models;
 
-public sealed record Py4GwRuntimeLineSnapshot
+public sealed record RuntimeLogLineSnapshot
 {
     public string? Map { get; init; }
     public string? Health { get; init; }
@@ -15,16 +15,16 @@ public sealed record Py4GwRuntimeLineSnapshot
     public string? Overwatch { get; init; }
 }
 
-public static partial class Py4GwRuntimeLogParser
+public static partial class RuntimeLogParser
 {
-    public static Py4GwRuntimeLineSnapshot? TryParse(string source, string text)
+    public static RuntimeLogLineSnapshot? TryParse(string source, string text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
             return null;
         }
 
-        var builder = new Py4GwRuntimeLineSnapshotBuilder();
+        var builder = new RuntimeLogLineSnapshotBuilder();
 
         if (TrySummarizeActionQueue(text) is { Length: > 0 } actionQueue)
         {
@@ -87,7 +87,7 @@ public static partial class Py4GwRuntimeLogParser
         return null;
     }
 
-    private static Py4GwRuntimeLineSnapshot? TrySummarizeRouteTelemetry(string text)
+    private static RuntimeLogLineSnapshot? TrySummarizeRouteTelemetry(string text)
     {
         if (!text.Contains("Froggy:", StringComparison.OrdinalIgnoreCase) ||
             !text.Contains("wp=", StringComparison.OrdinalIgnoreCase))
@@ -144,7 +144,7 @@ public static partial class Py4GwRuntimeLogParser
             targetParts.Add($"nearby {nearbyEnemies}");
         }
 
-        return new Py4GwRuntimeLineSnapshot
+        return new RuntimeLogLineSnapshot
         {
             Map = string.IsNullOrWhiteSpace(map) ? null : $"map {map}",
             Health = healthParts.Count > 0 ? string.Join(", ", healthParts) : null,
@@ -248,7 +248,7 @@ public static partial class Py4GwRuntimeLogParser
         return normalized.Length <= maxLength ? normalized : normalized[..(maxLength - 3)] + "...";
     }
 
-    private sealed class Py4GwRuntimeLineSnapshotBuilder
+    private sealed class RuntimeLogLineSnapshotBuilder
     {
         public string? Map { get; set; }
         public string? Health { get; set; }
@@ -260,7 +260,7 @@ public static partial class Py4GwRuntimeLogParser
         public string? ActionQueue { get; set; }
         public string? Overwatch { get; set; }
 
-        public Py4GwRuntimeLineSnapshot? Build()
+        public RuntimeLogLineSnapshot? Build()
         {
             if (Map is null &&
                 Health is null &&
@@ -275,7 +275,7 @@ public static partial class Py4GwRuntimeLogParser
                 return null;
             }
 
-            return new Py4GwRuntimeLineSnapshot
+            return new RuntimeLogLineSnapshot
             {
                 Map = Map,
                 Health = Health,

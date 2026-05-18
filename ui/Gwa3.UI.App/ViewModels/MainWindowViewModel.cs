@@ -1998,87 +1998,87 @@ public sealed class MainWindowViewModel : ObservableObject
         var updated = false;
         var parsedRuntimeLine = false;
 
-        if (Py4GwRuntimeLogParser.TryParse(source, text) is { } runtimeSnapshot)
+        if (RuntimeLogParser.TryParse(source, text) is { } runtimeSnapshot)
         {
             parsedRuntimeLine = true;
             if (!string.IsNullOrWhiteSpace(runtimeSnapshot.ActionQueue))
             {
                 SelectedSession.BotshubCommandQueue = runtimeSnapshot.ActionQueue;
-                SelectedSession.Py4GwActionQueue = runtimeSnapshot.ActionQueue;
+                SelectedSession.RuntimeActionQueue = runtimeSnapshot.ActionQueue;
             }
 
             if (!string.IsNullOrWhiteSpace(runtimeSnapshot.Map))
             {
-                SelectedSession.Py4GwMap = SelectedSession.DungeonLevel != "not in dungeon"
+                SelectedSession.RuntimeMap = SelectedSession.DungeonLevel != "not in dungeon"
                     ? $"{SelectedSession.DungeonLevel} ({runtimeSnapshot.Map})"
                     : runtimeSnapshot.Map;
             }
 
             if (!string.IsNullOrWhiteSpace(runtimeSnapshot.Health))
             {
-                SelectedSession.Py4GwHealth = runtimeSnapshot.Health;
+                SelectedSession.RuntimeHealth = runtimeSnapshot.Health;
             }
 
             if (!string.IsNullOrWhiteSpace(runtimeSnapshot.Position))
             {
-                SelectedSession.Py4GwPosition = runtimeSnapshot.Position;
+                SelectedSession.RuntimePosition = runtimeSnapshot.Position;
             }
 
             if (!string.IsNullOrWhiteSpace(runtimeSnapshot.Target))
             {
-                SelectedSession.Py4GwTarget = runtimeSnapshot.Target;
+                SelectedSession.RuntimeTarget = runtimeSnapshot.Target;
             }
 
             if (!string.IsNullOrWhiteSpace(runtimeSnapshot.Pathing))
             {
-                SelectedSession.Py4GwPathing = SelectedSession.ProgressDetail != "waiting for route telemetry"
+                SelectedSession.RuntimePathing = SelectedSession.ProgressDetail != "waiting for route telemetry"
                     ? SelectedSession.ProgressDetail
                     : runtimeSnapshot.Pathing;
             }
 
             if (!string.IsNullOrWhiteSpace(runtimeSnapshot.Casting))
             {
-                SelectedSession.Py4GwCasting = runtimeSnapshot.Casting;
+                SelectedSession.RuntimeCasting = runtimeSnapshot.Casting;
             }
 
             if (!string.IsNullOrWhiteSpace(runtimeSnapshot.Skillbar))
             {
-                SelectedSession.Py4GwSkillbar = runtimeSnapshot.Skillbar;
+                SelectedSession.RuntimeSkillbar = runtimeSnapshot.Skillbar;
             }
 
             if (!string.IsNullOrWhiteSpace(runtimeSnapshot.Overwatch))
             {
-                SelectedSession.Py4GwOverwatch = runtimeSnapshot.Overwatch;
+                SelectedSession.RuntimeOverwatch = runtimeSnapshot.Overwatch;
             }
 
-            SelectedSession.Py4GwLastUpdate = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+            SelectedSession.RuntimeLastUpdate = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
             updated = true;
         }
 
         if (TryExtractBotStateTransition(text) is { } transition)
         {
-            SelectedSession.Py4GwPreviousStep = EmptyToFallback(transition.Previous, "n/a");
-            SelectedSession.Py4GwCurrentStep = transition.Current;
-            SelectedSession.Py4GwNextStep = InferNextRuntimeStep(transition.Current);
-            SelectedSession.Py4GwStateMachine = "started";
+            SelectedSession.RuntimePreviousStep = EmptyToFallback(transition.Previous, "n/a");
+            SelectedSession.RuntimeCurrentStep = transition.Current;
+            SelectedSession.RuntimeNextStep = InferNextRuntimeStep(transition.Current);
+            SelectedSession.RuntimeStateMachine = "started";
             updated = true;
         }
         else if (TryExtractRunNumber(text) is { } runNumber &&
                  text.Contains("State: TownSetup", StringComparison.OrdinalIgnoreCase))
         {
-            SelectedSession.Py4GwPreviousStep = SelectedSession.Py4GwCurrentStep;
-            SelectedSession.Py4GwCurrentStep = $"TownSetup run {runNumber}";
-            SelectedSession.Py4GwNextStep = "Traveling";
-            SelectedSession.Py4GwStateMachine = "started";
+            SelectedSession.RuntimePreviousStep = SelectedSession.RuntimeCurrentStep;
+            SelectedSession.RuntimeCurrentStep = $"TownSetup run {runNumber}";
+            SelectedSession.RuntimeNextStep = "Traveling";
+            SelectedSession.RuntimeStateMachine = "started";
             updated = true;
         }
         else if (text.Contains("Run #", StringComparison.OrdinalIgnoreCase) &&
                  text.Contains("complete in", StringComparison.OrdinalIgnoreCase))
         {
-            SelectedSession.Py4GwPreviousStep = SelectedSession.Py4GwCurrentStep;
-            SelectedSession.Py4GwCurrentStep = "Run complete";
-            SelectedSession.Py4GwNextStep = "TownSetup";
-            SelectedSession.Py4GwStateMachine = "finished";
+            SelectedSession.RuntimePreviousStep = SelectedSession.RuntimeCurrentStep;
+            SelectedSession.RuntimeCurrentStep = "Run complete";
+            SelectedSession.RuntimeNextStep = "TownSetup";
+            SelectedSession.RuntimeStateMachine = "finished";
             updated = true;
         }
 
@@ -2086,7 +2086,7 @@ public sealed class MainWindowViewModel : ObservableObject
             text.Contains("Mapping your skill bar - completed", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("CacheSkillBar", StringComparison.OrdinalIgnoreCase))
         {
-            SelectedSession.Py4GwSkillbar = "loaded";
+            SelectedSession.RuntimeSkillbar = "loaded";
             updated = true;
         }
 
@@ -2094,7 +2094,7 @@ public sealed class MainWindowViewModel : ObservableObject
             (text.Contains("UseSkill", StringComparison.OrdinalIgnoreCase) ||
              text.Contains("casting", StringComparison.OrdinalIgnoreCase)))
         {
-            SelectedSession.Py4GwCasting = SummarizeStatusText(text);
+            SelectedSession.RuntimeCasting = SummarizeStatusText(text);
             updated = true;
         }
 
@@ -2105,7 +2105,7 @@ public sealed class MainWindowViewModel : ObservableObject
              text.Contains("FollowPath", StringComparison.OrdinalIgnoreCase) ||
              text.Contains("wp=", StringComparison.OrdinalIgnoreCase)))
         {
-            SelectedSession.Py4GwPathing = SelectedSession.ProgressDetail != "waiting for route telemetry"
+            SelectedSession.RuntimePathing = SelectedSession.ProgressDetail != "waiting for route telemetry"
                 ? SelectedSession.ProgressDetail
                 : SummarizeStatusText(text);
             updated = true;
@@ -2176,9 +2176,9 @@ public sealed class MainWindowViewModel : ObservableObject
         SelectedSession.CompletionPercent = percent;
         SelectedSession.CompletionText = completionText;
         SelectedSession.ProgressDetail = progressDetail;
-        SelectedSession.Py4GwMap = snapshot.DungeonLevel;
-        SelectedSession.Py4GwPathing = progressDetail;
-        SelectedSession.Py4GwLastUpdate = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+        SelectedSession.RuntimeMap = snapshot.DungeonLevel;
+        SelectedSession.RuntimePathing = progressDetail;
+        SelectedSession.RuntimeLastUpdate = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
 
         var inferredPhase = InferRuntimePhaseFromDungeonProgress(snapshot.DungeonLevel, progressDetail);
         if (liveRuntimeIssue is null &&
@@ -2189,9 +2189,9 @@ public sealed class MainWindowViewModel : ObservableObject
             SelectedSession.BotPhase = inferredPhase;
             if (inferredPhase == "AwaitingReturn")
             {
-                SelectedSession.Py4GwCurrentStep = inferredPhase;
-                SelectedSession.Py4GwNextStep = "Sparkfly return";
-                SelectedSession.Py4GwStateMachine = "started";
+                SelectedSession.RuntimeCurrentStep = inferredPhase;
+                SelectedSession.RuntimeNextStep = "Sparkfly return";
+                SelectedSession.RuntimeStateMachine = "started";
             }
         }
 
@@ -2860,20 +2860,20 @@ public sealed class MainWindowViewModel : ObservableObject
             BotshubStatusSource = session.BotshubStatusSource,
             BotshubCommandQueue = session.BotshubCommandQueue,
             BotshubLastLog = session.BotshubLastLog,
-            Py4GwPreviousStep = session.Py4GwPreviousStep,
-            Py4GwCurrentStep = session.Py4GwCurrentStep,
-            Py4GwNextStep = session.Py4GwNextStep,
-            Py4GwStateMachine = session.Py4GwStateMachine,
-            Py4GwMap = session.Py4GwMap,
-            Py4GwHealth = session.Py4GwHealth,
-            Py4GwPosition = session.Py4GwPosition,
-            Py4GwTarget = session.Py4GwTarget,
-            Py4GwPathing = session.Py4GwPathing,
-            Py4GwCasting = session.Py4GwCasting,
-            Py4GwSkillbar = session.Py4GwSkillbar,
-            Py4GwActionQueue = session.Py4GwActionQueue,
-            Py4GwOverwatch = session.Py4GwOverwatch,
-            Py4GwLastUpdate = session.Py4GwLastUpdate,
+            RuntimePreviousStep = session.RuntimePreviousStep,
+            RuntimeCurrentStep = session.RuntimeCurrentStep,
+            RuntimeNextStep = session.RuntimeNextStep,
+            RuntimeStateMachine = session.RuntimeStateMachine,
+            RuntimeMap = session.RuntimeMap,
+            RuntimeHealth = session.RuntimeHealth,
+            RuntimePosition = session.RuntimePosition,
+            RuntimeTarget = session.RuntimeTarget,
+            RuntimePathing = session.RuntimePathing,
+            RuntimeCasting = session.RuntimeCasting,
+            RuntimeSkillbar = session.RuntimeSkillbar,
+            RuntimeActionQueue = session.RuntimeActionQueue,
+            RuntimeOverwatch = session.RuntimeOverwatch,
+            RuntimeLastUpdate = session.RuntimeLastUpdate,
             Detail = detail
         };
     }
@@ -2897,7 +2897,7 @@ public sealed class MainWindowViewModel : ObservableObject
         var effectiveBotPhase = awaitingReturn ? "AwaitingReturn" : snapshot.BotPhase;
         var effectiveBotshubState = awaitingReturn ? "AwaitingReturn" : snapshot.BotshubState;
         var effectiveBotshubRunning = awaitingReturn ? "waiting" : snapshot.BotshubRunning;
-        var effectivePy4GwCurrentStep = awaitingReturn ? "AwaitingReturn" : snapshot.Py4GwCurrentStep;
+        var effectiveRuntimeCurrentStep = awaitingReturn ? "AwaitingReturn" : snapshot.RuntimeCurrentStep;
 
         session.Status = ValueOrCurrent(effectiveStatus, session.Status);
         session.BotPhase = ValueOrCurrent(effectiveBotPhase, session.BotPhase);
@@ -2991,20 +2991,20 @@ public sealed class MainWindowViewModel : ObservableObject
         session.BotshubStatusSource = ValueOrCurrent(snapshot.BotshubStatusSource, session.BotshubStatusSource);
         session.BotshubCommandQueue = ValueOrCurrent(snapshot.BotshubCommandQueue, session.BotshubCommandQueue);
         session.BotshubLastLog = ValueOrCurrent(snapshot.BotshubLastLog, session.BotshubLastLog);
-        session.Py4GwPreviousStep = ValueOrCurrent(snapshot.Py4GwPreviousStep, session.Py4GwPreviousStep);
-        session.Py4GwCurrentStep = ValueOrCurrent(effectivePy4GwCurrentStep, session.Py4GwCurrentStep);
-        session.Py4GwNextStep = ValueOrCurrent(snapshot.Py4GwNextStep, session.Py4GwNextStep);
-        session.Py4GwStateMachine = ValueOrCurrent(snapshot.Py4GwStateMachine, session.Py4GwStateMachine);
-        session.Py4GwMap = ValueOrCurrent(snapshot.Py4GwMap, session.Py4GwMap);
-        session.Py4GwHealth = ValueOrCurrent(snapshot.Py4GwHealth, session.Py4GwHealth);
-        session.Py4GwPosition = ValueOrCurrent(snapshot.Py4GwPosition, session.Py4GwPosition);
-        session.Py4GwTarget = ValueOrCurrent(snapshot.Py4GwTarget, session.Py4GwTarget);
-        session.Py4GwPathing = ValueOrCurrent(snapshot.Py4GwPathing, session.Py4GwPathing);
-        session.Py4GwCasting = ValueOrCurrent(snapshot.Py4GwCasting, session.Py4GwCasting);
-        session.Py4GwSkillbar = ValueOrCurrent(snapshot.Py4GwSkillbar, session.Py4GwSkillbar);
-        session.Py4GwActionQueue = ValueOrCurrent(snapshot.Py4GwActionQueue, session.Py4GwActionQueue);
-        session.Py4GwOverwatch = ValueOrCurrent(snapshot.Py4GwOverwatch, session.Py4GwOverwatch);
-        session.Py4GwLastUpdate = ValueOrCurrent(snapshot.Py4GwLastUpdate, session.Py4GwLastUpdate);
+        session.RuntimePreviousStep = ValueOrCurrent(snapshot.RuntimePreviousStep, session.RuntimePreviousStep);
+        session.RuntimeCurrentStep = ValueOrCurrent(effectiveRuntimeCurrentStep, session.RuntimeCurrentStep);
+        session.RuntimeNextStep = ValueOrCurrent(snapshot.RuntimeNextStep, session.RuntimeNextStep);
+        session.RuntimeStateMachine = ValueOrCurrent(snapshot.RuntimeStateMachine, session.RuntimeStateMachine);
+        session.RuntimeMap = ValueOrCurrent(snapshot.RuntimeMap, session.RuntimeMap);
+        session.RuntimeHealth = ValueOrCurrent(snapshot.RuntimeHealth, session.RuntimeHealth);
+        session.RuntimePosition = ValueOrCurrent(snapshot.RuntimePosition, session.RuntimePosition);
+        session.RuntimeTarget = ValueOrCurrent(snapshot.RuntimeTarget, session.RuntimeTarget);
+        session.RuntimePathing = ValueOrCurrent(snapshot.RuntimePathing, session.RuntimePathing);
+        session.RuntimeCasting = ValueOrCurrent(snapshot.RuntimeCasting, session.RuntimeCasting);
+        session.RuntimeSkillbar = ValueOrCurrent(snapshot.RuntimeSkillbar, session.RuntimeSkillbar);
+        session.RuntimeActionQueue = ValueOrCurrent(snapshot.RuntimeActionQueue, session.RuntimeActionQueue);
+        session.RuntimeOverwatch = ValueOrCurrent(snapshot.RuntimeOverwatch, session.RuntimeOverwatch);
+        session.RuntimeLastUpdate = ValueOrCurrent(snapshot.RuntimeLastUpdate, session.RuntimeLastUpdate);
     }
 
     private void WriteStatusSnapshot(string eventName, string detail)
@@ -3578,20 +3578,20 @@ public sealed class SessionViewModel : ObservableObject
         BotshubStatusSource = "n/a";
         BotshubCommandQueue = "no queue telemetry";
         BotshubLastLog = "n/a";
-        Py4GwPreviousStep = "n/a";
-        Py4GwCurrentStep = "waiting for state telemetry";
-        Py4GwNextStep = "n/a";
-        Py4GwStateMachine = "not started";
-        Py4GwMap = "n/a";
-        Py4GwHealth = "n/a";
-        Py4GwPosition = "n/a";
-        Py4GwTarget = "n/a";
-        Py4GwPathing = "waiting for pathing telemetry";
-        Py4GwCasting = "n/a";
-        Py4GwSkillbar = "n/a";
-        Py4GwActionQueue = "no queue telemetry";
-        Py4GwOverwatch = "n/a";
-        Py4GwLastUpdate = "n/a";
+        RuntimePreviousStep = "n/a";
+        RuntimeCurrentStep = "waiting for state telemetry";
+        RuntimeNextStep = "n/a";
+        RuntimeStateMachine = "not started";
+        RuntimeMap = "n/a";
+        RuntimeHealth = "n/a";
+        RuntimePosition = "n/a";
+        RuntimeTarget = "n/a";
+        RuntimePathing = "waiting for pathing telemetry";
+        RuntimeCasting = "n/a";
+        RuntimeSkillbar = "n/a";
+        RuntimeActionQueue = "no queue telemetry";
+        RuntimeOverwatch = "n/a";
+        RuntimeLastUpdate = "n/a";
     }
 
     public void IncrementFailureCount()
@@ -3673,7 +3673,7 @@ public sealed class SessionViewModel : ObservableObject
 
         if (BuildSkillbarSummary(snapshot) is { Length: > 0 } skillbarSummary)
         {
-            Py4GwSkillbar = skillbarSummary;
+            RuntimeSkillbar = skillbarSummary;
         }
     }
 
@@ -3723,10 +3723,10 @@ public sealed class SessionViewModel : ObservableObject
 
     private string PreferredRuntimeDisplayState()
     {
-        if (!IsUnavailableValue(Py4GwCurrentStep) &&
-            !Py4GwCurrentStep.Contains("waiting", StringComparison.OrdinalIgnoreCase))
+        if (!IsUnavailableValue(RuntimeCurrentStep) &&
+            !RuntimeCurrentStep.Contains("waiting", StringComparison.OrdinalIgnoreCase))
         {
-            return Py4GwCurrentStep.Trim();
+            return RuntimeCurrentStep.Trim();
         }
 
         return EmptyToDisplay(BotPhase, Status);
@@ -4142,85 +4142,85 @@ public sealed class SessionViewModel : ObservableObject
         set => SetProperty(ref botshubLastLog, value);
     }
 
-    public string Py4GwPreviousStep
+    public string RuntimePreviousStep
     {
         get => py4GwPreviousStep;
         set => SetProperty(ref py4GwPreviousStep, value);
     }
 
-    public string Py4GwCurrentStep
+    public string RuntimeCurrentStep
     {
         get => py4GwCurrentStep;
         set => SetProperty(ref py4GwCurrentStep, value);
     }
 
-    public string Py4GwNextStep
+    public string RuntimeNextStep
     {
         get => py4GwNextStep;
         set => SetProperty(ref py4GwNextStep, value);
     }
 
-    public string Py4GwStateMachine
+    public string RuntimeStateMachine
     {
         get => py4GwStateMachine;
         set => SetProperty(ref py4GwStateMachine, value);
     }
 
-    public string Py4GwMap
+    public string RuntimeMap
     {
         get => py4GwMap;
         set => SetProperty(ref py4GwMap, value);
     }
 
-    public string Py4GwHealth
+    public string RuntimeHealth
     {
         get => py4GwHealth;
         set => SetProperty(ref py4GwHealth, value);
     }
 
-    public string Py4GwPosition
+    public string RuntimePosition
     {
         get => py4GwPosition;
         set => SetProperty(ref py4GwPosition, value);
     }
 
-    public string Py4GwTarget
+    public string RuntimeTarget
     {
         get => py4GwTarget;
         set => SetProperty(ref py4GwTarget, value);
     }
 
-    public string Py4GwPathing
+    public string RuntimePathing
     {
         get => py4GwPathing;
         set => SetProperty(ref py4GwPathing, value);
     }
 
-    public string Py4GwCasting
+    public string RuntimeCasting
     {
         get => py4GwCasting;
         set => SetProperty(ref py4GwCasting, value);
     }
 
-    public string Py4GwSkillbar
+    public string RuntimeSkillbar
     {
         get => py4GwSkillbar;
         set => SetProperty(ref py4GwSkillbar, value);
     }
 
-    public string Py4GwActionQueue
+    public string RuntimeActionQueue
     {
         get => py4GwActionQueue;
         set => SetProperty(ref py4GwActionQueue, value);
     }
 
-    public string Py4GwOverwatch
+    public string RuntimeOverwatch
     {
         get => py4GwOverwatch;
         set => SetProperty(ref py4GwOverwatch, value);
     }
 
-    public string Py4GwLastUpdate
+    public string RuntimeLastUpdate
     {
         get => py4GwLastUpdate;
         set => SetProperty(ref py4GwLastUpdate, value);

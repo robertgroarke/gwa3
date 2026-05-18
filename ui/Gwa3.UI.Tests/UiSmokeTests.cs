@@ -192,12 +192,12 @@ public sealed class UiSmokeTests
             BotshubRunStats = "runs 3 / success 2 / fail 1",
             BotshubInventorySummary = "free slots 9, salvage kits 2",
             BotshubMaintenanceSummary = "maintenance: salvage, sell",
-            Py4GwCurrentStep = "InDungeon",
-            Py4GwMap = "map 616",
-            Py4GwHealth = "alive hp 0.94",
-            Py4GwPosition = "pos (1200,-350), dist 540",
-            Py4GwTarget = "nearest 31, nearby 4",
-            Py4GwActionQueue = "queued idx 558",
+            RuntimeCurrentStep = "InDungeon",
+            RuntimeMap = "map 616",
+            RuntimeHealth = "alive hp 0.94",
+            RuntimePosition = "pos (1200,-350), dist 540",
+            RuntimeTarget = "nearest 31, nearby 4",
+            RuntimeActionQueue = "queued idx 558",
             Detail = "Bogroot route telemetry"
         });
         var rehydratedSnapshot = Required(snapshotStore.TryReadLatest(), "UI live status snapshot should round-trip through the typed store.");
@@ -206,7 +206,7 @@ public sealed class UiSmokeTests
         Assert.Equal(74, rehydratedSnapshot.CompletionPercent);
         Assert.Equal("74%", rehydratedSnapshot.CompletionText);
         Verify(rehydratedSnapshot.BotshubInventorySummary.Contains("free slots", StringComparison.OrdinalIgnoreCase), "Snapshot store should preserve Botshub inventory monitoring.");
-        Verify(rehydratedSnapshot.Py4GwActionQueue.Contains("idx 558", StringComparison.OrdinalIgnoreCase), "Snapshot store should preserve Py4GW action queue monitoring.");
+        Verify(rehydratedSnapshot.RuntimeActionQueue.Contains("idx 558", StringComparison.OrdinalIgnoreCase), "Snapshot store should preserve Runtime action queue monitoring.");
         Directory.Delete(snapshotDirectory, recursive: true);
     }
 
@@ -356,25 +356,25 @@ public sealed class UiSmokeTests
     }
 
     [Fact]
-    public void Py4GwRuntimeLogParserReadsActionTelemetry()
+    public void RuntimeLogParserReadsActionTelemetry()
     {
-        var py4gwRoute = Required(Py4GwRuntimeLogParser.TryParse(
+        var runtimeRoute = Required(RuntimeLogParser.TryParse(
             "Bot",
-            "[2026-05-15 20:54:11] [INFO] Froggy: Bogroot post wp=10(28) map=615 loaded=1 alive=1 hp=0.94 pos=(1200,-350) distToWp=540 nearestEnemy=31 nearbyEnemies=4"), "Py4GW-style route telemetry should parse.");
-        Assert.Equal("map 615", py4gwRoute.Map);
-        Verify((py4gwRoute.Health ?? "").Contains("alive", StringComparison.OrdinalIgnoreCase), "Py4GW parser should expose health state.");
-        Verify((py4gwRoute.Position ?? "").Contains("dist 540", StringComparison.OrdinalIgnoreCase), "Py4GW parser should expose waypoint distance.");
-        Verify((py4gwRoute.Target ?? "").Contains("nearby 4", StringComparison.OrdinalIgnoreCase), "Py4GW parser should expose nearby enemy count.");
+            "[2026-05-15 20:54:11] [INFO] Froggy: Bogroot post wp=10(28) map=615 loaded=1 alive=1 hp=0.94 pos=(1200,-350) distToWp=540 nearestEnemy=31 nearbyEnemies=4"), "Runtime-style route telemetry should parse.");
+        Assert.Equal("map 615", runtimeRoute.Map);
+        Verify((runtimeRoute.Health ?? "").Contains("alive", StringComparison.OrdinalIgnoreCase), "Runtime parser should expose health state.");
+        Verify((runtimeRoute.Position ?? "").Contains("dist 540", StringComparison.OrdinalIgnoreCase), "Runtime parser should expose waypoint distance.");
+        Verify((runtimeRoute.Target ?? "").Contains("nearby 4", StringComparison.OrdinalIgnoreCase), "Runtime parser should expose nearby enemy count.");
 
-        var py4gwQueue = Required(Py4GwRuntimeLogParser.TryParse(
+        var runtimeQueue = Required(RuntimeLogParser.TryParse(
             "DLL",
-            "[2026-05-15 20:54:27] [INFO] CtoS: EnqueueBotshubCommand size=16 idx=558 fn=0x555EC820 defer=0 deferCmd=0 exec=558 hb=91305"), "Py4GW-style action queue telemetry should parse.");
-        Verify((py4gwQueue.ActionQueue ?? "").Contains("idx 558", StringComparison.OrdinalIgnoreCase), "Py4GW parser should expose queued action id.");
+            "[2026-05-15 20:54:27] [INFO] CtoS: EnqueueBotshubCommand size=16 idx=558 fn=0x555EC820 defer=0 deferCmd=0 exec=558 hb=91305"), "Runtime-style action queue telemetry should parse.");
+        Verify((runtimeQueue.ActionQueue ?? "").Contains("idx 558", StringComparison.OrdinalIgnoreCase), "Runtime parser should expose queued action id.");
 
-        var py4gwCasting = Required(Py4GwRuntimeLogParser.TryParse(
+        var runtimeCasting = Required(RuntimeLogParser.TryParse(
             "DLL",
-            "[2026-05-15 20:54:04] [INFO] SkillMgr: UseSkill packet slot=4 skillId=2100 target=31"), "Py4GW-style casting telemetry should parse.");
-        Verify((py4gwCasting.Casting ?? "").Contains("skill 2100", StringComparison.OrdinalIgnoreCase), "Py4GW parser should summarize skill casting.");
+            "[2026-05-15 20:54:04] [INFO] SkillMgr: UseSkill packet slot=4 skillId=2100 target=31"), "Runtime-style casting telemetry should parse.");
+        Verify((runtimeCasting.Casting ?? "").Contains("skill 2100", StringComparison.OrdinalIgnoreCase), "Runtime parser should summarize skill casting.");
     }
 
     private static async Task VerifyOwnedClientCleanupAsync(
