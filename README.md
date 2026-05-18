@@ -6,7 +6,7 @@ This public repository is a filtered export of the private development tree. It 
 
 ## Demo
 
-![Froggy HM running Bogroot Growths level 2 boss route with live command log](assets/gwa3_bogrootlvl2boss.gif)
+![Froggy HM running Bogroot Growths level 2 boss route with live command log](assets/gwa3_bogrootlvl2boss_demo.gif)
 
 ![GWA3 Control Panel monitoring five sanitized character lanes with live status, telemetry, and log panels](assets/gwa3_control_panel_demo.png)
 
