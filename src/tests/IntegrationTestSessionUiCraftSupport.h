@@ -1,0 +1,5 @@
+#include "IntegrationTestSessionUiCraftFrameSupport.h"
+#include "IntegrationTestSessionUiCraftRowSupport.h"
+#include "IntegrationTestSessionUiCraftActionSupport.h"
+#include "IntegrationTestSessionUiCraftClickImpl.h"
+#include "IntegrationTestSessionUiCraftNpcSupport.h"

@@ -33,7 +33,7 @@ GWA3_TEST(dungeon_interactions_candidate_dialog_interacts_npc_and_sends_dialog, 
     GWA3_ASSERT(result.interacted);
     GWA3_ASSERT(result.dialog_sent);
     GWA3_ASSERT_EQ(result.interact_attempts, 1);
-    GWA3_ASSERT_EQ(GWA3::TestStubs::AgentMgr::LastInteractedNpcId(), 0u);
+    GWA3_ASSERT_EQ(GWA3::TestStubs::AgentMgr::LastInteractedNpcId(), 42u);
     GWA3_ASSERT_EQ(GWA3::TestStubs::QuestMgr::DialogCount(), static_cast<std::size_t>(1));
     GWA3_ASSERT_EQ(GWA3::TestStubs::QuestMgr::DialogAt(0), 0x84u);
 })

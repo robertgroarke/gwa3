@@ -10,6 +10,7 @@
 #include <gwa3/game/MapIds.h>
 #include <gwa3/game/QuestIds.h>
 
+#include <cstddef>
 #include <cstdint>
 
 namespace GWA3::Bot::Froggy {
@@ -21,8 +22,12 @@ namespace GWA3::Bot::Froggy {
     inline constexpr int BOGROOT_DUNGEON_MAP_COUNT = static_cast<int>(
         sizeof(BOGROOT_DUNGEON_MAPS) / sizeof(BOGROOT_DUNGEON_MAPS[0]));
     inline constexpr float AGGRO_BOGROOT_SIDESTEP_RANDOM_RADIUS = 500.0f;
-    inline constexpr uint32_t AGGRO_BOGROOT_FIGHT_BUDGET_MS = 4000u;
+    inline constexpr uint32_t AGGRO_BOGROOT_FIGHT_BUDGET_MS = 12000u;
     inline constexpr float AGGRO_BOGROOT_LOOT_RADIUS = 3000.0f;
+    inline constexpr float AGGRO_SPIRIT_CASTER_MIN_ENEMY_GATE_RANGE = 1200.0f;
+    inline constexpr float AGGRO_SPIRIT_CASTER_ENEMY_GATE_RANGE = 1240.0f;
+    inline constexpr float AGGRO_SPIRIT_CASTER_CROWD_SCAN_RANGE = 1800.0f;
+    inline constexpr uint32_t AGGRO_SPIRIT_CASTER_CROWD_COUNT_GATE = 4u;
 
     inline constexpr uint32_t BLESSING_TITLE_ID = 0x27u;
     inline constexpr uint32_t BLESSING_ACCEPT_DIALOG_ID = 0x84u;
@@ -41,10 +46,15 @@ namespace GWA3::Bot::Froggy {
     inline constexpr float BOSS_CHEST_LOOT_RADIUS = 5000.0f;
     inline constexpr uint32_t BOSS_CHEST_FIRST_LOOT_DELAY_MS = 2000u;
     inline constexpr uint32_t BOSS_CHEST_RETRY_LOOT_DELAY_MS = 1000u;
+    inline constexpr float BOSS_FINAL_CLEAR_RANGE = 2200.0f;
+    inline constexpr int BOSS_FINAL_CLEAR_ATTEMPTS = 2;
+    inline constexpr uint32_t BOSS_FINAL_CLEAR_DELAY_MS = 500u;
     inline constexpr uint32_t BOSS_REWARD_SETTLE_TIMEOUT_MS = 1000u;
     inline constexpr float BOSS_REWARD_SETTLE_DISTANCE = 15.0f;
     inline constexpr float BOSS_REWARD_NPC_SEARCH_RADIUS = 6000.0f;
     inline constexpr float BOSS_REWARD_LOCAL_NPC_SEARCH_RADIUS = 3500.0f;
+    inline constexpr int BOSS_REWARD_RESOLVE_ATTEMPTS = 6;
+    inline constexpr uint32_t BOSS_REWARD_RESOLVE_RETRY_DELAY_MS = 1500u;
     inline constexpr float BOSS_REWARD_NPC_MOVE_THRESHOLD = 120.0f;
     inline constexpr uint32_t BOSS_REWARD_INTERACT_TARGET_WAIT_MS = 500u;
     inline constexpr uint32_t BOSS_REWARD_INTERACT_PASS_WAIT_MS = 1500u;
@@ -58,11 +68,12 @@ namespace GWA3::Bot::Froggy {
     inline constexpr int BOSS_REWARD_FALLBACK_SEND_ATTEMPTS = 1;
     inline constexpr uint32_t BOSS_REWARD_FALLBACK_SEND_DELAY_MS = 1000u;
     inline constexpr uint32_t BOSS_REWARD_FALLBACK_REFRESH_DELAY_MS = 500u;
-    inline constexpr uint32_t BOSS_POST_REWARD_LONG_TOTAL_WAIT_MS = 210000u;
+    inline constexpr uint32_t BOSS_POST_REWARD_LONG_TOTAL_WAIT_MS = 400000u;
     inline constexpr uint32_t BOSS_POST_REWARD_SHORT_TOTAL_WAIT_MS = 45000u;
     inline constexpr uint32_t BOSS_POST_REWARD_LONG_BOGROOT_WAIT_MS = 180000u;
     inline constexpr uint32_t BOSS_POST_REWARD_SHORT_BOGROOT_WAIT_MS = 30000u;
     inline constexpr float DEFAULT_LOOT_PICKUP_RADIUS = 1200.0f;
+    inline constexpr uint32_t GENERAL_LOOT_MIN_FREE_SLOTS = 5u;
     inline constexpr float DEFAULT_CHEST_OPEN_RADIUS = 1500.0f;
     inline constexpr float CHEST_BUNDLE_MIN_SIGNPOST_RADIUS = 1500.0f;
     inline constexpr float CHEST_BUNDLE_MIN_LOOT_RADIUS = 5000.0f;
@@ -130,7 +141,7 @@ namespace GWA3::Bot::Froggy {
     inline constexpr uint32_t TEKKS_ENTRY_VERIFY_REFRESH_INTERVAL_MS = 500u;
     inline constexpr uint32_t TEKKS_ENTRY_VERIFY_POLL_MS = 100u;
     inline constexpr uint32_t TEKKS_QUEST_REFRESH_DELAY_MS = 250u;
-    inline constexpr int TEKKS_DIALOG_RESET_FAILURE_THRESHOLD = 5;
+    inline constexpr int TEKKS_DIALOG_RESET_FAILURE_THRESHOLD = 2;
     inline constexpr uint32_t TEKKS_DIALOG_RESET_SETTLE_MS = 1000u;
     inline constexpr float TELEMETRY_NEAREST_ENEMY_RANGE = 5000.0f;
     inline constexpr float TELEMETRY_NEARBY_ENEMY_RANGE = 1800.0f;
@@ -266,10 +277,25 @@ namespace GWA3::Bot::Froggy {
         bool maintenance_deferred = false;
     };
 
+    struct MonitoringStatsSnapshot {
+        bool title_baseline_ready = false;
+        uint32_t run_count = 0;
+        uint32_t fail_count = 0;
+        uint32_t current_wipe_count = 0;
+        uint32_t route_wipe_count = 0;
+        uint32_t monitoring_wipes = 0;
+        uint32_t rare_skins = 0;
+        uint32_t gold_items = 0;
+        uint32_t dropped_lockpicks = 0;
+        uint32_t chests_opened = 0;
+        uint32_t black_dyes = 0;
+        uint32_t tomes = 0;
+    };
+
     inline constexpr PostSparkflyRunDecision ResolvePostSparkflyRunDecision(bool maintenanceNeeded) {
         return {
-            BotState::InDungeon,
-            maintenanceNeeded,
+            maintenanceNeeded ? BotState::Merchant : BotState::InDungeon,
+            false,
         };
     }
 
@@ -291,6 +317,9 @@ namespace GWA3::Bot::Froggy {
     bool ExecuteBuiltinCombatStep(uint32_t targetId, bool quickStep = false);
 
     // Execute Froggy's real aggro-move path toward a waypoint.
+    bool IsSpiritCasterAggroSkill(uint32_t skillId);
+    bool IsSpiritCasterAggroSkillbar(const uint32_t* skillIds, std::size_t count);
+    float ResolveAggroMoveEnemyGateRange(const uint32_t* skillIds, std::size_t count, float fightRange);
     bool DebugAggroMoveTo(float x, float y, float fightRange = 1350.0f);
     bool DebugClearAggroInPlace(float fightRange = 1350.0f);
 
@@ -301,5 +330,6 @@ namespace GWA3::Bot::Froggy {
     // Run/read the full Bogroot loop.
     bool RunDungeonLoopFromCurrentMap();
     void ResetDungeonLoopTelemetry();
+    MonitoringStatsSnapshot GetMonitoringStatsSnapshot();
 
 } // namespace GWA3::Bot::Froggy

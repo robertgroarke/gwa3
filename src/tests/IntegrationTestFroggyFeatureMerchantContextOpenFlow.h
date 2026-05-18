@@ -1,0 +1,3 @@
+#include "IntegrationTestFroggyFeatureMerchantCandidateResolver.h"
+#include "IntegrationTestFroggyFeatureMerchantContextProbe.h"
+#include "IntegrationTestFroggyFeatureMerchantSessionHarnessOpen.h"

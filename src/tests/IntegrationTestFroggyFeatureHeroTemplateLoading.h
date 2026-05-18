@@ -1,0 +1,5 @@
+#include "IntegrationTestFroggyFeatureHeroTemplateTypes.h"
+#include "IntegrationTestFroggyFeatureHeroTemplateDecode.h"
+#include "IntegrationTestFroggyFeatureHeroTemplatePath.h"
+#include "IntegrationTestFroggyFeatureHeroTemplateLineParse.h"
+#include "IntegrationTestFroggyFeatureHeroTemplateLoadEntry.h"

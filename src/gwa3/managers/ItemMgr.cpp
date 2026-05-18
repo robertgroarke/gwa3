@@ -56,6 +56,10 @@ void SalvageMaterials() {
     CtoS::SendPacket(1, Packets::SALVAGE_MATERIALS);
 }
 
+void SalvageUpgrade(uint32_t modIndex) {
+    CtoS::SendPacket(2, Packets::SALVAGE_UPGRADE, modIndex);
+}
+
 void SalvageSessionDone() {
     CtoS::SendPacket(1, Packets::SALVAGE_SESSION_DONE);
 }
@@ -107,6 +111,20 @@ static bool GetGlobalItemArray(uintptr_t& itemsBase, uint32_t& arraySize);
 static uintptr_t s_lastInventoryRootLog = 0;
 static uintptr_t s_lastInventoryStructLog = 0;
 static uintptr_t s_lastInventoryProbeDumpP1 = 0;
+static uintptr_t s_lastInventoryProbeWarnP1 = 0;
+static DWORD s_lastInventoryProbeWarnTick = 0;
+static constexpr DWORD kInventoryProbeWarnThrottleMs = 5000;
+
+static bool ShouldLogInventoryProbeWarning(uintptr_t p1) {
+    const DWORD now = GetTickCount();
+    if (p1 == s_lastInventoryProbeWarnP1 &&
+        (now - s_lastInventoryProbeWarnTick) < kInventoryProbeWarnThrottleMs) {
+        return false;
+    }
+    s_lastInventoryProbeWarnP1 = p1;
+    s_lastInventoryProbeWarnTick = now;
+    return true;
+}
 
 static void DumpInventoryCandidate(uintptr_t p1, uintptr_t rootOffset, uintptr_t p2, uintptr_t invStruct) {
     __try {
@@ -199,14 +217,16 @@ static bool ReadInventoryStruct(uintptr_t& p0, uintptr_t& p1, uintptr_t& p2, uin
                 }
                 return true;
             }
-            Log::Warn("ItemMgr: Inventory root probe failed p1=0x%08X primaryRoot=0x%08X primaryInv=0x%08X primaryHits=%u siblingRoot=0x%08X siblingInv=0x%08X siblingHits=%u",
-                      static_cast<unsigned>(p1),
-                      static_cast<unsigned>(primaryRoot),
-                      static_cast<unsigned>(primaryInv),
-                      primaryHits,
-                      static_cast<unsigned>(siblingRoot),
-                      static_cast<unsigned>(siblingInv),
-                      siblingHits);
+            if (ShouldLogInventoryProbeWarning(p1)) {
+                Log::Warn("ItemMgr: Inventory root probe failed p1=0x%08X primaryRoot=0x%08X primaryInv=0x%08X primaryHits=%u siblingRoot=0x%08X siblingInv=0x%08X siblingHits=%u",
+                          static_cast<unsigned>(p1),
+                          static_cast<unsigned>(primaryRoot),
+                          static_cast<unsigned>(primaryInv),
+                          primaryHits,
+                          static_cast<unsigned>(siblingRoot),
+                          static_cast<unsigned>(siblingInv),
+                          siblingHits);
+            }
             if (p1 != s_lastInventoryProbeDumpP1) {
                 s_lastInventoryProbeDumpP1 = p1;
                 if (primaryInv > 0x10000) DumpInventoryCandidate(p1, 0x40, primaryRoot, primaryInv);

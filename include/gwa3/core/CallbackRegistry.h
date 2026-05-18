@@ -1,6 +1,6 @@
 #pragma once
 
-// Callback Registry + Module Ownership
+// : Callback Registry + Module Ownership
 //
 // Centralized callback registration system matching GWCA's architecture:
 // - Three callback families: UIMessage, FrameUIMessage, CreateUIComponent

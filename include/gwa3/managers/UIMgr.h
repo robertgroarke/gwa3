@@ -64,6 +64,7 @@ namespace GWA3::UIMgr {
 
     // Send UI message (must be on game thread)
     void SendUIMessage(uint32_t msgId, void* wParam, void* lParam);
+    bool SendFrameMessage(uintptr_t frame, uint32_t msgId, void* wParam, void* lParam);
 
     // Child frame navigation
     uint32_t GetChildFrameCount(uintptr_t frame);
@@ -73,6 +74,7 @@ namespace GWA3::UIMgr {
     uintptr_t GetFrameById(uint32_t frameId);
     uintptr_t GetFrameByContextAndChildOffset(uintptr_t context, uint32_t childOffsetId, uintptr_t excludeFrame = 0);
     uintptr_t GetVisibleFrameByChildOffset(uint32_t childOffsetId, uintptr_t excludeFrame = 0, uintptr_t excludeContext = 0);
+    uintptr_t GetFrameByCallback(uintptr_t callbackFn, bool visibleOnly = true);
 
     // Frame search
     uintptr_t GetVisibleFrameByChildOffsetAndChildCount(
@@ -125,7 +127,7 @@ namespace GWA3::UIMgr {
     // Low-level UIMessage dispatch
     void SendUIMessageAsm(uint32_t msgId, void* wParam, void* lParam);
 
-    // Button click (GWA3-021)
+    // Button click ()
     // Default path uses MouseUp(0x7); trade experiments can opt into MouseClick(0x8).
     bool ButtonClickImmediate(uintptr_t frame);
     bool ButtonClickImmediateFull(uintptr_t frame);

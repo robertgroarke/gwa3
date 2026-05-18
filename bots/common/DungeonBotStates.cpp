@@ -129,7 +129,9 @@ BotState HandleTownSetup(BotConfig& cfg, const TownSetupOptions& options) {
 
         const uint32_t postMaintenanceFreeSlots = MaintenanceMgr::CountFreeSlots();
         const bool stillNeedsMaintenance = MaintenanceMgr::NeedsMaintenance(options.maintenance);
-        if (postMaintenanceFreeSlots < options.critical_free_slots || stillNeedsMaintenance) {
+        const bool missingCharacterConsets =
+            MaintenanceMgr::NeedsCharacterConsetRestock(options.maintenance);
+        if (postMaintenanceFreeSlots < options.critical_free_slots || missingCharacterConsets) {
             LogBot("%s: TownSetup maintenance did not clear inventory enough (freeSlots=%u preferred=%u critical=%u needsMaintenance=%s); stopping before explorable entry",
                    prefix,
                    postMaintenanceFreeSlots,
@@ -137,6 +139,13 @@ BotState HandleTownSetup(BotConfig& cfg, const TownSetupOptions& options) {
                    options.critical_free_slots,
                    stillNeedsMaintenance ? "yes" : "no");
             return BotState::Stopping;
+        }
+        if (stillNeedsMaintenance) {
+            LogBot("%s: TownSetup continuing after exhausted preferred upkeep (freeSlots=%u preferred=%u critical=%u)",
+                   prefix,
+                   postMaintenanceFreeSlots,
+                   options.maintenance.minFreeSlots,
+                   options.critical_free_slots);
         }
         if (postMaintenanceFreeSlots < options.maintenance.minFreeSlots) {
             LogBot("%s: TownSetup continuing after exhausted maintenance with %u free slots (preferred=%u)",
@@ -156,7 +165,10 @@ BotState HandleTownSetup(BotConfig& cfg, const TownSetupOptions& options) {
     }
 
     if (options.use_consumables) {
-        options.use_consumables(cfg);
+        if (!options.use_consumables(cfg)) {
+            LogBot("%s: consumable setup incomplete; running maintenance before explorable entry", prefix);
+            return BotState::Maintenance;
+        }
     }
 
     return BotState::Traveling;
@@ -201,7 +213,10 @@ BotState HandleDungeonProgression(BotConfig& cfg, const DungeonProgressionOption
                options.dungeon_name != nullptr ? options.dungeon_name : "dungeon");
 
         if (options.use_consumables) {
-            options.use_consumables(cfg);
+            if (!options.use_consumables(cfg)) {
+                LogBot("%s: consumable setup incomplete in entry map; returning to maintenance", prefix);
+                return BotState::Merchant;
+            }
         }
 
         if (options.move_to_entry_npc && !options.move_to_entry_npc()) {
@@ -256,11 +271,10 @@ BotState HandleDungeonProgression(BotConfig& cfg, const DungeonProgressionOption
         }
 
         if (loopResult.completed) {
-            if (options.mark_run_completed) {
-                options.mark_run_completed(runNumber, loopResult.final_map_id);
-            }
-
             if (loopResult.final_map_id == options.entry_map_id) {
+                if (options.mark_run_completed) {
+                    options.mark_run_completed(runNumber, loopResult.final_map_id);
+                }
                 const bool maintenanceNeeded = options.needs_maintenance && options.needs_maintenance();
                 PostEntryMapRunDecision decision = {};
                 if (options.resolve_post_entry_map_run_decision) {
@@ -269,12 +283,34 @@ BotState HandleDungeonProgression(BotConfig& cfg, const DungeonProgressionOption
                 if (decision.maintenance_deferred) {
                     LogBot("Maintenance needed after run; deferring town maintenance and preserving entry-map loop");
                 }
-                LogBot("Run returned to entry map; re-entering dungeon without town reset");
+                if (decision.next_state == BotState::InDungeon) {
+                    LogBot("Run returned to entry map; re-entering dungeon without town reset");
+                } else if (decision.next_state == BotState::Merchant ||
+                           decision.next_state == BotState::Maintenance) {
+                    LogBot("Run returned to entry map; maintenance required, entering town maintenance lane");
+                } else {
+                    LogBot("Run returned to entry map; next state selected");
+                }
                 return decision.next_state;
             }
 
             if (loopResult.final_map_id == ResolveOutpostMapId(cfg, options.default_outpost_map_id)) {
+                if (options.mark_run_completed) {
+                    options.mark_run_completed(runNumber, loopResult.final_map_id);
+                }
                 return BotState::InTown;
+            }
+
+            if (options.stop_on_completed_dungeon_map &&
+                IsMapInList(loopResult.final_map_id, options.dungeon_map_ids, options.dungeon_map_count)) {
+                LogBot("%s reward complete inside dungeon map %u; awaiting return before run completion",
+                       options.dungeon_name != nullptr ? options.dungeon_name : "Dungeon",
+                       loopResult.final_map_id);
+                return BotState::AwaitingReturn;
+            }
+
+            if (options.mark_run_completed) {
+                options.mark_run_completed(runNumber, loopResult.final_map_id);
             }
         }
 

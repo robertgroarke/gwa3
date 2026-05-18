@@ -1,10 +1,15 @@
 #include <gwa3/advanced/OutpostSetup.h>
 
+#include <gwa3/core/Offsets.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/game/Agent.h>
+#include <gwa3/game/Party.h>
+#include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/PartyMgr.h>
 #include <gwa3/managers/PlayerMgr.h>
 #include <gwa3/managers/SkillMgr.h>
+#include <gwa3/packets/CtoS.h>
 
 #include <Windows.h>
 
@@ -20,6 +25,13 @@ namespace {
 
 constexpr const char* kBase64Chars =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+constexpr uint32_t kMaxProfessionId = 10u;
+
+struct SkillTemplateDecodeResult {
+    uint32_t primary_profession = 0u;
+    uint32_t secondary_profession = 0u;
+    uint32_t skills[8] = {};
+};
 
 void WaitMs(DWORD ms) {
     Sleep(ms);
@@ -181,10 +193,331 @@ bool WaitForHeroesCleared(DWORD timeout_ms, DWORD poll_interval_ms) {
     return PartyMgr::CountPartyHeroes() == 0u;
 }
 
-} // namespace
+bool CurrentPartyHeroIdsMatch(const HeroTemplate* templates, std::size_t template_count) {
+    if (!templates || template_count == 0u || template_count > kMaxHeroTemplates) {
+        return false;
+    }
 
-bool DecodeSkillTemplate(const char* code, uint32_t skill_ids[8]) {
-    if (!code || !*code || !skill_ids) {
+    uint32_t current_hero_ids[16] = {};
+    const std::size_t current_count =
+        PartyMgr::GetPartyHeroIds(current_hero_ids, _countof(current_hero_ids));
+    if (current_count != template_count) {
+        return false;
+    }
+
+    for (std::size_t i = 0; i < template_count; ++i) {
+        if (current_hero_ids[i] != templates[i].hero_id) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool CurrentPartyHeroIdsMatch(const uint32_t* hero_ids, std::size_t hero_count) {
+    if (!hero_ids || hero_count == 0u || hero_count > kMaxHeroTemplates) {
+        return false;
+    }
+
+    uint32_t current_hero_ids[16] = {};
+    const std::size_t current_count =
+        PartyMgr::GetPartyHeroIds(current_hero_ids, _countof(current_hero_ids));
+    if (current_count != hero_count) {
+        return false;
+    }
+
+    for (std::size_t i = 0; i < hero_count; ++i) {
+        if (current_hero_ids[i] != hero_ids[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+uint32_t ResolveHeroAgentIdForIndex(uint32_t hero_index, uint32_t fallback_id) {
+    if (hero_index == 0u) {
+        return fallback_id;
+    }
+
+    PartyInfo* party = PartyMgr::ResolvePlayerParty();
+    if (!party || !party->heroes.buffer || hero_index > party->heroes.size || party->heroes.size > 16u) {
+        return fallback_id;
+    }
+
+    __try {
+        const uint32_t agent_id = party->heroes.buffer[hero_index - 1u].agent_id;
+        return agent_id != 0u ? agent_id : fallback_id;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return fallback_id;
+    }
+}
+
+bool ReadHeroProfessionsByAgentId(uint32_t agent_id, uint32_t& primary, uint32_t& secondary) {
+    primary = 0u;
+    secondary = 0u;
+    if (agent_id == 0u) {
+        return false;
+    }
+
+    const uintptr_t world_context = Offsets::ResolveWorldContext();
+    if (world_context > 0x10000) {
+        __try {
+            const uintptr_t profession_table = *reinterpret_cast<uintptr_t*>(world_context + 0x6BC);
+            if (profession_table > 0x10000) {
+                const uint32_t party_heroes = PartyMgr::CountPartyHeroes();
+                const uint32_t scan_count = party_heroes < 15u ? party_heroes + 1u : 16u;
+                for (uint32_t i = 0; i < scan_count; ++i) {
+                    const uintptr_t entry = profession_table + static_cast<uintptr_t>(i) * 0x14u;
+                    const uint32_t entry_agent_id = *reinterpret_cast<uint32_t*>(entry + 0x0u);
+                    if (entry_agent_id != agent_id) {
+                        continue;
+                    }
+                    const uint32_t entry_primary = *reinterpret_cast<uint32_t*>(entry + 0x4u);
+                    const uint32_t entry_secondary = *reinterpret_cast<uint32_t*>(entry + 0x8u);
+                    if (entry_primary == 0u ||
+                        entry_primary > kMaxProfessionId ||
+                        entry_secondary > kMaxProfessionId) {
+                        return false;
+                    }
+                    primary = entry_primary;
+                    secondary = entry_secondary;
+                    return true;
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            primary = 0u;
+            secondary = 0u;
+        }
+    }
+
+    if (Agent* agent = AgentMgr::GetAgentByID(agent_id)) {
+        __try {
+            if (agent->type == 0xDBu) {
+                const auto* living = reinterpret_cast<const AgentLiving*>(agent);
+                if (living->primary != 0u &&
+                    living->primary <= kMaxProfessionId &&
+                    living->secondary <= kMaxProfessionId) {
+                    primary = living->primary;
+                    secondary = living->secondary;
+                    return true;
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            primary = 0u;
+            secondary = 0u;
+        }
+    }
+
+    return false;
+}
+
+bool ApplyTemplateSecondaryProfession(const HeroTemplate& hero,
+                                      uint32_t hero_index,
+                                      const Options& options) {
+    if (hero.secondary_profession == 0u ||
+        hero.secondary_profession > kMaxProfessionId ||
+        hero.secondary_profession == hero.primary_profession) {
+        return true;
+    }
+
+    const uint32_t agent_id = ResolveHeroAgentIdForIndex(hero_index, 0u);
+    if (agent_id == 0u) {
+        GWA3::Log::Warn("Outpost setup cannot change secondary for hero slot %u hero=%u: agent unresolved",
+                        hero_index,
+                        hero.hero_id);
+        return false;
+    }
+
+    uint32_t current_primary = 0u;
+    uint32_t current_secondary = 0u;
+    const bool can_read_professions =
+        ReadHeroProfessionsByAgentId(agent_id, current_primary, current_secondary);
+    const bool secondary_already_matches =
+        can_read_professions && current_secondary == hero.secondary_profession;
+    if (secondary_already_matches) {
+        GWA3::Log::Info("Outpost setup hero slot %u already secondary=%u hero=%u agent=%u; refreshing before skillbar load",
+                        hero_index,
+                        hero.secondary_profession,
+                        hero.hero_id,
+                        agent_id);
+    }
+    if (can_read_professions &&
+        hero.primary_profession != 0u &&
+        current_primary != 0u &&
+        current_primary != hero.primary_profession) {
+        GWA3::Log::Warn("Outpost setup hero slot %u primary mismatch hero=%u current=%u template=%u",
+                        hero_index,
+                        hero.hero_id,
+                        current_primary,
+                        hero.primary_profession);
+    }
+
+    GWA3::Log::Info("Outpost setup changing hero slot %u hero=%u agent=%u secondary %u -> %u",
+                    hero_index,
+                    hero.hero_id,
+                    agent_id,
+                    can_read_professions ? current_secondary : 0u,
+                    hero.secondary_profession);
+
+    const DWORD start = GetTickCount();
+    DWORD last_send = 0u;
+    bool read_any = can_read_professions;
+    bool sent_refresh = false;
+    while ((GetTickCount() - start) < options.profession_change_timeout_ms) {
+        const DWORD now = GetTickCount();
+        if (last_send == 0u || (now - last_send) >= options.profession_change_retry_interval_ms) {
+            CtoS::ChangeSecondProfession(agent_id, hero.secondary_profession);
+            last_send = now;
+            sent_refresh = true;
+        }
+
+        uint32_t primary = 0u;
+        uint32_t secondary = 0u;
+        if (ReadHeroProfessionsByAgentId(agent_id, primary, secondary)) {
+            read_any = true;
+            if (secondary == hero.secondary_profession) {
+                // Even when memory already reports the desired secondary, let the
+                // refresh packet drain before loading a bar that depends on it.
+                if (sent_refresh && (GetTickCount() - last_send) < 300u) {
+                    WaitMs(100u);
+                    continue;
+                }
+                GWA3::Log::Info("Outpost setup hero slot %u secondary ready hero=%u agent=%u secondary=%u",
+                                hero_index,
+                                hero.hero_id,
+                                agent_id,
+                                secondary);
+                return true;
+            }
+        }
+        WaitMs(100u);
+    }
+
+    if (!read_any) {
+        GWA3::Log::Warn("Outpost setup could not verify hero secondary for slot %u hero=%u agent=%u",
+                        hero_index,
+                        hero.hero_id,
+                        agent_id);
+        return false;
+    }
+
+    uint32_t final_primary = 0u;
+    uint32_t final_secondary = 0u;
+    (void)ReadHeroProfessionsByAgentId(agent_id, final_primary, final_secondary);
+    GWA3::Log::Warn("Outpost setup hero slot %u secondary change timed out hero=%u agent=%u expected=%u current=%u",
+                    hero_index,
+                    hero.hero_id,
+                    agent_id,
+                    hero.secondary_profession,
+                    final_secondary);
+    return false;
+}
+
+bool WaitForHeroSkillbarMatches(const HeroTemplate& hero,
+                                uint32_t hero_index,
+                                const Options& options) {
+    if (options.skillbar_verify_timeout_ms == 0u) {
+        return true;
+    }
+
+    const uint32_t agent_id = ResolveHeroAgentIdForIndex(hero_index, 0u);
+    if (agent_id == 0u) {
+        GWA3::Log::Warn("Outpost setup could not verify hero slot %u skillbar hero=%u: agent unresolved",
+                        hero_index,
+                        hero.hero_id);
+        return true;
+    }
+
+    const DWORD start = GetTickCount();
+    bool saw_bar = false;
+    uint32_t final_mismatch_count = 0u;
+    uint32_t final_empty_count = 0u;
+    uint32_t final_first_slot = 0u;
+    uint32_t final_expected = 0u;
+    uint32_t final_actual = 0u;
+    uint32_t final_disabled = 0u;
+
+    while ((GetTickCount() - start) < options.skillbar_verify_timeout_ms) {
+        Skillbar* bar = SkillMgr::GetSkillbarByAgentId(agent_id);
+        if (!bar) {
+            WaitMs(100u);
+            continue;
+        }
+
+        saw_bar = true;
+        uint32_t mismatch_count = 0u;
+        uint32_t empty_count = 0u;
+        uint32_t first_slot = 0u;
+        uint32_t first_expected = 0u;
+        uint32_t first_actual = 0u;
+        uint32_t disabled = 0u;
+
+        __try {
+            disabled = bar->disabled;
+            for (uint32_t slot = 0u; slot < 8u; ++slot) {
+                const uint32_t expected = hero.skills[slot];
+                const uint32_t actual = bar->skills[slot].skill_id;
+                if (expected == actual) {
+                    continue;
+                }
+                ++mismatch_count;
+                if (expected != 0u && actual == 0u) {
+                    ++empty_count;
+                }
+                if (first_slot == 0u) {
+                    first_slot = slot + 1u;
+                    first_expected = expected;
+                    first_actual = actual;
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            WaitMs(100u);
+            continue;
+        }
+
+        if (mismatch_count == 0u) {
+            GWA3::Log::Info("Outpost setup hero slot %u skillbar ready hero=%u agent=%u disabled=0x%08X",
+                            hero_index,
+                            hero.hero_id,
+                            agent_id,
+                            disabled);
+            return true;
+        }
+
+        final_mismatch_count = mismatch_count;
+        final_empty_count = empty_count;
+        final_first_slot = first_slot;
+        final_expected = first_expected;
+        final_actual = first_actual;
+        final_disabled = disabled;
+        WaitMs(100u);
+    }
+
+    if (!saw_bar) {
+        GWA3::Log::Warn("Outpost setup could not verify hero slot %u skillbar hero=%u agent=%u: bar not found",
+                        hero_index,
+                        hero.hero_id,
+                        agent_id);
+        return true;
+    }
+
+    GWA3::Log::Warn("Outpost setup hero slot %u skillbar mismatch hero=%u agent=%u mismatches=%u empty=%u first_slot=%u expected=%u actual=%u disabled=0x%08X",
+                    hero_index,
+                    hero.hero_id,
+                    agent_id,
+                    final_mismatch_count,
+                    final_empty_count,
+                    final_first_slot,
+                    final_expected,
+                    final_actual,
+                    final_disabled);
+    return false;
+}
+
+bool DecodeSkillTemplateDetails(const char* code, SkillTemplateDecodeResult& out) {
+    out = {};
+    if (!code || !*code) {
         return false;
     }
 
@@ -217,8 +550,8 @@ bool DecodeSkillTemplate(const char* code, uint32_t skill_ids[8]) {
     }
 
     const uint32_t profession_bits = read_bits(2) * 2u + 4u;
-    read_bits(static_cast<int>(profession_bits));
-    read_bits(static_cast<int>(profession_bits));
+    out.primary_profession = read_bits(static_cast<int>(profession_bits));
+    out.secondary_profession = read_bits(static_cast<int>(profession_bits));
 
     const uint32_t attribute_count = read_bits(4);
     const uint32_t attribute_bits = read_bits(4) + 4u;
@@ -229,10 +562,31 @@ bool DecodeSkillTemplate(const char* code, uint32_t skill_ids[8]) {
 
     const uint32_t skill_bits = read_bits(4) + 8u;
     for (int i = 0; i < 8; ++i) {
-        skill_ids[i] = read_bits(static_cast<int>(skill_bits));
+        out.skills[i] = read_bits(static_cast<int>(skill_bits));
     }
 
     return true;
+}
+
+} // namespace
+
+bool DecodeSkillTemplate(const char* code, uint32_t skill_ids[8]) {
+    if (!skill_ids) {
+        return false;
+    }
+
+    SkillTemplateDecodeResult decoded = {};
+    if (!DecodeSkillTemplateDetails(code, decoded)) {
+        return false;
+    }
+    for (int i = 0; i < 8; ++i) {
+        skill_ids[i] = decoded.skills[i];
+    }
+    return true;
+}
+
+bool ReadHeroProfessions(uint32_t agent_id, uint32_t& primary, uint32_t& secondary) {
+    return ReadHeroProfessionsByAgentId(agent_id, primary, secondary);
 }
 
 bool ResolvePreferredHeroConfigFromJson(const char* json_text,
@@ -325,7 +679,7 @@ bool ResolvePreferredHeroConfigFile(char* out_filename,
     }
 
     char config_path[MAX_PATH] = {};
-    BuildRepoRelativePath("GWA Censured\\AccountConfigs.json", config_path, sizeof(config_path));
+    BuildRepoRelativePath("config\\AccountConfigs.json", config_path, sizeof(config_path));
 
     std::string json;
     if (!ReadTextFile(config_path, json)) {
@@ -348,7 +702,6 @@ std::size_t LoadHeroTemplatesFromFile(const char* filename,
     FILE* file = nullptr;
     constexpr const char* kHeroConfigDirs[] = {
         "config\\hero_configs",
-        "GWA Censured\\hero_configs",
     };
 
     for (const char* dir : kHeroConfigDirs) {
@@ -414,8 +767,14 @@ std::size_t LoadHeroTemplatesFromFile(const char* filename,
         HeroTemplate& hero = out_templates[count];
         hero = {};
         hero.hero_id = hero_id;
-        if (!DecodeSkillTemplate(template_code, hero.skills)) {
+        SkillTemplateDecodeResult decoded = {};
+        if (!DecodeSkillTemplateDetails(template_code, decoded)) {
             continue;
+        }
+        hero.primary_profession = decoded.primary_profession;
+        hero.secondary_profession = decoded.secondary_profession;
+        for (int skill_index = 0; skill_index < 8; ++skill_index) {
+            hero.skills[skill_index] = decoded.skills[skill_index];
         }
 
         ++count;
@@ -442,7 +801,29 @@ bool ApplyOutpostSetup(Config& cfg, const Options& options) {
         fallback_hero_ids[i] = cfg.hero_ids[i];
     }
 
-    if (PartyMgr::CountPartyHeroes() > 0u) {
+    std::array<HeroTemplate, kMaxHeroTemplates> templates = {};
+    const std::size_t template_count = LoadHeroTemplatesFromFile(cfg.hero_config_file.c_str(),
+                                                                 templates.data(),
+                                                                 templates.size());
+
+    uint32_t active_hero_count = 0u;
+    bool reuse_existing_party = false;
+    if (template_count > 0u) {
+        reuse_existing_party = CurrentPartyHeroIdsMatch(templates.data(), template_count);
+    } else {
+        std::array<uint32_t, kMaxHeroTemplates> configured_hero_ids = {};
+        std::size_t configured_count = 0u;
+        for (uint32_t hero_id : fallback_hero_ids) {
+            if (hero_id == 0u) continue;
+            configured_hero_ids[configured_count++] = hero_id;
+        }
+        reuse_existing_party = CurrentPartyHeroIdsMatch(configured_hero_ids.data(), configured_count);
+    }
+
+    if (reuse_existing_party) {
+        GWA3::Log::Info("Outpost setup reusing existing matching hero party count=%u",
+                        PartyMgr::CountPartyHeroes());
+    } else if (PartyMgr::CountPartyHeroes() > 0u) {
         GWA3::Log::Info("Clearing %u existing heroes before outpost setup", PartyMgr::CountPartyHeroes());
         PartyMgr::KickAllHeroes();
         if (!WaitForHeroesCleared(options.clear_timeout_ms, options.clear_poll_interval_ms)) {
@@ -455,32 +836,41 @@ bool ApplyOutpostSetup(Config& cfg, const Options& options) {
         hero_id = 0u;
     }
 
-    std::array<HeroTemplate, kMaxHeroTemplates> templates = {};
-    const std::size_t template_count = LoadHeroTemplatesFromFile(cfg.hero_config_file.c_str(),
-                                                                 templates.data(),
-                                                                 templates.size());
-
-    uint32_t active_hero_count = 0u;
     if (template_count > 0u) {
         for (std::size_t i = 0; i < template_count; ++i) {
             cfg.hero_ids[i] = templates[i].hero_id;
-            PartyMgr::AddHero(templates[i].hero_id);
-            if (!WaitForHeroCount(static_cast<uint32_t>(i + 1u),
-                                  options.add_hero_timeout_ms,
-                                  options.clear_poll_interval_ms)) {
-                GWA3::Log::Info("Outpost setup failed: hero %u did not join slot %zu",
-                       templates[i].hero_id,
-                       i + 1u);
-                return false;
+            if (!reuse_existing_party) {
+                PartyMgr::AddHero(templates[i].hero_id);
+                if (!WaitForHeroCount(static_cast<uint32_t>(i + 1u),
+                                      options.add_hero_timeout_ms,
+                                      options.clear_poll_interval_ms)) {
+                    GWA3::Log::Info("Outpost setup failed: hero %u did not join slot %zu",
+                           templates[i].hero_id,
+                           i + 1u);
+                    return false;
+                }
+                WaitMs(options.add_hero_delay_ms);
             }
-            WaitMs(options.add_hero_delay_ms);
         }
 
         active_hero_count = static_cast<uint32_t>(template_count);
 
         for (uint32_t hero_index = 1u; hero_index <= active_hero_count; ++hero_index) {
+            if (!ApplyTemplateSecondaryProfession(templates[hero_index - 1u], hero_index, options)) {
+                GWA3::Log::Info("Outpost setup failed: hero slot %u secondary profession did not apply",
+                                hero_index);
+                return false;
+            }
+        }
+
+        for (uint32_t hero_index = 1u; hero_index <= active_hero_count; ++hero_index) {
             SkillMgr::LoadSkillbar(templates[hero_index - 1u].skills, hero_index);
             WaitMs(options.skillbar_delay_ms);
+            if (!WaitForHeroSkillbarMatches(templates[hero_index - 1u], hero_index, options)) {
+                GWA3::Log::Info("Outpost setup failed: hero slot %u skillbar did not match template",
+                                hero_index);
+                return false;
+            }
         }
     } else {
         GWA3::Log::Info("Outpost setup falling back to preconfigured hero ids");
@@ -490,15 +880,17 @@ bool ApplyOutpostSetup(Config& cfg, const Options& options) {
                 continue;
             }
             cfg.hero_ids[i] = hero_id;
-            PartyMgr::AddHero(hero_id);
-            if (!WaitForHeroCount(active_hero_count + 1u,
-                                  options.add_hero_timeout_ms,
-                                  options.clear_poll_interval_ms)) {
-                GWA3::Log::Info("Outpost setup failed: fallback hero %u did not join", hero_id);
-                return false;
+            if (!reuse_existing_party) {
+                PartyMgr::AddHero(hero_id);
+                if (!WaitForHeroCount(active_hero_count + 1u,
+                                      options.add_hero_timeout_ms,
+                                      options.clear_poll_interval_ms)) {
+                    GWA3::Log::Info("Outpost setup failed: fallback hero %u did not join", hero_id);
+                    return false;
+                }
+                WaitMs(options.add_hero_delay_ms);
             }
             ++active_hero_count;
-            WaitMs(options.add_hero_delay_ms);
         }
     }
 

@@ -6,7 +6,7 @@ team, skillbars), per-level spawn + key waypoints, final chest, and the
 quest-reward turn-in NPC.
 
 Source: AutoIt dungeon scripts in
-`Dungeons GWA Logic Censured NEW DEC06/`. The waypoint data is a curated
+the legacy dungeon route archive. The waypoint data is a curated
 subset — the scripts have dozens of fine-grained MoveTo points per level;
 we keep only structurally-meaningful spots (blessings, keys, doors, boss
 engagement, chest, portal). Between key_points, Gemma should use

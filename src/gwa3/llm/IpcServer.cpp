@@ -1,9 +1,14 @@
 #include <gwa3/llm/IpcServer.h>
+#include <gwa3/llm/Protocol.h>
 #include <gwa3/core/Log.h>
 
 #include <atomic>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <queue>
+#include <string>
+
+using json = nlohmann::json;
 
 namespace GWA3::LLM::IpcServer {
 
@@ -58,6 +63,13 @@ namespace GWA3::LLM::IpcServer {
         return true;
     }
 
+    static bool WriteMessagePayload(const char* payload, uint32_t length) {
+        if (!payload || length == 0) return false;
+        if (!PipeWriteAll(&length, 4)) return false;
+        if (!PipeWriteAll(payload, length)) return false;
+        return true;
+    }
+
     // Read exactly `count` bytes from the pipe. Returns false on failure/disconnect.
     static bool PipeReadAll(void* buf, DWORD count) {
         uint8_t* p = static_cast<uint8_t*>(buf);
@@ -91,6 +103,54 @@ namespace GWA3::LLM::IpcServer {
         buf[msgLen] = '\0';
         *outLength = msgLen;
         return buf;
+    }
+
+    static bool SendServerHello() {
+        json hello;
+        hello["type"] = "hello";
+        hello["role"] = "gwa3";
+        hello["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
+        hello["pipe_name"] = PIPE_NAME;
+
+        const std::string payload = hello.dump();
+        return WriteMessagePayload(payload.c_str(), static_cast<uint32_t>(payload.size()));
+    }
+
+    static bool ValidateClientHello(const char* payload, uint32_t length) {
+        if (!payload || length == 0) return false;
+
+        try {
+            json hello = json::parse(payload, payload + length);
+            const std::string type = hello.value("type", "");
+            const int version = hello.value("protocol_version", -1);
+            if (type != "hello") {
+                GWA3::Log::Warn("[LLM-IPC] Expected client hello, got type=%s", type.c_str());
+                return false;
+            }
+            if (version != static_cast<int>(GWA3::LLM::IPC_PROTOCOL_VERSION)) {
+                GWA3::Log::Warn("[LLM-IPC] Protocol mismatch: bridge=%d gwa3=%u",
+                                version,
+                                GWA3::LLM::IPC_PROTOCOL_VERSION);
+                return false;
+            }
+            return true;
+        } catch (const std::exception& e) {
+            GWA3::Log::Warn("[LLM-IPC] Invalid client hello: %s", e.what());
+            return false;
+        }
+    }
+
+    static bool ReceiveClientHello() {
+        uint32_t msgLen = 0;
+        char* msg = ReadMessage(&msgLen);
+        if (!msg) {
+            GWA3::Log::Warn("[LLM-IPC] Client disconnected before protocol hello");
+            return false;
+        }
+
+        const bool ok = ValidateClientHello(msg, msgLen);
+        delete[] msg;
+        return ok;
     }
 
     // IPC thread: creates pipe, waits for client, reads messages.
@@ -147,8 +207,16 @@ namespace GWA3::LLM::IpcServer {
             }
 
             CloseHandle(ov.hEvent);
+            if (!SendServerHello() || !ReceiveClientHello()) {
+                GWA3::Log::Warn("[LLM-IPC] Protocol handshake failed; closing client");
+                DisconnectNamedPipe(g_pipe);
+                CloseHandle(g_pipe);
+                g_pipe = INVALID_HANDLE_VALUE;
+                continue;
+            }
+
             g_clientConnected.store(true);
-            GWA3::Log::Info("[LLM-IPC] Client connected");
+            GWA3::Log::Info("[LLM-IPC] Client connected (protocol v%u)", GWA3::LLM::IPC_PROTOCOL_VERSION);
 
             // Read messages from the client until disconnect or shutdown
             while (g_running.load()) {
@@ -236,10 +304,7 @@ namespace GWA3::LLM::IpcServer {
             return false;
         }
 
-        // Length-prefix framing: [4-byte uint32 length][payload]
-        if (!PipeWriteAll(&length, 4)) return false;
-        if (!PipeWriteAll(json, length)) return false;
-        return true;
+        return WriteMessagePayload(json, length);
     }
 
     bool HasPending() {

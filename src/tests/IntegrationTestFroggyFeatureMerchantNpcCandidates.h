@@ -1,0 +1,4 @@
+#include "IntegrationTestFroggyFeatureMerchantNpcCandidateTypes.h"
+#include "IntegrationTestFroggyFeatureMerchantNpcCandidateRanking.h"
+#include "IntegrationTestFroggyFeatureMerchantNpcCandidateCollection.h"
+#include "IntegrationTestFroggyFeatureMerchantNpcCandidateDump.h"

@@ -12,6 +12,7 @@ using GetMapIdFn = uint32_t(*)();
 using WaitMsFn = void(*)(uint32_t ms);
 using SalvageRewardItemsFn = uint32_t(*)();
 using FindTransitionPortalFn = uint32_t(*)(float x, float y, float searchRadius);
+using ReturnToOutpostFn = void(*)();
 
 struct TransitionAnchor {
     float x = 0.0f;
@@ -90,6 +91,8 @@ struct PostRewardReturnOptions {
     bool reward_claimed = false;
     bool reward_dialog_latched = false;
     SalvageRewardItemsFn salvage_reward_items = nullptr;
+    ReturnToOutpostFn return_to_outpost = nullptr;
+    uint32_t explicit_return_delay_ms = 1000u;
     const char* log_prefix = nullptr;
     const char* label = nullptr;
 };
@@ -98,6 +101,7 @@ struct PostRewardReturnResult {
     bool used_long_wait = false;
     bool salvaged_reward_items = false;
     bool returned_expected_map = false;
+    bool explicit_return_attempted = false;
     bool fallback_attempted = false;
     bool fallback_recovered = false;
     bool skipped_fallback_ghost_state = false;

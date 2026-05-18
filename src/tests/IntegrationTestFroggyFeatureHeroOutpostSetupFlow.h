@@ -1,0 +1,5 @@
+#include "IntegrationTestFroggyFeatureHeroOutpostTemplateLoad.h"
+#include "IntegrationTestFroggyFeatureHeroOutpostPartyClear.h"
+#include "IntegrationTestFroggyFeatureHeroOutpostPartyAdd.h"
+#include "IntegrationTestFroggyFeatureHeroOutpostSkillbarLoad.h"
+#include "IntegrationTestFroggyFeatureHeroOutpostSetupEntry.h"

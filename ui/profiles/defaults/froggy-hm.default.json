@@ -1,0 +1,361 @@
+{
+  "schemaVersion": 1,
+  "profileName": "Froggy HM Default",
+  "description": "Public seed profile for the first GWA3 UI milestone. Configure launcher and injector paths for your local Guild Wars setup before live use.",
+  "bot": {
+    "moduleId": "FroggyHM",
+    "displayName": "Froggy HM",
+    "objective": "Hard mode Froggy run with configurable maintenance, inventory, and LLM steering settings.",
+    "defaultOutpost": "Gadd's Encampment",
+    "tags": [ "farm", "hardMode", "publicDefault" ]
+  },
+  "character": {
+    "accountIndex": 2,
+    "characterName": "GWA3 SAMPLE THREE",
+    "accountLabel": "trade-helper",
+    "preferredMap": "Gadd's Encampment",
+    "preferredDistrict": {
+      "region": 4,
+      "district": 99,
+      "language": 8,
+      "label": "Asia/Japan 99"
+    }
+  },
+  "build": {
+    "player": {
+      "primaryProfession": "",
+      "secondaryProfession": "",
+      "skillbar": {
+        "templateCode": "",
+        "skills": []
+      },
+      "attributes": []
+    },
+    "heroConfigFile": "Standard.txt",
+    "heroes": [
+      {
+        "slot": 1,
+        "enabled": true,
+        "heroName": "Hero 1",
+        "behavior": "guard",
+        "skillbar": {
+          "templateCode": "",
+          "skills": []
+        },
+        "attributes": []
+      },
+      {
+        "slot": 2,
+        "enabled": true,
+        "heroName": "Hero 2",
+        "behavior": "guard",
+        "skillbar": {
+          "templateCode": "",
+          "skills": []
+        },
+        "attributes": []
+      },
+      {
+        "slot": 3,
+        "enabled": true,
+        "heroName": "Hero 3",
+        "behavior": "guard",
+        "skillbar": {
+          "templateCode": "",
+          "skills": []
+        },
+        "attributes": []
+      },
+      {
+        "slot": 4,
+        "enabled": true,
+        "heroName": "Hero 4",
+        "behavior": "guard",
+        "skillbar": {
+          "templateCode": "",
+          "skills": []
+        },
+        "attributes": []
+      },
+      {
+        "slot": 5,
+        "enabled": true,
+        "heroName": "Hero 5",
+        "behavior": "guard",
+        "skillbar": {
+          "templateCode": "",
+          "skills": []
+        },
+        "attributes": []
+      },
+      {
+        "slot": 6,
+        "enabled": true,
+        "heroName": "Hero 6",
+        "behavior": "guard",
+        "skillbar": {
+          "templateCode": "",
+          "skills": []
+        },
+        "attributes": []
+      },
+      {
+        "slot": 7,
+        "enabled": true,
+        "heroName": "Hero 7",
+        "behavior": "guard",
+        "skillbar": {
+          "templateCode": "",
+          "skills": []
+        },
+        "attributes": []
+      }
+    ]
+  },
+  "runtime": {
+    "hardMode": true,
+    "useConsets": false,
+    "useStones": false,
+    "disableRendering": false,
+    "openChests": true,
+    "pickupGold": true,
+    "autoIdentify": true,
+    "autoSalvage": true
+  },
+  "maintenance": {
+    "minimumFreeSlots": 5,
+    "kits": {
+      "minimumIdentificationKits": 1,
+      "minimumSalvageKits": 1,
+      "targetIdentificationKits": 3,
+      "targetSalvageKits": 8,
+      "targetExpertSalvageKits": 1
+    },
+    "gold": {
+      "keepOnCharacterGold": 5000,
+      "depositWhenCharacterGoldAtLeast": 80000
+    },
+    "consets": {
+      "enabled": true,
+      "restockFromStorage": false,
+      "craftWhenBelowSets": 0,
+      "targetStoredSetsEach": 25,
+      "materialSlotTrigger": 10,
+      "materialPressureFreeSlots": 10,
+      "batchSets": 10
+    }
+  },
+  "inventoryPolicy": {
+    "pickup": {
+      "mode": "excludeRules",
+      "categoryTags": [ "gold", "rare", "event", "dungeon" ],
+      "rules": [
+        {
+          "enabled": true,
+          "name": "Skip low-value white weapons",
+          "itemType": "weapon",
+          "rarity": "white",
+          "minimumValueGold": 0,
+          "notes": "Seed rule for the UI policy grid; tune after bot defaults are imported."
+        }
+      ]
+    },
+    "identify": {
+      "mode": "all",
+      "categoryTags": [ "blue", "purple", "gold" ],
+      "rules": []
+    },
+    "salvageMaterials": {
+      "mode": "includeRules",
+      "categoryTags": [ "commonMaterials" ],
+      "rules": [
+        {
+          "enabled": true,
+          "name": "Salvage cloth and dust candidates",
+          "material": "cloth,dust",
+          "notes": "Placeholder until current hard-coded bot salvage rules are exported."
+        }
+      ]
+    },
+    "salvageUpgrades": {
+      "mode": "includeRules",
+      "categoryTags": [ "valuableMods" ],
+      "rules": [
+        {
+          "enabled": true,
+          "name": "Salvage desirable inscription/mod patterns",
+          "modifierPattern": "aptitude|fortitude|enchanting|measure",
+          "rarity": "gold"
+        }
+      ]
+    },
+    "sell": {
+      "mode": "excludeRules",
+      "categoryTags": [ "merchantTrash" ],
+      "rules": [
+        {
+          "enabled": true,
+          "name": "Do not sell keep components",
+          "itemType": "material",
+          "notes": "Keep components are controlled by the keepComponents rule set."
+        }
+      ]
+    },
+    "store": {
+      "mode": "includeRules",
+      "categoryTags": [ "materials", "consumables", "rareDrops" ],
+      "rules": []
+    },
+    "keepComponents": {
+      "mode": "includeRules",
+      "categoryTags": [ "consetMaterials", "rareMaterials" ],
+      "rules": [
+        {
+          "enabled": true,
+          "name": "Conset components",
+          "material": "feather,iron,scale,bone,dust,fiber",
+          "notes": "Initial list for later conset crafting policy."
+        }
+      ]
+    },
+    "upgradeSalvageRules": [
+      {
+        "enabled": true,
+        "group": "Popular Mods",
+        "name": "HCT20 [Inscription]",
+        "modifierPattern": "22500140828",
+        "salvageIndex": 2,
+        "itemTypes": [ "staff", "wand" ],
+        "action": "salvage",
+        "minimumRarity": "gold"
+      },
+      {
+        "enabled": true,
+        "group": "Popular Mods",
+        "name": "HSR20 [Inscription]",
+        "modifierPattern": "00142828",
+        "salvageIndex": 2,
+        "itemTypes": [ "focus" ],
+        "action": "salvage",
+        "minimumRarity": "gold"
+      },
+      {
+        "enabled": true,
+        "group": "HP, Enchanting, Attribute",
+        "name": "+30 HP",
+        "modifierPattern": "001E4823",
+        "salvageIndex": 1,
+        "itemTypes": [ "shield" ],
+        "action": "salvage",
+        "minimumRarity": "gold"
+      },
+      {
+        "enabled": true,
+        "group": "HP, Enchanting, Attribute",
+        "name": "+30 HP (staff wrapping)",
+        "modifierPattern": "9013025001E4823",
+        "salvageIndex": 1,
+        "itemTypes": [ "staff" ],
+        "action": "salvage",
+        "minimumRarity": "gold"
+      },
+      {
+        "enabled": true,
+        "group": "HP, Enchanting, Attribute",
+        "name": "+30 HP (staff head)",
+        "modifierPattern": "A013025001E4823",
+        "salvageIndex": 0,
+        "itemTypes": [ "staff" ],
+        "action": "salvage",
+        "minimumRarity": "gold"
+      },
+      {
+        "enabled": true,
+        "group": "Runes & Insignias",
+        "name": "Rune of Superior Vigor",
+        "modifierPattern": "C202EA27",
+        "salvageIndex": 1,
+        "itemTypes": [ "runesAndInsignias" ],
+        "action": "salvage",
+        "minimumRarity": "any"
+      },
+      {
+        "enabled": true,
+        "group": "Runes & Insignias",
+        "name": "Rune of Major Vigor",
+        "modifierPattern": "C202E927",
+        "salvageIndex": 1,
+        "itemTypes": [ "runesAndInsignias" ],
+        "action": "salvage",
+        "minimumRarity": "any"
+      },
+      {
+        "enabled": true,
+        "group": "Runes & Insignias",
+        "name": "Rune of Clarity",
+        "modifierPattern": "01087827",
+        "salvageIndex": 1,
+        "itemTypes": [ "runesAndInsignias" ],
+        "action": "salvage",
+        "minimumRarity": "any"
+      },
+      {
+        "enabled": true,
+        "group": "Runes & Insignias",
+        "name": "Blessed Insignia",
+        "modifierPattern": "E9010824",
+        "salvageIndex": 0,
+        "itemTypes": [ "runesAndInsignias" ],
+        "action": "salvage",
+        "minimumRarity": "any"
+      }
+    ]
+  },
+  "launch": {
+    "launchMode": "bot",
+    "laneTag": "trade-helper",
+    "buildDirectory": "build_trade",
+    "dllName": "gwa3_trade.dll",
+    "pipeName": "\\\\.\\pipe\\gwa3_llm_trade",
+    "launcherScriptPath": "launch_sample_three_via_gwlauncher.au3",
+    "injectorPath": "build_trade\\\\bin\\\\Release\\\\injector.exe",
+    "freshClientRequired": true,
+    "passProfilePathToInjector": false,
+    "healthGate": {
+      "timeoutSeconds": 30,
+      "pollIntervalMilliseconds": 500,
+      "requiredWorkingSetKilobytes": 100000,
+      "postHealthySettleMilliseconds": 8000
+    },
+    "extraInjectorArguments": []
+  },
+  "llm": {
+    "mode": "off",
+    "endpoint": "http://localhost:11434/v1",
+    "model": "deepseek-v4-pro:cloud",
+    "hourlyTokenCap": 10000000,
+    "allowRemote": false,
+    "autonomyLevel": "advisory",
+    "allowedActions": [
+      "observe",
+      "chat",
+      "set_bot_goal",
+      "pause_bot",
+      "resume_bot"
+    ],
+    "chat": {
+      "mode": "operatorSteered",
+      "personaName": "GWA3 Operator Copilot",
+      "systemPrompt": "Help the operator understand bot status, explain risk before actions, and keep Guild Wars automation inside the configured action permissions.",
+      "steeringInstructions": "Default to advisory responses until the operator explicitly enables LLM or advisory launch mode.",
+      "maxHistoryMessages": 50,
+      "temperature": 0.2
+    }
+  },
+  "botSpecific": {
+    "froggyHM": {
+      "routeProfile": "default",
+      "useCurrentHardcodedDefaults": true
+    }
+  }
+}

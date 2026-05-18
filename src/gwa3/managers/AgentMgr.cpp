@@ -85,6 +85,9 @@ static bool s_loggedLegacySignpostPath = false;
 static bool s_loggedMoveQueuedOnce = false;
 static bool s_loggedEngineMoveLane = false;
 static bool s_loggedEngineMoveLaneUnavailable = false;
+static DWORD s_lastEngineMoveQueueBusyLogAt = 0;
+static DWORD s_engineMoveQueueBusySince = 0;
+static DWORD s_lastEngineMoveQueueResetAt = 0;
 static bool s_loggedChangeTargetNativeLane = false;
 static bool s_loggedChangeTargetEngineLane = false;
 static SRWLOCK s_moveQueueLock = SRWLOCK_INIT;
@@ -94,6 +97,7 @@ static volatile LONG s_moveDrainQueued = 0;
 static MoveData s_lastIssuedMove{};
 static DWORD s_lastIssuedMoveAt = 0;
 static bool s_haveLastIssuedMove = false;
+static constexpr int32_t kEngineMoveQueueBacklogLimit = 48;
 static constexpr LONG kRenderCommandSlots = 32;
 static constexpr size_t kRenderCommandSlotSize = 32;
 static uintptr_t s_renderCommandPool = 0;
@@ -459,6 +463,8 @@ void IssueNativeMove(float x, float y) {
 
 bool IsCasting(const AgentLiving *agent) { return IsCastingState(agent); }
 
+void ResetMoveState(const char *reason);
+
 void Move(float x, float y) {
   if (!s_moveFn) {
     if (!s_loggedMoveOnce) {
@@ -473,19 +479,49 @@ void Move(float x, float y) {
   }
   if (!GameThread::IsOnGameThread() && CtoS::Initialize() &&
       CtoS::IsBotshubCommandLaneAvailable()) {
-    if (!s_loggedEngineMoveLane) {
-      Log::Info("AgentMgr: Move using engine command lane");
-      s_loggedEngineMoveLane = true;
+    const int32_t pendingBotshubCommands = CtoS::GetBotshubQueuePending();
+    if (pendingBotshubCommands < kEngineMoveQueueBacklogLimit) {
+      s_engineMoveQueueBusySince = 0;
+      if (!s_loggedEngineMoveLane) {
+        Log::Info("AgentMgr: Move using engine command lane");
+        s_loggedEngineMoveLane = true;
+      }
+      MoveCommand cmd{};
+      cmd.fn = reinterpret_cast<uintptr_t>(&BotshubMoveCommandStub);
+      cmd.move.x = x;
+      cmd.move.y = y;
+      cmd.move.plane = 0u;
+      if (CtoS::EnqueueBotshubCommand(&cmd, sizeof(cmd))) {
+        s_lastIssuedMove = cmd.move;
+        s_lastIssuedMoveAt = GetTickCount();
+        s_haveLastIssuedMove = true;
+        return;
+      }
+      Log::Warn("AgentMgr: Botshub command queue rejected move, falling back");
+    } else {
+      const DWORD now = GetTickCount();
+      if (s_engineMoveQueueBusySince == 0u) {
+        s_engineMoveQueueBusySince = now;
+      }
+      if (now - s_lastEngineMoveQueueBusyLogAt >= 2000u) {
+        s_lastEngineMoveQueueBusyLogAt = now;
+        Log::Warn("AgentMgr: Botshub command queue pending=%d; using "
+                  "coalesced native move fallback",
+                  pendingBotshubCommands);
+      }
+      if (now - s_engineMoveQueueBusySince >= 8000u &&
+          now - s_lastEngineMoveQueueResetAt >= 8000u) {
+        s_lastEngineMoveQueueResetAt = now;
+        CtoS::DumpBotshubQueueState("movement saturated");
+        Log::Warn("AgentMgr: Botshub move lane saturated; dropping queued "
+                  "native move state and using packet move target=(%.0f, %.0f)",
+                  x, y);
+        ResetMoveState("Botshub move lane saturated");
+        CtoS::MoveToCoord(x, y);
+        s_engineMoveQueueBusySince = 0u;
+        return;
+      }
     }
-    MoveCommand cmd{};
-    cmd.fn = reinterpret_cast<uintptr_t>(&BotshubMoveCommandStub);
-    cmd.move.x = x;
-    cmd.move.y = y;
-    cmd.move.plane = 0u;
-    if (CtoS::EnqueueBotshubCommand(&cmd, sizeof(cmd))) {
-      return;
-    }
-    Log::Warn("AgentMgr: Botshub command queue rejected move, falling back");
   } else if (!GameThread::IsOnGameThread() && CtoS::Initialize() &&
              !s_loggedEngineMoveLaneUnavailable) {
     Log::Info("AgentMgr: Move skipping engine command lane because it is "
@@ -546,6 +582,7 @@ void ResetMoveState(const char *reason) {
   s_lastIssuedMove = {};
   s_lastIssuedMoveAt = 0u;
   s_haveLastIssuedMove = false;
+  s_engineMoveQueueBusySince = 0u;
 
   Log::Info("AgentMgr: ResetMoveState reason=%s hadPending=%d "
             "pendingTarget=(%.0f, %.0f) hadDrainQueued=%ld hadLast=%d "
@@ -562,7 +599,40 @@ void ResetMoveState(const char *reason) {
 static bool s_loggedChangeTargetFallback = false;
 static uint32_t s_lastQueuedTargetId = 0u;
 static DWORD s_lastQueuedTargetAt = 0u;
+static DWORD s_lastUnsafeCombatCommandLogAt = 0u;
 static constexpr DWORD kChangeTargetMoveSettleMs = 1500u;
+
+static bool IsCombatCommandUnsafe(DWORD now, const char *command,
+                                  uint32_t agentId,
+                                  bool logDeferral = true) {
+  const auto *me = GetMyAgent();
+  const bool moving = me && (std::fabs(me->move_x) > 0.01f ||
+                             std::fabs(me->move_y) > 0.01f);
+  const bool queueBusy = CtoS::Initialize() && !CtoS::IsBotshubQueueIdle();
+  const bool recentMove =
+      s_haveLastIssuedMove && (now - s_lastIssuedMoveAt) < kChangeTargetMoveSettleMs;
+  if (!moving && !queueBusy && !recentMove) {
+    return false;
+  }
+
+  if (logDeferral && (now - s_lastUnsafeCombatCommandLogAt) >= 1000u) {
+    s_lastUnsafeCombatCommandLogAt = now;
+    Log::Info("AgentMgr: %s deferred until movement settles target=%u "
+              "moving=%d queueBusy=%d recentMove=%d ageMs=%lu",
+              command != nullptr ? command : "combat command",
+              agentId,
+              moving ? 1 : 0,
+              queueBusy ? 1 : 0,
+              recentMove ? 1 : 0,
+              static_cast<unsigned long>(
+                  s_haveLastIssuedMove ? (now - s_lastIssuedMoveAt) : 0u));
+  }
+  return true;
+}
+
+bool IsCombatCommandSafe() {
+  return !IsCombatCommandUnsafe(GetTickCount(), "combat command", 0u, false);
+}
 
 static void ChangeTargetImpl(uint32_t agentId, bool respectMoveSettle,
                              const char *modeLabel) {
@@ -575,9 +645,8 @@ static void ChangeTargetImpl(uint32_t agentId, bool respectMoveSettle,
   if (agentId == s_lastQueuedTargetId && (now - s_lastQueuedTargetAt) < 250u) {
     return;
   }
-  if (respectMoveSettle && agentId != 0u && s_haveLastIssuedMove &&
-      (now - s_lastIssuedMoveAt) < kChangeTargetMoveSettleMs) {
-    Log::Info("AgentMgr: ChangeTarget deferred until movement settles");
+  if (respectMoveSettle && agentId != 0u &&
+      IsCombatCommandUnsafe(now, "ChangeTarget", agentId)) {
     s_lastQueuedTargetId = agentId;
     s_lastQueuedTargetAt = now;
     return;
@@ -727,6 +796,13 @@ uint32_t GetMyId() {
 }
 
 void Attack(uint32_t agentId) {
+  if (agentId == 0u) {
+    return;
+  }
+  const DWORD now = GetTickCount();
+  if (IsCombatCommandUnsafe(now, "Attack", agentId)) {
+    return;
+  }
   static bool s_loggedActionAttack = false;
   if (!s_loggedActionAttack) {
     s_loggedActionAttack = true;
@@ -787,9 +863,14 @@ bool InteractAgentWorldAction(uint32_t agentId, bool callTarget) {
 }
 
 void CallTarget(uint32_t agentId) {
-  // Packet path proven working, matches AutoIt: SendPacket(0xC, CALL_TARGET,
+  if (agentId != 0u &&
+      IsCombatCommandUnsafe(GetTickCount(), "CallTarget", agentId)) {
+    return;
+  }
+  // Packet path — proven working, matches AutoIt: SendPacket(0xC, CALL_TARGET,
   // 0xA, agentId) Native function path is resolved but the dispatcher+offset
-  // may not point to the correct CallTarget sub-function in all GW builds.
+  // may not point to the correct CallTarget sub-function in all GW builds. See
+  //  investigation.
   CtoS::SendPacket(3, Packets::CALL_TARGET,
                    static_cast<uint32_t>(CallTargetType::AttackingOrTargetting),
                    agentId);
@@ -911,11 +992,12 @@ void InteractSignpostLegacy(uint32_t agentId) {
     return;
   }
   if (!s_loggedLegacySignpostPath) {
-    Log::Info("AgentMgr: InteractSignpostLegacy using direct INTERACT_GADGET "
-              "packet path");
+    Log::Info("AgentMgr: InteractSignpostLegacy using SIGNPOST_RUN packet path");
     s_loggedLegacySignpostPath = true;
   }
-  CtoS::SendPacketDirect(3, Packets::INTERACT_GADGET, agentId, 0u);
+  if (!CtoS::SendPacketBotshub(3, Packets::SIGNPOST_RUN, agentId, 0u)) {
+    CtoS::SendPacket(3, Packets::SIGNPOST_RUN, agentId, 0u);
+  }
 }
 
 // Agent access via flat pointer chain: *AgentBase = agent_ptr_array,

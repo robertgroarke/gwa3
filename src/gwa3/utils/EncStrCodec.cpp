@@ -1,4 +1,4 @@
-// Offline-safe string encoding functions (no Windows.h dependency).
+// : Offline-safe string encoding functions (no Windows.h dependency).
 // These are separated from StringEncoding.cpp so they can be linked into
 // the test binary without pulling in Windows API static initializers.
 

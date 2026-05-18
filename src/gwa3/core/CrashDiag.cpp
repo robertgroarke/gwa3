@@ -1,4 +1,4 @@
-﻿#include <gwa3/core/CrashDiag.h>
+#include <gwa3/core/CrashDiag.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/core/HookMarker.h>
 
@@ -303,6 +303,30 @@ bool IsHardFault(DWORD code) {
            code == EXCEPTION_DATATYPE_MISALIGNMENT ||
            code == EXCEPTION_IN_PAGE_ERROR ||
            code == EXCEPTION_NONCONTINUABLE_EXCEPTION;
+}
+
+// Returns true if the given address lives inside one of the OS DLLs that
+// routinely raise first-chance access violations as part of Windows'
+// internal SEH-protected control flow (status-code dispatch, pipe
+// disconnect cleanup, RtlNtStatusToDosError lookups, etc.). These are
+// virtually always handled by Windows itself and are NOT real crashes;
+// the GW process keeps running. Logging them as "VEH-hard" creates
+// dozens of false-positive crash entries per bridge session.
+bool IsAddressInSystemDll(const void* addr) {
+    if (!addr) return false;
+    HMODULE hModule = nullptr;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCSTR>(addr), &hModule)) {
+        return false;
+    }
+    char modulePath[MAX_PATH] = {};
+    if (!GetModuleFileNameA(hModule, modulePath, MAX_PATH)) return false;
+    const char* base = strrchr(modulePath, '\\');
+    base = base ? base + 1 : modulePath;
+    return _stricmp(base, "kernel32.dll") == 0 ||
+           _stricmp(base, "kernelbase.dll") == 0 ||
+           _stricmp(base, "ntdll.dll") == 0;
 }
 
 void BuildOutputPath(const char* extension, char* outPath, size_t outPathSize) {
@@ -647,6 +671,16 @@ LONG CALLBACK VectoredExceptionHandler(EXCEPTION_POINTERS* ep) {
     // process is already terminating and SEH chain integrity no
     // longer matters.
     if (IsHardFault(code)) {
+        // Suppress first-chance AVs originating inside KERNEL32/KERNELBASE/NTDLL.
+        // Windows uses SEH-caught AVs as ordinary control flow in these DLLs
+        // (status-code lookup tables, broken-pipe cleanup, etc.). They never
+        // terminate the process and they flood the log when bridge tests
+        // cycle the IPC pipe. Real crashes that actually kill the process
+        // still surface via the UEF (UnhandledExceptionFilterThunk) path.
+        if (code == EXCEPTION_ACCESS_VIOLATION &&
+            IsAddressInSystemDll(ep->ExceptionRecord->ExceptionAddress)) {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
         __try { HookMarker::DumpOnCrash(); } __except(EXCEPTION_EXECUTE_HANDLER) { GWA3::Log::Error("CrashDiag: DumpOnCrash itself crashed in VEH-hard"); }
         LogExceptionContext("VEH-hard", ep);
         return EXCEPTION_CONTINUE_SEARCH;

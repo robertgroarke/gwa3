@@ -50,6 +50,9 @@ const char* LogPrefixOrDefault(const char* logPrefix) {
 } // namespace
 
 bool IsDead() {
+    if (!MapMgr::GetIsMapLoaded()) {
+        return false;
+    }
     auto* me = AgentMgr::GetMyAgent();
     return !me || me->hp <= 0.0f;
 }
@@ -103,7 +106,15 @@ bool WaitForTownRuntimeReady(uint32_t mapId, uint32_t timeoutMs) {
         }
         auto* inv = ItemMgr::GetInventory();
         if (!inv) return false;
-        return inv->bags[1] != nullptr;
+        __try {
+            Bag* backpack = inv->bags[1];
+            if (!backpack || !backpack->items.buffer) return false;
+            if (backpack->items.size == 0u || backpack->items.size > 25u) return false;
+            if (backpack->items_count > backpack->items.size) return false;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
     });
 }
 
@@ -608,6 +619,27 @@ PostRewardReturnResult HandlePostRewardReturn(const PostRewardReturnOptions& opt
         Log::Info("%s: %s reward not claimed and dialog not latched; skipping post-reward salvage",
                   prefix,
                   label);
+    }
+
+    const uint32_t mapBeforeWait = MapMgr::GetMapId();
+    const bool loadedBeforeWait = MapMgr::GetIsMapLoaded();
+    const uint32_t playerIdBeforeWait = AgentMgr::GetMyId();
+    if (result.used_long_wait &&
+        options.return_to_outpost != nullptr &&
+        IsListedMap(mapBeforeWait, options.dungeon_map_ids, options.dungeon_map_count) &&
+        loadedBeforeWait &&
+        playerIdBeforeWait > 0u) {
+        result.explicit_return_attempted = true;
+        Log::Info("%s: %s reward complete but still in dungeon map=%u loaded=%d playerId=%u; requesting explicit return to outpost before transition wait",
+                  prefix,
+                  label,
+                  mapBeforeWait,
+                  loadedBeforeWait ? 1 : 0,
+                  playerIdBeforeWait);
+        options.return_to_outpost();
+        if (options.explicit_return_delay_ms > 0u) {
+            Sleep(options.explicit_return_delay_ms);
+        }
     }
 
     result.returned_expected_map = WaitForPostDungeonReturn(

@@ -42,10 +42,37 @@ GWA3_TEST(dungeon_bundle_action_interact_bundle_open_matches_raven_torch_flow, {
         3,
         0u,
         0u));
-    GWA3_ASSERT_EQ(AgentStubs::ActionInteractCount(), 1u);
-    GWA3_ASSERT_EQ(AgentStubs::LastInteractedSignpostId(), 0u);
+    GWA3_ASSERT_EQ(AgentStubs::ActionInteractCount(), 0u);
+    GWA3_ASSERT_EQ(AgentStubs::LastInteractedSignpostId(), 80u);
+    GWA3_ASSERT_EQ(GWA3::TestStubs::UIMgr::ActionKeyDownCount(), 1u);
     GWA3_ASSERT_EQ(ItemStubs::LastPickedItemAgentId(), 81u);
     GWA3_ASSERT_EQ(GWA3::DungeonInteractions::GetHeldBundleItemId(), 5001u);
+})
+
+GWA3_TEST(dungeon_bundle_action_interact_frees_slot_for_required_torch_pickup, {
+    AgentStubs::ResetAgents();
+    ItemStubs::Reset();
+    GWA3::TestStubs::UIMgr::Reset();
+    AgentStubs::SetPlayerAgent(0.0f, 0.0f, 1.0f);
+    ItemStubs::SetBagCapacity(1u, 2u);
+    ItemStubs::SetBagItem(1u, 0u, 5002u, 16003u, 27u, 1u, 60u, 0u,
+                          GWA3::DungeonInventory::RARITY_GREEN);
+    ItemStubs::SetBagItem(1u, 1u, 5003u, 22342u, 6u, 1u, 0u, 0u, 0u);
+    AgentStubs::AddGadgetAgent(82u, 40.0f, 0.0f, 3u);
+    AgentStubs::AddItemAgent(83u, 45.0f, 0.0f, 5003u, 0u);
+
+    GWA3_ASSERT(OpenChestAndAcquireHeldBundleByModelActionInteract(
+        0.0f,
+        0.0f,
+        22342u,
+        1000.0f,
+        2,
+        3,
+        0u,
+        0u));
+    GWA3_ASSERT_EQ(ItemStubs::LastDroppedItemId(), 5002u);
+    GWA3_ASSERT_EQ(ItemStubs::LastPickedItemAgentId(), 83u);
+    GWA3_ASSERT_EQ(GWA3::DungeonInteractions::GetHeldBundleItemId(), 5003u);
 })
 
 GWA3_TEST(dungeon_bundle_model_acquire_accepts_matching_equipped_torch_without_inventory_bundle, {
@@ -83,6 +110,31 @@ GWA3_TEST(dungeon_bundle_model_acquire_accepts_matching_equipped_torch_without_i
         0u,
         0u));
     GWA3_ASSERT_EQ(AgentStubs::SignpostInteractionCount(), 0u);
+})
+
+GWA3_TEST(dungeon_bundle_restore_weapon_after_equipped_torch_drop_uses_inventory_weapon, {
+    AgentStubs::ResetAgents();
+    ItemStubs::Reset();
+    GWA3::TestStubs::UIMgr::Reset();
+    AgentStubs::SetPlayerAgent(0.0f, 0.0f, 1.0f);
+    ItemStubs::SetBagCapacity(1u, 2u);
+    ItemStubs::SetBagItem(1u, 0u, 506u, 22342u, 6u, 1u, 0u, 0u, 0u);
+    ItemStubs::SetBagItem(1u, 1u, 9001u, 16003u, 27u, 1u, 60u, 0u,
+                          GWA3::DungeonInventory::RARITY_GREEN);
+    AgentStubs::SetPlayerEquippedItems(506u, 0u);
+    GWA3::TestStubs::UIMgr::SetActionKeyDownResult(true);
+
+    GWA3_ASSERT(DropHeldOrEquippedBundleByModel(22342u));
+    AgentStubs::SetPlayerEquippedItems(0u, 0u);
+
+    GWA3_ASSERT(RestoreCombatWeaponAfterBundleDrop(0u));
+    GWA3_ASSERT_EQ(ItemStubs::LastEquippedItemId(), 9001u);
+    GWA3_ASSERT_EQ(GWA3::TestStubs::UIMgr::PerformUiActionCount(), 0u);
+    GWA3_ASSERT_EQ(GWA3::TestStubs::UIMgr::LastActionKeyDown(), 0xCDu);
+    const auto* me = GWA3::AgentMgr::GetMyAgent();
+    GWA3_ASSERT(me != nullptr);
+    GWA3_ASSERT_EQ(me->weapon_item_id, 9001u);
+    GWA3_ASSERT_EQ(me->weapon_item_type, 27u);
 })
 } // namespace GWA3::Tests::Consolidated::test_dungeon_bundle_action_interact
 
@@ -242,6 +294,34 @@ GWA3_TEST(dungeon_bundle_chest_preferred_uses_visible_ravens_chest_over_exact_ma
         0u));
     GWA3_ASSERT_EQ(AgentStubs::LastInteractedSignpostId(), 67u);
     GWA3_ASSERT_EQ(GWA3::DungeonInteractions::GetHeldBundleItemId(), 4201u);
+})
+
+GWA3_TEST(dungeon_bundle_level2torch3_tries_wider_object_candidates_after_nearest_object_fails, {
+    AgentStubs::ResetAgents();
+    ItemStubs::Reset();
+    GWA3::TestStubs::UIMgr::Reset();
+    AgentStubs::SetPlayerAgent(-5746.0f, 6102.0f, 1.0f);
+    ItemStubs::SetBagCapacity(1u, 2u);
+    ItemStubs::SetBagItem(1u, 0u, 4301u, 22342u, 6u, 1u, 0u, 0u, 0u);
+    AgentStubs::AddGadgetAgent(9u, -5138.0f, 6553.0f, 8153u);
+    AgentStubs::AddGadgetAgent(29u, -5662.0f, 5736.0f, 8178u);
+    AgentStubs::AddGadgetAgent(38u, -4945.0f, 6766.0f, 8323u);
+    AgentStubs::AddGadgetAgent(108u, -5768.0f, 6120.0f, 3u);
+    AgentStubs::SetSpawnItemOnSignpostInteraction(9u, 244u, -5138.0f, 6553.0f, 4301u, 0u);
+
+    GWA3_ASSERT(OpenChestAndAcquireHeldBundleByModelChestPreferred(
+        -5643.0f,
+        6112.0f,
+        22342u,
+        1500.0f,
+        18000.0f,
+        2,
+        1,
+        0u,
+        0u));
+    GWA3_ASSERT_EQ(AgentStubs::LastInteractedSignpostId(), 9u);
+    GWA3_ASSERT_EQ(ItemStubs::LastPickedItemAgentId(), 244u);
+    GWA3_ASSERT_EQ(GWA3::DungeonInteractions::GetHeldBundleItemId(), 4301u);
 })
 } // namespace GWA3::Tests::Consolidated::test_dungeon_bundle_ravens_torch_chest_precedence
 

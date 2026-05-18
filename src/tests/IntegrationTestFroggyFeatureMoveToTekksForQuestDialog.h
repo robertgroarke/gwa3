@@ -1,0 +1,6 @@
+#include "IntegrationTestFroggyFeatureTekksRouteDebugSupport.h"
+#include "IntegrationTestFroggyFeatureMoveToTekksCombatIdle.h"
+#include "IntegrationTestFroggyFeatureMoveToTekksPrimaryRoute.h"
+#include "IntegrationTestFroggyFeatureMoveToTekksSegmentStep.h"
+#include "IntegrationTestFroggyFeatureMoveToTekksSegmentedPath.h"
+#include "IntegrationTestFroggyFeatureMoveToTekksEntry.h"

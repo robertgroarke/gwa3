@@ -1,0 +1,3 @@
+#include "IntegrationTestFroggyFeatureBuiltinCombatProofFoeSelection.h"
+#include "IntegrationTestFroggyFeatureBuiltinCombatSpiritFoeSelection.h"
+#include "IntegrationTestFroggyFeatureBuiltinCombatProofSuiteEntry.h"

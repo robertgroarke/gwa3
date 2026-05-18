@@ -1,5 +1,6 @@
 #include <gwa3/llm/EventPush.h>
 #include <gwa3/llm/IpcServer.h>
+#include <gwa3/llm/Protocol.h>
 #include <gwa3/managers/StoCMgr.h>
 #include <gwa3/core/Log.h>
 
@@ -104,7 +105,9 @@ namespace GWA3::LLM::EventPush {
     // --- Send helper ---
     static void SendEvent(const json& j) {
         if (!IpcServer::IsClientConnected()) return;
-        std::string s = j.dump();
+        json event = j;
+        event["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
+        std::string s = event.dump();
         IpcServer::Send(s.c_str(), static_cast<uint32_t>(s.size()));
     }
 

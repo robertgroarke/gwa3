@@ -1,0 +1,108 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [master, main]
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  build-test-sign:
+    runs-on: windows-2022
+    env:
+      GWA3_CODESIGN_PFX_BASE64: ${{ secrets.GWA3_CODESIGN_PFX_BASE64 }}
+      GWA3_CODESIGN_PASSWORD: ${{ secrets.GWA3_CODESIGN_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install bridge dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r bridge/requirements.txt
+
+      - name: Configure production build
+        shell: pwsh
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A Win32
+
+      - name: Build dungeon tests
+        shell: pwsh
+        run: cmake --build build --config Release --target gwa3_dungeon_tests
+
+      - name: Run dungeon tests
+        shell: pwsh
+        run: .\build\bin\Release\gwa3_dungeon_tests.exe
+
+      - name: Build core DLL, injector, and core tests
+        shell: pwsh
+        run: cmake --build build --config Release --target gwa3_tests gwa3 injector
+
+      - name: Run core tests
+        shell: pwsh
+        run: .\build\bin\Release\gwa3_tests.exe
+
+      - name: Configure injected build
+        shell: pwsh
+        run: cmake -S . -B build_injected -G "Visual Studio 17 2022" -A Win32 -DGWA3_ENABLE_INJECTED_TESTS=ON
+
+      - name: Build injected DLL
+        shell: pwsh
+        run: cmake --build build_injected --config Release --target gwa3
+
+      - name: Run bridge unit tests
+        shell: pwsh
+        run: python -m unittest bridge.tests.test_o_protocol_contract bridge.tests.test_o_token_budget
+
+      - name: Run UI tests
+        shell: pwsh
+        run: |
+          dotnet restore ui\Gwa3.UI.sln
+          dotnet test ui\Gwa3.UI.sln -c Release --no-restore
+
+      - name: Whitespace check
+        shell: pwsh
+        run: git diff --check
+
+      - name: Source hygiene scans
+        shell: pwsh
+        run: |
+          $sourceFiles = git ls-files '*.h' '*.cpp' '*.inc'
+          $aliasPattern = 'inline constexpr\s+[^=]+\s+\w+\s*=\s*GWA3::|static constexpr\s+[^=]+\s+\w+\s*=\s*GWA3::|constexpr\s+[^=]+\s+\w+\s*=\s*GWA3::'
+          $aliasHits = Select-String -Path $sourceFiles -Pattern $aliasPattern -AllMatches
+          if ($aliasHits) {
+            $aliasHits | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+
+          $taskFiles = git ls-files '*.h' '*.cpp' '*.inc' '*.md' 'CMakeLists.txt' | Where-Object { $_ -ne 'KANBAN.md' }
+          $taskPattern = 'GWA3-[0-9]+|Epic14|IntegrationTestEpic14|slice:'
+          $taskHits = Select-String -Path $taskFiles -Pattern $taskPattern -AllMatches
+          if ($taskHits) {
+            $taskHits | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+
+      - name: Sign gwa3 artifacts
+        shell: pwsh
+        run: |
+          $hasSigningSecrets = -not [string]::IsNullOrWhiteSpace($env:GWA3_CODESIGN_PFX_BASE64) -and -not [string]::IsNullOrWhiteSpace($env:GWA3_CODESIGN_PASSWORD)
+          $allowTemporary = ("${{ github.event_name }}" -eq "pull_request") -or -not $hasSigningSecrets
+          .\tools\Sign-Gwa3Binaries.ps1 -AllowTemporaryCertificate:$allowTemporary
+
+      - name: Upload signed artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gwa3-signed-binaries
+          path: |
+            build/bin/Release/gwa3.dll
+            build/bin/Release/injector.exe

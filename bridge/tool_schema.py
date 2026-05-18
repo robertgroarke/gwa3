@@ -872,6 +872,13 @@ FROGGY_TRAVEL_TO_SPARKFLY = _tool(
     {"properties": {}, "required": []},
 )
 
+FROGGY_TRAVEL_TO_GADDS = _tool(
+    "froggy_travel_to_gadds",
+    "Recover Froggy to Gadd's Encampment from another outpost such as Embark "
+    "Beach. Use this when Froggy setup or maintenance requires Gadd's.",
+    {"properties": {}, "required": []},
+)
+
 FROGGY_RUN_SPARKFLY_ROUTE_TO_TEKKS = _tool(
     "froggy_run_sparkfly_route_to_tekks",
     "Run the Sparkfly Swamp route from spawn toward Tekks. This is a blocking "
@@ -882,16 +889,20 @@ FROGGY_RUN_SPARKFLY_ROUTE_TO_TEKKS = _tool(
 FROGGY_PREPARE_TEKKS_DUNGEON_ENTRY = _tool(
     "froggy_prepare_tekks_dungeon_entry",
     "Interact with Tekks and prepare Bogroot Growths entry. Use this in Sparkfly "
-    "near Tekks before entering Bogroot.",
+    "near Tekks before entering Bogroot. This high-level helper owns repeated "
+    "Tekks accept failures and dialog-reset recovery; do not use generic "
+    "send_dialog for garbled Tekks dialog states.",
     {"properties": {}, "required": []},
 )
 
 FROGGY_RUN_DUNGEON_LOOP = _tool(
     "froggy_run_dungeon_loop",
-    "Run one complete Bogroot Growths HM loop from Sparkfly Swamp or the current "
-    "Bogroot map. From Sparkfly it first follows Froggy's route to Tekks, then "
-    "refreshes Tekks/entry and enters the dungeon; inside Bogroot it runs Froggy's "
-    "route, combat, key, door, boss, reward, and post-run return logic.",
+    "Run one complete Bogroot Growths HM loop from the current Bogroot map. "
+    "Preferred use is after froggy_prepare_tekks_dungeon_entry has entered "
+    "Bogroot level 1. In Sparkfly Swamp, use froggy_run_sparkfly_route_to_tekks "
+    "then froggy_prepare_tekks_dungeon_entry; call this from Sparkfly only as "
+    "recovery when segmented entry state is ambiguous. Inside Bogroot it runs "
+    "Froggy's route, combat, key, door, boss, reward, and post-run return logic.",
     {"properties": {}, "required": []},
 )
 
@@ -908,6 +919,16 @@ FROGGY_RUN_MAINTENANCE_CYCLE = _tool(
         },
         "required": [],
     },
+)
+
+FROGGY_RUN_FULL_MAINTENANCE = _tool(
+    "froggy_run_full_maintenance",
+    "Run Froggy's full Gadd's Encampment maintenance state. This high-level action "
+    "handles the Froggy maintenance location/config: claim unclaimed items, identify, "
+    "sell junk, restock kits, deposit/withdraw gold, and convert excess gold/materials "
+    "into consets when Froggy maintenance thresholds say to do so. Prefer this over "
+    "manual merchant/open_xunlai/trader actions while autonomously farming Froggy.",
+    {"properties": {}, "required": []},
 )
 
 RESIGN = _tool(
@@ -1176,11 +1197,13 @@ ALL_TOOLS = [
     SET_BOT_STATE,
     FROGGY_REFRESH_COMBAT_SKILLBAR,
     FROGGY_RUN_TOWN_SETUP,
+    FROGGY_TRAVEL_TO_GADDS,
     FROGGY_TRAVEL_TO_SPARKFLY,
     FROGGY_RUN_SPARKFLY_ROUTE_TO_TEKKS,
     FROGGY_PREPARE_TEKKS_DUNGEON_ENTRY,
     FROGGY_RUN_DUNGEON_LOOP,
     FROGGY_RUN_MAINTENANCE_CYCLE,
+    FROGGY_RUN_FULL_MAINTENANCE,
     # Utility
     SEND_CHAT,
     SEND_WHISPER,
@@ -1198,3 +1221,29 @@ ALL_TOOLS = [
     GET_HERO_BUILD,
     GET_QUEST_INFO,
 ]
+
+
+def _tool_name(tool: dict) -> str:
+    return tool["function"]["name"]
+
+
+FROGGY_AUTONOMOUS_TOOLS = [
+    FROGGY_RUN_TOWN_SETUP,
+    FROGGY_TRAVEL_TO_GADDS,
+    FROGGY_TRAVEL_TO_SPARKFLY,
+    FROGGY_RUN_SPARKFLY_ROUTE_TO_TEKKS,
+    FROGGY_PREPARE_TEKKS_DUNGEON_ENTRY,
+    FROGGY_RUN_DUNGEON_LOOP,
+    FROGGY_RUN_FULL_MAINTENANCE,
+    QUERY_STATE,
+    WAIT,
+    GET_RECIPE,
+    GET_OUTPOST_INFO,
+    GET_MATERIAL_INFO,
+    GET_DUNGEON_INFO,
+    GET_BLESSING_INFO,
+    GET_HERO_BUILD,
+    GET_QUEST_INFO,
+]
+
+FROGGY_AUTONOMOUS_TOOL_NAMES = {_tool_name(tool) for tool in FROGGY_AUTONOMOUS_TOOLS}

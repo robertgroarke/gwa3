@@ -37,6 +37,8 @@ inline constexpr float LOCAL_CLEAR_NEAREST_ENEMY_SCAN_PADDING = 250.0f;
 inline constexpr float LOCAL_CLEAR_EXIT_DISTANCE_PADDING = 75.0f;
 inline constexpr float LOCAL_CLEAR_RANGE_PADDING = 250.0f;
 inline constexpr float LOCAL_CLEAR_MIN_RANGE = 1600.0f;
+inline constexpr float BUNDLE_CARRY_SKILL_ENGAGE_RANGE = 950.0f;
+inline constexpr uint32_t BUNDLE_CARRY_CHASE_WAIT_MS = 350u;
 
 using WaitFn = void(*)(uint32_t ms);
 using MoveIssuerFn = void(*)(float x, float y);
@@ -245,7 +247,7 @@ bool HoldForLocalClear(float waypointX,
                        const LocalClearPolicy& policy,
                        const HoldLocalClearCallbacks& callbacks,
                        const HoldLocalClearOptions& options = {});
-void FlagAllHeroes(float x, float y);
+bool FlagAllHeroes(float x, float y);
 void UnflagAllHeroes();
 bool ClearEnemiesInArea(float fightRange, const CombatCallbacks& callbacks,
                         const ClearEnemiesOptions& options = {});

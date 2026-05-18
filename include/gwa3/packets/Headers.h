@@ -1,6 +1,6 @@
 #pragma once
-// Game packet header constants ported from AutoIt GWA2_Headers.au3
-// Source: GWA Censured/lib/botshub/GWA2_Headers.au3 (v1.7, rheek/mhaendler/3vcloud/MrJambix/night)
+// : Game packet header constants ported from the current legacy GWA source.
+// Source: legacy GWA2 packet header lookup.
 // These are GAME_CMSG_ opcodes used for client-to-server packets.
 
 #include <cstdint>
@@ -33,22 +33,22 @@ constexpr uint32_t PING_REQUEST                       = 0x0B;  // Requests a pin
 constexpr uint32_t QUEST_ABANDON                      = 0x11;  // Abandons a selected quest
 constexpr uint32_t QUEST_REQUEST_INFOS                = 0x12;  // Requests information about a quest
 constexpr uint32_t QUEST_SET_ACTIVE                   = 0x14;  // Confirms setting a quest as active
-constexpr uint32_t DIALOG_SEND                        = 0x3B;  // Dialog header (non-living target variant)
-constexpr uint32_t DIALOG_SEND_LIVING                 = 0x3A;  // Dialog header (living-agent target variant)
+constexpr uint32_t DIALOG_SEND                        = 0x3B;  // Dialog header
+constexpr uint32_t DIALOG_SEND_LIVING                 = 0x3B;  // Dialog header (living-agent target variant)
 
 // ===== Heroes & NPCs =====
 constexpr uint32_t HERO_BEHAVIOR                      = 0x15;  // Sets the behavior/aggression level of a hero
 constexpr uint32_t HERO_LOCK_TARGET                   = 0x16;  // Locks a target for the hero
 constexpr uint32_t HERO_SKILL_TOGGLE                  = 0x19;  // Toggles a hero's skill on or off
-constexpr uint32_t HERO_FLAG_ALL                      = 0x1B;  // Sets or clears the party position flag
 constexpr uint32_t HERO_FLAG_SINGLE                   = 0x1A;  // Sets or clears a single hero position flag
+constexpr uint32_t HERO_FLAG_ALL                      = 0x1B;  // Sets or clears the party position flag
 constexpr uint32_t USE_HERO_SKILL                     = 0x1C;  // For use with UseHeroSkillByPacket() only
 constexpr uint32_t HERO_ADD                           = 0x1E;  // Adds a hero to the party
 constexpr uint32_t HERO_KICK                          = 0x1F;  // Removes a hero or all heroes from the party
 
 // ===== Combat & Targeting =====
 constexpr uint32_t CALL_TARGET                        = 0x23;  // Calls the target without attacking (Ctrl+Shift+Space)
-constexpr uint32_t ATTACK_AGENT                       = 0x24;  // Initiates an attack on a selected agent (I_HEADER variant)
+constexpr uint32_t ATTACK_AGENT                       = 0x26;  // Initiates an attack on a selected agent
 constexpr uint32_t ACTION_ATTACK                      = 0x26;  // Initiates an attack on a selected agent
 constexpr uint32_t ACTION_CANCEL                      = 0x28;  // Cancels the current action
 constexpr uint32_t TARGET_AGENT                       = 0xC1;  // Target an agent
@@ -113,7 +113,7 @@ constexpr uint32_t PLAYER_ATTR_SET                    = 0x98;  // Set player att
 constexpr uint32_t INSTANCE_LOAD_REQUEST_SPAWN        = 0x87;  // Requests spawn in an instance
 constexpr uint32_t INSTANCE_LOAD_REQUEST_PLAYERS      = 0x8F;  // Requests player information in an instance
 constexpr uint32_t INSTANCE_LOAD_REQUEST_ITEMS        = 0x90;  // Requests item information in an instance
-constexpr uint32_t SET_DIFFICULTY                      = 0x9B;  // Toggles hard- and normal mode
+constexpr uint32_t SET_DIFFICULTY                     = 0x9B;  // Toggles hard- and normal mode
 constexpr uint32_t PARTY_ACCEPT_INVITE                = 0x9C;  // Accepts a party invitation
 constexpr uint32_t INVITE_CANCEL                      = 0x9D;  // Cancel invitation of player
 constexpr uint32_t PARTY_ACCEPT_REFUSE                = 0x9E;  // Refuses a party invitation
@@ -129,6 +129,7 @@ constexpr uint32_t PARTY_KICK_PLAYER                  = 0xA9;  // Kicks a player
 constexpr uint32_t PARTY_SEARCH_SEEK                  = 0xAA;  // Seeks members for party formation
 constexpr uint32_t PARTY_SEARCH_CANCEL                = 0xAB;  // Cancels a party search
 constexpr uint32_t PARTY_SEARCH_REQUEST_JOIN          = 0xAC;  // Requests to join a party search
+constexpr uint32_t PARTY_SEARCH_REQUEST_REPLY         = 0xAD;  // Replies to a party search join request
 constexpr uint32_t PARTY_ENTER_FOREIGN_MISSION        = 0xAD;  // Enters a foreign mission/challenge
 constexpr uint32_t PARTY_SEARCH_TYPE                  = 0xAE;  // Sets the type of party search
 constexpr uint32_t PARTY_READY_STATUS                 = 0xAF;  // Indicates ready status in a party

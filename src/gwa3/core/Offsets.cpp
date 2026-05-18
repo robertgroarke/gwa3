@@ -281,7 +281,7 @@ static const PatternDef s_patterns[] = {
     ASSERT_PAT("ValidateAsyncDecodeStr", ValidateAsyncDecodeStr, 0, Priority::P1, PatternType::Func, "P:\\Code\\Engine\\Text\\TextApi.cpp", "codedString"),
     // GWCA's exact byte-pattern scan for the same function. Kept alongside
     // the assertion-based scan so we can compare resolved addresses — if
-    // they disagree, one of them is wrong.
+    // they disagree, one of them is wrong. See local docs/QUEST_LOG_RESEARCH.md.
     PAT("ValidateAsyncDecodeStrGwca", ValidateAsyncDecodeStrGwca,
         "\x83\xC4\x10\x3B\xC6\x5E\x74\x14", "xxxxxxxx", -0x70,
         Priority::P1, PatternType::Func),

@@ -1,0 +1,5 @@
+#include "IntegrationTestFroggyFeatureBogrootBlessingMovement.h"
+#include "IntegrationTestFroggyFeatureBogrootBlessingNpcDiscovery.h"
+#include "IntegrationTestFroggyFeatureBogrootBlessingTitlePrep.h"
+#include "IntegrationTestFroggyFeatureBogrootBlessingNpcInteract.h"
+#include "IntegrationTestFroggyFeatureBogrootBlessingEffectWait.h"

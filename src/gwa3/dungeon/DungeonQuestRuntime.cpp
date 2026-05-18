@@ -7,6 +7,7 @@
 #include <gwa3/dungeon/DungeonLoot.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
 #include <gwa3/dungeon/DungeonRuntime.h>
+#include <gwa3/advanced/Combat.h>
 #include <gwa3/core/DialogHook.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/managers/AgentMgr.h>
@@ -165,6 +166,10 @@ void ReopenAcceptAfterReward(
     const QuestGiverEntryOptions& options,
     const char* prefix,
     const char* label) {
+    if (DungeonDialog::HasDialogButton(dialogs.accept)) {
+        return;
+    }
+
     auto acceptInteract = MakeDirectInteractOptions(
         options.reopen_accept_target_wait_base_ms + ping,
         options.reopen_accept_pass_wait_ms,
@@ -172,8 +177,11 @@ void ReopenAcceptAfterReward(
         prefix,
         label);
     for (int attempt = 0; attempt < options.reopen_accept_attempts; ++attempt) {
+        AgentMgr::CancelAction();
+        DialogMgr::ClearDialog();
+        Sleep(options.dialog_refresh_delay_ms);
         (void)DungeonInteractions::PulseDirectNpcInteract(npcId, acceptInteract);
-        if (!(DialogMgr::IsDialogOpen() && DialogMgr::GetDialogSenderAgentId() == npcId)) {
+        if (!WaitForDialogFromNpc(npcId, options.reopen_accept_pass_wait_ms)) {
             continue;
         }
         if (DungeonDialog::HasDialogButton(dialogs.accept)) {
@@ -212,6 +220,59 @@ bool StopWhenBossRewardDialogReady(uint32_t npcId, void* context) {
         return false;
     }
     return DungeonDialog::IsDialogOpenFromSenderWithButton(npcId, options->reward_dialog_id);
+}
+
+void RunBossFinalClear(
+    float x,
+    float y,
+    const BossCompletionOptions& options,
+    const char* prefix,
+    const char* label,
+    const char* phase) {
+    if (options.aggro_move_to == nullptr ||
+        options.final_clear_range <= 0.0f ||
+        options.final_clear_attempts <= 0) {
+        return;
+    }
+
+    for (int attempt = 1; attempt <= options.final_clear_attempts; ++attempt) {
+        float nearestDistance = 0.0f;
+        const uint32_t nearestId =
+            AdvancedCombat::FindNearestLivingEnemy(options.final_clear_range, &nearestDistance);
+        const uint32_t nearbyCount =
+            AdvancedCombat::CountLivingEnemiesInRange(options.final_clear_range);
+        if (nearestId == 0u || nearbyCount == 0u) {
+            Log::Info("%s: %s final clear phase=%s complete attempt=%d range=%.0f",
+                      prefix,
+                      label,
+                      phase,
+                      attempt,
+                      options.final_clear_range);
+            return;
+        }
+
+        Log::Info("%s: %s final clear phase=%s attempt=%d/%d range=%.0f nearest=%u dist=%.0f nearby=%u",
+                  prefix,
+                  label,
+                  phase,
+                  attempt,
+                  options.final_clear_attempts,
+                  options.final_clear_range,
+                  nearestId,
+                  nearestDistance,
+                  nearbyCount);
+        options.aggro_move_to(x, y, options.final_clear_range);
+        if (options.wait_ms != nullptr && options.final_clear_delay_ms > 0u) {
+            options.wait_ms(options.final_clear_delay_ms);
+        }
+    }
+
+    Log::Warn("%s: %s final clear phase=%s exhausted range=%.0f remaining=%u",
+              prefix,
+              label,
+              phase,
+              options.final_clear_range,
+              AdvancedCombat::CountLivingEnemiesInRange(options.final_clear_range));
 }
 
 QuestGiverEntryResult AcceptQuestAndEnter(
@@ -596,6 +657,7 @@ QuestGiverEntryResult PrepareDungeonEntryFromQuestGiver(
         return result;
     }
 
+    bool clearedRewardBeforeAccept = false;
     if (snapshot.quest_present && plan.dialogs.reward != 0u) {
         const QuestDialogResult rewardResult = SendQuestGiverDialog(
             plan.dialogs.reward,
@@ -605,6 +667,7 @@ QuestGiverEntryResult PrepareDungeonEntryFromQuestGiver(
             options.dialog_refresh_delay_ms,
             prefix);
         const bool clearedAfterReward = !rewardResult.quest_present;
+        clearedRewardBeforeAccept = clearedAfterReward;
         Log::Info("%s: %s reward-first snapshot clearedAfterReward=%d",
                   prefix,
                   label,
@@ -620,7 +683,23 @@ QuestGiverEntryResult PrepareDungeonEntryFromQuestGiver(
         }
     }
 
-    return AcceptQuestAndEnter(npcId, plan, ping, options, prefix, label);
+    QuestGiverEntryResult acceptResult = AcceptQuestAndEnter(npcId, plan, ping, options, prefix, label);
+    if (acceptResult.confirmed || !clearedRewardBeforeAccept || acceptResult.quest_present) {
+        return acceptResult;
+    }
+
+    Log::Info("%s: %s post-reward accept failed with no quest present; forcing fresh NPC dialog and retrying",
+              prefix,
+              label);
+    ReopenAcceptAfterReward(
+        npcId,
+        plan.dialogs,
+        ping,
+        options,
+        prefix,
+        "forced fresh accept after reward");
+    acceptResult = AcceptQuestAndEnter(npcId, plan, ping, options, prefix, label);
+    return acceptResult;
 }
 
 bool InteractNearestNpcAndSendDialogPlan(
@@ -632,94 +711,162 @@ bool InteractNearestNpcAndSendDialogPlan(
         return false;
     }
 
-    const uint32_t npcId = DungeonInteractions::FindNearestNpc(
-        npc.x,
-        npc.y,
-        npc.search_radius);
-    if (npcId == 0u) {
+    constexpr std::size_t kMaxDialogNpcCandidates = 8u;
+    uint32_t candidateIds[kMaxDialogNpcCandidates] = {};
+    std::size_t candidateCount = 0u;
+    const int requestedCandidates = options.npc_dialog_candidate_count > 0
+        ? options.npc_dialog_candidate_count
+        : 1;
+    const std::size_t candidateLimit =
+        requestedCandidates < static_cast<int>(kMaxDialogNpcCandidates)
+            ? static_cast<std::size_t>(requestedCandidates)
+            : kMaxDialogNpcCandidates;
+
+    if (candidateLimit > 1u) {
+        candidateCount = DungeonInteractions::CollectNearestNpcs(
+            npc.x,
+            npc.y,
+            npc.search_radius,
+            candidateIds,
+            candidateLimit);
+        Log::Info("DungeonQuestRuntime: probing %u NPC dialog candidates near (%.0f, %.0f) radius=%.0f",
+                  static_cast<unsigned>(candidateCount),
+                  npc.x,
+                  npc.y,
+                  npc.search_radius);
+        if (options.log_npc_dialog_candidates) {
+            DungeonDiagnostics::NearbyNpcCandidate diagnostics[kMaxDialogNpcCandidates] = {};
+            const std::size_t diagnosticCount = DungeonDiagnostics::CollectNearbyNpcCandidates(
+                npc.x,
+                npc.y,
+                npc.search_radius,
+                diagnostics,
+                candidateLimit);
+            DungeonDiagnostics::LogNearbyNpcCandidates(
+                "quest dialog",
+                npc.x,
+                npc.y,
+                npc.search_radius,
+                diagnostics,
+                diagnosticCount);
+        }
+    } else {
+        candidateIds[0] = DungeonInteractions::FindNearestNpc(
+            npc.x,
+            npc.y,
+            npc.search_radius);
+        candidateCount = candidateIds[0] != 0u ? 1u : 0u;
+    }
+
+    if (candidateCount == 0u) {
         return false;
     }
 
-    if (options.move_to_actual_npc) {
-        auto* npcAgent = AgentMgr::GetAgentByID(npcId);
-        if (npcAgent == nullptr) {
-            return false;
+    for (std::size_t candidateIndex = 0u; candidateIndex < candidateCount; ++candidateIndex) {
+        const uint32_t npcId = candidateIds[candidateIndex];
+        if (npcId == 0u) {
+            continue;
         }
 
-        const auto moveResult = DungeonNavigation::MoveToAndWait(
-            npcAgent->x,
-            npcAgent->y,
-            options.move_to_npc_tolerance > 0.0f ? options.move_to_npc_tolerance : 120.0f,
-            options.move_to_npc_timeout_ms,
-            1000u,
-            MapMgr::GetMapId());
-        if (!moveResult.arrived) {
-            Log::Info("DungeonQuestRuntime: failed moving onto NPC agent=%u at (%.0f, %.0f)",
-                      npcId,
-                      npcAgent->x,
-                      npcAgent->y);
-            return false;
+        if (options.log_npc_dialog_candidates) {
+            DungeonDiagnostics::LogAgentIdentity("quest dialog candidate", npcId);
+        }
+
+        if (options.move_to_actual_npc) {
+            auto* npcAgent = AgentMgr::GetAgentByID(npcId);
+            if (npcAgent == nullptr) {
+                continue;
+            }
+
+            const auto moveResult = DungeonNavigation::MoveToAndWait(
+                npcAgent->x,
+                npcAgent->y,
+                options.move_to_npc_tolerance > 0.0f ? options.move_to_npc_tolerance : 120.0f,
+                options.move_to_npc_timeout_ms,
+                1000u,
+                MapMgr::GetMapId());
+            if (!moveResult.arrived) {
+                Log::Info("DungeonQuestRuntime: failed moving onto NPC candidate=%u agent=%u at (%.0f, %.0f)",
+                          static_cast<unsigned>(candidateIndex),
+                          npcId,
+                          npcAgent->x,
+                          npcAgent->y);
+                continue;
+            }
+        }
+
+        if (options.cancel_action_before_interact) {
+            AgentMgr::CancelAction();
+            if (options.pre_interact_settle_ms > 0u) {
+                Sleep(options.pre_interact_settle_ms);
+            }
+        }
+
+        if (options.clear_dialog_state_before_interact) {
+            DialogMgr::ClearDialog();
+            DialogMgr::ResetHookState();
+        }
+
+        AgentMgr::ChangeTarget(npcId);
+        if (options.change_target_delay_ms > 0u) {
+            Sleep(options.change_target_delay_ms);
+        }
+
+        bool sawDialog = HasDialogFromNpc(npcId);
+        for (int attempt = 0; attempt < options.interact_count; ++attempt) {
+            if (options.use_direct_npc_interact) {
+                CtoS::SendPacketDirect(3, Packets::INTERACT_NPC, npcId, 0u);
+            } else {
+                AgentMgr::InteractNPC(npcId);
+            }
+            sawDialog = HasDialogFromNpc(npcId);
+            if (sawDialog) {
+                break;
+            }
+            if (attempt + 1 < options.interact_count) {
+                Sleep(options.interact_delay_ms);
+            }
+        }
+        Sleep(options.post_interact_delay_ms);
+
+        if (!sawDialog && options.require_dialog_before_send) {
+            const uint32_t dialogTimeoutMs =
+                options.dialog_wait_timeout_ms > 0u
+                    ? options.dialog_wait_timeout_ms
+                    : (options.post_interact_delay_ms > 0u ? options.post_interact_delay_ms : 2000u);
+            sawDialog = WaitForDialogFromNpc(npcId, dialogTimeoutMs);
+        }
+
+        Log::Info("DungeonQuestRuntime: NPC interaction snapshot candidate=%u/%u npc=%u dialogOpen=%d sender=%u buttons=%u",
+                  static_cast<unsigned>(candidateIndex + 1u),
+                  static_cast<unsigned>(candidateCount),
+                  npcId,
+                  DialogMgr::IsDialogOpen() ? 1 : 0,
+                  DialogMgr::GetDialogSenderAgentId(),
+                  DialogMgr::GetButtonCount());
+
+        if (options.require_dialog_before_send && !sawDialog && !options.send_dialog_without_ready) {
+            Log::Info("DungeonQuestRuntime: NPC dialog did not open for candidate=%u npc=%u before sending dialogs",
+                      static_cast<unsigned>(candidateIndex + 1u),
+                      npcId);
+            continue;
+        }
+        if (options.require_dialog_before_send && !sawDialog && options.send_dialog_without_ready) {
+            Log::Info("DungeonQuestRuntime: NPC dialog did not open for candidate=%u npc=%u; sending dialog plan without visible dialog",
+                      static_cast<unsigned>(candidateIndex + 1u),
+                      npcId);
+        }
+
+        AgentMgr::ChangeTarget(npcId);
+        if (options.change_target_delay_ms > 0u) {
+            Sleep(options.change_target_delay_ms);
+        }
+        if (SendDialogPlan(plan, options)) {
+            return true;
         }
     }
 
-    if (options.cancel_action_before_interact) {
-        AgentMgr::CancelAction();
-        if (options.pre_interact_settle_ms > 0u) {
-            Sleep(options.pre_interact_settle_ms);
-        }
-    }
-
-    if (options.clear_dialog_state_before_interact) {
-        DialogMgr::ClearDialog();
-        DialogMgr::ResetHookState();
-    }
-
-    AgentMgr::ChangeTarget(npcId);
-    if (options.change_target_delay_ms > 0u) {
-        Sleep(options.change_target_delay_ms);
-    }
-
-    bool sawDialog = HasDialogFromNpc(npcId);
-    for (int attempt = 0; attempt < options.interact_count; ++attempt) {
-        if (options.use_direct_npc_interact) {
-            CtoS::SendPacketDirect(3, Packets::INTERACT_NPC, npcId, 0u);
-        } else {
-            AgentMgr::InteractNPC(npcId);
-        }
-        sawDialog = HasDialogFromNpc(npcId);
-        if (sawDialog) {
-            break;
-        }
-        if (attempt + 1 < options.interact_count) {
-            Sleep(options.interact_delay_ms);
-        }
-    }
-    Sleep(options.post_interact_delay_ms);
-
-    if (!sawDialog && options.require_dialog_before_send) {
-        const uint32_t dialogTimeoutMs =
-            options.dialog_wait_timeout_ms > 0u
-                ? options.dialog_wait_timeout_ms
-                : (options.post_interact_delay_ms > 0u ? options.post_interact_delay_ms : 2000u);
-        sawDialog = WaitForDialogFromNpc(npcId, dialogTimeoutMs);
-    }
-
-    Log::Info("DungeonQuestRuntime: NPC interaction snapshot npc=%u dialogOpen=%d sender=%u buttons=%u",
-              npcId,
-              DialogMgr::IsDialogOpen() ? 1 : 0,
-              DialogMgr::GetDialogSenderAgentId(),
-              DialogMgr::GetButtonCount());
-
-    if (options.require_dialog_before_send && !sawDialog) {
-        Log::Info("DungeonQuestRuntime: NPC dialog did not open for npc=%u before sending dialogs", npcId);
-        return false;
-    }
-
-    AgentMgr::ChangeTarget(npcId);
-    if (options.change_target_delay_ms > 0u) {
-        Sleep(options.change_target_delay_ms);
-    }
-    return SendDialogPlan(plan, options);
+    return false;
 }
 
 RewardClaimResult TryClaimReward(
@@ -791,58 +938,70 @@ RewardNpcResolveResult ResolveRewardNpc(
     RewardNpcResolveResult result = {};
     const char* label = options.label != nullptr ? options.label : "Boss reward";
 
-    DungeonDiagnostics::NearbyNpcCandidate rewardCandidates[8] = {};
-    const std::size_t rewardCandidateCount = DungeonDiagnostics::CollectNearbyNpcCandidates(
-        rewardNpc.x,
-        rewardNpc.y,
-        rewardNpc.search_radius,
-        rewardCandidates,
-        sizeof(rewardCandidates) / sizeof(rewardCandidates[0]));
-    DungeonDiagnostics::LogNearbyNpcCandidates(
-        label,
-        rewardNpc.x,
-        rewardNpc.y,
-        rewardNpc.search_radius,
-        rewardCandidates,
-        rewardCandidateCount);
+    const int attempts = options.resolve_attempts > 0 ? options.resolve_attempts : 1;
+    for (int attempt = 1; attempt <= attempts; ++attempt) {
+        DungeonDiagnostics::NearbyNpcCandidate rewardCandidates[8] = {};
+        const std::size_t rewardCandidateCount = DungeonDiagnostics::CollectNearbyNpcCandidates(
+            rewardNpc.x,
+            rewardNpc.y,
+            rewardNpc.search_radius,
+            rewardCandidates,
+            sizeof(rewardCandidates) / sizeof(rewardCandidates[0]));
+        DungeonDiagnostics::LogNearbyNpcCandidates(
+            label,
+            rewardNpc.x,
+            rewardNpc.y,
+            rewardNpc.search_radius,
+            rewardCandidates,
+            rewardCandidateCount);
 
-    if (rewardCandidateCount > 0u) {
-        result.npc_id = rewardCandidates[0].agentId;
-        result.found_at_anchor = true;
-        return result;
-    }
+        if (rewardCandidateCount > 0u) {
+            result.npc_id = rewardCandidates[0].agentId;
+            result.found_at_anchor = true;
+            return result;
+        }
 
-    result.npc_id = DungeonInteractions::FindNearestNpc(
-        rewardNpc.x,
-        rewardNpc.y,
-        rewardNpc.search_radius);
-    if (result.npc_id != 0u) {
-        result.found_at_anchor = true;
-        return result;
-    }
+        result.npc_id = DungeonInteractions::FindNearestNpc(
+            rewardNpc.x,
+            rewardNpc.y,
+            rewardNpc.search_radius);
+        if (result.npc_id != 0u) {
+            result.found_at_anchor = true;
+            return result;
+        }
 
-    auto* me = AgentMgr::GetMyAgent();
-    if (!me || options.local_search_radius <= 0.0f) {
-        return result;
-    }
+        auto* me = AgentMgr::GetMyAgent();
+        if (me && options.local_search_radius > 0.0f) {
+            DungeonDiagnostics::NearbyNpcCandidate localCandidates[8] = {};
+            const std::size_t localCandidateCount = DungeonDiagnostics::CollectNearbyNpcCandidates(
+                me->x,
+                me->y,
+                options.local_search_radius,
+                localCandidates,
+                sizeof(localCandidates) / sizeof(localCandidates[0]));
+            DungeonDiagnostics::LogNearbyNpcCandidates(
+                "Boss reward local",
+                me->x,
+                me->y,
+                options.local_search_radius,
+                localCandidates,
+                localCandidateCount);
+            if (localCandidateCount > 0u) {
+                result.npc_id = localCandidates[0].agentId;
+                result.found_near_player = true;
+                return result;
+            }
+        }
 
-    DungeonDiagnostics::NearbyNpcCandidate localCandidates[8] = {};
-    const std::size_t localCandidateCount = DungeonDiagnostics::CollectNearbyNpcCandidates(
-        me->x,
-        me->y,
-        options.local_search_radius,
-        localCandidates,
-        sizeof(localCandidates) / sizeof(localCandidates[0]));
-    DungeonDiagnostics::LogNearbyNpcCandidates(
-        "Boss reward local",
-        me->x,
-        me->y,
-        options.local_search_radius,
-        localCandidates,
-        localCandidateCount);
-    if (localCandidateCount > 0u) {
-        result.npc_id = localCandidates[0].agentId;
-        result.found_near_player = true;
+        if (attempt < attempts && options.retry_delay_ms > 0u) {
+            Log::Info("%s: %s NPC not resolved attempt=%d/%d; retrying after %ums",
+                      PrefixOrDefault(options.log_prefix),
+                      label,
+                      attempt,
+                      attempts,
+                      options.retry_delay_ms);
+            Sleep(options.retry_delay_ms);
+        }
     }
     return result;
 }
@@ -884,6 +1043,14 @@ BossRewardClaimResult ClaimBossReward(uint32_t npcId, const BossRewardClaimOptio
         Log::Info("%s: %s NPC not found near staging coords; sending reward dialog directly",
                   prefix,
                   label);
+        DungeonDialog::SendDialogWithRetry(
+            options.reward_dialog_id,
+            options.fallback_send_attempts,
+            options.fallback_send_delay_ms);
+        QuestMgr::RequestQuestInfo(options.quest_id);
+        if (options.fallback_refresh_delay_ms > 0u) {
+            Sleep(options.fallback_refresh_delay_ms);
+        }
         result.reward_cleared = AcceptQuestRewardWithRetry(
             options.quest_id,
             0u,
@@ -894,15 +1061,6 @@ BossRewardClaimResult ClaimBossReward(uint32_t npcId, const BossRewardClaimOptio
                   label,
                   result.reward_cleared ? 1 : 0,
                   result.final_quest_present ? 1 : 0);
-        DungeonDialog::SendDialogWithRetry(
-            options.reward_dialog_id,
-            options.fallback_send_attempts,
-            options.fallback_send_delay_ms);
-        QuestMgr::RequestQuestInfo(options.quest_id);
-        if (options.fallback_refresh_delay_ms > 0u) {
-            Sleep(options.fallback_refresh_delay_ms);
-        }
-        result.final_quest_present = QuestMgr::GetQuestById(options.quest_id) != nullptr;
         result.last_dialog_id = DialogMgr::GetLastDialogId();
         return result;
     }
@@ -1018,6 +1176,7 @@ BossCompletionResult ExecuteBossCompletion(
     if (options.aggro_move_to != nullptr) {
         options.aggro_move_to(bossX, bossY, fightRange);
     }
+    RunBossFinalClear(bossX, bossY, options, prefix, label, "pre-chest");
     if (options.wait_ms != nullptr && options.post_fight_loot_delay_ms > 0u) {
         options.wait_ms(options.post_fight_loot_delay_ms);
     }
@@ -1070,6 +1229,19 @@ BossCompletionResult ExecuteBossCompletion(
         resolveOptions.log_prefix = prefix;
     }
     result.reward_resolve = ResolveRewardNpc(options.reward_npc, resolveOptions);
+    if (result.reward_resolve.npc_id == 0u && options.final_clear_range > 0.0f) {
+        Log::Info("%s: %s reward NPC missing after chest; running final clear before resolve retry",
+                  prefix,
+                  label);
+        RunBossFinalClear(
+            options.reward_npc.x,
+            options.reward_npc.y,
+            options,
+            prefix,
+            label,
+            "reward-resolve");
+        result.reward_resolve = ResolveRewardNpc(options.reward_npc, resolveOptions);
+    }
 
     BossRewardClaimOptions claimOptions = options.reward_claim;
     if (claimOptions.log_prefix == nullptr) {
@@ -1081,11 +1253,13 @@ BossCompletionResult ExecuteBossCompletion(
     result.reward_claim = ClaimBossReward(result.reward_resolve.npc_id, claimOptions);
 
     result.last_dialog_id = DialogMgr::GetLastDialogId();
-    result.reward_dialog_latched =
-        claimOptions.reward_dialog_id != 0u && result.last_dialog_id == claimOptions.reward_dialog_id;
     result.reward_claimed =
         claimOptions.quest_id != 0u && QuestMgr::GetQuestById(claimOptions.quest_id) == nullptr;
-    result.boss_completed = true;
+    result.reward_dialog_latched =
+        result.reward_claimed &&
+        claimOptions.reward_dialog_id != 0u &&
+        result.last_dialog_id == claimOptions.reward_dialog_id;
+    result.boss_completed = result.reward_claimed;
 
     DungeonRuntime::PostRewardReturnOptions postRewardOptions = options.post_reward;
     postRewardOptions.reward_claimed = result.reward_claimed;

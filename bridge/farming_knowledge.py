@@ -11,7 +11,7 @@ prompt.
 
 Sources:
   - Consumable recipes: crafter NPC dialog in game
-  - Material trader NPC IDs per map: `GWA Censured/lib/Utils-Maintenance.au3`
+  - Material trader NPC IDs per map: legacy maintenance lookup data
     `GetMaterialTrader()` table
   - Xunlai chest coords (guild halls): `Chest()` function in the same AutoIt lib
   - Outpost NPC coords: observed in game
@@ -131,7 +131,7 @@ OUTPOST_NPCS: dict[int, dict] = {
 # =============================================================================
 # Material trader NPC model IDs per map
 # =============================================================================
-# Source: GWA Censured GetMaterialTrader() AutoIt lookup. The COORDS of the
+# Source: legacy GetMaterialTrader() lookup. The COORDS of the
 # NPC in each map aren't hardcoded there — the bot has to find the NPC by
 # model_id. These IDs match agent->agent_model_type in the AgentLiving struct.
 

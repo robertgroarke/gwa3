@@ -236,7 +236,7 @@ constexpr RouteDefinition kRoutes[] = {
 };
 
 constexpr BlessingAnchor kRunVarajarBlessings[] = {
-    {0, -2034.0f, -4512.0f},
+    {0, -2034.0f, -4512.0f, 0x29u, "Norn blessing"},
 };
 
 constexpr BlessingAnchor kLevel1Torch1Blessings[] = {

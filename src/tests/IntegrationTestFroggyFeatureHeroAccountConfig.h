@@ -1,0 +1,5 @@
+#include "IntegrationTestFroggyFeatureHeroAccountConfigEncoding.h"
+#include "IntegrationTestFroggyFeatureHeroAccountConfigPath.h"
+#include "IntegrationTestFroggyFeatureHeroAccountConfigFile.h"
+#include "IntegrationTestFroggyFeatureHeroAccountConfigParse.h"
+#include "IntegrationTestFroggyFeatureHeroAccountConfigResolve.h"

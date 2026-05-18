@@ -41,6 +41,7 @@ struct EmergencyFreeSlotOptions {
     uint32_t first_bag = 1u;
     uint32_t last_bag = 4u;
     uint32_t post_drop_wait_ms = 500u;
+    bool allow_green_items = false;
     const char* log_prefix = nullptr;
     WaitFn wait_ms = nullptr;
 };
@@ -57,5 +58,7 @@ struct EmergencyFreeSlotDropResult {
 UnclaimedItemClaimResult ClaimUnclaimedItemsByModel(const UnclaimedItemClaimOptions& options);
 EmergencyFreeSlotDropResult DropEmergencyInventoryItemForFreeSlot(
     const EmergencyFreeSlotOptions& options = {});
+uint32_t EnsureEmergencyFreeSlots(uint32_t min_free_slots,
+                                  const EmergencyFreeSlotOptions& options = {});
 
 } // namespace GWA3::AdvancedInventory

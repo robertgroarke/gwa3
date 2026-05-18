@@ -25,6 +25,11 @@ WaypointMoveResult InspectWaypointMoveResult(const DungeonRoute::Waypoint& waypo
     result.threshold = threshold;
     result.final_map_id = MapMgr::GetMapId();
 
+    if (!MapMgr::GetIsMapLoaded()) {
+        result.timed_out = true;
+        return result;
+    }
+
     auto* me = AgentMgr::GetMyAgent();
     result.dead = me == nullptr || me->hp <= 0.0f;
     if (me != nullptr) {
@@ -379,6 +384,114 @@ bool IsAggroMoveWorldReady(const AggroMoveCallbacks& callbacks) {
            CallBool(callbacks.is_map_loaded, MapMgr::GetIsMapLoaded());
 }
 
+bool CanMoveWithConfiguredEnemyGate(float fightRange, const AggroMoveOptions& options) {
+    if (options.crowd_enemy_scan_range > 0.0f &&
+        options.crowd_enemy_count_gate > 0u &&
+        DungeonCombat::CountLivingEnemiesInRange(options.crowd_enemy_scan_range) >= options.crowd_enemy_count_gate) {
+        if (options.move_enemy_gate_range <= 0.0f ||
+            DungeonCombat::GetNearestLivingEnemyDistance(options.crowd_enemy_scan_range) < options.move_enemy_gate_range) {
+            return false;
+        }
+    }
+
+    if (options.move_enemy_gate_range > 0.0f) {
+        return DungeonCombat::GetNearestLivingEnemyDistance() >= options.move_enemy_gate_range;
+    }
+    return DungeonCombat::CanMoveWithEnemyRangeGate(fightRange, DungeonCombat::LONG_BOW_RANGE);
+}
+
+bool CanForceMovePastEnemyGate(const AggroMoveOptions& options) {
+    return options.move_enemy_gate_range <= 0.0f;
+}
+
+bool ShouldContinueAggroMoveLoop(float x, float y, float fightRange, const AggroMoveOptions& options) {
+    if (DungeonCombat::DistanceToPoint(x, y) > options.arrival_threshold) {
+        return true;
+    }
+    return options.move_enemy_gate_range > 0.0f &&
+        !CanMoveWithConfiguredEnemyGate(fightRange, options);
+}
+
+uint32_t FindAggroMoveThreat(
+    float fightRange,
+    const AggroMoveOptions& options,
+    float& targetDistance,
+    bool& crowdGate,
+    uint32_t& crowdCount) {
+    crowdGate = false;
+    crowdCount = 0u;
+    targetDistance = 99999.0f;
+
+    const float threatRange = options.move_enemy_gate_range > 0.0f
+        ? options.move_enemy_gate_range
+        : fightRange;
+    uint32_t threatId = DungeonCombat::FindNearestLivingEnemy(threatRange, &targetDistance);
+    if (threatId != 0u) {
+        return threatId;
+    }
+
+    if (options.crowd_enemy_scan_range <= 0.0f ||
+        options.crowd_enemy_count_gate == 0u) {
+        return 0u;
+    }
+
+    crowdCount = DungeonCombat::CountLivingEnemiesInRange(options.crowd_enemy_scan_range);
+    if (crowdCount < options.crowd_enemy_count_gate) {
+        return 0u;
+    }
+
+    uint32_t crowdThreatId = DungeonCombat::FindNearestLivingEnemy(options.crowd_enemy_scan_range, &targetDistance);
+    if (options.move_enemy_gate_range > 0.0f && targetDistance > options.move_enemy_gate_range) {
+        targetDistance = 99999.0f;
+        return 0u;
+    }
+
+    crowdGate = true;
+    return crowdThreatId;
+}
+
+void HoldForAggroThreat(
+    float x,
+    float y,
+    float fightRange,
+    uint32_t targetId,
+    float targetDistance,
+    const AggroMoveCallbacks& callbacks,
+    const AggroMoveOptions& options) {
+    const char* prefix = options.log_prefix ? options.log_prefix : "Dungeon";
+    Log::Info("%s: AggroMove threat detected target=%u waypoint=(%.0f, %.0f) dist=%.0f fightRange=%.0f; stopping movement",
+              prefix,
+              targetId,
+              x,
+              y,
+              targetDistance,
+              fightRange);
+
+    AgentMgr::CancelAction();
+    CallWait(callbacks.wait_ms, DungeonCombat::LOCAL_CLEAR_PRE_FIGHT_CANCEL_DWELL_MS);
+
+    if (callbacks.hold_special_local_clear != nullptr) {
+        callbacks.hold_special_local_clear(
+            x,
+            y,
+            fightRange,
+            targetId,
+            callbacks.user_data ? callbacks.user_data : callbacks.special_stats);
+    } else if (callbacks.hold_local_clear != nullptr) {
+        callbacks.hold_local_clear("Route", x, y, fightRange, targetId, callbacks.user_data);
+    } else if (callbacks.fight_in_aggro != nullptr) {
+        callbacks.fight_in_aggro(
+            fightRange,
+            false,
+            callbacks.user_data,
+            true,
+            options.opportunistic_fight_budget_ms);
+    }
+
+    AgentMgr::CancelAction();
+    CallWait(callbacks.wait_ms, DungeonCombat::LOCAL_CLEAR_POST_FIGHT_CANCEL_DWELL_MS);
+}
+
 void AggroMoveToOpportunistic(
     float x,
     float y,
@@ -389,7 +502,6 @@ void AggroMoveToOpportunistic(
     int blockedCount = 0;
     float moveTargetX = x;
     float moveTargetY = y;
-
     auto issueMove = [&]() {
         moveTargetX = RandomizedCoordinate(x, options.move_random_radius);
         moveTargetY = RandomizedCoordinate(y, options.move_random_radius);
@@ -402,11 +514,11 @@ void AggroMoveToOpportunistic(
                        RandomizedCoordinate(me->y, options.sidestep_random_radius));
     };
 
-    if (DungeonCombat::CanMoveWithEnemyRangeGate(fightRange, DungeonCombat::LONG_BOW_RANGE)) {
+    if (CanMoveWithConfiguredEnemyGate(fightRange, options)) {
         issueMove();
     }
 
-    while (DungeonCombat::DistanceToPoint(x, y) > options.arrival_threshold &&
+    while (ShouldContinueAggroMoveLoop(x, y, fightRange, options) &&
            (GetTickCount() - start) < options.move_budget_ms) {
         if (!IsAggroMoveWorldReady(callbacks)) {
             return;
@@ -416,18 +528,47 @@ void AggroMoveToOpportunistic(
         const float oldX = meBefore ? meBefore->x : 0.0f;
         const float oldY = meBefore ? meBefore->y : 0.0f;
 
-        if (DungeonCombat::GetNearestLivingEnemyDistance() < fightRange &&
-            callbacks.fight_in_aggro != nullptr) {
-            callbacks.fight_in_aggro(
+        float threatDistance = 99999.0f;
+        bool crowdGate = false;
+        uint32_t crowdCount = 0u;
+        const uint32_t threatId = FindAggroMoveThreat(
+            fightRange,
+            options,
+            threatDistance,
+            crowdGate,
+            crowdCount);
+        if (threatId != 0u) {
+            if (crowdGate) {
+                Log::Info("%s: AggroMove crowd gate active enemies=%u scan=%.0f nearest=%u dist=%.0f waypoint=(%.0f, %.0f)",
+                          options.log_prefix ? options.log_prefix : "Dungeon",
+                          crowdCount,
+                          options.crowd_enemy_scan_range,
+                          threatId,
+                          threatDistance,
+                          x,
+                          y);
+            }
+            HoldForAggroThreat(
+                x,
+                y,
                 fightRange,
-                false,
-                callbacks.user_data,
-                true,
-                options.opportunistic_fight_budget_ms);
+                threatId,
+                threatDistance,
+                callbacks,
+                options);
+            if (!IsAggroMoveWorldReady(callbacks)) {
+                return;
+            }
+            if (!CanMoveWithConfiguredEnemyGate(fightRange, options)) {
+                CallWait(callbacks.wait_ms, options.loop_poll_ms);
+                continue;
+            }
         }
 
-        if (DungeonCombat::CanMoveWithEnemyRangeGate(fightRange, DungeonCombat::LONG_BOW_RANGE) ||
-            (GetTickCount() - start) > options.force_move_after_ms) {
+        const bool canMove = CanMoveWithConfiguredEnemyGate(fightRange, options);
+        const bool canForceMove = CanForceMovePastEnemyGate(options) &&
+            (GetTickCount() - start) > options.force_move_after_ms;
+        if (canMove || canForceMove) {
             issueMove();
             if (callbacks.pickup_nearby_loot != nullptr) {
                 (void)callbacks.pickup_nearby_loot(options.opportunistic_loot_radius);
@@ -478,15 +619,17 @@ void AggroMoveToStandard(
     float fightRange,
     const AggroMoveCallbacks& callbacks,
     const AggroMoveOptions& options) {
-    const float localClearRange = DungeonCombat::ComputeLocalClearRange(fightRange);
+    const float localClearRange = options.move_enemy_gate_range > 0.0f
+        ? options.move_enemy_gate_range
+        : DungeonCombat::ComputeLocalClearRange(fightRange);
     AggroMoveState moveState;
     moveState.moveTargetX = x;
     moveState.moveTargetY = y;
-    if (DungeonCombat::CanMoveWithEnemyRangeGate(fightRange, DungeonCombat::LONG_BOW_RANGE)) {
+    if (CanMoveWithConfiguredEnemyGate(fightRange, options)) {
         IssueAggroMove(moveState, x, y, options.exact_move_target, true);
     }
     DWORD start = GetTickCount();
-    while (DungeonCombat::DistanceToPoint(x, y) > options.arrival_threshold &&
+    while (ShouldContinueAggroMoveLoop(x, y, fightRange, options) &&
            (GetTickCount() - start) < options.move_budget_ms) {
         if (!IsAggroMoveWorldReady(callbacks)) {
             return;
@@ -496,10 +639,45 @@ void AggroMoveToStandard(
         const float oldX = meLoop ? meLoop->x : 0.0f;
         const float oldY = meLoop ? meLoop->y : 0.0f;
         const float nearestDistance = DungeonCombat::GetNearestLivingEnemyDistance();
+        float crowdThreatDistance = 99999.0f;
+        bool crowdGate = false;
+        uint32_t crowdCount = 0u;
+        const uint32_t crowdThreatId = FindAggroMoveThreat(
+            fightRange,
+            options,
+            crowdThreatDistance,
+            crowdGate,
+            crowdCount);
+
+        if (crowdGate && crowdThreatId != 0u) {
+            Log::Info("%s: AggroMove crowd gate active enemies=%u scan=%.0f nearest=%u dist=%.0f waypoint=(%.0f, %.0f)",
+                      options.log_prefix ? options.log_prefix : "Dungeon",
+                      crowdCount,
+                      options.crowd_enemy_scan_range,
+                      crowdThreatId,
+                      crowdThreatDistance,
+                      x,
+                      y);
+            HoldForAggroThreat(
+                x,
+                y,
+                fightRange,
+                crowdThreatId,
+                crowdThreatDistance,
+                callbacks,
+                options);
+            if (!IsAggroMoveWorldReady(callbacks)) {
+                return;
+            }
+            CallWait(callbacks.wait_ms, options.loop_poll_ms);
+            continue;
+        }
 
         if (nearestDistance < localClearRange) {
             if (options.use_local_clear_cooldown && ShouldContinueLocalClearCooldown(moveState)) {
-                IssueAggroMove(moveState, x, y, options.exact_move_target, true);
+                if (CanMoveWithConfiguredEnemyGate(fightRange, options)) {
+                    IssueAggroMove(moveState, x, y, options.exact_move_target, true);
+                }
                 CallWait(callbacks.wait_ms, DungeonCombat::AGGRO_STANDARD_COOLDOWN_MOVE_DELAY_MS);
                 continue;
             }
@@ -511,7 +689,9 @@ void AggroMoveToStandard(
                 ? bestId
                 : DungeonCombat::FindNearestLivingEnemy(localClearRange, &fallbackTargetDistance);
             if (!fallbackId) {
-                IssueAggroMove(moveState, x, y, options.exact_move_target, true);
+                if (CanMoveWithConfiguredEnemyGate(fightRange, options)) {
+                    IssueAggroMove(moveState, x, y, options.exact_move_target, true);
+                }
                 CallWait(callbacks.wait_ms, DungeonCombat::AGGRO_STANDARD_NO_BALL_DELAY_MS);
                 if (!IsAggroMoveWorldReady(callbacks)) {
                     return;
@@ -525,6 +705,9 @@ void AggroMoveToStandard(
                     options.exact_move_target);
                 continue;
             }
+
+            AgentMgr::CancelAction();
+            CallWait(callbacks.wait_ms, DungeonCombat::LOCAL_CLEAR_PRE_FIGHT_CANCEL_DWELL_MS);
 
             if (callbacks.hold_special_local_clear != nullptr) {
                 Log::Info("%s: AggroMove holding special local clear foe=%u waypoint=(%.0f, %.0f) dist=%.0f",
@@ -553,6 +736,9 @@ void AggroMoveToStandard(
                 }
             }
 
+            AgentMgr::CancelAction();
+            CallWait(callbacks.wait_ms, DungeonCombat::LOCAL_CLEAR_POST_FIGHT_CANCEL_DWELL_MS);
+
             if (!IsAggroMoveWorldReady(callbacks)) {
                 return;
             }
@@ -562,6 +748,10 @@ void AggroMoveToStandard(
             if (!IsAggroMoveWorldReady(callbacks)) {
                 return;
             }
+            if (!CanMoveWithConfiguredEnemyGate(fightRange, options)) {
+                CallWait(callbacks.wait_ms, options.loop_poll_ms);
+                continue;
+            }
             IssueAggroMove(moveState, x, y, options.exact_move_target, true);
             CallWait(callbacks.wait_ms, DungeonCombat::AGGRO_STANDARD_LOCAL_CLEAR_RESUME_DELAY_MS);
             if (!IsAggroMoveWorldReady(callbacks)) {
@@ -570,14 +760,16 @@ void AggroMoveToStandard(
             continue;
         }
 
-        if (DungeonCombat::CanMoveWithEnemyRangeGate(fightRange, DungeonCombat::LONG_BOW_RANGE) ||
-            (GetTickCount() - start) > options.force_move_after_ms) {
+        const bool canMove = CanMoveWithConfiguredEnemyGate(fightRange, options);
+        const bool canForceMove = CanForceMovePastEnemyGate(options) &&
+            (GetTickCount() - start) > options.force_move_after_ms;
+        if (canMove || canForceMove) {
             IssueAggroMove(
                 moveState,
                 x,
                 y,
                 options.exact_move_target,
-                (GetTickCount() - start) > options.force_move_after_ms);
+                canForceMove);
             CallWait(callbacks.wait_ms, options.loop_poll_ms);
             if (!IsAggroMoveWorldReady(callbacks)) {
                 return;
@@ -630,11 +822,12 @@ void AggroMoveToConfigured(
     float y,
     float fightRange,
     const AggroMoveProfileConfig& config) {
-    Log::Info("%s: AggroMove configured start target=(%.0f, %.0f) fightRange=%.0f profile=%u exact=%d specialClear=%d",
+    Log::Info("%s: AggroMove configured start target=(%.0f, %.0f) fightRange=%.0f moveGate=%.0f profile=%u exact=%d specialClear=%d",
               config.log_prefix ? config.log_prefix : "Dungeon",
               x,
               y,
               fightRange,
+              config.move_enemy_gate_range,
               static_cast<unsigned>(config.profile),
               config.exact_move_target ? 1 : 0,
               config.use_special_local_clear ? 1 : 0);
@@ -655,6 +848,9 @@ void AggroMoveToConfigured(
     options.profile = config.profile;
     options.exact_move_target = config.exact_move_target;
     options.use_local_clear_cooldown = config.use_local_clear_cooldown;
+    options.move_enemy_gate_range = config.move_enemy_gate_range;
+    options.crowd_enemy_scan_range = config.crowd_enemy_scan_range;
+    options.crowd_enemy_count_gate = config.crowd_enemy_count_gate;
     options.log_prefix = config.log_prefix;
     options.sidestep_random_radius = config.sidestep_random_radius;
     options.opportunistic_fight_budget_ms = config.opportunistic_fight_budget_ms;

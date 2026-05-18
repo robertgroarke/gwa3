@@ -43,6 +43,14 @@ static bool IsSameTravelRequest(const PendingTravelRequest& pending,
            pending.language == language;
 }
 
+static void DispatchTravel(uint32_t mapId, uint32_t region, uint32_t district, uint32_t language) {
+    Log::Info("MapMgr: Travel dispatch map=%u region=%u district=%u language=%u",
+              mapId, region, district, language);
+
+    Log::Info("MapMgr: Travel using direct packet lane");
+    CtoS::MapTravel(mapId, region, district, language);
+}
+
 static void RefreshPendingTravelState() {
     if (!s_pendingTravel.valid) return;
 
@@ -76,10 +84,17 @@ bool Travel(uint32_t mapId, uint32_t region, uint32_t district, uint32_t languag
     Log::Info("MapMgr: Travel request map=%u region=%u district=%u language=%u", mapId, region, district, language);
     RefreshPendingTravelState();
     s_lastTravelRequestAt = GetTickCount();
+    const uint32_t currentMapId = GetMapId();
+    if (currentMapId != 0u && !GetIsMapLoaded()) {
+        Log::Warn("MapMgr: Travel refused for map=%u because current map=%u is not loaded",
+                  mapId,
+                  currentMapId);
+        return false;
+    }
     if (GameThread::IsOnGameThread()) {
         s_pendingTravel = {};
-        Log::Info("MapMgr: Travel using direct game-thread packet send");
-        CtoS::MapTravel(mapId, region, district, language);
+        Log::Info("MapMgr: Travel using direct game-thread dispatch");
+        DispatchTravel(mapId, region, district, language);
         Log::Info("MapMgr: Travel direct send returned");
         return true;
     }
@@ -108,21 +123,21 @@ bool Travel(uint32_t mapId, uint32_t region, uint32_t district, uint32_t languag
     s_pendingTravel.region = region;
     s_pendingTravel.district = district;
     s_pendingTravel.language = language;
-    s_pendingTravel.originMapId = GetMapId();
+    s_pendingTravel.originMapId = currentMapId;
     s_pendingTravel.queuedAt = GetTickCount();
     s_pendingTravel.valid = true;
 
     Log::Info("MapMgr: Travel enqueueing to GameThread");
     GameThread::Enqueue([mapId, region, district, language]() {
         Log::Info("MapMgr: Travel lambda running on GameThread");
-        CtoS::MapTravel(mapId, region, district, language);
+        DispatchTravel(mapId, region, district, language);
         Log::Info("MapMgr: Travel lambda returned");
     });
     Log::Info("MapMgr: Travel enqueue returned to caller");
     return true;
 }
 
-void ReturnToOutpost() {
+static void ReturnToOutpostImpl() {
     s_lastTravelRequestAt = GetTickCount();
     uint32_t mapId = GetMapId();
     if (mapId != 0 && !GetIsMapLoaded()) {
@@ -136,6 +151,14 @@ void ReturnToOutpost() {
                   mapId, static_cast<unsigned long>(settleMs));
         const DWORD start = GetTickCount();
         while ((GetTickCount() - start) < settleMs) {
+            if (UIMgr::IsFrameVisible(UIMgr::Hashes::ReturnToOutpost)) {
+                Log::Info("MapMgr: ReturnToOutpost button visible while map is not loaded; clicking hash=%u",
+                          UIMgr::Hashes::ReturnToOutpost);
+                if (UIMgr::ButtonClickByHash(UIMgr::Hashes::ReturnToOutpost)) {
+                    return;
+                }
+                Log::Warn("MapMgr: ReturnToOutpost button click failed while map is not loaded");
+            }
             if (GetIsMapLoaded()) {
                 break;
             }
@@ -156,15 +179,17 @@ void ReturnToOutpost() {
     }
 
     const AreaInfo* area = GetAreaInfo(mapId);
-    const bool inExplorable = area && IsExplorableMapRegionType(area->type);
+    const bool inExplorableLike = area && IsExplorableLikeMapRegionType(area->type);
 
-    if (!inExplorable) {
-        Log::Info("MapMgr: ReturnToOutpost sending direct packet outside explorable");
+    if (!inExplorableLike) {
+        Log::Info("MapMgr: ReturnToOutpost sending direct packet outside explorable-like map");
         CtoS::SendPacket(1, Packets::PARTY_RETURN_TO_OUTPOST);
         return;
     }
 
-    Log::Info("MapMgr: ReturnToOutpost using /resign + button flow in explorable map %u", mapId);
+    Log::Info("MapMgr: ReturnToOutpost using /resign + button flow in explorable-like map %u type=%u",
+              mapId,
+              area ? area->type : 0u);
     ChatMgr::SendChat(L"resign", L'/');
 
     // Match the previously working test path: allow resign and party defeat
@@ -185,8 +210,15 @@ void ReturnToOutpost() {
         Sleep(500);
     }
 
-    Log::Warn("MapMgr: ReturnToOutpost button never appeared; falling back to direct packet");
-    CtoS::SendPacket(1, Packets::PARTY_RETURN_TO_OUTPOST);
+    Log::Warn("MapMgr: ReturnToOutpost button never appeared; skipping direct packet fallback to avoid crash");
+}
+
+void ReturnToOutpost() {
+    __try {
+        ReturnToOutpostImpl();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("MapMgr: ReturnToOutpost caught structured exception; aborting return request");
+    }
 }
 
 void EnterMission() {

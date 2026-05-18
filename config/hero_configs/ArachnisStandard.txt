@@ -1,0 +1,12 @@
+; Arachnis Haunt Standard Hero Configuration
+; Format: HeroID,SkillTemplateCode
+; Mirrors the legacy Arachnis AutoIt non-merc setup with Shields Up / Charge
+; projectile protection for spider-heavy rooms.
+
+25,OAGjUhgMpOYTr3jLcCNdmWz3CA
+14,OAhjQkGZIT3BVVCPSTTODTjTciA
+21,OAhjYoHYIPWb7wnoqKNncDzqH
+4,OAFTUYTWTiKQB8LoqaLktgr4tAA
+24,OQhkAsC8gFKzJY6lDMd40hQG4iB
+15,OQhkAsC8gFKDNY6lDMd40hQG4iB
+1,OQFUAyAPmaSvAIg5ZkAcQsAcFvFA

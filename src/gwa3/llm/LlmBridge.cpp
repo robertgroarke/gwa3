@@ -3,6 +3,7 @@
 #include <gwa3/llm/GameSnapshot.h>
 #include <gwa3/llm/ActionExecutor.h>
 #include <gwa3/llm/EventPush.h>
+#include <gwa3/llm/Protocol.h>
 #include <gwa3/core/Log.h>
 
 #include <Windows.h>
@@ -28,8 +29,21 @@ namespace GWA3::LLM {
     static void SendHeartbeat() {
         json j;
         j["type"] = "heartbeat";
+        j["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
         std::string s = j.dump();
         IpcServer::Send(s.c_str(), static_cast<uint32_t>(s.size()));
+    }
+
+    static bool HasExpectedProtocolVersion(const json& j) {
+        const int version = j.value("protocol_version", -1);
+        if (version == static_cast<int>(GWA3::LLM::IPC_PROTOCOL_VERSION)) {
+            return true;
+        }
+
+        GWA3::Log::Warn("[LLM-Bridge] Dropping message with protocol_version=%d expected=%u",
+                        version,
+                        GWA3::LLM::IPC_PROTOCOL_VERSION);
+        return false;
     }
 
     static void ProcessInboundMessages() {
@@ -40,6 +54,10 @@ namespace GWA3::LLM {
 
             try {
                 json j = json::parse(msg, msg + len);
+                if (!HasExpectedProtocolVersion(j)) {
+                    IpcServer::FreeMsgBuf(msg);
+                    continue;
+                }
                 std::string type = j.value("type", "");
 
                 if (type == "action") {

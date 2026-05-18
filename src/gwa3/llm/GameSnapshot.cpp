@@ -1,4 +1,5 @@
 #include <gwa3/llm/GameSnapshot.h>
+#include <gwa3/llm/Protocol.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/SkillMgr.h>
 #include <gwa3/managers/MapMgr.h>
@@ -12,6 +13,7 @@
 #include <gwa3/managers/QuestMgr.h>
 #include <gwa3/managers/UIMgr.h>
 #include <bots/common/BotFramework.h>
+#include <bots/froggy/FroggyHM.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/Offsets.h>
 #include <gwa3/core/Log.h>
@@ -21,6 +23,7 @@
 #include <gwa3/game/Skill.h>
 #include <gwa3/game/Item.h>
 #include <gwa3/game/Effect.h>
+#include <gwa3/game/ItemModelIds.h>
 #include <gwa3/utils/EncStringCache.h>
 
 #include <Windows.h>
@@ -35,6 +38,7 @@ namespace GWA3::LLM::GameSnapshot {
 
     static uint32_t g_tick = 0;
     static uint32_t g_lastChatTimestamp = 0;  // track which chat messages we've already sent
+    static constexpr uint32_t kMaxProfessionId = 10u;
 
     template <typename T>
     struct SnapshotArrayView {
@@ -132,9 +136,9 @@ namespace GWA3::LLM::GameSnapshot {
             auto* living = reinterpret_cast<AgentLiving*>(agent);
             out.agent_id = living->agent_id;
             out.hp = living->hp;
-            out.max_hp = living->max_hp;
+            out.max_hp = static_cast<float>(living->max_hp);
             out.energy = living->energy;
-            out.max_energy = living->max_energy;
+            out.max_energy = static_cast<float>(living->max_energy);
             out.allegiance = living->allegiance;
             out.primary = living->primary;
             out.secondary = living->secondary;
@@ -658,6 +662,9 @@ namespace GWA3::LLM::GameSnapshot {
             for (uint32_t i = 0; i < arr->size; ++i) {
                 const auto& hi = arr->buffer[i];
                 if (hi.hero_id != heroId) continue;
+                if (hi.primary == 0u || hi.primary > kMaxProfessionId || hi.secondary > kMaxProfessionId) {
+                    return r;
+                }
                 r.ok = true;
                 r.hero_id = hi.hero_id;
                 r.agent_id = hi.agent_id;
@@ -737,9 +744,9 @@ namespace GWA3::LLM::GameSnapshot {
                     if (ReadLivingAgentSeed(agent, living)) {
                         h["hp"] = living.hp;
                         h["energy"] = living.energy;
-                        // Only overwrite prof fields if HeroInfo didn't fill them
-                        // and the living read produced non-zero values.
-                        if (!info.ok && living.primary != 0) {
+                        // Prefer live AgentLiving professions when the hero is
+                        // spawned; HeroInfo can lag behind the actual UI state.
+                        if (living.primary != 0) {
                             h["primary"] = living.primary;
                             h["secondary"] = living.secondary;
                         }
@@ -1003,9 +1010,9 @@ namespace GWA3::LLM::GameSnapshot {
     }
 
     // Serialize a single bag to JSON
-    static json SerializeBag(int bagIndex) {
+    static json SerializeBag(int bagIndex, Bag* bag = nullptr) {
         json b;
-        auto* bag = ItemMgr::GetBag(bagIndex);
+        if (!bag) bag = ItemMgr::GetBag(bagIndex);
         if (!bag) return b;
 
         b["bag_index"] = bagIndex;
@@ -1058,23 +1065,69 @@ namespace GWA3::LLM::GameSnapshot {
     // Build inventory snapshot (backpack bags 1-4) with free slot count
     static json BuildInventoryJson() {
         json inv;
-        // Always populate gold from safe getters — they handle null inventory pointer
-        inv["gold_character"] = ItemMgr::GetGoldCharacter();
-        inv["gold_storage"] = ItemMgr::GetGoldStorage();
-
         auto* inventory = ItemMgr::GetInventory();
         if (!inventory) {
+            inv["gold_character"] = 0;
+            inv["gold_storage"] = 0;
             inv["bags"] = json::array();
             inv["free_slots_total"] = 0;
+            inv["froggy_maintenance"] = {
+                {"conset_material_stacks_inventory", 0},
+                {"conset_material_quantity_inventory", 0},
+                {"loose_consets_inventory_total", 0},
+                {"grail_inventory", 0},
+                {"essence_inventory", 0},
+                {"armor_inventory", 0},
+                {"stored_consets_total", 0},
+                {"stored_grail", 0},
+                {"stored_essence", 0},
+                {"stored_armor", 0},
+            };
             return inv;
         }
 
+        inv["gold_character"] = inventory->gold_character;
+        inv["gold_storage"] = inventory->gold_storage;
+
         json bags = json::array();
         uint32_t totalFreeSlots = 0;
+        uint32_t consetMaterialStacks = 0;
+        uint32_t consetMaterialQuantity = 0;
+        uint32_t looseConsets = 0;
+        uint32_t grailInventory = 0;
+        uint32_t essenceInventory = 0;
+        uint32_t armorInventory = 0;
+        const auto addMaintenanceCounts = [&](const Item* item) {
+            if (!item) return;
+            switch (item->model_id) {
+            case ItemModelIds::IRON_INGOT:
+            case ItemModelIds::DUST:
+            case ItemModelIds::FEATHERS:
+            case ItemModelIds::BONES:
+                consetMaterialStacks++;
+                consetMaterialQuantity += item->quantity;
+                break;
+            case ItemModelIds::GRAIL_OF_MIGHT:
+                grailInventory += item->quantity;
+                looseConsets += item->quantity;
+                break;
+            case ItemModelIds::ESSENCE_OF_CELERITY:
+                essenceInventory += item->quantity;
+                looseConsets += item->quantity;
+                break;
+            case ItemModelIds::ARMOR_OF_SALVATION:
+                armorInventory += item->quantity;
+                looseConsets += item->quantity;
+                break;
+            default:
+                break;
+            }
+        };
+
         for (int i = 1; i <= 4; i++) {
-            auto* bag = ItemMgr::GetBag(i);
+            auto* bag = inventory->bags[i];
             if (!bag) continue;
-            json b = SerializeBag(i);
+            json b = SerializeBag(i, bag);
             if (!b.is_null()) {
                 // Count free slots in this bag
                 uint32_t capacity = bag->items.size;  // allocated slot count
@@ -1084,9 +1137,51 @@ namespace GWA3::LLM::GameSnapshot {
                 totalFreeSlots += free;
                 bags.push_back(b);
             }
+            if (bag->items.buffer && bag->items.size > 0) {
+                for (uint32_t s = 0; s < bag->items.size; s++) {
+                    addMaintenanceCounts(bag->items.buffer[s]);
+                }
+            }
         }
         inv["bags"] = bags;
         inv["free_slots_total"] = totalFreeSlots;
+
+        uint32_t storedGrail = 0;
+        uint32_t storedEssence = 0;
+        uint32_t storedArmor = 0;
+        for (int i = 8; i <= 16; i++) {
+            auto* bag = inventory->bags[i];
+            if (!bag || !bag->items.buffer || bag->items.size == 0) continue;
+            for (uint32_t s = 0; s < bag->items.size; s++) {
+                auto* item = bag->items.buffer[s];
+                if (!item) continue;
+                switch (item->model_id) {
+                case ItemModelIds::GRAIL_OF_MIGHT:
+                    storedGrail += item->quantity;
+                    break;
+                case ItemModelIds::ESSENCE_OF_CELERITY:
+                    storedEssence += item->quantity;
+                    break;
+                case ItemModelIds::ARMOR_OF_SALVATION:
+                    storedArmor += item->quantity;
+                    break;
+                default:
+                    break;
+                }
+            }
+        }
+        inv["froggy_maintenance"] = {
+            {"conset_material_stacks_inventory", consetMaterialStacks},
+            {"conset_material_quantity_inventory", consetMaterialQuantity},
+            {"loose_consets_inventory_total", looseConsets},
+            {"grail_inventory", grailInventory},
+            {"essence_inventory", essenceInventory},
+            {"armor_inventory", armorInventory},
+            {"stored_consets_total", storedGrail + storedEssence + storedArmor},
+            {"stored_grail", storedGrail},
+            {"stored_essence", storedEssence},
+            {"stored_armor", storedArmor},
+        };
         return inv;
     }
 
@@ -1183,10 +1278,10 @@ namespace GWA3::LLM::GameSnapshot {
         }
 
         const auto* area = MapMgr::GetAreaInfo(MapMgr::GetMapId());
-        if (area && IsExplorableMapRegionType(area->type)) {
+        if (area && IsExplorableLikeMapRegionType(area->type)) {
             // Merchant item arrays can stay populated with stale town-window
-            // pointers after zoning. Do not touch them in explorable maps.
-            m["skipped"] = "explorable";
+            // pointers after zoning. Do not touch them in combat instances.
+            m["skipped"] = "explorable_like";
             return m;
         }
 
@@ -1568,6 +1663,7 @@ namespace GWA3::LLM::GameSnapshot {
             case Bot::BotState::Traveling:     name = "traveling"; break;
             case Bot::BotState::InDungeon:     name = "in_dungeon"; break;
             case Bot::BotState::Looting:       name = "looting"; break;
+            case Bot::BotState::AwaitingReturn:name = "awaiting_return"; break;
             case Bot::BotState::Merchant:      name = "merchant"; break;
             case Bot::BotState::Maintenance:   name = "maintenance"; break;
             case Bot::BotState::Error:         name = "error"; break;
@@ -1577,6 +1673,45 @@ namespace GWA3::LLM::GameSnapshot {
         b["state"] = name;
         b["is_running"] = Bot::IsRunning();
         b["combat_mode"] = (Bot::GetConfig().combat_mode == Bot::CombatMode::LLM) ? "llm" : "builtin";
+
+        const auto stats = Bot::Froggy::GetMonitoringStatsSnapshot();
+        b["froggy_monitoring"] = {
+            {"title_baseline_ready", stats.title_baseline_ready},
+            {"run_count", stats.run_count},
+            {"fail_count", stats.fail_count},
+            {"current_wipe_count", stats.current_wipe_count},
+            {"route_wipe_count", stats.route_wipe_count},
+            {"monitoring_wipes", stats.monitoring_wipes},
+            {"rare_skins", stats.rare_skins},
+            {"gold_items", stats.gold_items},
+            {"dropped_lockpicks", stats.dropped_lockpicks},
+            {"chests_opened", stats.chests_opened},
+            {"black_dyes", stats.black_dyes},
+            {"tomes", stats.tomes},
+        };
+
+        const auto& loop = Bot::Froggy::g_dungeonLoopTelemetry;
+        b["froggy_dungeon_loop"] = {
+            {"started_in_lvl1", loop.started_in_lvl1},
+            {"started_in_lvl2", loop.started_in_lvl2},
+            {"entered_lvl2", loop.entered_lvl2},
+            {"boss_started", loop.boss_started},
+            {"boss_completed", loop.boss_completed},
+            {"returned_to_sparkfly", loop.returned_to_sparkfly},
+            {"final_map_id", loop.final_map_id},
+            {"last_waypoint_index", loop.last_waypoint_index},
+            {"last_waypoint_label", loop.last_waypoint_label},
+            {"waypoint_iterations", loop.waypoint_iterations},
+            {"chest_attempts", loop.chest_attempts},
+            {"chest_successes", loop.chest_successes},
+            {"reward_attempted", loop.reward_attempted},
+            {"reward_dialog_latched", loop.reward_dialog_latched},
+            {"last_dialog_id", loop.last_dialog_id},
+            {"player_alive", loop.player_alive},
+            {"player_hp", loop.player_hp},
+            {"nearest_enemy_dist", loop.nearest_enemy_dist},
+            {"nearby_enemy_count", loop.nearby_enemy_count},
+        };
         return b;
     }
 
@@ -1864,6 +1999,7 @@ namespace GWA3::LLM::GameSnapshot {
         g_tick++;
         json j;
         j["type"] = "snapshot";
+        j["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
         j["tier"] = 1;
         j["tick"] = g_tick;
         j["me"] = TryBuildPlayerJson();
@@ -1878,6 +2014,7 @@ namespace GWA3::LLM::GameSnapshot {
         g_tick++;
         json j;
         j["type"] = "snapshot";
+        j["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
         j["tier"] = 2;
         j["tick"] = g_tick;
         j["me"] = TryBuildPlayerJson();
@@ -1898,6 +2035,7 @@ namespace GWA3::LLM::GameSnapshot {
         g_tick++;
         json j;
         j["type"] = "snapshot";
+        j["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
         j["tier"] = 3;
         j["tick"] = g_tick;
         j["me"] = TryBuildPlayerJson();

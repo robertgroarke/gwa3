@@ -31,6 +31,7 @@ namespace GWA3::AgentMgr {
     uint32_t GetMyId();
 
     // Combat
+    bool IsCombatCommandSafe();
     void Attack(uint32_t agentId);
     void CancelAction();
     void CallTarget(uint32_t agentId);

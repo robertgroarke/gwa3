@@ -1,0 +1,4 @@
+#include "IntegrationTestFroggyFeatureGaddsMerchantOpenConstants.h"
+#include "IntegrationTestFroggyFeatureGaddsMerchantCandidateDiscovery.h"
+#include "IntegrationTestFroggyFeatureGaddsMerchantCandidateOpenAttempt.h"
+#include "IntegrationTestFroggyFeatureGaddsMerchantOpenFlow.h"

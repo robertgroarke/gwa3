@@ -1,5 +1,6 @@
 #include <gwa3/managers/SkillMgr.h>
 
+#include <gwa3/advanced/Interactions.h>
 #include <gwa3/game/SkillIds.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/EffectMgr.h>
@@ -28,6 +29,25 @@ constexpr uint32_t DEBUFF_IGNORANCE           = 56u;
 constexpr uint32_t EFFECT_QUICKENING_ZEPHYR   = 475u;
 constexpr uint32_t EFFECTS_SKIP_AGGRO_FOE     = 0x0014u;
 constexpr uint32_t TYPE_MAP_VANISHED_HOSTILE_MINION = 262152u;
+
+bool IsPlayerCarryingCombatBundle() {
+    const auto* me = AgentMgr::GetMyAgent();
+    if (!me) {
+        return false;
+    }
+
+    if (AdvancedInteractions::GetHeldBundleItemId() != 0u) {
+        return true;
+    }
+
+    if (me->weapon_item_type == 6u || me->offhand_item_type == 6u) {
+        return true;
+    }
+
+    return me->weapon_item_id != 0u &&
+           me->weapon_type == 0u &&
+           me->weapon_item_type == 0u;
+}
 
 bool IsHardInterruptId(uint32_t id) {
     switch (id) {
@@ -756,6 +776,10 @@ bool CanCast(const CachedSkill& skill) {
 }
 
 bool CanBasicAttack() {
+    if (IsPlayerCarryingCombatBundle()) {
+        return false;
+    }
+
     CachedSkill basicAttack = {};
     basicAttack.slot = 0xFFu;
     basicAttack.skill_type = 9u;

@@ -19,6 +19,7 @@ namespace GWA3::ItemMgr {
     // Salvage session
     void SalvageSessionOpen(uint32_t kitId, uint32_t itemId);
     void SalvageMaterials();
+    void SalvageUpgrade(uint32_t modIndex);
     void SalvageSessionDone();
 
     // Merchant

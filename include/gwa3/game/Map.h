@@ -38,6 +38,11 @@ inline constexpr bool IsExplorableMapRegionType(uint32_t type) {
     return IsMapRegionType(type, MapRegionType::ExplorableZone);
 }
 
+inline constexpr bool IsExplorableLikeMapRegionType(uint32_t type) {
+    return IsMapRegionType(type, MapRegionType::ExplorableZone) ||
+           IsMapRegionType(type, MapRegionType::Dungeon);
+}
+
 inline constexpr bool IsOutpostLikeMapRegionType(uint32_t type) {
     return IsMapRegionType(type, MapRegionType::MissionOutpost) ||
            IsMapRegionType(type, MapRegionType::Outpost) ||

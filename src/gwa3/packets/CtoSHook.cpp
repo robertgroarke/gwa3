@@ -61,6 +61,14 @@ static bool EnsurePacketCommandPool() {
     return true;
 }
 
+static void ReleasePacketCommandPool() {
+    if (!s_packetCommandPool) return;
+
+    VirtualFree(reinterpret_cast<void*>(s_packetCommandPool), 0, MEM_RELEASE);
+    s_packetCommandPool = 0;
+    s_packetCommandSlot = 0;
+}
+
 static uintptr_t NextPacketCommandSlot() {
     if (!EnsurePacketCommandPool()) return 0;
     LONG idx = InterlockedIncrement(&s_packetCommandSlot) - 1;
@@ -239,7 +247,10 @@ bool Initialize() {
 }
 
 void Shutdown() {
-    if (!s_initialized) return;
+    if (!s_initialized) {
+        ReleasePacketCommandPool();
+        return;
+    }
 
     s_watchdogRunning = false;
     if (s_watchdogThread) {
@@ -256,6 +267,7 @@ void Shutdown() {
     VirtualProtect(reinterpret_cast<void*>(hookAddr), kPatchSize, oldProtect, &oldProtect);
 
     ZeroMemory(s_queue, sizeof(s_queue));
+    ReleasePacketCommandPool();
     s_queueCounter = 0;
     s_savedIndex = -1;
     s_initialized = false;

@@ -1,6 +1,7 @@
 """Observation window manager — maintains a sliding window of recent game state snapshots."""
 
 from collections import deque
+from copy import deepcopy
 from .gamedata import (
     skill_name,
     item_name,
@@ -8,6 +9,7 @@ from .gamedata import (
     skill_type_name,
     item_type_name,
 )
+from .farming_knowledge import MAP_NAMES
 
 
 class ObservationWindow:
@@ -17,10 +19,22 @@ class ObservationWindow:
         self.max_size = max_size
         self._snapshots: deque[dict] = deque(maxlen=max_size)
         self._events: deque[dict] = deque(maxlen=50)
+        self._latest_merged: dict | None = None
 
     def add_snapshot(self, snapshot: dict):
-        """Add a snapshot, keeping only the latest per tier."""
+        """Add a snapshot and retain richer fields from previous tiers.
+
+        The bridge emits lightweight tier-1 snapshots much more often than full
+        tier-3 snapshots. Treating the most recent raw snapshot as the current
+        state makes inventory, quest, and merchant context disappear between
+        tier-3 updates. Keep a merged view so decision code can see the latest
+        core state plus the last known richer sections.
+        """
         self._snapshots.append(snapshot)
+        merged = deepcopy(self._latest_merged) if self._latest_merged else {}
+        for key, value in snapshot.items():
+            merged[key] = value
+        self._latest_merged = merged
 
     def add_event(self, event: dict):
         """Add a discrete game event."""
@@ -28,8 +42,8 @@ class ObservationWindow:
 
     @property
     def latest(self) -> dict | None:
-        """Return the most recent snapshot."""
-        return self._snapshots[-1] if self._snapshots else None
+        """Return the latest merged snapshot."""
+        return self._latest_merged
 
     def get_recent_events(self, count: int = 10) -> list[dict]:
         """Return the most recent events."""
@@ -41,7 +55,7 @@ class ObservationWindow:
         self._events.clear()
         return events
 
-    def build_context_summary(self) -> str:
+    def build_context_summary(self, *, tier1_only: bool = False) -> str:
         """Build a compact text summary of the current game state for the LLM prompt."""
         snap = self.latest
         if not snap:
@@ -66,10 +80,39 @@ class ObservationWindow:
         if bot and bot.get("is_running"):
             combat = bot.get("combat_mode", "builtin")
             lines.append(f"Bot: state={bot.get('state', '?')} combat={combat}")
+            froggy_stats = bot.get("froggy_monitoring", {}) or {}
+            if froggy_stats:
+                lines.append(
+                    "Froggy stats: "
+                    f"runs={froggy_stats.get('run_count', '?')} "
+                    f"fails={froggy_stats.get('fail_count', '?')} "
+                    f"wipes={froggy_stats.get('monitoring_wipes', '?')} "
+                    f"route_wipes={froggy_stats.get('route_wipe_count', '?')} "
+                    f"chests={froggy_stats.get('chests_opened', '?')} "
+                    f"rare={froggy_stats.get('rare_skins', '?')} "
+                    f"gold_items={froggy_stats.get('gold_items', '?')} "
+                    f"tomes={froggy_stats.get('tomes', '?')}"
+                )
+            froggy_loop = bot.get("froggy_dungeon_loop", {}) or {}
+            if froggy_loop:
+                label = froggy_loop.get("last_waypoint_label") or ""
+                lines.append(
+                    "Froggy loop: "
+                    f"wp={froggy_loop.get('last_waypoint_index', '?')} "
+                    f"label=\"{label}\" "
+                    f"entered_lvl2={froggy_loop.get('entered_lvl2', '?')} "
+                    f"boss_started={froggy_loop.get('boss_started', '?')} "
+                    f"boss_completed={froggy_loop.get('boss_completed', '?')} "
+                    f"returned_to_sparkfly={froggy_loop.get('returned_to_sparkfly', '?')} "
+                    f"chests={froggy_loop.get('chest_successes', '?')}/{froggy_loop.get('chest_attempts', '?')} "
+                    f"reward_attempted={froggy_loop.get('reward_attempted', '?')}"
+                )
 
         # Map
         m = snap.get("map", {})
         if m.get("map_id"):
+            map_id = int(m["map_id"])
+            map_name = MAP_NAMES.get(map_id, "unknown")
             loading = m.get("loading_state", "?")
             load_str = {0: "loading", 1: "loaded", 2: "disconnected"}.get(loading, f"state={loading}")
             vanquish = ""
@@ -78,9 +121,15 @@ class ObservationWindow:
             if fk is not None and ft is not None and (fk > 0 or ft > 0):
                 vanquish = f" foes={fk}/{fk+ft}"
             lines.append(
-                f"Map: id={m['map_id']} {load_str} "
+                f"Map: id={map_id} name=\"{map_name}\" {load_str} "
                 f"time={m.get('instance_time', 0)}ms{vanquish}"
             )
+            if map_id == 638:
+                lines.append("Froggy hint: in Gadd's Encampment, use froggy_run_full_maintenance when upkeep is needed, otherwise froggy_run_town_setup then froggy_travel_to_sparkfly. Froggy tools own town dialogs.")
+            elif map_id == 558:
+                lines.append("Froggy hint: in Sparkfly Swamp, use froggy_run_sparkfly_route_to_tekks, then froggy_prepare_tekks_dungeon_entry. Use froggy_run_dungeon_loop from Sparkfly only as recovery if segmented entry state is ambiguous.")
+            elif map_id in (615, 616):
+                lines.append("Froggy hint: in Bogroot Growths, use froggy_run_dungeon_loop; it owns dungeon routing, boss, reward, and return handling.")
 
         # Skillbar — show human-readable skill names
         skills = snap.get("skillbar", [])
@@ -121,6 +170,14 @@ class ObservationWindow:
                         lines.append(
                             f"    agent_id={dm.get('agent_id')} {profession_name(dm.get('primary', 0))} ({role})"
                         )
+
+        if tier1_only:
+            events = self.get_recent_events(3)
+            if events:
+                lines.append("Recent events:")
+                for ev in events:
+                    lines.append(f"  - {ev.get('event', 'unknown')}: {ev}")
+            return "\n".join(lines)
 
         # Nearby agents (from tier 2+)
         agents = snap.get("agents", [])
@@ -294,6 +351,21 @@ class ObservationWindow:
             total_items = sum(b.get("item_count", 0) for b in bags)
             free_slots = inv.get("free_slots_total", "?")
             lines.append(f"Backpack: {total_items} items, {free_slots} free slots across {len(bags)} bags")
+            froggy_maintenance = inv.get("froggy_maintenance", {}) or {}
+            if froggy_maintenance:
+                lines.append(
+                    "Froggy maintenance: "
+                    f"conset_material_stacks={froggy_maintenance.get('conset_material_stacks_inventory', '?')} "
+                    f"conset_material_qty={froggy_maintenance.get('conset_material_quantity_inventory', '?')} "
+                    f"loose_consets={froggy_maintenance.get('loose_consets_inventory_total', '?')} "
+                    f"inventory_consets=(grail={froggy_maintenance.get('grail_inventory', '?')} "
+                    f"essence={froggy_maintenance.get('essence_inventory', '?')} "
+                    f"armor={froggy_maintenance.get('armor_inventory', '?')}) "
+                    f"stored_consets={froggy_maintenance.get('stored_consets_total', '?')} "
+                    f"(grail={froggy_maintenance.get('stored_grail', '?')} "
+                    f"essence={froggy_maintenance.get('stored_essence', '?')} "
+                    f"armor={froggy_maintenance.get('stored_armor', '?')})"
+                )
 
         # Storage (from tier 3)
         storage = snap.get("storage", [])

@@ -1,0 +1,3 @@
+#include "IntegrationTestFroggyFeatureFeatureRunnerSparkflyEntry.h"
+#include "IntegrationTestFroggyFeatureFeatureRunnerCombatProofDispatch.h"
+#include "IntegrationTestFroggyFeatureFeatureRunnerSparkflyEnemyProofs.h"

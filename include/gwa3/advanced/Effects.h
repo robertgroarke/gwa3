@@ -57,10 +57,14 @@ struct BlessingInteractionOptions {
     WaitFn wait_ms = nullptr;
     SignpostScanLogFn signpost_scan_log = nullptr;
     AgentLogFn agent_log = nullptr;
+    bool use_legacy_interact_fallbacks = true;
+    bool send_dialog_without_ready = true;
+    bool require_specific_blessing = false;
 };
 
 uint32_t GetPlayerEffectCount();
 bool HasAnyDungeonBlessing(uint32_t agentId = 0u);
+bool HasDungeonBlessingForTitle(uint32_t titleId, uint32_t agentId = 0u);
 bool HasBlessing();
 bool HasFullConset(uint32_t agentId = 0u);
 ActiveTitleEnsureResult EnsureActiveTitle(

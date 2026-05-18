@@ -2,22 +2,16 @@
 #include <gwa3/packets/CtoS.h>
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/Offsets.h>
-#include <gwa3/core/Scanner.h>
-#include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
-#include <gwa3/managers/SkillMgr.h>
-#include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/PlayerMgr.h>
 
 #include <cmath>
-#include <vector>
+#include <cstddef>
 #include <Windows.h>
 
 namespace GWA3::PartyMgr {
 
 static bool s_initialized = false;
-using AddHeroFn = void(__cdecl*)(uint32_t);
-static AddHeroFn s_addHeroFn = nullptr;
 
 uintptr_t ResolvePartyContext() {
     if (Offsets::BasePointer <= 0x10000) return 0;
@@ -51,58 +45,23 @@ PartyInfo* ResolvePlayerParty() {
 bool Initialize() {
     if (s_initialized) return true;
 
-    // Port GWCA's resolution (GWCA-master/Source/PartyMgr.cpp:102-106):
-    //   address = FindAssertion("p:\\code\\gw\\ui\\game\\party\\ptsearch.cpp",
-    //                           "m_activeList == LIST_HEROES", -0xd5);
-    //   AddHero_Func = FunctionFromNearCall(address + 0x100);
-    // Byte-pattern scans for the AddHero prologue stopped matching in
-    // Reforged; the assertion-string anchor is stable across builds
-    // because the source filename + assertion message live in .rdata.
-    uintptr_t anchor = Scanner::FindAssertion(
-        "p:\\code\\gw\\ui\\game\\party\\ptsearch.cpp",
-        "m_activeList == LIST_HEROES",
-        -0xd5);
-    if (anchor > 0x10000) {
-        uintptr_t fn = Scanner::FunctionFromNearCall(anchor + 0x100);
-        if (fn > 0x10000) {
-            s_addHeroFn = reinterpret_cast<AddHeroFn>(fn);
-        }
-        Log::Info("PartyMgr: ptsearch anchor=0x%08X addHero=0x%08X",
-                  static_cast<unsigned>(anchor),
-                  static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_addHeroFn)));
-    } else {
-        Log::Warn("PartyMgr: FindAssertion(ptsearch.cpp, m_activeList == "
-                  "LIST_HEROES) failed — AddHero disabled, will fall back "
-                  "to CtoS::HeroAdd packet");
-    }
-
     s_initialized = true;
-    Log::Info("PartyMgr: Initialized (AddHero=0x%08X)",
-              static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_addHeroFn)));
+    Log::Info("PartyMgr: Initialized");
     return true;
 }
 
 void AddHero(uint32_t heroId) {
-    Log::Info("PartyMgr: AddHero(%u) addHeroFn=0x%08X gt=%d",
-              heroId, static_cast<unsigned>(reinterpret_cast<uintptr_t>(s_addHeroFn)),
-              GameThread::IsInitialized() ? 1 : 0);
-    if (s_addHeroFn && GameThread::IsInitialized()) {
-        auto fn = s_addHeroFn;
-        GameThread::Enqueue([fn, heroId]() {
-            fn(heroId);
-        });
-        return;
-    }
+    Log::Info("PartyMgr: AddHero(%u) via CtoS hero packet", heroId);
     CtoS::HeroAdd(heroId);
 }
 
 void KickHero(uint32_t heroId)   { CtoS::HeroKick(heroId); }
 void KickAllHeroes() {
-    // Send the 0x27 "kick all" sentinel first: confirmed to reliably clear
+    // Send the 0x26 "kick all" sentinel first: confirmed to reliably clear
     // party heroes on the current client. Per-hero HERO_KICK with the
     // internal hero_id has stopped removing heroes on the current build,
     // so we issue it only as a fallback behind the sentinel.
-    CtoS::SendPacket(2, Packets::HERO_KICK, 0x27u);
+    CtoS::HeroKick(0x26u);
     uint32_t heroIds[16] = {};
     const size_t heroCount = GetPartyHeroIds(heroIds, _countof(heroIds));
     for (size_t i = 0; i < heroCount; ++i) {

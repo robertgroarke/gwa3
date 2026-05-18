@@ -46,19 +46,19 @@ namespace TitleID {
     constexpr uint32_t CanthanCartographer  = 2;
     constexpr uint32_t Gladiator            = 3;
     constexpr uint32_t Champion             = 4;
-    constexpr uint32_t Kurzick              = 7;
-    constexpr uint32_t Luxon                = 8;
-    constexpr uint32_t Drunkard             = 9;
-    constexpr uint32_t Survivor             = 11;
-    constexpr uint32_t KindOfABigDeal       = 12;
-    constexpr uint32_t Sunspear             = 20;
-    constexpr uint32_t Lightbringer         = 21;
-    constexpr uint32_t ElonianCartographer  = 22;
-    constexpr uint32_t Vanguard             = 28;
-    constexpr uint32_t Norn                 = 29;
-    constexpr uint32_t Asura                = 30;
-    constexpr uint32_t Deldrimor            = 31;
-    constexpr uint32_t Master               = 34;
+    constexpr uint32_t Kurzick              = 5;
+    constexpr uint32_t Luxon                = 6;
+    constexpr uint32_t Drunkard             = 7;
+    constexpr uint32_t Survivor             = 9;
+    constexpr uint32_t KindOfABigDeal       = 10;
+    constexpr uint32_t Sunspear             = 17;
+    constexpr uint32_t Lightbringer         = 20;
+    constexpr uint32_t ElonianCartographer  = 18;
+    constexpr uint32_t Vanguard             = 40;
+    constexpr uint32_t Norn                 = 41;
+    constexpr uint32_t Asura                = 38;
+    constexpr uint32_t Deldrimor            = 39;
+    constexpr uint32_t Master               = 42;
 }
 
 } // namespace GWA3

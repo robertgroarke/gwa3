@@ -29,6 +29,7 @@ namespace GWA3::MerchantMgr {
 
     struct MerchantContextNearCoordsOptions {
         uint16_t preferred_player_number = 0u;
+        bool require_standard_merchant_stock = false;
         float candidate_move_threshold = 120.0f;
         const char* log_prefix = nullptr;
         MerchantContextOptions merchant = {};
@@ -97,6 +98,7 @@ namespace GWA3::MerchantMgr {
 
     uint32_t GetMerchantItemCount();
     Item* GetMerchantItemByPosition(uint32_t itemPosition);
+    uint32_t GetMerchantItemIdByPosition(uint32_t itemPosition);
     Item* GetMerchantItemByModelId(uint32_t modelId);
     uint32_t GetMerchantItemIdByModelId(uint32_t modelId);
 

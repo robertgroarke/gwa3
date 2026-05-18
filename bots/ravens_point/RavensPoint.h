@@ -50,6 +50,8 @@ struct BlessingAnchor {
     int trigger_index = 0;
     float x = 0.0f;
     float y = 0.0f;
+    uint32_t required_title_id = 0x27u;
+    const char* log_name = "Dwarven blessing";
 };
 
 struct TorchObjective {

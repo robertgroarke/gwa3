@@ -324,7 +324,7 @@ bool RecordEntryFailureAndMaybeResetDialog(
               context ? context : "unspecified",
               MapMgr::GetMapId());
 
-    if (tracker.count <= tracker.reset_threshold) {
+    if (tracker.count < tracker.reset_threshold) {
         return false;
     }
 

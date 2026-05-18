@@ -9,6 +9,8 @@ PIPE_NAME = os.environ.get("GWA3_PIPE_NAME", r"\\.\pipe\gwa3_llm")
 # Default LLM settings
 DEFAULT_LLM_URL = "http://localhost:8000/v1"
 DEFAULT_MODEL = "deepseek-v4-pro:cloud"
+DEFAULT_LLM_PROVIDER = "openai-compatible"
+DEFAULT_LLM_HOURLY_TOKEN_CAP = 10_000_000
 
 # Agent loop settings
 MAX_HISTORY_MESSAGES = 50
@@ -24,6 +26,15 @@ AUTONOMY_FULL = "full"
 def parse_args():
     parser = argparse.ArgumentParser(description="GWA3 LLM Bridge autonomous agent")
     parser.add_argument(
+        "--llm-provider",
+        choices=["openai-compatible", "codex-exec"],
+        default=DEFAULT_LLM_PROVIDER,
+        help=(
+            "LLM provider backend. Use codex-exec for Codex CLI models such "
+            "as gpt-5.3-codex-spark."
+        ),
+    )
+    parser.add_argument(
         "--llm-url",
         default=DEFAULT_LLM_URL,
         help=f"OpenAI-compatible API URL (default: {DEFAULT_LLM_URL})",
@@ -38,6 +49,11 @@ def parse_args():
         choices=[AUTONOMY_ADVISORY, AUTONOMY_TACTICAL, AUTONOMY_FULL],
         default=AUTONOMY_TACTICAL,
         help="Autonomy level (default: tactical)",
+    )
+    parser.add_argument(
+        "--advisory",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--pipe",
@@ -61,4 +77,29 @@ def parse_args():
         default=120.0,
         help="Kamadan search cache TTL in seconds (default: 120.0)",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--codex-exec-timeout",
+        type=float,
+        default=180.0,
+        help="Per-decision timeout for --llm-provider codex-exec in seconds (default: 180.0)",
+    )
+    parser.add_argument(
+        "--llm-hourly-token-cap",
+        type=int,
+        default=int(os.environ.get("GWA3_LLM_HOURLY_TOKEN_CAP", DEFAULT_LLM_HOURLY_TOKEN_CAP)),
+        help=(
+            "Hard rolling token cap for LLM mode in tokens/hour "
+            f"(default: {DEFAULT_LLM_HOURLY_TOKEN_CAP})"
+        ),
+    )
+    parser.add_argument(
+        "--allow-remote-llm",
+        action="store_true",
+        default=os.environ.get("GWA3_ALLOW_REMOTE_LLM", "").strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Allow remote/cloud LLM backends. Localhost endpoints do not require this flag.",
+    )
+    args = parser.parse_args()
+    if args.advisory:
+        args.autonomy = AUTONOMY_ADVISORY
+    return args

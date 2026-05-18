@@ -2,6 +2,7 @@
 #include <gwa3/llm/IpcServer.h>
 #include <gwa3/llm/LlmBridge.h>
 #include <gwa3/llm/GameSnapshot.h>
+#include <gwa3/llm/Protocol.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/managers/AgentMgr.h>
@@ -20,6 +21,8 @@
 #include <gwa3/packets/Headers.h>
 #include <gwa3/core/TraderHook.h>
 #include <gwa3/core/Offsets.h>
+#include <gwa3/advanced/Effects.h>
+#include <gwa3/advanced/ItemActions.h>
 #include <gwa3/dungeon/DungeonCombatRoutine.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
 #include <gwa3/dungeon/DungeonOutpostSetup.h>
@@ -63,13 +66,41 @@ namespace GWA3::LLM::ActionExecutor {
         return true;
     }
 
+    static bool EnsureFroggyConsetsReadyForRun(const char* context) {
+        const Bot::BotConfig& cfg = Bot::GetConfig();
+        if (!cfg.use_consets) {
+            return true;
+        }
+
+        const auto result = AdvancedItemActions::UseConsetsForCurrentPlayerIfEnabled(
+            true,
+            &DungeonRuntime::WaitMs,
+            {},
+            "Froggy");
+        if (result.attempted && result.consets.full_active) {
+            return true;
+        }
+
+        Log::Warn("[LLM-Action] %s: full conset not active; inventory consets=%u/%u/%u stored=%u/%u/%u",
+                  context ? context : "froggy",
+                  MaintenanceMgr::CountItemByModel(ItemModelIds::GRAIL_OF_MIGHT),
+                  MaintenanceMgr::CountItemByModel(ItemModelIds::ESSENCE_OF_CELERITY),
+                  MaintenanceMgr::CountItemByModel(ItemModelIds::ARMOR_OF_SALVATION),
+                  MaintenanceMgr::CountItemByModelInStorage(ItemModelIds::GRAIL_OF_MIGHT),
+                  MaintenanceMgr::CountItemByModelInStorage(ItemModelIds::ESSENCE_OF_CELERITY),
+                  MaintenanceMgr::CountItemByModelInStorage(ItemModelIds::ARMOR_OF_SALVATION));
+        return false;
+    }
+
     static bool ShouldPauseSnapshotsDuringAction(const char* actionName) {
         if (!actionName) return false;
         return strcmp(actionName, "froggy_run_dungeon_loop") == 0 ||
                strcmp(actionName, "froggy_run_sparkfly_route_to_tekks") == 0 ||
                strcmp(actionName, "froggy_prepare_tekks_dungeon_entry") == 0 ||
+               strcmp(actionName, "froggy_travel_to_gadds") == 0 ||
                strcmp(actionName, "froggy_travel_to_sparkfly") == 0 ||
-               strcmp(actionName, "froggy_run_town_setup") == 0;
+               strcmp(actionName, "froggy_run_town_setup") == 0 ||
+               strcmp(actionName, "froggy_run_full_maintenance") == 0;
     }
 
     static unsigned long SnapshotPauseBudgetForAction(const char* actionName) {
@@ -96,6 +127,7 @@ namespace GWA3::LLM::ActionExecutor {
     static void SendResult(const char* requestId, bool success, const char* error) {
         json j;
         j["type"] = "action_result";
+        j["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
         j["request_id"] = requestId ? requestId : "";
         j["success"] = success;
         j["error"] = (error && error[0]) ? json(error) : json(nullptr);
@@ -225,6 +257,9 @@ namespace GWA3::LLM::ActionExecutor {
 
     static ActionResult HandleFroggyRunSparkflyRouteToTekks(const json&) {
         if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
+        if (!EnsureFroggyConsetsReadyForRun("froggy_run_sparkfly_route_to_tekks")) {
+            return MakeError("froggy_consets_missing_run_full_maintenance");
+        }
         const bool ok = Bot::Froggy::DebugRunSparkflyRouteToTekks();
         return ok ? MakeOk() : MakeError("froggy_sparkfly_route_to_tekks_failed");
     }
@@ -248,17 +283,56 @@ namespace GWA3::LLM::ActionExecutor {
         }
 
         (void)DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(Bot::Froggy::g_combatSession, "Froggy");
+        if (!EnsureFroggyConsetsReadyForRun("froggy_run_town_setup")) {
+            return MakeError("froggy_consets_missing_run_full_maintenance");
+        }
         Bot::SetState(Bot::BotState::Traveling);
         return MakeOk();
     }
 
+    static ActionResult HandleFroggyTravelToGadds(const json&) {
+        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
+        constexpr uint32_t targetMapId = MapIds::GADDS_ENCAMPMENT;
+        const uint32_t currentMapId = MapMgr::GetMapId();
+        if (currentMapId == targetMapId) {
+            return DungeonRuntime::WaitForTownRuntimeReady(targetMapId, 10000u)
+                ? MakeOk()
+                : MakeError("town_runtime_not_ready");
+        }
+
+        if (currentMapId != MapIds::EMBARK_BEACH) {
+            Log::Warn("[LLM-Action] froggy_travel_to_gadds rejected from unsupported map=%u", currentMapId);
+            return MakeError("froggy_travel_to_gadds_unsupported_map");
+        }
+
+        if (!MapMgr::Travel(targetMapId)) {
+            return MakeError("froggy_travel_to_gadds_failed");
+        }
+
+        const DWORD start = GetTickCount();
+        while ((GetTickCount() - start) < 60000u) {
+            if (MapMgr::GetMapId() == targetMapId &&
+                DungeonRuntime::WaitForTownRuntimeReady(targetMapId, 10000u)) {
+                return MakeOk();
+            }
+            Sleep(500);
+        }
+        return MakeError("froggy_travel_to_gadds_timeout");
+    }
+
     static ActionResult HandleFroggyTravelToSparkfly(const json&) {
         if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
+        if (!EnsureFroggyConsetsReadyForRun("froggy_travel_to_sparkfly")) {
+            return MakeError("froggy_consets_missing_run_full_maintenance");
+        }
         Bot::BotConfig& cfg = Bot::GetConfig();
         const Bot::BotState next = Bot::Froggy::HandleTravel(cfg);
         Bot::SetState(next);
         if (next == Bot::BotState::Error || next == Bot::BotState::Stopping) {
             return MakeError("froggy_travel_to_sparkfly_failed");
+        }
+        if (!DungeonRuntime::WaitForMapReady(MapIds::SPARKFLY_SWAMP, 15000u)) {
+            return MakeError("sparkfly_runtime_not_ready");
         }
         return MakeOk();
     }
@@ -271,6 +345,9 @@ namespace GWA3::LLM::ActionExecutor {
 
     static ActionResult HandleFroggyRunDungeonLoop(const json&) {
         if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
+        if (!EnsureFroggyConsetsReadyForRun("froggy_run_dungeon_loop")) {
+            return MakeError("froggy_consets_missing_run_full_maintenance");
+        }
         if (MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP) {
             Log::Info("[LLM-Action] froggy_run_dungeon_loop: routing from Sparkfly spawn toward Tekks before entry");
             if (!Bot::Froggy::DebugRunSparkflyRouteToTekks()) {
@@ -279,6 +356,19 @@ namespace GWA3::LLM::ActionExecutor {
         }
         Bot::Froggy::ResetDungeonLoopTelemetry();
         const bool ok = Bot::Froggy::RunDungeonLoopFromCurrentMap();
+        const uint32_t finalMapId = MapMgr::GetMapId();
+        if (ok &&
+            Bot::Froggy::g_dungeonLoopTelemetry.boss_completed &&
+            (finalMapId == MapIds::BOGROOT_GROWTHS_LVL1 ||
+             finalMapId == MapIds::BOGROOT_GROWTHS_LVL2)) {
+            Log::Warn("[LLM-Action] froggy_run_dungeon_loop completed reward but remained in Bogroot map=%u; forcing return to outpost",
+                      finalMapId);
+            MapMgr::ReturnToOutpost();
+            if (DungeonRuntime::WaitForMapReady(MapIds::GADDS_ENCAMPMENT, 120000u)) {
+                return MakeOk();
+            }
+            return MakeError("froggy_dungeon_loop_reward_complete_still_in_bogroot");
+        }
         return ok ? MakeOk() : MakeError("froggy_dungeon_loop_failed");
     }
 
@@ -342,6 +432,32 @@ namespace GWA3::LLM::ActionExecutor {
             return MakeError("froggy_maintenance_restock_failed");
         }
         return MakeOk();
+    }
+
+    static ActionResult HandleFroggyRunFullMaintenance(const json&) {
+        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
+        Bot::BotConfig& cfg = Bot::GetConfig();
+        const uint32_t outpostMapId = cfg.outpost_map_id ? cfg.outpost_map_id : MapIds::GADDS_ENCAMPMENT;
+        if (MapMgr::GetMapId() != outpostMapId) {
+            return MakeError("froggy_full_maintenance_requires_gadds");
+        }
+        if (!DungeonRuntime::WaitForTownRuntimeReady(outpostMapId, 10000u)) {
+            return MakeError("town_runtime_not_ready");
+        }
+
+        const Bot::BotState next = Bot::Froggy::HandleMaintenance(cfg);
+        Bot::SetState(next);
+        if (next == Bot::BotState::Traveling || next == Bot::BotState::InTown) {
+            (void)DungeonCombatRoutine::RefreshSkillCacheWithDebugLog(Bot::Froggy::g_combatSession, "Froggy");
+            if (!EnsureFroggyConsetsReadyForRun("froggy_run_full_maintenance")) {
+                return MakeError("froggy_consets_missing_after_maintenance");
+            }
+            return MakeOk();
+        }
+        if (next == Bot::BotState::Maintenance) {
+            return MakeError("froggy_full_maintenance_retry");
+        }
+        return MakeError("froggy_full_maintenance_failed");
     }
 
     static ActionResult HandleChangeTarget(const json& p) {
@@ -1223,6 +1339,7 @@ namespace GWA3::LLM::ActionExecutor {
         else if (stateName == "traveling") target = GWA3::Bot::BotState::Traveling;
         else if (stateName == "in_dungeon") target = GWA3::Bot::BotState::InDungeon;
         else if (stateName == "looting") target = GWA3::Bot::BotState::Looting;
+        else if (stateName == "awaiting_return") target = GWA3::Bot::BotState::AwaitingReturn;
         else if (stateName == "merchant") target = GWA3::Bot::BotState::Merchant;
         else if (stateName == "maintenance") target = GWA3::Bot::BotState::Maintenance;
         else if (stateName == "llm_controlled") target = GWA3::Bot::BotState::LLMControlled;
@@ -1334,11 +1451,13 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["load_skillbar"] = HandleLoadSkillbar;
         g_dispatch["froggy_refresh_combat_skillbar"] = HandleFroggyRefreshCombatSkillbar;
         g_dispatch["froggy_run_town_setup"] = HandleFroggyRunTownSetup;
+        g_dispatch["froggy_travel_to_gadds"] = HandleFroggyTravelToGadds;
         g_dispatch["froggy_travel_to_sparkfly"] = HandleFroggyTravelToSparkfly;
         g_dispatch["froggy_run_sparkfly_route_to_tekks"] = HandleFroggyRunSparkflyRouteToTekks;
         g_dispatch["froggy_prepare_tekks_dungeon_entry"] = HandleFroggyPrepareTekksDungeonEntry;
         g_dispatch["froggy_run_dungeon_loop"] = HandleFroggyRunDungeonLoop;
         g_dispatch["froggy_run_maintenance_cycle"] = HandleFroggyRunMaintenanceCycle;
+        g_dispatch["froggy_run_full_maintenance"] = HandleFroggyRunFullMaintenance;
 
         // Bot control (advisory mode)
         g_dispatch["set_bot_state"] = HandleSetBotState;

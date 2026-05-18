@@ -9,6 +9,7 @@
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/PartyMgr.h>
 #include <gwa3/managers/SkillMgr.h>
+#include <gwa3/packets/CtoS.h>
 
 #include <Windows.h>
 #include <cmath>
@@ -27,12 +28,77 @@ void CallWait(WaitFn fn, uint32_t ms) {
   Sleep(ms);
 }
 
+constexpr uint32_t LOCAL_CLEAR_COMMAND_SETTLE_TIMEOUT_MS = 2500u;
+constexpr uint32_t LOCAL_CLEAR_COMMAND_SETTLE_QUIET_MS = 250u;
+constexpr uint32_t LOCAL_CLEAR_COMMAND_SETTLE_POLL_MS = 50u;
+
+bool IsCombatCommandLaneSettled() {
+  return AgentMgr::IsCombatCommandSafe();
+}
+
+bool WaitForCombatCommandSettle(
+    const char* label,
+    const CombatCallbacks& callbacks,
+    uint32_t timeoutMs = LOCAL_CLEAR_COMMAND_SETTLE_TIMEOUT_MS,
+    uint32_t quietMs = LOCAL_CLEAR_COMMAND_SETTLE_QUIET_MS) {
+  const DWORD start = GetTickCount();
+  DWORD quietStart = 0u;
+
+  while ((GetTickCount() - start) < timeoutMs) {
+    if (CallBool(callbacks.is_dead, false) ||
+        !CallBool(callbacks.is_map_loaded, MapMgr::GetIsMapLoaded()) ||
+        PartyMgr::GetIsPartyDefeated()) {
+      return false;
+    }
+
+    if (IsCombatCommandLaneSettled()) {
+      if (quietStart == 0u) {
+        quietStart = GetTickCount();
+      }
+      if ((GetTickCount() - quietStart) >= quietMs) {
+        return true;
+      }
+    } else {
+      quietStart = 0u;
+    }
+
+    CallWait(callbacks.wait_ms, LOCAL_CLEAR_COMMAND_SETTLE_POLL_MS);
+  }
+
+  const auto* me = AgentMgr::GetMyAgent();
+  const bool moving = me && (std::fabs(me->move_x) > 0.01f ||
+                             std::fabs(me->move_y) > 0.01f);
+  const bool queueIdle = !CtoS::Initialize() || CtoS::IsBotshubQueueIdle();
+  Log::Warn("Combat: command settle timeout label=%s moving=%d queueIdle=%d safe=%d",
+            label != nullptr ? label : "",
+            moving ? 1 : 0,
+            queueIdle ? 1 : 0,
+            AgentMgr::IsCombatCommandSafe() ? 1 : 0);
+  return false;
+}
+
 struct SessionAggroFightContext {
   const SessionAggroFightProfile* profile = nullptr;
   void* post_loot_user_data = nullptr;
 };
 
 const SessionAggroFightProfile* g_activeSessionAggroSkillProfile = nullptr;
+
+bool IsPlayerCarryingCombatBundle() {
+  const auto* me = AgentMgr::GetMyAgent();
+  if (!me) {
+    return false;
+  }
+
+  if (me->weapon_item_type == 6u || me->offhand_item_type == 6u) {
+    return true;
+  }
+
+  // Raven's Point torches can present as an equipped item with no normal
+  // weapon type; attacking in that state is a no-op, but call target works.
+  return me->weapon_item_id != 0u && me->weapon_type == 0u &&
+         me->weapon_item_type == 0u;
+}
 
 const SessionAggroFightProfile* ResolveSessionAggroProfile(void* userData) {
   auto* context = static_cast<SessionAggroFightContext*>(userData);
@@ -199,6 +265,7 @@ void PrepareForLocalClear(float routeX, float routeY, float foeDistance,
   if (options.pre_clear_cancel_wait_ms > 0u) {
     CallWait(callbacks.wait_ms, options.pre_clear_cancel_wait_ms);
   }
+  (void)WaitForCombatCommandSettle("local-clear", callbacks);
 }
 
 void ResumeAfterLocalClear(float routeX, float routeY,
@@ -414,6 +481,7 @@ bool HoldForLocalClear(float waypointX,
 
     AgentMgr::CancelAction();
     CallWait(callbacks.wait_ms, LOCAL_CLEAR_PRE_FIGHT_CANCEL_DWELL_MS);
+    (void)WaitForCombatCommandSettle(clearLabel, dwellCallbacks);
     callbacks.fight_in_aggro(
         policy.clear_range,
         false,
@@ -454,19 +522,36 @@ bool HoldForLocalClear(float waypointX,
     }
 
     if (policy.single_pass && clearPasses >= policy.max_clear_passes) {
-      Log::Info("%s: %s local clear early-exit target=%u waypoint=(%.0f, %.0f) nearby=%u nearest=%.0f budget=%lums",
+      const uint32_t nearbyAtLimit = CountLivingEnemiesInRange(policy.clear_range);
+      const float nearestAtLimit =
+          GetNearestLivingEnemyDistance(policy.clear_range + LOCAL_CLEAR_NEAREST_ENEMY_SCAN_PADDING);
+      if (nearbyAtLimit <= 3u ||
+          nearestAtLimit > (policy.clear_range + LOCAL_CLEAR_EXIT_DISTANCE_PADDING)) {
+        Log::Info("%s: %s local clear early-exit target=%u waypoint=(%.0f, %.0f) nearby=%u nearest=%.0f budget=%lums",
                 prefix,
                 clearLabel,
                 targetId,
                 waypointX,
                 waypointY,
-                CountLivingEnemiesInRange(policy.clear_range),
-                GetNearestLivingEnemyDistance(policy.clear_range + LOCAL_CLEAR_NEAREST_ENEMY_SCAN_PADDING),
+                nearbyAtLimit,
+                nearestAtLimit,
                 static_cast<unsigned long>(GetTickCount() - localClearStart));
-      if (callbacks.post_loot != nullptr) {
-        callbacks.post_loot(callbacks.user_data, policy.clear_range, lootReason);
+        if (callbacks.post_loot != nullptr) {
+          callbacks.post_loot(callbacks.user_data, policy.clear_range, lootReason);
+        }
+        return true;
       }
-      return true;
+
+      Log::Warn("%s: %s local clear held route target=%u waypoint=(%.0f, %.0f) nearby=%u nearest=%.0f after %d passes",
+                prefix,
+                clearLabel,
+                targetId,
+                waypointX,
+                waypointY,
+                nearbyAtLimit,
+                nearestAtLimit,
+                clearPasses);
+      return false;
     }
   }
 
@@ -480,17 +565,36 @@ bool HoldForLocalClear(float waypointX,
   return false;
 }
 
-void FlagAllHeroes(float x, float y) {
+bool FlagAllHeroes(float x, float y) {
+  if (!AgentMgr::IsCombatCommandSafe()) {
+    return false;
+  }
   if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
-    GameThread::EnqueuePost([x, y]() { PartyMgr::FlagAll(x, y); });
-    return;
+    GameThread::EnqueuePost([x, y]() {
+      if (!AgentMgr::IsCombatCommandSafe()) {
+        Log::Info("Combat: skipped queued hero flag until command lane settles");
+        return;
+      }
+      PartyMgr::FlagAll(x, y);
+    });
+    return true;
   }
   PartyMgr::FlagAll(x, y);
+  return true;
 }
 
 void UnflagAllHeroes() {
   if (GameThread::IsInitialized() && !GameThread::IsOnGameThread()) {
-    GameThread::EnqueuePost([]() { PartyMgr::UnflagAll(); });
+    GameThread::EnqueuePost([]() {
+      if (!AgentMgr::IsCombatCommandSafe()) {
+        Log::Info("Combat: skipped queued hero unflag until command lane settles");
+        return;
+      }
+      PartyMgr::UnflagAll();
+    });
+    return;
+  }
+  if (!AgentMgr::IsCombatCommandSafe()) {
     return;
   }
   PartyMgr::UnflagAll();
@@ -506,6 +610,7 @@ bool ClearEnemiesInArea(float fightRange, const CombatCallbacks &callbacks,
   const DWORD clearStart = GetTickCount();
   DWORD quietStart = 0u;
   uint32_t currentTargetId = 0u;
+  uint32_t targetTimeoutResets = 0u;
   DWORD targetFightStart = 0u;
   DWORD lastFlagMs = 0u;
   DWORD lastTargetCallMs = 0u;
@@ -551,11 +656,51 @@ bool ClearEnemiesInArea(float fightRange, const CombatCallbacks &callbacks,
     if (targetChanged) {
       currentTargetId = foeId;
       targetFightStart = now;
+      targetTimeoutResets = 0u;
       lastFlagMs = 0u;
       lastTargetCallMs = 0u;
       lastFightMs = 0u;
       lastAttackMs = 0u;
     } else if ((now - targetFightStart) > options.target_timeout_ms) {
+      auto *meTimeout = AgentMgr::GetMyAgent();
+      const uint32_t remainingNearby = CountLivingEnemiesInRange(clearRange);
+      if (remainingNearby == 0u) {
+        if (options.flag_heroes) {
+          UnflagAllHeroes();
+        }
+        if (callbacks.pickup_loot && options.pickup_after_clear) {
+          callbacks.pickup_loot(options.pickup_range);
+        }
+        return true;
+      }
+      auto *timeoutTarget = AgentMgr::GetAgentByID(foeId);
+      if (targetTimeoutResets < 2u || timeoutTarget == nullptr) {
+        ++targetTimeoutResets;
+        Log::Warn("Combat: ClearEnemiesInArea target stale/reset target=%u "
+                  "fightRange=%.0f clearRange=%.0f foeDist=%.0f "
+                  "nearby=%u reset=%u player=(%.0f, %.0f) targetValid=%d",
+                  foeId, fightRange, clearRange, foeDistance, remainingNearby,
+                  targetTimeoutResets,
+                  meTimeout ? meTimeout->x : 0.0f,
+                  meTimeout ? meTimeout->y : 0.0f,
+                  timeoutTarget != nullptr ? 1 : 0);
+        if (timeoutTarget == nullptr) {
+          currentTargetId = 0u;
+        }
+        targetFightStart = now;
+        lastFlagMs = 0u;
+        lastTargetCallMs = 0u;
+        lastFightMs = 0u;
+        lastAttackMs = 0u;
+        CallWait(callbacks.wait_ms, options.loop_wait_ms);
+        continue;
+      }
+      Log::Warn("Combat: ClearEnemiesInArea target timeout target=%u "
+                "fightRange=%.0f clearRange=%.0f foeDist=%.0f "
+                "nearby=%u player=(%.0f, %.0f)",
+                foeId, fightRange, clearRange, foeDistance, remainingNearby,
+                meTimeout ? meTimeout->x : 0.0f,
+                meTimeout ? meTimeout->y : 0.0f);
       if (options.flag_heroes) {
         UnflagAllHeroes();
       }
@@ -567,17 +712,13 @@ bool ClearEnemiesInArea(float fightRange, const CombatCallbacks &callbacks,
       CallWait(callbacks.wait_ms, options.idle_wait_ms);
       continue;
     }
+    const bool carryingBundle = IsPlayerCarryingCombatBundle();
     auto *meCasting = AgentMgr::GetMyAgent();
     if (AgentMgr::IsCasting(meCasting)) {
       CallWait(callbacks.wait_ms, options.loop_wait_ms);
       continue;
     }
 
-    if (options.flag_heroes &&
-        (targetChanged || (now - lastFlagMs) >= options.flag_reissue_ms)) {
-      FlagAllHeroes(foe->x, foe->y);
-      lastFlagMs = now;
-    }
     if (options.change_target &&
         (targetChanged ||
          (now - lastTargetCallMs) >= options.target_reissue_ms)) {
@@ -590,6 +731,25 @@ bool ClearEnemiesInArea(float fightRange, const CombatCallbacks &callbacks,
       AgentMgr::CallTarget(foeId);
       lastTargetCallMs = now;
     }
+    if (carryingBundle &&
+        (targetChanged ||
+         (now - lastTargetCallMs) >= options.target_reissue_ms)) {
+      AgentMgr::CallTarget(foeId);
+      lastTargetCallMs = now;
+    }
+    if (options.flag_heroes &&
+        (targetChanged || (now - lastFlagMs) >= options.flag_reissue_ms)) {
+      if (FlagAllHeroes(foe->x, foe->y)) {
+        lastFlagMs = now;
+      }
+    }
+
+    if (carryingBundle && foeDistance > BUNDLE_CARRY_SKILL_ENGAGE_RANGE &&
+        callbacks.queue_move) {
+      callbacks.queue_move(foe->x, foe->y);
+      CallWait(callbacks.wait_ms, BUNDLE_CARRY_CHASE_WAIT_MS);
+      continue;
+    }
 
     if (options.chase_during_clear && foeDistance > options.chase_distance &&
         callbacks.queue_move) {
@@ -598,7 +758,8 @@ bool ClearEnemiesInArea(float fightRange, const CombatCallbacks &callbacks,
     }
 
     bool attackedNow = false;
-    if (targetChanged || (now - lastAttackMs) >= options.attack_reissue_ms) {
+    if (!carryingBundle &&
+        (targetChanged || (now - lastAttackMs) >= options.attack_reissue_ms)) {
       AgentMgr::Attack(foeId);
       lastAttackMs = now;
       attackedNow = true;
@@ -613,9 +774,34 @@ bool ClearEnemiesInArea(float fightRange, const CombatCallbacks &callbacks,
     CallWait(callbacks.wait_ms, options.loop_wait_ms);
   }
 
+  auto *meTimeout = AgentMgr::GetMyAgent();
+  const uint32_t finalNearby = CountLivingEnemiesInRange(clearRange);
+  if (finalNearby == 0u) {
+    if (options.flag_heroes) {
+      UnflagAllHeroes();
+    }
+    if (callbacks.pickup_loot && options.pickup_after_clear) {
+      callbacks.pickup_loot(options.pickup_range);
+    }
+    Log::Info("Combat: ClearEnemiesInArea timeout resolved clean fightRange=%.0f "
+              "clearRange=%.0f player=(%.0f, %.0f)",
+              fightRange, clearRange, meTimeout ? meTimeout->x : 0.0f,
+              meTimeout ? meTimeout->y : 0.0f);
+    return true;
+  }
+
   if (options.flag_heroes) {
     UnflagAllHeroes();
   }
+  const uint32_t remainingTarget = currentTargetId;
+  auto *target = remainingTarget != 0u ? AgentMgr::GetAgentByID(remainingTarget)
+                                      : nullptr;
+  Log::Warn("Combat: ClearEnemiesInArea timeout fightRange=%.0f clearRange=%.0f "
+            "nearby=%u target=%u player=(%.0f, %.0f) targetPos=(%.0f, %.0f)",
+            fightRange, clearRange, finalNearby,
+            remainingTarget, meTimeout ? meTimeout->x : 0.0f,
+            meTimeout ? meTimeout->y : 0.0f, target ? target->x : 0.0f,
+            target ? target->y : 0.0f);
   return false;
 }
 
@@ -640,8 +826,16 @@ bool AdvanceWithAggro(float x, float y, float fightRange,
 
   while (DistanceToPoint(x, y) > options.arrival_threshold &&
          (GetTickCount() - start) < options.timeout_ms) {
-    if (CallBool(callbacks.is_dead, false) ||
-        !CallBool(callbacks.is_map_loaded, MapMgr::GetIsMapLoaded())) {
+    const bool isDead = CallBool(callbacks.is_dead, false);
+    const bool isMapLoaded =
+        CallBool(callbacks.is_map_loaded, MapMgr::GetIsMapLoaded());
+    if (isDead || !isMapLoaded) {
+      auto *meAbort = AgentMgr::GetMyAgent();
+      Log::Warn("Combat: AdvanceWithAggro abort target=(%.0f, %.0f) "
+                "dead=%d mapLoaded=%d partyDefeated=%d player=(%.0f, %.0f)",
+                x, y, isDead ? 1 : 0, isMapLoaded ? 1 : 0,
+                PartyMgr::GetIsPartyDefeated() ? 1 : 0,
+                meAbort ? meAbort->x : 0.0f, meAbort ? meAbort->y : 0.0f);
       return false;
     }
 
@@ -652,10 +846,23 @@ bool AdvanceWithAggro(float x, float y, float fightRange,
           options.stuck_minimum_progress, options.stuck_recovery_threshold,
           options.stuck_abort_threshold, options.stuck_recovery_radius);
       if (stuckResolution.issue_recovery_move) {
+        Log::Warn("Combat: AdvanceWithAggro recovery target=(%.0f, %.0f) "
+                  "player=(%.0f, %.0f) recovery=(%.0f, %.0f) "
+                  "dist=%.0f lowMove=%d clearRange=%.0f",
+                  x, y, meStuck->x, meStuck->y,
+                  stuckResolution.recovery_x, stuckResolution.recovery_y,
+                  DistanceToPoint(x, y), stuckMonitor.low_movement_count,
+                  localClearRange);
         callbacks.queue_move(stuckResolution.recovery_x,
                              stuckResolution.recovery_y);
         CallWait(callbacks.wait_ms, options.move_wait_ms);
       } else if (stuckResolution.abort_move) {
+        Log::Warn("Combat: AdvanceWithAggro stuck abort target=(%.0f, %.0f) "
+                  "player=(%.0f, %.0f) dist=%.0f lowMove=%d "
+                  "clearRange=%.0f nearby=%u",
+                  x, y, meStuck->x, meStuck->y, DistanceToPoint(x, y),
+                  stuckMonitor.low_movement_count, localClearRange,
+                  CountLivingEnemiesInRange(localClearRange));
         return false;
       }
     }
@@ -676,7 +883,20 @@ bool AdvanceWithAggro(float x, float y, float fightRange,
     CallWait(callbacks.wait_ms, options.move_wait_ms);
   }
 
-  return DistanceToPoint(x, y) <= options.arrival_threshold;
+  const float finalDist = DistanceToPoint(x, y);
+  const bool arrived = finalDist <= options.arrival_threshold;
+  if (!arrived) {
+    auto *meTimeout = AgentMgr::GetMyAgent();
+    Log::Warn("Combat: AdvanceWithAggro timeout target=(%.0f, %.0f) "
+              "player=(%.0f, %.0f) dist=%.0f threshold=%.0f "
+              "clearRange=%.0f nearby=%u elapsed=%lums",
+              x, y, meTimeout ? meTimeout->x : 0.0f,
+              meTimeout ? meTimeout->y : 0.0f, finalDist,
+              options.arrival_threshold, localClearRange,
+              CountLivingEnemiesInRange(localClearRange),
+              static_cast<unsigned long>(GetTickCount() - start));
+  }
+  return arrived;
 }
 
 bool FightEnemiesInAggro(float aggroRange,
@@ -712,8 +932,21 @@ bool FightEnemiesInAggro(float aggroRange,
       callbacks.record_target(callbacks.user_data, bestTarget);
     }
 
+    const bool carryingBundle = IsPlayerCarryingCombatBundle();
+    if (carryingBundle) {
+      AgentMgr::CallTarget(bestTarget);
+      if (auto* target = AgentMgr::GetAgentByID(bestTarget)) {
+        auto* me = AgentMgr::GetMyAgent();
+        if (me && AgentMgr::GetDistance(me->x, me->y, target->x, target->y) >
+                      BUNDLE_CARRY_SKILL_ENGAGE_RANGE) {
+          AgentMgr::Move(target->x, target->y);
+          CallWait(callbacks.wait_ms, BUNDLE_CARRY_CHASE_WAIT_MS);
+        }
+      }
+    }
+
     bool attacked = false;
-    if (AdvancedSkill::CanBasicAttack()) {
+    if (!carryingBundle && AdvancedSkill::CanBasicAttack()) {
       AgentMgr::Attack(bestTarget);
       attacked = true;
     }
@@ -743,10 +976,12 @@ bool FightEnemiesInAggro(float aggroRange,
   }
 
   const DWORD elapsedFightMs = GetTickCount() - fightStart;
-  if (elapsedFightMs >= options.max_fight_ms &&
+  const bool timedOutWithNearbyEnemy =
+      elapsedFightMs >= options.max_fight_ms &&
       GetNearestLivingEnemyDistance() <= aggroRange &&
       !CallBool(callbacks.is_dead, false) &&
-      MapMgr::GetIsMapLoaded()) {
+      MapMgr::GetIsMapLoaded();
+  if (timedOutWithNearbyEnemy) {
     auto* me = AgentMgr::GetMyAgent();
     Log::Warn("%s: FightEnemiesInAggro budget hit elapsed=%lums aggroRange=%.0f player=(%.0f, %.0f) nearestEnemy=%.0f target=%u",
               options.log_prefix ? options.log_prefix : "Combat",
@@ -762,8 +997,11 @@ bool FightEnemiesInAggro(float aggroRange,
     SkillMgr::SetRestrictedMapPlayerUseSkillOverride(false);
   }
 
-  if (callbacks.post_loot != nullptr) {
+  if (callbacks.post_loot != nullptr && !timedOutWithNearbyEnemy) {
     callbacks.post_loot(callbacks.user_data, aggroRange, options.loot_reason);
+  } else if (callbacks.post_loot != nullptr && timedOutWithNearbyEnemy) {
+    Log::Warn("%s: FightEnemiesInAggro skipping post-loot because enemies remain in range",
+              options.log_prefix ? options.log_prefix : "Combat");
   }
   return ranPass;
 }

@@ -1,0 +1,3 @@
+#include "IntegrationTestFroggyFeaturePlayerPositionSettle.h"
+#include "IntegrationTestFroggyFeaturePlayerCombatIdleWait.h"
+#include "IntegrationTestFroggyFeatureCombatTargetAcquireWait.h"

@@ -1,0 +1,5 @@
+#include "IntegrationTestFroggyFeatureExplorableLootTypes.h"
+#include "IntegrationTestFroggyFeatureExplorableLootContext.h"
+#include "IntegrationTestFroggyFeatureExplorableLootCandidateSupport.h"
+#include "IntegrationTestFroggyFeatureExplorableLootPickupAttempt.h"
+#include "IntegrationTestFroggyFeatureExplorableLootPickupResult.h"

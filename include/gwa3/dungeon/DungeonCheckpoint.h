@@ -59,6 +59,8 @@ struct WaypointWipeRecoveryOptions {
     int waypoint_count = 0;
     int backtrack_steps = 2;
     uint32_t* wipe_count = nullptr;
+    uint32_t* total_wipe_count = nullptr;
+    uint32_t max_total_wipes_before_outpost = 0u;
     uint32_t revive_timeout_ms = 120000u;
     uint32_t revive_poll_ms = 500u;
     uint32_t dp_removal_wipe_threshold = 2u;
@@ -101,6 +103,8 @@ struct LockedDoorCheckpointOptions {
     int current_index = 0;
     int backtrack_steps = 3;
     bool move_before_check = true;
+    bool require_physical_reach = true;
+    float physical_reach_threshold = 750.0f;
     const char* log_prefix = "Dungeon";
     const char* checkpoint_name = "Dungeon Door Checkpoint";
     WaypointMoveFn move_waypoint = nullptr;

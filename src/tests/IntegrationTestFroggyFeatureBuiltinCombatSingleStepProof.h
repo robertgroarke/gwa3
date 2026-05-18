@@ -1,0 +1,7 @@
+#include "IntegrationTestFroggyFeatureBuiltinCombatSignalSupport.h"
+#include "IntegrationTestFroggyFeatureBuiltinCombatSingleStepState.h"
+#include "IntegrationTestFroggyFeatureBuiltinCombatEngagementSupport.h"
+#include "IntegrationTestFroggyFeatureBuiltinCombatSingleStepSnapshots.h"
+#include "IntegrationTestFroggyFeatureBuiltinCombatSingleStepAction.h"
+#include "IntegrationTestFroggyFeatureBuiltinCombatSingleStepSignal.h"
+#include "IntegrationTestFroggyFeatureBuiltinCombatSingleStepProofEntry.h"

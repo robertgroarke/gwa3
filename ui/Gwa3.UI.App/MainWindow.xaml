@@ -1,0 +1,1420 @@
+<Window x:Class="Gwa3.UI.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:converters="clr-namespace:Gwa3.UI.App.Converters"
+        Title="GWA3 Control Panel"
+        Width="1500"
+        Height="1060"
+        MinWidth="1420"
+        MinHeight="980"
+        WindowStartupLocation="CenterScreen"
+        Icon="Assets/gwa3-control-panel.ico"
+        Background="#EEF2F5">
+    <Window.Resources>
+        <Color x:Key="ShellBackgroundColor">#EEF2F5</Color>
+        <Color x:Key="SurfaceColor">#FFFFFF</Color>
+        <Color x:Key="SurfaceAltColor">#F7FAFC</Color>
+        <Color x:Key="RailColor">#20242A</Color>
+        <Color x:Key="RailAltColor">#2C3138</Color>
+        <Color x:Key="TextColor">#1A202C</Color>
+        <Color x:Key="MutedTextColor">#64748B</Color>
+        <Color x:Key="BorderColor">#CBD5E1</Color>
+        <Color x:Key="AccentColor">#2C7A7B</Color>
+        <Color x:Key="WarnColor">#B7791F</Color>
+        <Color x:Key="DangerColor">#C53030</Color>
+        <SolidColorBrush x:Key="ShellBackground" Color="{StaticResource ShellBackgroundColor}" />
+        <SolidColorBrush x:Key="SurfaceBrush" Color="{StaticResource SurfaceColor}" />
+        <SolidColorBrush x:Key="SurfaceAltBrush" Color="{StaticResource SurfaceAltColor}" />
+        <SolidColorBrush x:Key="RailBrush" Color="{StaticResource RailColor}" />
+        <SolidColorBrush x:Key="RailAltBrush" Color="{StaticResource RailAltColor}" />
+        <SolidColorBrush x:Key="TextBrush" Color="{StaticResource TextColor}" />
+        <SolidColorBrush x:Key="MutedTextBrush" Color="{StaticResource MutedTextColor}" />
+        <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}" />
+        <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}" />
+        <SolidColorBrush x:Key="WarnBrush" Color="{StaticResource WarnColor}" />
+        <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}" />
+
+        <converters:StatusBrushConverter x:Key="StatusBrushConverter" />
+        <converters:LogLevelBrushConverter x:Key="LogLevelBrushConverter" />
+
+        <Style TargetType="{x:Type TextBlock}">
+            <Setter Property="FontFamily" Value="Segoe UI" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <Style TargetType="{x:Type Button}">
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="14,5" />
+            <Setter Property="Margin" Value="4,0" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="FontFamily" Value="Segoe UI" />
+        </Style>
+
+        <Style x:Key="PrimaryButton" TargetType="{x:Type Button}" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style x:Key="DangerButton" TargetType="{x:Type Button}" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="{StaticResource DangerBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style TargetType="{x:Type TextBox}">
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="FontFamily" Value="Segoe UI" />
+        </Style>
+
+        <Style TargetType="{x:Type ComboBox}">
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="Padding" Value="6,4" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="FontFamily" Value="Segoe UI" />
+        </Style>
+
+        <Style TargetType="{x:Type CheckBox}">
+            <Setter Property="Margin" Value="0,5,14,5" />
+            <Setter Property="FontFamily" Value="Segoe UI" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        </Style>
+
+        <Style TargetType="{x:Type TabControl}">
+            <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        </Style>
+
+        <Style TargetType="{x:Type TabItem}">
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="FontFamily" Value="Segoe UI" />
+        </Style>
+
+        <Style TargetType="{x:Type DataGrid}">
+            <Setter Property="AutoGenerateColumns" Value="False" />
+            <Setter Property="CanUserAddRows" Value="False" />
+            <Setter Property="GridLinesVisibility" Value="Horizontal" />
+            <Setter Property="HeadersVisibility" Value="Column" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="RowHeaderWidth" Value="0" />
+        </Style>
+
+        <Style x:Key="SectionBorder" TargetType="{x:Type Border}">
+            <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="14" />
+        </Style>
+
+        <Style x:Key="SectionTitle" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,10" />
+        </Style>
+
+        <Style x:Key="FieldLabel" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+
+        <Style TargetType="{x:Type ListBoxItem}">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="28" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" MinHeight="72" Background="{StaticResource SurfaceBrush}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="260" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Margin="18,8,12,6">
+                <TextBlock Text="GWA3 Control Panel" FontSize="17" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding FleetHealthBanner}" FontSize="12" Foreground="{StaticResource MutedTextBrush}" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+
+            <WrapPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,8,16,8">
+                <StackPanel Width="180" Margin="0,0,10,8">
+                    <TextBlock Style="{StaticResource FieldLabel}" Text="Profile" />
+                    <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" DisplayMemberPath="Name" />
+                </StackPanel>
+                <StackPanel Width="180" Margin="0,0,10,8">
+                    <TextBlock Style="{StaticResource FieldLabel}" Text="Bot" />
+                    <ComboBox ItemsSource="{Binding BotOptions}" SelectedItem="{Binding SelectedBot}" DisplayMemberPath="Name" />
+                </StackPanel>
+                <StackPanel Width="210" Margin="0,0,10,8">
+                    <TextBlock Style="{StaticResource FieldLabel}" Text="Character" />
+                    <ComboBox ItemsSource="{Binding CharacterOptions}" SelectedItem="{Binding SelectedCharacter}" DisplayMemberPath="Name" />
+                </StackPanel>
+                <StackPanel Width="125" Margin="0,0,12,8">
+                    <TextBlock Style="{StaticResource FieldLabel}" Text="Mode" />
+                    <ComboBox ItemsSource="{Binding LaunchModes}" SelectedItem="{Binding SelectedLaunchMode}" />
+                </StackPanel>
+                <Button Content="Save Profile" Command="{Binding SaveProfileCommand}" Margin="0,0,8,8" />
+                <Button Content="Validate" Command="{Binding ValidateCommand}" Margin="0,0,8,8" />
+                <Button Content="Dry Run" Command="{Binding DryRunCommand}" Margin="0,0,8,8" />
+                <Button Content="Launch" Command="{Binding LaunchCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8" />
+                <Button Content="Stop" Command="{Binding StopCommand}" Style="{StaticResource DangerButton}" Margin="0,0,0,8" />
+            </WrapPanel>
+        </Grid>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="266" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="{StaticResource RailBrush}">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top" Margin="16,16,16,8">
+                        <TextBlock Text="Sessions" Foreground="White" FontSize="15" FontWeight="SemiBold" />
+                        <TextBlock Text="Lane, DLL, pipe, and process state" Foreground="#A0AEC0" FontSize="12" />
+                    </StackPanel>
+
+                    <ListBox ItemsSource="{Binding Sessions}"
+                             SelectedItem="{Binding SelectedSession}"
+                             Background="{StaticResource RailBrush}"
+                             BorderThickness="0"
+                             Margin="8,0,8,10">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{StaticResource RailAltBrush}"
+                                        BorderBrush="#3A414A"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Padding="10"
+                                        Margin="0,5">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding CharacterName}" Foreground="White" FontWeight="SemiBold" />
+                                        <Border Grid.Row="0" Grid.Column="1"
+                                                Background="{Binding Status, Converter={StaticResource StatusBrushConverter}}"
+                                                CornerRadius="4"
+                                                Padding="6,2">
+                                            <TextBlock Text="{Binding Status}" Foreground="White" FontSize="11" />
+                                        </Border>
+
+                                        <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding BotModule}" Foreground="#CBD5E1" FontSize="12" Margin="0,5,0,0" />
+                                        <TextBlock Grid.Row="2" Grid.ColumnSpan="2" Text="{Binding BotPhase}" Foreground="#FBBF24" FontSize="12" FontWeight="SemiBold" />
+                                        <TextBlock Grid.Row="3" Grid.ColumnSpan="2" Text="{Binding DllName}" Foreground="#A0AEC0" FontSize="12" />
+                                        <TextBlock Grid.Row="4" Grid.ColumnSpan="2" Text="{Binding PipeName}" Foreground="#A0AEC0" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </Border>
+
+            <TabControl Grid.Column="1" Margin="12" SelectedIndex="1">
+                <TabItem Header="Configuration">
+                    <TabControl Margin="0">
+                <TabItem Header="Launch">
+                    <Grid Margin="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.05*" />
+                            <ColumnDefinition Width="0.95*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource SectionBorder}" Margin="0,0,8,12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Style="{StaticResource SectionTitle}" Text="Launch selection" />
+
+                                <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,8,10">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Bot module" />
+                                    <ComboBox ItemsSource="{Binding BotOptions}" SelectedItem="{Binding SelectedBot}" DisplayMemberPath="Name" />
+                                </StackPanel>
+                                <StackPanel Grid.Row="1" Grid.Column="1" Margin="8,0,0,10">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Character" />
+                                    <ComboBox ItemsSource="{Binding CharacterOptions}" SelectedItem="{Binding SelectedCharacter}" DisplayMemberPath="Name" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,0,8,10">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Launch mode" />
+                                    <ComboBox ItemsSource="{Binding LaunchModes}" SelectedItem="{Binding SelectedLaunchMode}" />
+                                </StackPanel>
+                                <StackPanel Grid.Row="2" Grid.Column="1" Margin="8,0,0,10">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Resolved profile" />
+                                    <TextBox Text="ui/runs/preview-trade-helper/resolved-profile.json" IsReadOnly="True" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Orientation="Horizontal">
+                                    <CheckBox Content="Hard mode" IsChecked="{Binding HardMode}" />
+                                    <CheckBox Content="Use consets" IsChecked="{Binding UseConsets}" />
+                                    <CheckBox Content="Open chests" IsChecked="{Binding OpenChests}" />
+                                    <CheckBox Content="Pickup gold" IsChecked="{Binding PickupGold}" />
+                                    <CheckBox Content="Auto salvage" IsChecked="{Binding AutoSalvage}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="0" Grid.Column="1" Style="{StaticResource SectionBorder}" Margin="8,0,0,12">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Style="{StaticResource SectionTitle}" Text="Selected lane" />
+                                <UniformGrid Grid.Row="1" Columns="2">
+                                    <StackPanel Margin="0,0,8,8">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Lane" />
+                                        <TextBox Text="{Binding SelectedSession.LaneTag}" IsReadOnly="True" />
+                                    </StackPanel>
+                                    <StackPanel Margin="8,0,0,8">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="PID" />
+                                        <TextBox Text="{Binding SelectedSession.Pid}" IsReadOnly="True" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,8,8">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="DLL" />
+                                        <TextBox Text="{Binding SelectedSession.DllName}" IsReadOnly="True" />
+                                    </StackPanel>
+                                    <StackPanel Margin="8,0,0,8">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Health" />
+                                        <TextBox Text="{Binding SelectedSession.Health}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" Height="54" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,8,8">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Bot phase" />
+                                        <TextBox Text="{Binding SelectedSession.BotPhase}" IsReadOnly="True" />
+                                    </StackPanel>
+                                    <StackPanel Margin="8,0,0,8">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Last event" />
+                                        <TextBox Text="{Binding SelectedSession.LastEvent}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" Height="54" />
+                                    </StackPanel>
+                                </UniformGrid>
+                                <StackPanel Grid.Row="2">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Pipe" />
+                                    <TextBox Text="{Binding SelectedSession.PipeName}" IsReadOnly="True" />
+                                </StackPanel>
+                                <TextBlock Grid.Row="3" Text="Live wiring must call GWLauncher, wait for the exact returned PID to become healthy, then inject the lane DLL only into that PID." Foreground="{StaticResource MutedTextBrush}" FontSize="12" Margin="0,8,0,0" />
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource SectionBorder}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="0.9*" />
+                                    <ColumnDefinition Width="1.1*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,14,0">
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Validation" />
+                                    <ListView ItemsSource="{Binding ValidationChecks}" MinHeight="240">
+                                        <ListView.View>
+                                            <GridView>
+                                                <GridViewColumn Header="State" Width="70" DisplayMemberBinding="{Binding State}" />
+                                                <GridViewColumn Header="Check" Width="180" DisplayMemberBinding="{Binding Name}" />
+                                                <GridViewColumn Header="Detail" Width="300" DisplayMemberBinding="{Binding Detail}" />
+                                            </GridView>
+                                        </ListView.View>
+                                    </ListView>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Recent launch log" />
+                                    <ListBox ItemsSource="{Binding LaunchLogEntries}" MinHeight="240">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <DockPanel Margin="0,2">
+                                                    <TextBlock DockPanel.Dock="Left" Text="{Binding Timestamp}" Foreground="{StaticResource MutedTextBrush}" Width="58" />
+                                                    <TextBlock DockPanel.Dock="Left" Text="{Binding Level}" Foreground="{Binding Level, Converter={StaticResource LogLevelBrushConverter}}" Width="58" FontWeight="SemiBold" />
+                                                    <TextBlock Text="{Binding Message}" />
+                                                </DockPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Profile">
+                    <Grid Margin="14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="0.9*" />
+                            <ColumnDefinition Width="1.1*" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0" Style="{StaticResource SectionBorder}" Margin="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionTitle}" Text="Profile identity" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Profile name" />
+                                <TextBox Text="{Binding ProfileName, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Bot module" Margin="0,12,0,4" />
+                                <ComboBox ItemsSource="{Binding BotOptions}" SelectedItem="{Binding SelectedBot}" DisplayMemberPath="Name" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Character" Margin="0,12,0,4" />
+                                <ComboBox ItemsSource="{Binding CharacterOptions}" SelectedItem="{Binding SelectedCharacter}" DisplayMemberPath="Name" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Hero config file" Margin="0,12,0,4" />
+                                <TextBox Text="{Binding HeroConfigFile, UpdateSourceTrigger=PropertyChanged}" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Column="1" Style="{StaticResource SectionBorder}" Margin="8,0,0,0">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionTitle}" Text="Runtime toggles" />
+                                <WrapPanel>
+                                    <CheckBox Content="Hard mode" IsChecked="{Binding HardMode}" />
+                                    <CheckBox Content="Use consets" IsChecked="{Binding UseConsets}" />
+                                    <CheckBox Content="Use stones" IsChecked="{Binding UseStones}" />
+                                    <CheckBox Content="Disable rendering" IsChecked="{Binding DisableRendering}" />
+                                    <CheckBox Content="Open chests" IsChecked="{Binding OpenChests}" />
+                                    <CheckBox Content="Pickup gold" IsChecked="{Binding PickupGold}" />
+                                    <CheckBox Content="Auto identify" IsChecked="{Binding AutoIdentify}" />
+                                    <CheckBox Content="Auto salvage" IsChecked="{Binding AutoSalvage}" />
+                                    <CheckBox Content="Merchant restock" IsEnabled="False" />
+                                    <CheckBox Content="Store protected items" IsEnabled="False" />
+                                </WrapPanel>
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Operator notes" Margin="0,14,0,4" />
+                                <TextBox Height="160"
+                                         AcceptsReturn="True"
+                                         TextWrapping="Wrap"
+                                         Text="Keep normal runs deterministic. Enable LLM mode only after the bridge pipe and action permissions are visible in Diagnostics." />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Team/Skills">
+                    <Grid Margin="14">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Border Grid.Row="0" Style="{StaticResource SectionBorder}" Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="260" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Player template" />
+                                    <TextBox Text="{Binding PlayerTemplate, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Hero config file" />
+                                    <TextBox Text="{Binding HeroConfigFile, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="1" Style="{StaticResource SectionBorder}">
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Skillbars and attributes" Margin="0,0,16,0" />
+                                    <Button Content="Import Template" IsEnabled="False" />
+                                    <Button Content="Apply to Heroes" IsEnabled="False" />
+                                    <Button Content="Validate Builds" Command="{Binding ValidateCommand}" />
+                                </StackPanel>
+                                <DataGrid ItemsSource="{Binding HeroBuilds}">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Slot" Width="90" Binding="{Binding Slot}" />
+                                        <DataGridTextColumn Header="Name" Width="150" Binding="{Binding Name}" />
+                                        <DataGridTextColumn Header="Template" Width="*" Binding="{Binding Template}" />
+                                        <DataGridTextColumn Header="Role" Width="120" Binding="{Binding Role}" />
+                                        <DataGridTextColumn Header="Behavior" Width="130" Binding="{Binding Behavior}" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </DockPanel>
+                        </Border>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Inventory">
+                    <Grid Margin="14">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Border Grid.Row="0" Style="{StaticResource SectionBorder}" Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                    <StackPanel Width="220" Margin="0,0,12,0">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Policy filter" />
+                                        <TextBox Text="weapons, mods, materials" IsEnabled="False" />
+                                    </StackPanel>
+                                    <StackPanel Width="180">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Policy set" />
+                                        <ComboBox SelectedIndex="0" IsEnabled="False">
+                                            <ComboBoxItem Content="Default farm policy" />
+                                            <ComboBoxItem Content="Conservative salvage" />
+                                            <ComboBoxItem Content="Keep all mods" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
+                                    <Button Content="Import BotsHub JSON" IsEnabled="False" />
+                                    <Button Content="Apply" Command="{Binding SaveProfileCommand}" Style="{StaticResource PrimaryButton}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <Grid Grid.Row="1">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="230" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <Border Grid.Row="0" Style="{StaticResource SectionBorder}" Margin="0,0,0,10">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Top" Style="{StaticResource SectionTitle}" Text="Pickup, identify, salvage, sell, and store rules" />
+                                    <DataGrid ItemsSource="{Binding InventoryPolicies}">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Category" Width="150" Binding="{Binding Category}" />
+                                            <DataGridTextColumn Header="Rule" Width="220" Binding="{Binding Rule}" />
+                                            <DataGridTextColumn Header="Decision" Width="180" Binding="{Binding Decision}" />
+                                            <DataGridTextColumn Header="Notes" Width="*" Binding="{Binding Notes}" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </DockPanel>
+                            </Border>
+
+                            <Border Grid.Row="1" Style="{StaticResource SectionBorder}">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Top" Style="{StaticResource SectionTitle}" Text="GWA2-style upgrade salvage matrix" />
+                                    <DataGrid ItemsSource="{Binding UpgradeSalvageRules}" ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                        <DataGrid.Columns>
+                                            <DataGridCheckBoxColumn Header="On" Width="46" Binding="{Binding Enabled}" />
+                                            <DataGridTextColumn Header="Group" Width="135" Binding="{Binding Group}" />
+                                            <DataGridTextColumn Header="Mod" Width="210" Binding="{Binding Name}" />
+                                            <DataGridTextColumn Header="Slot" Width="95" Binding="{Binding SalvageSlot}" />
+                                            <DataGridTextColumn Header="Min" Width="70" Binding="{Binding MinimumRarity}" />
+                                            <DataGridTextColumn Header="Types" Width="145" Binding="{Binding ItemTypesSummary}" />
+                                            <DataGridTextColumn Header="Pattern" Width="130" Binding="{Binding ModifierPattern}" />
+                                            <DataGridCheckBoxColumn Header="Staff" Width="58" Binding="{Binding Staff}" />
+                                            <DataGridCheckBoxColumn Header="Wand" Width="58" Binding="{Binding Wand}" />
+                                            <DataGridCheckBoxColumn Header="Focus" Width="60" Binding="{Binding Focus}" />
+                                            <DataGridCheckBoxColumn Header="Shield" Width="62" Binding="{Binding Shield}" />
+                                            <DataGridCheckBoxColumn Header="Axe" Width="52" Binding="{Binding Axe}" />
+                                            <DataGridCheckBoxColumn Header="Bow" Width="52" Binding="{Binding Bow}" />
+                                            <DataGridCheckBoxColumn Header="Hammer" Width="72" Binding="{Binding Hammer}" />
+                                            <DataGridCheckBoxColumn Header="Daggers" Width="72" Binding="{Binding Daggers}" />
+                                            <DataGridCheckBoxColumn Header="Scythe" Width="65" Binding="{Binding Scythe}" />
+                                            <DataGridCheckBoxColumn Header="Spear" Width="58" Binding="{Binding Spear}" />
+                                            <DataGridCheckBoxColumn Header="Sword" Width="60" Binding="{Binding Sword}" />
+                                            <DataGridCheckBoxColumn Header="Runes" Width="62" Binding="{Binding RunesAndInsignias}" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </DockPanel>
+                            </Border>
+                        </Grid>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Maintenance">
+                    <Grid Margin="14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="320" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0" Style="{StaticResource SectionBorder}" Margin="0,0,8,0">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Style="{StaticResource SectionTitle}" Text="Limits and restock rules" />
+                                <DataGrid ItemsSource="{Binding MaintenanceSettings}">
+                                    <DataGrid.Columns>
+                                        <DataGridCheckBoxColumn Header="Enabled" Width="80" Binding="{Binding Enabled}" />
+                                        <DataGridTextColumn Header="Limit" Width="220" Binding="{Binding Name}" />
+                                        <DataGridTextColumn Header="Target" Width="160" Binding="{Binding Target}" />
+                                        <DataGridTextColumn Header="Threshold" Width="*" Binding="{Binding Threshold}" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </DockPanel>
+                        </Border>
+
+                        <Border Grid.Column="1" Style="{StaticResource SectionBorder}" Margin="8,0,0,0">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionTitle}" Text="Conset crafting" />
+                                <CheckBox Content="Craft when material slots pile up" IsChecked="{Binding ConsetCraftingEnabled}" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Material slot trigger" Margin="0,8,0,4" />
+                                <TextBox Text="{Binding ConsetMaterialSlotTrigger, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Pressure free-slot hint" Margin="0,8,0,4" />
+                                <TextBox Text="{Binding ConsetMaterialPressureFreeSlots, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Craft batch size" Margin="0,8,0,4" />
+                                <TextBox Text="{Binding ConsetBatchSets, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Required components" Margin="0,12,0,4" />
+                                <TextBox Height="110" AcceptsReturn="True" IsReadOnly="True" TextWrapping="Wrap" Text="Converts carried dust, iron, bones, and feathers into Grail of Might, Essence of Celerity, or Armor of Salvation before Xunlai deposits." />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="LLM">
+                    <Grid Margin="14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="350" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0" Style="{StaticResource SectionBorder}" Margin="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionTitle}" Text="Model and autonomy" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="LLM mode" />
+                                <ComboBox ItemsSource="{Binding LlmModes}" SelectedItem="{Binding LlmMode}" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Model" Margin="0,10,0,4" />
+                                <ComboBox ItemsSource="{Binding ModelOptions}" SelectedItem="{Binding SelectedModel}" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Endpoint" Margin="0,10,0,4" />
+                                <TextBox Text="{Binding LlmEndpoint, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Autonomy" Margin="0,10,0,4" />
+                                <ComboBox ItemsSource="{Binding AutonomyLevels}" SelectedItem="{Binding SelectedAutonomyLevel}" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Allowed actions" Margin="0,14,0,4" />
+                                <ItemsControl ItemsSource="{Binding AllowedActions}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding Enabled}" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Column="1" Style="{StaticResource SectionBorder}" Margin="8,0,0,0">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Style="{StaticResource SectionTitle}" Text="LLM steering chat" />
+                                <ListBox Grid.Row="1" ItemsSource="{Binding ChatMessages}" Margin="0,0,0,12">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,8">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="90" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Grid.Column="0">
+                                                        <TextBlock Text="{Binding Time}" Foreground="{StaticResource MutedTextBrush}" FontSize="11" />
+                                                        <TextBlock Text="{Binding Speaker}" FontWeight="SemiBold" />
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="1" Text="{Binding Text}" />
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+
+                                <Grid Grid.Row="2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Grid.Column="0"
+                                             MinHeight="58"
+                                             AcceptsReturn="True"
+                                             TextWrapping="Wrap"
+                                             Text="{Binding ChatDraft, UpdateSourceTrigger=PropertyChanged}" />
+                                    <Button Grid.Column="1" Content="Send" Command="{Binding SendChatCommand}" Style="{StaticResource PrimaryButton}" Margin="8,0,0,0" />
+                                </Grid>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Logs">
+                    <Grid Margin="14">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Border Grid.Row="0" Style="{StaticResource SectionBorder}" Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="190" />
+                                    <ColumnDefinition Width="190" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Source" />
+                                    <ComboBox SelectedIndex="0" IsEnabled="False">
+                                        <ComboBoxItem Content="All sources" />
+                                        <ComboBoxItem Content="Launcher" />
+                                        <ComboBoxItem Content="Injector" />
+                                        <ComboBoxItem Content="DLL" />
+                                        <ComboBoxItem Content="Bridge" />
+                                    </ComboBox>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="0,0,12,0">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Level" />
+                                    <ComboBox SelectedIndex="0" IsEnabled="False">
+                                        <ComboBoxItem Content="All levels" />
+                                        <ComboBoxItem Content="Info" />
+                                        <ComboBoxItem Content="Warn" />
+                                        <ComboBoxItem Content="Error" />
+                                        <ComboBoxItem Content="Action" />
+                                    </ComboBox>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Search" />
+                                    <TextBox IsEnabled="False" />
+                                </StackPanel>
+                                <Button Grid.Column="3" Content="Open Log Folder" Command="{Binding OpenLogFolderCommand}" VerticalAlignment="Bottom" />
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="1" Style="{StaticResource SectionBorder}">
+                            <ListBox ItemsSource="{Binding LogEntries}" FontFamily="Consolas">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Line}" Foreground="{Binding Level, Converter={StaticResource LogLevelBrushConverter}}" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Border>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Diagnostics">
+                    <Grid Margin="14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="340" />
+                        </Grid.ColumnDefinitions>
+                        <Border Grid.Column="0" Style="{StaticResource SectionBorder}" Margin="0,0,8,0">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Style="{StaticResource SectionTitle}" Text="Supervisor readiness" />
+                                <DataGrid ItemsSource="{Binding Diagnostics}" IsReadOnly="True">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Check" Width="180" Binding="{Binding Name}" />
+                                        <DataGridTextColumn Header="Value" Width="*" Binding="{Binding Value}" />
+                                        <DataGridTextColumn Header="Status" Width="180" Binding="{Binding Status}" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </DockPanel>
+                        </Border>
+
+                        <Border Grid.Column="1" Style="{StaticResource SectionBorder}" Margin="8,0,0,0">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionTitle}" Text="Process snapshot" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Launcher PID" />
+                                <TextBox Text="{Binding SelectedSession.Pid}" IsReadOnly="True" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Game health" Margin="0,10,0,4" />
+                                <TextBox Text="{Binding SelectedSession.Health}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" Height="64" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="DLL" Margin="0,10,0,4" />
+                                <TextBox Text="{Binding SelectedSession.DllName}" IsReadOnly="True" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Bridge pipe" Margin="0,10,0,4" />
+                                <TextBox Text="{Binding SelectedSession.PipeName}" IsReadOnly="True" />
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Command preview" Margin="0,14,0,4" />
+                                <TextBox Height="120"
+                                         FontFamily="Consolas"
+                                         TextWrapping="Wrap"
+                                         AcceptsReturn="True"
+                                         IsReadOnly="True"
+                                         Text="injector.exe --pid &lt;GWLAUNCHER_PID&gt; --dll &lt;lane dll&gt; --profile &lt;resolved-profile.json&gt;" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </TabItem>
+                    </TabControl>
+                </TabItem>
+
+                <TabItem Header="Monitoring">
+                    <Grid Margin="14">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0" Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="0" />
+                            </Grid.ColumnDefinitions>
+
+                            <Border Grid.Column="0" Style="{StaticResource SectionBorder}">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Status monitor" Margin="0,0,0,6" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="105" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="92" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="State" />
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedSession.Status}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="PID" />
+                                        <TextBlock Grid.Row="0" Grid.Column="3" Text="{Binding SelectedSession.Pid}" />
+
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Character" />
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedSession.CharacterName}" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Bot phase" />
+                                        <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding SelectedSession.BotPhase}" TextWrapping="Wrap" />
+
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Dungeon" />
+                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedSession.DungeonLevel}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Row="2" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Complete" />
+                                        <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding SelectedSession.CompletionText}" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Progress" Margin="0,10,0,4" />
+                                        <StackPanel Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,10,0,0">
+                                            <ProgressBar Minimum="0"
+                                                         Maximum="100"
+                                                         Height="14"
+                                                         Value="{Binding SelectedSession.CompletionPercent}" />
+                                            <TextBlock Text="{Binding SelectedSession.ProgressDetail}"
+                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                       FontSize="12"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,4,0,0" />
+                                        </StackPanel>
+
+                                        <Grid Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4" Margin="0,8,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="105" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="92" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Health" />
+                                            <TextBlock Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="3" Text="{Binding SelectedSession.Health}" TextWrapping="Wrap" MaxHeight="28" FontSize="12" />
+
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Last event" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" Text="{Binding SelectedSession.LastEvent}" TextWrapping="Wrap" MaxHeight="28" FontSize="12" Margin="0,6,0,0" />
+
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="DLL" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedSession.DllName}" TextTrimming="CharacterEllipsis" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="2" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Pipe" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding SelectedSession.PipeName}" TextTrimming="CharacterEllipsis" FontSize="12" Margin="0,6,0,0" />
+                                        </Grid>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Grid.Column="1" Style="{StaticResource SectionBorder}" Margin="8,0,0,0" Visibility="Collapsed">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Run telemetry" />
+                                    <UniformGrid Columns="3">
+                                        <StackPanel Margin="0,0,10,8">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Runs" />
+                                            <TextBlock Text="{Binding SelectedSession.RunCount}" FontSize="22" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                        <StackPanel Margin="10,0,10,8">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Successes" />
+                                            <TextBlock Text="{Binding SelectedSession.SuccessCount}" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+                                        </StackPanel>
+                                        <StackPanel Margin="10,0,0,8">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Failures" />
+                                            <TextBlock Text="{Binding SelectedSession.FailureCount}" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource DangerBrush}" />
+                                        </StackPanel>
+                                        <StackPanel Margin="0,0,10,8">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Fail ratio" />
+                                            <TextBlock Text="{Binding SelectedSession.FailureRatio}" FontSize="18" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                        <StackPanel Margin="10,0,10,8">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Run time" />
+                                            <TextBlock Text="{Binding SelectedSession.CurrentRunTime}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+                                        </StackPanel>
+                                        <StackPanel Margin="10,0,0,8">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Total time" />
+                                            <TextBlock Text="{Binding SelectedSession.TotalRuntime}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+                                        </StackPanel>
+                                        <StackPanel Margin="0,0,10,8">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Best run" />
+                                            <TextBlock Text="{Binding SelectedSession.BestRunTime}" FontSize="18" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                        <StackPanel Margin="10,0,10,8">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Avg run" />
+                                            <TextBlock Text="{Binding SelectedSession.AverageRunTime}" FontSize="18" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                        <StackPanel Margin="10,0,0,8">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Heartbeat" />
+                                            <TextBlock Text="{Binding SelectedSession.Heartbeat}" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <StackPanel Margin="0,0,10,0">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Gold" />
+                                            <TextBlock Text="{Binding SelectedSession.Gold}" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource WarnBrush}" />
+                                        </StackPanel>
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <Grid Grid.Row="2" Margin="0,0,0,12" Visibility="Collapsed">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1*" />
+                                <ColumnDefinition Width="1*" />
+                            </Grid.ColumnDefinitions>
+
+                            <Border Grid.Column="0" Style="{StaticResource SectionBorder}" Margin="0,0,8,0">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="General statistics" />
+                                    <UniformGrid Columns="4">
+                                        <StackPanel Margin="0,0,12,10">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Deldrimor Pts" />
+                                            <TextBlock Text="{Binding SelectedSession.DeldrimorPoints}" FontSize="20" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                        <StackPanel Margin="12,0,12,10">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Asura Pts" />
+                                            <TextBlock Text="{Binding SelectedSession.AsuraPoints}" FontSize="20" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                        <StackPanel Margin="12,0,12,10">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Norn Pts" />
+                                            <TextBlock Text="{Binding SelectedSession.NornPoints}" FontSize="20" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                        <StackPanel Margin="12,0,0,10">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Vanguard Pts" />
+                                            <TextBlock Text="{Binding SelectedSession.VanguardPoints}" FontSize="20" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                        <StackPanel Margin="0,0,12,0">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Lockpicks" />
+                                            <TextBlock Text="{Binding SelectedSession.Lockpicks}" FontSize="20" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                        <StackPanel Margin="12,0,12,0">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Wipes" />
+                                            <TextBlock Text="{Binding SelectedSession.Wipes}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource DangerBrush}" />
+                                        </StackPanel>
+                                        <StackPanel Margin="12,0,12,0">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Best Run Time" />
+                                            <TextBlock Text="{Binding SelectedSession.BestRunTime}" FontSize="20" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                        <StackPanel Margin="12,0,0,0">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Avg Run Time" />
+                                            <TextBlock Text="{Binding SelectedSession.AverageRunTime}" FontSize="20" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Grid.Column="1" Style="{StaticResource SectionBorder}" Margin="8,0,0,0">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Drop statistics" />
+                                    <UniformGrid Columns="3">
+                                        <StackPanel Margin="0,0,12,10">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Rare Skin" />
+                                            <TextBlock Text="{Binding SelectedSession.RareSkins}" FontSize="20" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                        <StackPanel Margin="12,0,12,10">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Gold Items" />
+                                            <TextBlock Text="{Binding SelectedSession.GoldItems}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource WarnBrush}" />
+                                        </StackPanel>
+                                        <StackPanel Margin="12,0,0,10">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Lockpicks" />
+                                            <TextBlock Text="{Binding SelectedSession.DroppedLockpicks}" FontSize="20" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                        <StackPanel Margin="0,0,12,0">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Chests Opened" />
+                                            <TextBlock Text="{Binding SelectedSession.ChestsOpened}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+                                        </StackPanel>
+                                        <StackPanel Margin="12,0,12,0">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Black Dye" />
+                                            <TextBlock Text="{Binding SelectedSession.BlackDyes}" FontSize="20" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                        <StackPanel Margin="12,0,0,0">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Tomes" />
+                                            <TextBlock Text="{Binding SelectedSession.Tomes}" FontSize="20" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <Grid Grid.Row="3" Visibility="Collapsed">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1*" />
+                                <ColumnDefinition Width="1*" />
+                            </Grid.ColumnDefinitions>
+
+                            <Border Grid.Column="0" Style="{StaticResource SectionBorder}" Margin="0,0,8,0">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Botshub / WebIPC" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="112" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="92" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="IPC" />
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedSession.BotshubIpcStatus}" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Script" />
+                                        <TextBlock Grid.Row="0" Grid.Column="3" Text="{Binding SelectedSession.BotshubScript}" TextWrapping="Wrap" />
+
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="AutoIt PID" />
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedSession.BotshubPid}" />
+                                        <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Running" />
+                                        <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding SelectedSession.BotshubRunning}" />
+
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="State" />
+                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedSession.BotshubState}" FontWeight="SemiBold" />
+                                        <TextBlock Grid.Row="2" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Map" />
+                                        <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding SelectedSession.BotshubMapId}" />
+
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Uptime" />
+                                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedSession.BotshubUptime}" />
+                                        <TextBlock Grid.Row="3" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Gold" />
+                                        <TextBlock Grid.Row="3" Grid.Column="3" Text="{Binding SelectedSession.BotshubGold}" TextWrapping="Wrap" />
+
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Source" />
+                                        <TextBlock Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="3" Text="{Binding SelectedSession.BotshubStatusSource}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" />
+
+                                        <StackPanel Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="4" Margin="0,10,0,0">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Run counters" />
+                                            <UniformGrid Columns="6" Margin="0,0,0,4">
+                                                <StackPanel Margin="0,0,10,8">
+                                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Runs" />
+                                                    <TextBlock Text="{Binding SelectedSession.BotshubRuns}" FontWeight="SemiBold" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,10,8">
+                                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Success" />
+                                                    <TextBlock Text="{Binding SelectedSession.BotshubSuccesses}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,10,8">
+                                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Fails" />
+                                                    <TextBlock Text="{Binding SelectedSession.BotshubFailures}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,10,8">
+                                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Ratio" />
+                                                    <TextBlock Text="{Binding SelectedSession.BotshubSuccessRatio}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,10,8">
+                                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Current" />
+                                                    <TextBlock Text="{Binding SelectedSession.BotshubCurrentRunTime}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,0,8">
+                                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Total" />
+                                                    <TextBlock Text="{Binding SelectedSession.BotshubTotalTime}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,10,8">
+                                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Best" />
+                                                    <TextBlock Text="{Binding SelectedSession.BotshubBestRunTime}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,10,8">
+                                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Avg" />
+                                                    <TextBlock Text="{Binding SelectedSession.BotshubAverageRunTime}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,10,8">
+                                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Per Run" />
+                                                    <TextBlock Text="{Binding SelectedSession.BotshubTimePerRun}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,10,8">
+                                                    <TextBlock Style="{StaticResource FieldLabel}" Text="XP" />
+                                                    <TextBlock Text="{Binding SelectedSession.BotshubExperience}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,10,8">
+                                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Chests" />
+                                                    <TextBlock Text="{Binding SelectedSession.BotshubChests}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,0,8">
+                                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Gold Items" />
+                                                    <TextBlock Text="{Binding SelectedSession.BotshubGoldItems}" />
+                                                </StackPanel>
+                                            </UniformGrid>
+
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="88" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
+
+                                                <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Settings" />
+                                                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedSession.BotshubSettings}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" />
+                                                <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Titles" Margin="0,6,0,0" />
+                                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedSession.BotshubTitleSummary}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" Margin="0,6,0,0" />
+                                                <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Loot" Margin="0,6,0,0" />
+                                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedSession.BotshubLootSummary}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" Margin="0,6,0,0" />
+                                                <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Materials" Margin="0,6,0,0" />
+                                                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedSession.BotshubMaterialSummary}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" Margin="0,6,0,0" />
+                                                <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Inventory" Margin="0,6,0,0" />
+                                                <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding SelectedSession.BotshubInventorySummary}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" Margin="0,6,0,0" />
+                                                <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Maintenance" Margin="0,6,0,0" />
+                                                <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding SelectedSession.BotshubMaintenanceSummary}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" Margin="0,6,0,0" />
+                                                <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Last Log" Margin="0,6,0,0" />
+                                                <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding SelectedSession.BotshubLastLog}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" Margin="0,6,0,0" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Grid.Column="1" Style="{StaticResource SectionBorder}" Margin="8,0,0,0">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Py4GW-style runtime" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="104" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="92" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Previous" />
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedSession.Py4GwPreviousStep}" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Current" />
+                                        <TextBlock Grid.Row="0" Grid.Column="3" Text="{Binding SelectedSession.Py4GwCurrentStep}" FontWeight="SemiBold" TextWrapping="Wrap" />
+
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Next" />
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedSession.Py4GwNextStep}" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="FSM" />
+                                        <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding SelectedSession.Py4GwStateMachine}" />
+
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Map" />
+                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedSession.Py4GwMap}" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Row="2" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Updated" />
+                                        <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding SelectedSession.Py4GwLastUpdate}" />
+
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Health" Margin="0,8,0,0" />
+                                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedSession.Py4GwHealth}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                                        <TextBlock Grid.Row="3" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Skillbar" Margin="0,8,0,0" />
+                                        <TextBlock Grid.Row="3" Grid.Column="3" Text="{Binding SelectedSession.Py4GwSkillbar}" TextWrapping="Wrap" Margin="0,8,0,0" />
+
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Position" Margin="0,8,0,0" />
+                                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding SelectedSession.Py4GwPosition}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                                        <TextBlock Grid.Row="4" Grid.Column="2" Style="{StaticResource FieldLabel}" Text="Target" Margin="0,8,0,0" />
+                                        <TextBlock Grid.Row="4" Grid.Column="3" Text="{Binding SelectedSession.Py4GwTarget}" TextWrapping="Wrap" Margin="0,8,0,0" />
+
+                                        <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Pathing" Margin="0,8,0,0" />
+                                        <TextBlock Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="3" Text="{Binding SelectedSession.Py4GwPathing}" TextWrapping="Wrap" MaxHeight="42" Margin="0,8,0,0" />
+
+                                        <StackPanel Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="4" Margin="0,10,0,0">
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Casting" />
+                                            <TextBlock Text="{Binding SelectedSession.Py4GwCasting}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" />
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Action queue" Margin="0,8,0,0" />
+                                            <TextBlock Text="{Binding SelectedSession.Py4GwActionQueue}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" />
+                                            <TextBlock Style="{StaticResource FieldLabel}" Text="Overwatch" Margin="0,8,0,0" />
+                                            <TextBlock Text="{Binding SelectedSession.Py4GwOverwatch}" TextWrapping="Wrap" MaxHeight="36" FontSize="12" />
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <Border Grid.Row="1" Style="{StaticResource SectionBorder}" Margin="0,0,0,8" Padding="12">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionTitle}" Text="Live telemetry" Margin="0,0,0,6" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="1.20*" />
+                                        <ColumnDefinition Width="1.15*" />
+                                        <ColumnDefinition Width="1.30*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Grid.Column="0" Margin="0,0,18,0">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Run" />
+                                        <UniformGrid Columns="5">
+                                            <StackPanel Margin="0,0,10,10">
+                                                <TextBlock Style="{StaticResource FieldLabel}" Text="Runs" />
+                                                <TextBlock Text="{Binding SelectedSession.RunCount}" FontSize="20" FontWeight="SemiBold" />
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,10,10">
+                                                <TextBlock Style="{StaticResource FieldLabel}" Text="Success" />
+                                                <TextBlock Text="{Binding SelectedSession.SuccessCount}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,10,10">
+                                                <TextBlock Style="{StaticResource FieldLabel}" Text="Fails" />
+                                                <TextBlock Text="{Binding SelectedSession.FailureCount}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource DangerBrush}" />
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,10,10">
+                                                <TextBlock Style="{StaticResource FieldLabel}" Text="Wipes" />
+                                                <TextBlock Text="{Binding SelectedSession.Wipes}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource DangerBrush}" />
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,0,10">
+                                                <TextBlock Style="{StaticResource FieldLabel}" Text="Fail ratio" />
+                                                <TextBlock Text="{Binding SelectedSession.FailureRatio}" FontSize="16" FontWeight="SemiBold" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                        </UniformGrid>
+                                        <UniformGrid Columns="4">
+                                            <StackPanel Margin="0,0,10,10">
+                                                <TextBlock Style="{StaticResource FieldLabel}" Text="Run time" />
+                                                <TextBlock Text="{Binding SelectedSession.CurrentRunTime}" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,10,10">
+                                                <TextBlock Style="{StaticResource FieldLabel}" Text="Total" />
+                                                <TextBlock Text="{Binding SelectedSession.TotalRuntime}" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,10,10">
+                                                <TextBlock Style="{StaticResource FieldLabel}" Text="Best" />
+                                                <TextBlock Text="{Binding SelectedSession.BestRunTime}" FontSize="16" FontWeight="SemiBold" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <StackPanel Margin="0,0,0,10">
+                                                <TextBlock Style="{StaticResource FieldLabel}" Text="Avg" />
+                                                <TextBlock Text="{Binding SelectedSession.AverageRunTime}" FontSize="16" FontWeight="SemiBold" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                        </UniformGrid>
+
+                                        <Grid Margin="0,4,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="84" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Heartbeat" />
+                                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedSession.Heartbeat}" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.Heartbeat}" />
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Source" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedSession.BotshubStatusSource}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Script" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedSession.BotshubScript}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Skillbar" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedSession.Py4GwSkillbar}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.Py4GwSkillbar}" FontSize="12" Margin="0,6,0,0" />
+                                        </Grid>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="1" Margin="0,0,18,0">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="World and action" />
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="84" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Map" />
+                                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedSession.Py4GwMap}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Updated" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedSession.Py4GwLastUpdate}" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Health" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedSession.Py4GwHealth}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Position" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedSession.Py4GwPosition}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Target" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding SelectedSession.Py4GwTarget}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Pathing" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding SelectedSession.Py4GwPathing}" TextWrapping="Wrap" MaxHeight="38" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Casting" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding SelectedSession.Py4GwCasting}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" />
+                                        </Grid>
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Queue" Margin="0,10,0,0" />
+                                        <TextBlock Text="{Binding SelectedSession.Py4GwActionQueue}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.Py4GwActionQueue}" FontSize="12" />
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Overwatch" Margin="0,8,0,0" />
+                                        <TextBlock Text="{Binding SelectedSession.Py4GwOverwatch}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.Py4GwOverwatch}" FontSize="12" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Resources and loot" />
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="96" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Gold" />
+                                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedSession.Gold}" FontWeight="SemiBold" Foreground="{StaticResource WarnBrush}" TextWrapping="Wrap" />
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Inventory" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedSession.BotshubInventorySummary}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.BotshubInventorySummary}" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Maintenance" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedSession.BotshubMaintenanceSummary}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.BotshubMaintenanceSummary}" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Titles" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedSession.BotshubTitleSummary}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.BotshubTitleSummary}" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Loot" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding SelectedSession.BotshubLootSummary}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.BotshubLootSummary}" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Materials" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding SelectedSession.BotshubMaterialSummary}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.BotshubMaterialSummary}" FontSize="12" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Last log" Margin="0,6,0,0" />
+                                            <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding SelectedSession.BotshubLastLog}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding SelectedSession.BotshubLastLog}" FontSize="12" Margin="0,6,0,0" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Grid>
+
+                                <UniformGrid Columns="10" Margin="0,12,0,0" Visibility="Collapsed">
+                                    <StackPanel Margin="0,0,10,0">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Deldrimor" />
+                                        <TextBlock Text="{Binding SelectedSession.DeldrimorPoints}" FontSize="17" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,10,0">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Asura" />
+                                        <TextBlock Text="{Binding SelectedSession.AsuraPoints}" FontSize="17" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,10,0">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Norn" />
+                                        <TextBlock Text="{Binding SelectedSession.NornPoints}" FontSize="17" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,10,0">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Vanguard" />
+                                        <TextBlock Text="{Binding SelectedSession.VanguardPoints}" FontSize="17" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,10,0">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Held LP" />
+                                        <TextBlock Text="{Binding SelectedSession.Lockpicks}" FontSize="17" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,10,0">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Wipes" />
+                                        <TextBlock Text="{Binding SelectedSession.Wipes}" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource DangerBrush}" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,10,0">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Gold items" />
+                                        <TextBlock Text="{Binding SelectedSession.GoldItems}" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource WarnBrush}" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,10,0">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Chests" />
+                                        <TextBlock Text="{Binding SelectedSession.ChestsOpened}" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,10,0">
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Dye" />
+                                        <TextBlock Text="{Binding SelectedSession.BlackDyes}" FontSize="17" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource FieldLabel}" Text="Tomes" />
+                                        <TextBlock Text="{Binding SelectedSession.Tomes}" FontSize="17" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </UniformGrid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Row="3" Style="{StaticResource SectionBorder}">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Style="{StaticResource SectionTitle}" Text="Live log tail" />
+                                 <ListBox ItemsSource="{Binding RuntimeLogEntries}"
+                                          MinHeight="140"
+                                          FontFamily="Consolas"
+                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                          ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Line}"
+                                                       Foreground="{Binding Level, Converter={StaticResource LogLevelBrushConverter}}"
+                                                       FontFamily="Consolas"
+                                                       FontSize="12"
+                                                       TextWrapping="Wrap" />
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
+                        </Border>
+                    </Grid>
+                </TabItem>
+            </TabControl>
+        </Grid>
+
+         <Border Grid.Row="2" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+             <Grid Margin="12,0">
+                 <Grid.ColumnDefinitions>
+                     <ColumnDefinition Width="*" />
+                     <ColumnDefinition Width="Auto" />
+                 </Grid.ColumnDefinitions>
+                 <TextBlock Grid.Column="0"
+                            VerticalAlignment="Center"
+                            Text="{Binding FleetHealthBanner}"
+                            Foreground="{StaticResource MutedTextBrush}"
+                            FontSize="12"
+                            TextTrimming="CharacterEllipsis" />
+                 <TextBlock Grid.Column="1"
+                            VerticalAlignment="Center"
+                            Margin="16,0,0,0"
+                            Text="{Binding SelectedSession.LaneTag}"
+                            Foreground="{StaticResource MutedTextBrush}"
+                            FontSize="12" />
+             </Grid>
+         </Border>
+    </Grid>
+</Window>

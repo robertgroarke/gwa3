@@ -1,0 +1,16 @@
+# Light formatting. Does not reflow existing code aggressively.
+BasedOnStyle: Google
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 120
+DerivePointerAlignment: false
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+SortIncludes: false
+ReflowComments: false
+AlwaysBreakTemplateDeclarations: Yes
+SpaceAfterCStyleCast: true
+Cpp11BracedListStyle: true

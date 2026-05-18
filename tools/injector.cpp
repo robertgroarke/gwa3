@@ -1,4 +1,4 @@
-// Standalone DLL Injector for gwa3.dll -> GW.exe
+// : Standalone DLL Injector for gwa3.dll -> GW.exe
 // Supports multi-client: --all, --list, --eject, --pid
 // Finds GW.exe by window class, injects gwa3.dll via CreateRemoteThread(LoadLibraryA)
 
@@ -18,8 +18,21 @@ struct GWProcess {
     DWORD pid;
     HWND hwnd;
     char windowTitle[256];
-    bool injected; // true if gwa3.dll is already loaded
+    bool injected; // true if any gwa3*.dll is already loaded
+    char injectedModule[MAX_PATH];
 };
+
+static bool IsGwa3ModulePath(const char* modulePath) {
+    if (!modulePath || !*modulePath) return false;
+
+    const char* name = strrchr(modulePath, '\\');
+    name = name ? name + 1 : modulePath;
+
+    if (_strnicmp(name, "gwa3", 4) != 0) return false;
+
+    const char* ext = strrchr(name, '.');
+    return ext && _stricmp(ext, ".dll") == 0;
+}
 
 // ===== Window/Process Discovery =====
 
@@ -35,6 +48,7 @@ static BOOL CALLBACK EnumWindowsCallback(HWND hwnd, LPARAM lParam) {
     GetWindowThreadProcessId(hwnd, &gw.pid);
     GetWindowTextA(hwnd, gw.windowTitle, sizeof(gw.windowTitle));
     gw.injected = false;
+    gw.injectedModule[0] = '\0';
     processes->push_back(gw);
     return TRUE;
 }
@@ -53,9 +67,9 @@ static std::vector<GWProcess> FindGWProcesses() {
                 for (DWORD i = 0; i < cbNeeded / sizeof(HMODULE); i++) {
                     char modName[MAX_PATH];
                     if (GetModuleFileNameExA(hProc, hMods[i], modName, sizeof(modName))) {
-                        char* name = strrchr(modName, '\\');
-                        if (name && _stricmp(name + 1, "gwa3.dll") == 0) {
+                        if (IsGwa3ModulePath(modName)) {
                             gw.injected = true;
+                            strncpy_s(gw.injectedModule, modName, _TRUNCATE);
                             break;
                         }
                     }
@@ -119,6 +133,25 @@ static bool SetModeFlag(const char* flagName) {
     return false;
 }
 
+static bool SetModeTextFile(const char* fileName, const char* value) {
+    if (!fileName || !value || !*value) return false;
+
+    char path[MAX_PATH];
+    GetModuleFileNameA(nullptr, path, MAX_PATH);
+    char* slash = strrchr(path, '\\');
+    if (slash) *(slash + 1) = '\0';
+    strcat_s(path, fileName);
+
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "w") == 0 && f) {
+        fprintf(f, "%s\n", value);
+        fclose(f);
+        printf("[*] Mode text set: %s = %s\n", path, value);
+        return true;
+    }
+    return false;
+}
+
 static void ClearModeFlags() {
     char dir[MAX_PATH];
     GetModuleFileNameA(nullptr, dir, MAX_PATH);
@@ -130,6 +163,33 @@ static void ClearModeFlags() {
     DeleteFileA(path);
     snprintf(path, sizeof(path), "%sgwa3_llm_advisory.flag", dir);
     DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_arachnis.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_ravens.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_test_rragars.flag", dir);
+    DeleteFileA(path);
+    snprintf(path, sizeof(path), "%sgwa3_bot_module.txt", dir);
+    DeleteFileA(path);
+}
+
+static HMODULE GetRemoteGwa3ModuleHandle(HANDLE hProcess, char* modulePathOut = nullptr, size_t modulePathOutSize = 0) {
+    HMODULE hMods[1024];
+    DWORD cbNeeded;
+    if (!EnumProcessModules(hProcess, hMods, sizeof(hMods), &cbNeeded)) return nullptr;
+
+    for (DWORD i = 0; i < cbNeeded / sizeof(HMODULE); i++) {
+        char modName[MAX_PATH];
+        if (GetModuleFileNameExA(hProcess, hMods[i], modName, sizeof(modName))) {
+            if (IsGwa3ModulePath(modName)) {
+                if (modulePathOut && modulePathOutSize > 0) {
+                    strncpy_s(modulePathOut, modulePathOutSize, modName, _TRUNCATE);
+                }
+                return hMods[i];
+            }
+        }
+    }
+    return nullptr;
 }
 
 // ===== Injection =====
@@ -142,8 +202,21 @@ static bool InjectDll(DWORD pid, const char* dllPath) {
         return false;
     }
 
-    // Check if already injected
+    // Check if already injected. Any gwa3*.dll build owns global client hooks,
+    // so stacking another build in the same Gw.exe corrupts shared detours.
     std::string dllFileName = s_dllNameOverride.empty() ? "gwa3.dll" : s_dllNameOverride;
+    char existingGwa3Path[MAX_PATH] = {};
+    HMODULE existingGwa3 = GetRemoteGwa3ModuleHandle(hProcess, existingGwa3Path, sizeof(existingGwa3Path));
+    if (existingGwa3) {
+        printf("[!] Existing GWA3 module loaded at 0x%08X in PID %lu:\n",
+               (unsigned)(uintptr_t)existingGwa3, pid);
+        printf("    %s\n", existingGwa3Path);
+        printf("    Refusing to inject %s. Restart this Gw.exe or eject the existing module first.\n",
+               dllPath);
+        CloseHandle(hProcess);
+        return false;
+    }
+
     HMODULE existing = GetRemoteModuleHandle(hProcess, dllFileName.c_str());
     if (existing) {
         printf("[!] %s already loaded at 0x%08X in PID %lu\n", dllFileName.c_str(),
@@ -206,16 +279,17 @@ static bool InjectDll(DWORD pid, const char* dllPath) {
 // ===== Ejection =====
 
 static bool EjectDll(DWORD pid) {
-    printf("[*] Ejecting gwa3.dll from PID %lu...\n", pid);
+    std::string dllFileName = s_dllNameOverride.empty() ? "gwa3.dll" : s_dllNameOverride;
+    printf("[*] Ejecting %s from PID %lu...\n", dllFileName.c_str(), pid);
     HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
     if (!hProcess) {
         printf("[!] OpenProcess failed (error %lu)\n", GetLastError());
         return false;
     }
 
-    HMODULE hRemoteDll = GetRemoteModuleHandle(hProcess, "gwa3.dll");
+    HMODULE hRemoteDll = GetRemoteModuleHandle(hProcess, dllFileName.c_str());
     if (!hRemoteDll) {
-        printf("[!] gwa3.dll is not loaded in PID %lu\n", pid);
+        printf("[!] %s is not loaded in PID %lu\n", dllFileName.c_str(), pid);
         CloseHandle(hProcess);
         return false;
     }
@@ -241,14 +315,14 @@ static bool EjectDll(DWORD pid) {
     CloseHandle(hThread);
 
     // Verify ejection
-    HMODULE stillThere = GetRemoteModuleHandle(hProcess, "gwa3.dll");
+    HMODULE stillThere = GetRemoteModuleHandle(hProcess, dllFileName.c_str());
     CloseHandle(hProcess);
 
     if (!stillThere) {
-        printf("[+] SUCCESS: gwa3.dll ejected from PID %lu\n", pid);
+        printf("[+] SUCCESS: %s ejected from PID %lu\n", dllFileName.c_str(), pid);
         return true;
     } else {
-        printf("[!] FAILED: gwa3.dll still loaded after FreeLibrary (rc=%lu)\n", exitCode);
+        printf("[!] FAILED: %s still loaded after FreeLibrary (rc=%lu)\n", dllFileName.c_str(), exitCode);
         return false;
     }
 }
@@ -265,9 +339,13 @@ static void PrintUsage(const char* argv0) {
     printf("  --eject --pid N Eject from specific PID\n");
     printf("  --llm           Inject in LLM agent mode (named pipe bridge for Gemma 4)\n");
     printf("  --llm-advisory  Inject in advisory mode (Froggy bot + LLM bridge together)\n");
+    printf("  --test-arachnis Inject in Arachnis Haunt live test mode\n");
+    printf("  --test-ravens   Inject in Raven's Point live test mode\n");
+    printf("  --test-rragars  Inject in Rragar's Menagerie live test mode\n");
     printf("\nOptions:\n");
     printf("  --pid <N>       Target specific process ID\n");
     printf("  --dll <name>    DLL filename next to injector.exe (default: gwa3.dll)\n");
+    printf("  --bot-module <name> Normal bot module for non-test mode (e.g. RavensPoint)\n");
     printf("  -h, --help      Show this help\n");
 }
 
@@ -280,6 +358,10 @@ int main(int argc, char* argv[]) {
     bool doEject = false;
     bool doLlm = false;
     bool doLlmAdvisory = false;
+    bool doArachnisTest = false;
+    bool doRavensTest = false;
+    bool doRragarsTest = false;
+    std::string botModule;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--pid") == 0 && i + 1 < argc) {
@@ -296,6 +378,14 @@ int main(int argc, char* argv[]) {
             doLlm = true;
         } else if (strcmp(argv[i], "--llm-advisory") == 0) {
             doLlmAdvisory = true;
+        } else if (strcmp(argv[i], "--test-arachnis") == 0) {
+            doArachnisTest = true;
+        } else if (strcmp(argv[i], "--test-ravens") == 0) {
+            doRavensTest = true;
+        } else if (strcmp(argv[i], "--test-rragars") == 0) {
+            doRragarsTest = true;
+        } else if (strcmp(argv[i], "--bot-module") == 0 && i + 1 < argc) {
+            botModule = argv[++i];
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             PrintUsage(argv[0]);
             return 0;
@@ -313,13 +403,14 @@ int main(int argc, char* argv[]) {
             printf("No Guild Wars windows found.\n");
             return 0;
         }
-        printf("  %-8s %-10s %-10s %s\n", "PID", "INJECTED", "HWND", "TITLE");
-        printf("  %-8s %-10s %-10s %s\n", "---", "--------", "----", "-----");
+        printf("  %-8s %-10s %-10s %-40s %s\n", "PID", "INJECTED", "HWND", "GWA3_MODULE", "TITLE");
+        printf("  %-8s %-10s %-10s %-40s %s\n", "---", "--------", "----", "-----------", "-----");
         for (const auto& gw : processes) {
-            printf("  %-8lu %-10s 0x%08X %s\n",
+            printf("  %-8lu %-10s 0x%08X %-40s %s\n",
                    gw.pid,
                    gw.injected ? "YES" : "no",
                    (unsigned)(uintptr_t)gw.hwnd,
+                   gw.injected ? gw.injectedModule : "",
                    gw.windowTitle);
         }
         printf("\n%zu client(s) found.\n", processes.size());
@@ -362,6 +453,10 @@ int main(int argc, char* argv[]) {
     ClearModeFlags();
     if (doLlm) SetModeFlag("gwa3_llm_mode.flag");
     if (doLlmAdvisory) SetModeFlag("gwa3_llm_advisory.flag");
+    if (doArachnisTest) SetModeFlag("gwa3_test_arachnis.flag");
+    if (doRavensTest) SetModeFlag("gwa3_test_ravens.flag");
+    if (doRragarsTest) SetModeFlag("gwa3_test_rragars.flag");
+    if (!botModule.empty()) SetModeTextFile("gwa3_bot_module.txt", botModule.c_str());
 
     // === --pid (single target) ===
     if (targetPid != 0) {

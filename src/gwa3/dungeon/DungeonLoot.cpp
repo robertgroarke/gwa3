@@ -4,6 +4,7 @@
 #include <gwa3/dungeon/DungeonInteractions.h>
 #include <gwa3/dungeon/DungeonInventory.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/dungeon/DungeonRunStats.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/MapMgr.h>
@@ -61,6 +62,7 @@ bool EnsureFreeSlotForBossKeyPickup(WaitFn wait_ms, const char* prefix) {
     DungeonInventory::EmergencyFreeSlotOptions options;
     options.log_prefix = prefix;
     options.wait_ms = wait_ms;
+    options.allow_green_items = true;
     const auto result = DungeonInventory::DropEmergencyInventoryItemForFreeSlot(options);
     if (!result.dropped) {
         Log::Warn("%s: Boss key pickup blocked by full inventory and no emergency drop candidate",
@@ -428,6 +430,7 @@ bool OpenNearbyChest(float maxRange, DungeonInteractions::OpenedChestTracker& tr
         AgentMgr::InteractSignpost(agent->agent_id);
         CallWait(wait_ms, options.interact_delay_ms);
         (void)PickUpNearbyLoot(options.pickup_range, wait_ms, is_dead, options.loot);
+        DungeonRunStats::RecordChestOpenedByAgent(agent->agent_id);
         return true;
     }
 
@@ -465,6 +468,12 @@ bool OpenResolvedChestAndPickUpLoot(uint32_t chestId,
 
     int picked = 0;
     for (int attempt = 1; attempt <= options.attempts; ++attempt) {
+        if (DungeonInventory::CountFreeSlots() == 0u) {
+            DungeonInventory::EmergencyFreeSlotOptions freeSlotOptions;
+            freeSlotOptions.log_prefix = prefix;
+            freeSlotOptions.wait_ms = wait_ms;
+            (void)DungeonInventory::EnsureEmergencyFreeSlots(1u, freeSlotOptions);
+        }
         Log::Info("%s: OpenChestAt attempt %d signpost=%u near (%.0f, %.0f)",
                   prefix,
                   attempt,
@@ -473,6 +482,12 @@ bool OpenResolvedChestAndPickUpLoot(uint32_t chestId,
                   chestY);
         AgentMgr::InteractSignpost(chestId);
         CallWait(wait_ms, options.interact_delay_ms);
+        if (DungeonInventory::CountFreeSlots() == 0u) {
+            DungeonInventory::EmergencyFreeSlotOptions freeSlotOptions;
+            freeSlotOptions.log_prefix = prefix;
+            freeSlotOptions.wait_ms = wait_ms;
+            (void)DungeonInventory::EnsureEmergencyFreeSlots(1u, freeSlotOptions);
+        }
         picked += PickUpNearbyLoot(options.pickup_range, wait_ms, is_dead, options.loot);
         if (chest && move_to_point) {
             move_to_point(chest->x, chest->y, options.chest_move_threshold);
@@ -483,6 +498,7 @@ bool OpenResolvedChestAndPickUpLoot(uint32_t chestId,
     const bool chestStillPresent = DungeonInteractions::IsChestStillPresentNear(chestX, chestY, searchRadius);
     if (picked > 0 || !chestStillPresent) {
         tracker.MarkOpened(chestId);
+        DungeonRunStats::RecordChestOpenedByAgent(chestId);
         return true;
     }
 
@@ -552,6 +568,7 @@ bool OpenChestAt(float chestX,
               prefix, chestX, chestY, playerX, playerY, playerDist, searchRadius);
 
     if (options.bundle_open && options.bundle_open(chestX, chestY, searchRadius)) {
+        DungeonRunStats::RecordChestOpened();
         return true;
     }
     if (options.use_bundle_fallback &&
@@ -641,12 +658,10 @@ bool OpenChestWithBundleFallback(float chestX,
               sharedSignpostRadius,
               sharedLootRadius,
               chestStillPresent ? 1 : 0);
-    if (!chestStillPresent) {
-        return true;
+    if (chestStillPresent) {
+        Log::Info("%s: OpenChestWithBundleFallback keeping success despite lingering chest signpost", prefix);
     }
-
-    Log::Warn("%s: OpenChestWithBundleFallback reported success but chest still appears present", prefix);
-    return false;
+    return true;
 }
 
 BossChestLootResult OpenBossChestAndLoot(
@@ -686,6 +701,10 @@ BossChestLootResult OpenBossChestAndLoot(
             wait_ms(delayMs);
         }
         result.picked_loot_count += pickup_nearby_loot(lootRadius);
+        if (result.open_successes > 0u) {
+            Log::Info("%s: Boss chest open succeeded; skipping duplicate open attempts", prefix);
+            break;
+        }
     }
 
     result.completed = true;

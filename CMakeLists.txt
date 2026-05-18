@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(GWA3_DLL_NAME "gwa3" CACHE STRING "Output DLL name (change for multi-agent builds)")
 set(GWA3_PIPE_NAME "\\\\.\\pipe\\gwa3_llm" CACHE STRING "Named pipe used by the LLM bridge")
+option(GWA3_ENABLE_INJECTED_TESTS "Compile injected SmokeTest/IntegrationTest modes into the DLL" OFF)
 
 # --- MSVC flags ---
 if(MSVC)
@@ -20,7 +21,7 @@ include(FetchContent)
 FetchContent_Declare(
     minhook
     GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-    GIT_TAG        master
+    GIT_TAG        v1.3.4
 )
 FetchContent_MakeAvailable(minhook)
 
@@ -110,6 +111,7 @@ add_library(gwa3_core OBJECT
     src/gwa3/advanced/Loot.cpp
     src/gwa3/advanced/Waypoint.cpp
     src/gwa3/dungeon/DungeonLoot.cpp
+    src/gwa3/dungeon/DungeonRunStats.cpp
     src/gwa3/advanced/OutpostSetup.cpp
     src/gwa3/advanced/QuestPlan.cpp
     src/gwa3/dungeon/DungeonQuestRuntime.cpp
@@ -180,3 +182,141 @@ set_target_properties(injector PROPERTIES
     OUTPUT_NAME "injector"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+# --- pattern_test.exe ---
+add_executable(pattern_test
+    tools/pattern_test.cpp
+)
+
+set_target_properties(pattern_test PROPERTIES
+    OUTPUT_NAME "pattern_test"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_executable(gwa3_tests
+    tests/offline_inventory.cpp
+    src/gwa3/advanced/Inventory.cpp
+    src/gwa3/advanced/ItemActions.cpp
+    src/gwa3/advanced/ItemPolicy.cpp
+)
+
+target_include_directories(gwa3_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(gwa3_tests PRIVATE nlohmann_json::nlohmann_json)
+
+set_target_properties(gwa3_tests PROPERTIES
+    OUTPUT_NAME "gwa3_tests"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+enable_testing()
+add_test(NAME gwa3_tests COMMAND gwa3_tests)
+
+# --- gwa3_dungeon_tests.exe ---
+add_executable(gwa3_dungeon_tests
+    tests/dungeon_tests_main.cpp
+    tests/dungeon_test_stubs_ext.cpp
+    tests/DungeonCombatTestSupport.cpp
+    tests/DungeonNavigationTestSupport.cpp
+    tests/DungeonSupportRuntime.cpp
+    tests/test_arachnis_suite.cpp
+    tests/test_bot_misc_suite.cpp
+    tests/test_core_lowlevel_suite.cpp
+    tests/test_dungeon_bundle_suite.cpp
+    tests/test_dungeon_checkpoint_suite.cpp
+    tests/test_dungeon_combat_advance_suite.cpp
+    tests/test_dungeon_combat_clear_builtin_suite.cpp
+    tests/test_dungeon_combat_follow_suite.cpp
+    tests/test_dungeon_combat_routine_suite.cpp
+    tests/test_dungeon_dialog_effects_quest_suite.cpp
+    tests/test_dungeon_interactions_suite.cpp
+    tests/test_dungeon_inventory_items_suite.cpp
+    tests/test_dungeon_loot_suite.cpp
+    tests/test_dungeon_navigation_runtime_suite.cpp
+    tests/test_dungeon_outpost_quest_runtime_a_suite.cpp
+    tests/test_dungeon_quest_runtime_b_suite.cpp
+    tests/test_dungeon_route_travel_vendor_suite.cpp
+    tests/test_froggy_config_tuning.cpp
+    tests/test_froggy_suite.cpp
+    tests/test_frostmaws_suite.cpp
+    tests/test_headers.cpp
+    tests/test_kathandrax_suite.cpp
+    tests/test_ravens_suite.cpp
+    tests/test_rragars_suite.cpp
+    tests/test_struct_offsets_agents_items.cpp
+    tests/test_struct_offsets_world.cpp
+    src/gwa3/core/Scanner.cpp
+    src/gwa3/utils/EncStrCodec.cpp
+    src/gwa3/utils/StringEncoding.cpp
+    bots/common/BotModuleRegistry.cpp
+    bots/common/BotModuleSelector.cpp
+    bots/common/DungeonBotStates.cpp
+    bots/arachnis_haunt/ArachnisHaunt.cpp
+    bots/arachnis_haunt/ArachnisHauntBot.cpp
+    bots/froggy/FroggyHM.cpp
+    bots/frostmaws_burrows/FrostmawsBurrows.cpp
+    bots/frostmaws_burrows/FrostmawsBurrowsBot.cpp
+    bots/kathandrax/Kathandrax.cpp
+    bots/kathandrax/KathandraxBot.cpp
+    bots/ravens_point/RavensPoint.cpp
+    bots/ravens_point/RavensPointBot.cpp
+    bots/rragars_menagerie/RragarsMenagerie.cpp
+    bots/rragars_menagerie/RragarsMenagerieBot.cpp
+    src/gwa3/advanced/Combat.cpp
+    src/gwa3/advanced/CombatRoutine.cpp
+    src/gwa3/advanced/Diagnostics.cpp
+    src/gwa3/advanced/Dialog.cpp
+    src/gwa3/advanced/Effects.cpp
+    src/gwa3/advanced/Interactions.cpp
+    src/gwa3/advanced/Inventory.cpp
+    src/gwa3/advanced/ItemActions.cpp
+    src/gwa3/advanced/ItemPolicy.cpp
+    src/gwa3/advanced/Loot.cpp
+    src/gwa3/advanced/OutpostSetup.cpp
+    src/gwa3/advanced/QuestPlan.cpp
+    src/gwa3/advanced/Runtime.cpp
+    src/gwa3/advanced/Waypoint.cpp
+    src/gwa3/dungeon/DungeonBundle.cpp
+    src/gwa3/dungeon/DungeonCheckpoint.cpp
+    src/gwa3/dungeon/DungeonCombat.cpp
+    src/gwa3/dungeon/DungeonEntryRecovery.cpp
+    src/gwa3/dungeon/DungeonLoot.cpp
+    src/gwa3/dungeon/DungeonNavigation.cpp
+    src/gwa3/dungeon/DungeonQuestRuntime.cpp
+    src/gwa3/dungeon/DungeonRoute.cpp
+    src/gwa3/dungeon/DungeonRouteRunner.cpp
+    src/gwa3/dungeon/DungeonRunStats.cpp
+    src/gwa3/managers/CombatMgr.cpp
+    src/gwa3/managers/MerchantServices.cpp
+    src/gwa3/managers/SkillCombat.cpp
+    src/gwa3/managers/TravelMgr.cpp
+)
+
+target_include_directories(gwa3_dungeon_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
+
+target_compile_definitions(gwa3_dungeon_tests PRIVATE GWA3_DUNGEON_TEST_BUILD=1)
+target_link_libraries(gwa3_dungeon_tests PRIVATE minhook version Dbghelp.lib nlohmann_json::nlohmann_json)
+
+if(MSVC)
+    target_compile_options(gwa3_dungeon_tests PRIVATE
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/tests/DungeonTestCommon.h"
+    )
+else()
+    target_compile_options(gwa3_dungeon_tests PRIVATE
+        "-include" "${CMAKE_CURRENT_SOURCE_DIR}/tests/DungeonTestCommon.h"
+    )
+endif()
+
+set_target_properties(gwa3_dungeon_tests PROPERTIES
+    OUTPUT_NAME "gwa3_dungeon_tests"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_test(NAME gwa3_dungeon_tests COMMAND gwa3_dungeon_tests)

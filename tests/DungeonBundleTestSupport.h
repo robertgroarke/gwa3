@@ -2,6 +2,7 @@
 
 #include <gwa3/dungeon/DungeonBundle.h>
 #include <gwa3/dungeon/DungeonInteractions.h>
+#include <gwa3/dungeon/DungeonInventory.h>
 #include <gwa3/testing/TestFramework.h>
 
 #include <cstdint>
@@ -15,6 +16,8 @@ void ResetAgents();
 void AddAgent(uint32_t agentId, float x, float y, uint32_t type);
 void AddGadgetAgent(uint32_t agentId, float x, float y, uint32_t gadgetId);
 void AddItemAgent(uint32_t agentId, float x, float y, uint32_t itemId, uint32_t owner);
+void SetSpawnItemOnSignpostInteraction(uint32_t signpostId, uint32_t itemAgentId, float x, float y,
+                                       uint32_t itemId, uint32_t owner);
 void SetPlayerAgent(float x, float y, float hp);
 void SetPlayerEquippedItems(uint16_t weaponItemId, uint16_t offhandItemId);
 uint32_t LastInteractedSignpostId();
@@ -36,6 +39,7 @@ void SetBagItem(uint32_t bagIndex, uint32_t slotIndex, uint32_t itemId, uint32_t
                 uint16_t rarity);
 uint32_t LastPickedItemAgentId();
 uint32_t LastDroppedItemId();
+uint32_t LastEquippedItemId();
 
 } // namespace GWA3::TestStubs::ItemMgr
 

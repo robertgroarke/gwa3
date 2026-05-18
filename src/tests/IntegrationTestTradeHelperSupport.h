@@ -1,0 +1,6 @@
+#include "IntegrationTestTradeHelperHarnessSupport.h"
+#include "IntegrationTestTradeHelperStateReadSupport.h"
+#include "IntegrationTestTradeHelperInventorySupport.h"
+#include "IntegrationTestTradeHelperConfigSupport.h"
+#include "IntegrationTestTradeHelperAgentSupport.h"
+#include "IntegrationTestTradeHelperModeSupport.h"

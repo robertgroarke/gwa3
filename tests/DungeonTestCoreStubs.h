@@ -8,6 +8,7 @@ constexpr std::size_t kMaxTrackedEffectsPerAgent = 8;
 constexpr std::size_t kMaxTestSkillConstants = 32;
 constexpr std::size_t kMaxTestBags = 24;
 constexpr std::size_t kMaxTestItemsPerBag = 40;
+constexpr std::size_t kMaxTestMerchantStock = 32;
 
 GWA3::AgentLiving g_test_agents[kMaxTestAgents] = {};
 std::size_t g_test_agent_count = 0;
@@ -25,6 +26,7 @@ uint32_t g_test_dialog_grants_quest_dialog_id = 0u;
 uint32_t g_test_request_quest_info_count = 0u;
 uint32_t g_last_dropped_item_id = 0u;
 uint32_t g_last_picked_item_agent_id = 0u;
+uint32_t g_last_equipped_item_id = 0u;
 uint32_t g_last_used_item_id = 0u;
 uint32_t g_last_identified_item_id = 0u;
 uint32_t g_last_identify_kit_id = 0u;
@@ -40,6 +42,8 @@ uint32_t g_last_transact_type = 0u;
 uint32_t g_last_transact_quantity = 0u;
 uint32_t g_last_transact_item_id = 0u;
 uint32_t g_test_merchant_item_count = 0u;
+uint32_t g_test_merchant_stock_model_ids[kMaxTestMerchantStock] = {};
+GWA3::Item g_test_merchant_stock_items[kMaxTestMerchantStock] = {};
 uint32_t g_last_buy_materials_model_id = 0u;
 uint32_t g_last_buy_materials_quantity = 0u;
 uint32_t g_test_visible_frame_hash = 0u;
@@ -68,6 +72,13 @@ uint32_t g_last_interacted_signpost_id = 0u;
 uint32_t g_last_changed_target_id = 0u;
 uint32_t g_last_called_target_id = 0u;
 uint32_t g_last_attack_target_id = 0u;
+uint32_t g_spawn_item_on_signpost_id = 0u;
+uint32_t g_spawn_item_agent_id = 0u;
+uint32_t g_spawn_item_id = 0u;
+uint32_t g_spawn_item_owner = 0u;
+float g_spawn_item_x = 0.0f;
+float g_spawn_item_y = 0.0f;
+bool g_spawn_item_consumed = false;
 float g_last_move_x = 0.0f;
 float g_last_move_y = 0.0f;
 float g_last_flag_all_x = 0.0f;
@@ -304,9 +315,34 @@ bool ActionInteract() {
     return true;
 }
 
+void SpawnConfiguredItemForSignpostInteraction(uint32_t agentId) {
+    if (g_spawn_item_consumed ||
+        g_spawn_item_on_signpost_id == 0u ||
+        agentId != g_spawn_item_on_signpost_id ||
+        g_spawn_item_agent_id == 0u ||
+        g_spawn_item_id == 0u ||
+        g_test_agent_count >= kMaxTestAgents) {
+        return;
+    }
+
+    auto& agent = g_test_agents[g_test_agent_count++];
+    agent = {};
+    agent.agent_id = g_spawn_item_agent_id;
+    agent.x = g_spawn_item_x;
+    agent.y = g_spawn_item_y;
+    agent.type = 0x400u;
+    agent.owner = g_spawn_item_owner;
+    agent.h00C8_living = g_spawn_item_id;
+    if (g_spawn_item_agent_id > g_test_agent_max_id) {
+        g_test_agent_max_id = g_spawn_item_agent_id;
+    }
+    g_spawn_item_consumed = true;
+}
+
 bool InteractAgentWorldAction(uint32_t agentId, bool) {
     g_last_interacted_signpost_id = agentId;
     ++g_signpost_interaction_count;
+    SpawnConfiguredItemForSignpostInteraction(agentId);
     return true;
 }
 
@@ -335,11 +371,13 @@ void InteractNPC(uint32_t agentId) {
 void InteractSignpost(uint32_t agentId) {
     g_last_interacted_signpost_id = agentId;
     ++g_signpost_interaction_count;
+    SpawnConfiguredItemForSignpostInteraction(agentId);
 }
 
 void InteractSignpostLegacy(uint32_t agentId) {
     g_last_interacted_signpost_id = agentId;
     ++g_signpost_interaction_count;
+    SpawnConfiguredItemForSignpostInteraction(agentId);
 }
 
 float GetDistance(float x1, float y1, float x2, float y2) {
@@ -406,6 +444,13 @@ void ResetAgents() {
     g_last_changed_target_id = 0u;
     g_last_called_target_id = 0u;
     g_last_attack_target_id = 0u;
+    g_spawn_item_on_signpost_id = 0u;
+    g_spawn_item_agent_id = 0u;
+    g_spawn_item_id = 0u;
+    g_spawn_item_owner = 0u;
+    g_spawn_item_x = 0.0f;
+    g_spawn_item_y = 0.0f;
+    g_spawn_item_consumed = false;
     g_last_move_x = 0.0f;
     g_last_move_y = 0.0f;
     g_last_flag_all_x = 0.0f;
@@ -461,6 +506,15 @@ void AddNpc(uint32_t agentId, float x, float y, uint8_t allegiance, float hp) {
     }
 }
 
+void SetNpcPlayerNumber(uint32_t agentId, uint16_t playerNumber) {
+    for (std::size_t i = 0; i < g_test_agent_count; ++i) {
+        if (g_test_agents[i].agent_id == agentId) {
+            g_test_agents[i].player_number = playerNumber;
+            return;
+        }
+    }
+}
+
 void AddItemAgent(uint32_t agentId, float x, float y, uint32_t itemId, uint32_t owner) {
     if (g_test_agent_count >= kMaxTestAgents) {
         return;
@@ -496,6 +550,22 @@ void AddGadgetAgent(uint32_t agentId, float x, float y, uint32_t gadgetId) {
     }
 }
 
+void SetSpawnItemOnSignpostInteraction(
+    uint32_t signpostId,
+    uint32_t itemAgentId,
+    float x,
+    float y,
+    uint32_t itemId,
+    uint32_t owner) {
+    g_spawn_item_on_signpost_id = signpostId;
+    g_spawn_item_agent_id = itemAgentId;
+    g_spawn_item_x = x;
+    g_spawn_item_y = y;
+    g_spawn_item_id = itemId;
+    g_spawn_item_owner = owner;
+    g_spawn_item_consumed = false;
+}
+
 void SetPlayerAgent(float x, float y, float hp) {
     g_test_player_agent = {};
     g_test_player_agent.agent_id = g_test_my_agent_id;
@@ -518,6 +588,10 @@ void SetPlayerEquippedItems(uint16_t weaponItemId, uint16_t offhandItemId) {
     }
     g_test_player_agent.weapon_item_id = weaponItemId;
     g_test_player_agent.offhand_item_id = offhandItemId;
+    const auto* weapon = GWA3::ItemMgr::GetItemById(weaponItemId);
+    const auto* offhand = GWA3::ItemMgr::GetItemById(offhandItemId);
+    g_test_player_agent.weapon_item_type = weapon ? weapon->type : 0u;
+    g_test_player_agent.offhand_item_type = offhand ? offhand->type : 0u;
 }
 
 void ClearPlayerAgent() {

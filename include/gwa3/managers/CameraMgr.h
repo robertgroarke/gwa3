@@ -1,6 +1,6 @@
 #pragma once
 
-// CameraMgr — camera control, FOV, unlock, fog toggle.
+// : CameraMgr — camera control, FOV, unlock, fog toggle.
 
 #include <gwa3/game/Camera.h>
 #include <cstdint>

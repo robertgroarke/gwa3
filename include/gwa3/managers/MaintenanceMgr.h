@@ -12,6 +12,36 @@ namespace GWA3 {
 
 namespace GWA3::MaintenanceMgr {
 
+    // Rarity IDs from the encoded item name prefix. Kept public so profile
+    // handoff code can build native maintenance policies without duplicating
+    // magic values.
+    static constexpr uint16_t kItemRarityAny    = 0;
+    static constexpr uint16_t kItemRarityWhite  = 2621;
+    static constexpr uint16_t kItemRarityGray   = 2622;
+    static constexpr uint16_t kItemRarityBlue   = 2623;
+    static constexpr uint16_t kItemRarityGold   = 2624;
+    static constexpr uint16_t kItemRarityPurple = 2626;
+    static constexpr uint16_t kItemRarityGreen  = 2627;
+
+    constexpr uint64_t UpgradeSalvageItemTypeMask(uint8_t itemType) {
+        return itemType < 64 ? (uint64_t{1} << itemType) : uint64_t{0};
+    }
+
+    struct UpgradeSalvageRule {
+        bool enabled = true;
+        const char* name = nullptr;
+        const char* modPatternHex = nullptr;
+        uint8_t salvageIndex = 2;  // 0=prefix, 1=suffix/rune, 2=inscription.
+        uint64_t itemTypeMask = 0; // 0 means any item type.
+        uint16_t minimumRarity = kItemRarityGold;
+    };
+
+    struct UpgradeSalvageMatch {
+        bool matched = false;
+        uint8_t salvageIndex = 2;
+        const char* ruleName = nullptr;
+    };
+
     // ===== Configuration =====
     struct Config {
         uint32_t minFreeSlots                = 5;
@@ -36,11 +66,21 @@ namespace GWA3::MaintenanceMgr {
         uint32_t consetStorageGoldTrigger    = 800000;
         uint32_t consetStorageGoldFloor      = 600000;
         uint32_t targetStoredConsetsEach     = 25;
+        uint32_t targetCharacterConsetsEach  = 1;
         uint32_t consetBatchSets             = 10;
         uint32_t consetWithdrawGoldTarget    = 100000;
+        // Count occupied inventory slots containing conset materials. When this
+        // threshold is reached, craft carried materials into consets to clear bag
+        // pressure even if stored consets are already above target.
         uint32_t consetMaterialStackTrigger  = 10;
+        // Kept as a UI/status hint and emergency free-slot fallback. The primary
+        // inventory-material crafting trigger is consetMaterialStackTrigger.
         uint32_t consetMaterialPressureFreeSlots = 10;
         bool enableConsetRestock             = true;
+        bool salvageMatchedUpgradesBeforeMaterials = true;
+        bool salvageUnmatchedGoldWeaponsForMaterials = false;
+        const UpgradeSalvageRule* upgradeSalvageRules = nullptr;
+        uint32_t upgradeSalvageRuleCount      = 0;
     };
 
     // ===== Rare Skin Detection =====
@@ -63,6 +103,10 @@ namespace GWA3::MaintenanceMgr {
     // Count items matching a model ID across Xunlai storage panes (bags 8-16).
     uint32_t CountItemByModelInStorage(uint32_t modelId);
 
+    bool HasCharacterConsetSet(uint32_t targetEach = 1);
+    bool NeedsCharacterConsetRestock(const Config& cfg = {});
+    uint32_t WithdrawMissingConsetsFromStorage(uint32_t targetEach = 1);
+
     // ===== Gold Management =====
 
     // Deposit gold to storage. Keeps `keepOnChar` gold on character.
@@ -73,7 +117,7 @@ namespace GWA3::MaintenanceMgr {
 
     // ===== Storage Deposit =====
 
-    // Deposit basic materials from backpack (bags 1-4) to material storage (bag 6).
+    // Deposit known basic and rare materials from backpack (bags 1-4) to material storage (bag 6).
     // Requires Xunlai chest to be open. Returns number of stacks deposited.
     uint32_t DepositMaterialsToStorage();
 
@@ -91,8 +135,17 @@ namespace GWA3::MaintenanceMgr {
     // Junk = identified whites/blues/purples, excluding kits and rare skins.
     uint32_t SellJunkItems();
 
+    // Sell safe emergency cleanup items at an open merchant until at least
+    // minFreeSlots are available. Prefers white weapons, then low-grade
+    // salvage kits. Returns number of items sold.
+    uint32_t SellEmergencyItemsForFreeSlots(uint32_t minFreeSlots);
+
     // Check if item should be sold as junk (filter function).
     bool ShouldSellItem(const Item* item);
+
+    // Check whether an identified item matches the configured useful-upgrade
+    // salvage matrix. Uses GWA2-style raw mod-struct hex patterns.
+    UpgradeSalvageMatch FindUpgradeSalvageMatch(const Item* item, const Config& cfg = {});
 
     // ===== Kit Management =====
 
@@ -124,11 +177,16 @@ namespace GWA3::MaintenanceMgr {
     // Mirrors the legacy dungeon Boss()->SalvageItems() pattern.
     // Returns number of gold items salvaged.
     uint32_t IdentifyAndSalvageGoldItems();
+    uint32_t IdentifyAndSalvageGoldItems(const Config& cfg);
 
     // Run one native salvage command for a specific item/kit pair.
     // Returns true when the command was queued and survived long enough to
     // observe completion or post-command stabilization.
     bool SalvageItemNative(uint32_t kitId, uint32_t itemId, bool confirmByEnter = false);
+
+    // Run one native upgrade salvage command for a specific item/kit/mod slot.
+    // modIndex mirrors GWA2 SalvageMod: 0=prefix, 1=suffix/rune, 2=inscription.
+    bool SalvageUpgradeNative(uint32_t kitId, uint32_t itemId, uint8_t modIndex, bool confirmByEnter = false);
 
     // Run one legacy AutoIt-like botshub salvage command for a specific
     // item/kit pair. This uses the naked salvage command stub/return path

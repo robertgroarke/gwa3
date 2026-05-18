@@ -267,13 +267,59 @@ void UseSkill(uint32_t slot, uint32_t targetAgentId, uint32_t callTarget) {
 }
 
 void UseHeroSkill(uint32_t heroIndex, uint32_t slot, uint32_t targetAgentId) {
-    if (s_useHeroSkillFn) {
-        GameThread::Enqueue([heroIndex, slot, targetAgentId]() {
-            s_useHeroSkillFn(heroIndex, slot, targetAgentId);
-        });
-    } else {
-        CtoS::SendPacket(4, Packets::USE_HERO_SKILL, heroIndex, slot, targetAgentId);
+    if (slot == 0u || slot > 8u) {
+        Log::Warn("SkillMgr: UseHeroSkill skipped invalid slot heroIndex=%u slot=%u target=%u",
+                  heroIndex,
+                  slot,
+                  targetAgentId);
+        return;
     }
+
+    const uint32_t agentId = ResolveSkillbarAgentId(heroIndex);
+    if (!agentId) {
+        Log::Warn("SkillMgr: UseHeroSkill skipped unresolved hero agent heroIndex=%u slot=%u target=%u",
+                  heroIndex,
+                  slot,
+                  targetAgentId);
+        return;
+    }
+
+    Skillbar* bar = GetSkillbarByAgentId(agentId);
+    if (!bar) {
+        Log::Warn("SkillMgr: UseHeroSkill skipped missing skillbar heroIndex=%u agentId=%u slot=%u target=%u",
+                  heroIndex,
+                  agentId,
+                  slot,
+                  targetAgentId);
+        return;
+    }
+
+    const SkillbarSkill& skill = bar->skills[slot - 1u];
+    if (skill.skill_id == 0u) {
+        Log::Warn("SkillMgr: UseHeroSkill skipped empty skill slot heroIndex=%u agentId=%u slot=%u",
+                  heroIndex,
+                  agentId,
+                  slot);
+        return;
+    }
+    if (skill.recharge > 0u) {
+        Log::Info("SkillMgr: UseHeroSkill skipped recharging heroIndex=%u agentId=%u slot=%u skillId=%u recharge=%u",
+                  heroIndex,
+                  agentId,
+                  slot,
+                  skill.skill_id,
+                  skill.recharge);
+        return;
+    }
+
+    Log::Info("SkillMgr: UseHeroSkill packet heroIndex=%u agentId=%u slot=%u skillId=%u target=%u disabled=0x%08X",
+              heroIndex,
+              agentId,
+              slot,
+              skill.skill_id,
+              targetAgentId,
+              bar->disabled);
+    CtoS::UseHeroSkill(agentId, skill.skill_id, targetAgentId);
 }
 
 void LoadSkillbar(const uint32_t skillIds[8], uint32_t heroIndex) {
@@ -300,7 +346,22 @@ void SetSkillbarSkill(uint32_t slot, uint32_t skillId, uint32_t heroIndex) {
 }
 
 void ToggleHeroSkillSlot(uint32_t heroIndex, uint32_t slot) {
-    CtoS::SendPacket(3, Packets::HERO_SKILL_TOGGLE, heroIndex, slot);
+    if (slot == 0u || slot > 8u) {
+        Log::Warn("SkillMgr: ToggleHeroSkillSlot skipped invalid slot heroIndex=%u slot=%u",
+                  heroIndex,
+                  slot);
+        return;
+    }
+
+    const uint32_t agentId = ResolveSkillbarAgentId(heroIndex);
+    if (!agentId) {
+        Log::Warn("SkillMgr: ToggleHeroSkillSlot skipped unresolved hero agent heroIndex=%u slot=%u",
+                  heroIndex,
+                  slot);
+        return;
+    }
+
+    CtoS::SendPacket(3, Packets::HERO_SKILL_TOGGLE, agentId, slot - 1u);
 }
 
 Skillbar* GetPlayerSkillbar() {

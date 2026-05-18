@@ -1,0 +1,4 @@
+#include "IntegrationTestFroggyFeatureCombatAgentReadTypes.h"
+#include "IntegrationTestFroggyFeatureCombatAgentReadCapture.h"
+#include "IntegrationTestFroggyFeatureCombatAgentReadValidationHelpers.h"
+#include "IntegrationTestFroggyFeatureCombatAgentReadReport.h"

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Gwa3.UI.App</AssemblyName>
+    <RootNamespace>Gwa3.UI.App</RootNamespace>
+    <ApplicationIcon>Assets\gwa3-control-panel.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Gwa3.UI.Core\Gwa3.UI.Core.csproj" />
+    <ProjectReference Include="..\Gwa3.UI.Supervisor\Gwa3.UI.Supervisor.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\gwa3-control-panel.ico" />
+    <Resource Include="Assets\gwa3-control-panel.png" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,4 @@
+#include "IntegrationTestFroggyFeatureBuiltinCombatTraceReports.h"
+#include "IntegrationTestFroggyFeatureBuiltinCombatSignalTypes.h"
+#include "IntegrationTestFroggyFeatureBuiltinCombatSignalEvaluation.h"
+#include "IntegrationTestFroggyFeatureBuiltinCombatSignalObserver.h"

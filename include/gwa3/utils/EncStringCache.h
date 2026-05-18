@@ -4,10 +4,10 @@
 // surface human-readable quest names / objectives / descriptions to the
 // LLM bridge without blocking the snapshot thread.
 //
-// ValidateAsyncDecodeStr (see StringEncoding.cpp) is fire-and-forget:
+// ValidateAsyncDecodeStr (see StringEncoding.cpp) is fire-and-forget —
 // the callback arrives on the game thread at an unknown later time.
 // Calling it synchronously from the snapshot path risks overrunning the
-// GameThread pre-dispatch queue and crashing GW.
+// GameThread pre-dispatch queue and crashing GW (see local docs/QUEST_LOG_RESEARCH.md).
 //
 // This module runs a dedicated worker thread that drains decode requests
 // one at a time, at a sustainable rate, and writes completed results
@@ -26,7 +26,7 @@ namespace GWA3::EncStringCache {
     // Read-only cache lookup. Returns decoded UTF-8 text when cached,
     // or an empty string when not. Never enqueues a decode.
     //
-    // Safe to call on every snapshot; the snapshot path uses this so
+    // Safe to call on every snapshot — the snapshot path uses this so
     // decoded text appears automatically once the cache is primed, but
     // without ever triggering new decode work itself.
     //

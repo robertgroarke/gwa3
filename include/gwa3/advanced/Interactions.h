@@ -11,6 +11,7 @@ using AgentLogFn = void(*)(const char* label, uint32_t agentId);
 using SignpostScanLogFn = void(*)(float x, float y, float maxDist, const char* label, bool chestOnly);
 using FailureProbeFn = void(*)(const char* label, float x, float y, float maxRange);
 using BoolFn = bool(*)();
+using BoolContextFn = bool(*)(void* context);
 using DirectNpcInteractStopFn = bool(*)(uint32_t npcId, void* context);
 
 class OpenedChestTracker {
@@ -72,6 +73,10 @@ struct CandidateDialogOptions {
     const char* log_prefix = nullptr;
     WaitFn wait_ms = nullptr;
     BoolFn stop_condition = nullptr;
+    BoolContextFn stop_condition_with_context = nullptr;
+    void* stop_context = nullptr;
+    bool use_legacy_interact_fallbacks = false;
+    bool send_dialog_without_ready = false;
 };
 
 struct CandidateDialogResult {

@@ -6,6 +6,9 @@ void Info(const char*, ...) {
 void Warn(const char*, ...) {
 }
 
+void Error(const char*, ...) {
+}
+
 } // namespace GWA3::Log
 
 namespace GWA3::TestStubs::TradeMgr {
@@ -16,12 +19,32 @@ void Reset() {
     g_last_transact_item_id = 0u;
     g_transact_count = 0u;
     g_test_merchant_item_count = 0u;
+    for (std::size_t i = 0; i < kMaxTestMerchantStock; ++i) {
+        g_test_merchant_stock_model_ids[i] = 0u;
+        g_test_merchant_stock_items[i] = {};
+    }
     g_last_buy_materials_model_id = 0u;
     g_last_buy_materials_quantity = 0u;
 }
 
 void SetMerchantItemCount(uint32_t count) {
     g_test_merchant_item_count = count;
+}
+
+void SetMerchantItemModel(uint32_t position, uint32_t modelId) {
+    if (position == 0u || position > kMaxTestMerchantStock) {
+        return;
+    }
+    g_test_merchant_stock_model_ids[position - 1u] = modelId;
+    auto& item = g_test_merchant_stock_items[position - 1u];
+    item = {};
+    item.item_id = static_cast<uint32_t>(1000u + position);
+    item.model_id = modelId;
+    item.bag = nullptr;
+    item.agent_id = 0u;
+    if (g_test_merchant_item_count < position) {
+        g_test_merchant_item_count = position;
+    }
 }
 
 uint32_t LastTransactType() {
@@ -75,6 +98,24 @@ namespace GWA3::MerchantMgr {
 
 uint32_t GetMerchantItemCount() {
     return g_test_merchant_item_count;
+}
+
+Item* GetMerchantItemByPosition(uint32_t itemPosition) {
+    if (itemPosition == 0u || itemPosition > g_test_merchant_item_count ||
+        itemPosition > kMaxTestMerchantStock) {
+        return nullptr;
+    }
+    auto& item = g_test_merchant_stock_items[itemPosition - 1u];
+    return item.item_id ? &item : nullptr;
+}
+
+uint32_t GetMerchantItemIdByModelId(uint32_t modelId) {
+    for (std::size_t i = 0; i < kMaxTestMerchantStock; ++i) {
+        if (g_test_merchant_stock_model_ids[i] == modelId) {
+            return static_cast<uint32_t>(1000u + i + 1u);
+        }
+    }
+    return 0u;
 }
 
 void TransactItems(uint32_t type, uint32_t quantity, uint32_t itemId) {
@@ -231,6 +272,18 @@ void SendPacket(uint32_t size, uint32_t header, ...) {
     g_last_send_packet_arg1 = va_arg(args, uint32_t);
     g_last_send_packet_arg2 = va_arg(args, uint32_t);
     va_end(args);
+}
+
+void ChangeSecondProfession(uint32_t agentId, uint32_t profession) {
+    SendPacket(3, GWA3::Packets::PROFESSION_CHANGE, agentId, profession);
+    auto* agent = GWA3::AgentMgr::GetAgentByID(agentId);
+    if (agent && agent->type == 0xDBu) {
+        auto* living = static_cast<GWA3::AgentLiving*>(agent);
+        if (living->primary == 0u) {
+            living->primary = 1u;
+        }
+        living->secondary = static_cast<uint8_t>(profession);
+    }
 }
 
 void SendPacketDirect(uint32_t size, uint32_t header, ...) {

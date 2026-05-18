@@ -1,6 +1,6 @@
 #pragma once
 
-// GuildMgr — guild data, guild hall travel.
+// : GuildMgr — guild data, guild hall travel.
 
 #include <gwa3/game/Guild.h>
 #include <cstdint>

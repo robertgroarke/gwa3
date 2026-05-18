@@ -1,0 +1,4 @@
+#include "IntegrationTestFroggyFeatureReadOnlyCombatSnapshotAssertions.h"
+#include "IntegrationTestFroggyFeatureReadOnlyCombatHeroAssertions.h"
+#include "IntegrationTestFroggyFeatureReadOnlyCombatTargetSetup.h"
+#include "IntegrationTestFroggyFeatureReadOnlyCombatPreconditionsEntry.h"

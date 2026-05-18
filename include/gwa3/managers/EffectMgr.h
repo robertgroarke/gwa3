@@ -1,6 +1,6 @@
 #pragma once
 
-// EffectMgr — buff/effect tracking for agents.
+// : EffectMgr — buff/effect tracking for agents.
 // Reads party effect arrays from WorldContext to check active
 // buffs, enchantments, and conditions on any party member.
 

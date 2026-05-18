@@ -25,12 +25,15 @@ GWA3_TEST(ravens_blessings_and_doors_match_source, {
     int count = 0;
     const auto* routeBlessing = Ravens::GetBlessingAnchors(Ravens::RouteId::RunVarajarToBlessing, count);
     GWA3_ASSERT_EQ(count, 1);
+    GWA3_ASSERT_EQ(routeBlessing[0].trigger_index, 0);
     GWA3_ASSERT_EQ(static_cast<int>(routeBlessing[0].x), -2034);
     GWA3_ASSERT_EQ(static_cast<int>(routeBlessing[0].y), -4512);
+    GWA3_ASSERT_EQ(routeBlessing[0].required_title_id, 0x29u);
 
     const auto* torchBlessing = Ravens::FindBlessingAnchor(Ravens::RouteId::Level1Torch1, 0);
     GWA3_ASSERT(torchBlessing != nullptr);
     GWA3_ASSERT_EQ(static_cast<int>(torchBlessing->x), -17536);
+    GWA3_ASSERT_EQ(torchBlessing->required_title_id, 0x27u);
 
     const auto* door = Ravens::FindDoorObjective(Ravens::RouteId::Level1DoorKey);
     GWA3_ASSERT(door != nullptr);

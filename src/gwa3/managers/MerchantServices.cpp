@@ -22,6 +22,8 @@ namespace GWA3::MerchantMgr {
 
 namespace {
 
+constexpr std::size_t kMaxMerchantContextCandidates = 32u;
+
 void CallWait(WaitFn wait_fn, uint32_t ms) {
     if (wait_fn) {
         wait_fn(ms);
@@ -81,6 +83,98 @@ bool MoveToPointWithResult(float x, float y, float threshold, MoveToPointResultF
         return move_to_point(x, y, threshold);
     }
     return AdvancedWaypoint::MoveToAndWait(x, y, threshold).arrived;
+}
+
+bool HasOpenStandardMerchantStock() {
+    const uint32_t merchantItemCount = MerchantMgr::GetMerchantItemCount();
+    if (merchantItemCount == 0u) {
+        return false;
+    }
+
+    static constexpr uint32_t kStandardMerchantModels[] = {
+        ItemModelIds::IDENTIFICATION_KIT,
+        ItemModelIds::SUPERIOR_IDENTIFICATION_KIT,
+        ItemModelIds::SALVAGE_KIT,
+        ItemModelIds::EXPERT_SALVAGE_KIT,
+        ItemModelIds::SUPERIOR_SALVAGE_KIT,
+    };
+
+    // Scan the visible merchant stock directly. GetMerchantItemIdByModelId falls
+    // back through material-trader virtual items and emits a full diagnostic
+    // dump for misses, which is too noisy and too slow for candidate probing.
+    for (uint32_t position = 1u; position <= merchantItemCount; ++position) {
+        const Item* item = MerchantMgr::GetMerchantItemByPosition(position);
+        if (!item) {
+            continue;
+        }
+        for (uint32_t modelId : kStandardMerchantModels) {
+            if (item->model_id == modelId) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool WaitForStandardMerchantStock(uint32_t timeoutMs, WaitFn wait_ms, uint32_t poll_ms) {
+    const DWORD start = GetTickCount();
+    while ((GetTickCount() - start) < timeoutMs) {
+        if (HasOpenStandardMerchantStock()) {
+            return true;
+        }
+        CallWait(wait_ms, poll_ms);
+    }
+    return HasOpenStandardMerchantStock();
+}
+
+bool ValidateMerchantContext(uint32_t npcId,
+                             const char* open_path,
+                             const MerchantContextNearCoordsOptions& options) {
+    if (!options.require_standard_merchant_stock) {
+        return true;
+    }
+
+    if (HasOpenStandardMerchantStock()) {
+        Log::Info("%s: Merchant candidate %u opened standard merchant stock via %s",
+                  Prefix(options.log_prefix),
+                  npcId,
+                  open_path ? open_path : "unknown path");
+        return true;
+    }
+
+    Log::Warn("%s: Merchant candidate %u opened non-standard trader stock via %s; "
+              "rejecting for maintenance (items=%u)",
+              Prefix(options.log_prefix),
+              npcId,
+              open_path ? open_path : "unknown path",
+              MerchantMgr::GetMerchantItemCount());
+    return false;
+}
+
+bool WaitForValidatedMerchantContext(uint32_t npcId,
+                                     const char* open_path,
+                                     uint32_t timeoutMs,
+                                     WaitFn wait_ms,
+                                     const MerchantContextNearCoordsOptions& options) {
+    if (!options.require_standard_merchant_stock) {
+        return WaitForMerchantContext(timeoutMs,
+                                      wait_ms,
+                                      options.merchant.merchant_root_hash,
+                                      options.merchant.wait_poll_ms);
+    }
+
+    if (WaitForStandardMerchantStock(timeoutMs, wait_ms, options.merchant.wait_poll_ms)) {
+        Log::Info("%s: Merchant candidate %u opened standard merchant stock via %s",
+                  Prefix(options.log_prefix),
+                  npcId,
+                  open_path ? open_path : "unknown path");
+        return true;
+    }
+
+    if (MerchantMgr::GetMerchantItemCount() > 0u) {
+        ValidateMerchantContext(npcId, open_path, options);
+    }
+    return false;
 }
 
 uint32_t ResolveOutpostMapId(uint32_t configured_outpost_map_id,
@@ -219,7 +313,7 @@ bool TryOpenMerchantContextCandidate(uint32_t npcId,
         CallWait(wait_ms, options.merchant.interact_delay_ms);
     }
     CallWait(wait_ms, options.merchant.post_interact_delay_ms);
-    if (WaitForMerchantContext(2000u, wait_ms, options.merchant.merchant_root_hash, options.merchant.wait_poll_ms)) {
+    if (WaitForValidatedMerchantContext(npcId, "native interact", 2000u, wait_ms, options)) {
         Log::Info("%s: Merchant window opened via native interact", Prefix(options.log_prefix));
         return true;
     }
@@ -235,10 +329,11 @@ bool TryOpenMerchantContextCandidate(uint32_t npcId,
         CallWait(wait_ms, options.merchant.interact_delay_ms);
     }
     CallWait(wait_ms, options.merchant.post_interact_delay_ms);
-    if (WaitForMerchantContext(options.merchant.wait_timeout_ms,
-                               wait_ms,
-                               options.merchant.merchant_root_hash,
-                               options.merchant.wait_poll_ms)) {
+    if (WaitForValidatedMerchantContext(npcId,
+                                        "raw packet fallback",
+                                        options.merchant.wait_timeout_ms,
+                                        wait_ms,
+                                        options)) {
         Log::Info("%s: Merchant window opened via raw packet fallback", Prefix(options.log_prefix));
         return true;
     }
@@ -308,7 +403,7 @@ bool WaitForMerchantContext(uint32_t timeoutMs, WaitFn wait_ms,
     const DWORD start = GetTickCount();
     while ((GetTickCount() - start) < timeoutMs) {
         if (MerchantMgr::GetMerchantItemCount() > 0u) return true;
-        if (UIMgr::IsFrameVisible(merchant_root_hash)) return true;
+        if (merchant_root_hash != 0u && UIMgr::IsFrameVisible(merchant_root_hash)) return true;
         CallWait(wait_ms, poll_ms);
     }
     return false;
@@ -337,7 +432,7 @@ bool OpenMerchantContextNearCoords(float searchX,
                                    MoveToPointResultFn move_to_point,
                                    WaitFn wait_ms,
                                    const MerchantContextNearCoordsOptions& options) {
-    AdvancedDiagnostics::NearbyNpcCandidate candidates[8]{};
+    AdvancedDiagnostics::NearbyNpcCandidate candidates[kMaxMerchantContextCandidates]{};
     const std::size_t candidateCount =
         AdvancedDiagnostics::CollectNearbyNpcCandidates(searchX, searchY, searchRadius, candidates, _countof(candidates));
     AdvancedDiagnostics::LogNearbyNpcCandidates("Merchant", searchX, searchY, searchRadius, candidates, candidateCount);
@@ -347,7 +442,7 @@ bool OpenMerchantContextNearCoords(float searchX,
     }
 
     bool triedPreferredMerchant = false;
-    bool attemptedAgents[8]{};
+    bool attemptedAgents[kMaxMerchantContextCandidates]{};
     if (options.preferred_player_number != 0u) {
         for (std::size_t i = 0u; i < candidateCount; ++i) {
             const auto& candidate = candidates[i];
@@ -430,7 +525,9 @@ bool OpenMaintenanceMerchantContext(const MaintenanceLocation& location,
                                     const char* log_prefix) {
     MerchantContextNearCoordsOptions options;
     options.preferred_player_number = location.merchant_player_number;
+    options.require_standard_merchant_stock = true;
     options.log_prefix = log_prefix;
+    options.merchant.merchant_root_hash = 0u;
     return OpenMerchantContextNearCoords(
         location.merchant_x,
         location.merchant_y,
@@ -460,6 +557,11 @@ MaintenanceStateResult RunMerchantMaintenanceState(uint32_t configured_outpost_m
         maintenance_cfg,
         "Merchant maintenance: merchant window failed to open, skipping sell/buy",
         true);
+
+    if (!AdvancedRuntime::WaitForTownRuntimeReady(outpost_map_id, options.town_runtime_timeout_ms)) {
+        Log::Warn("%s: Merchant: town runtime not stable after maintenance; retrying next tick", prefix);
+        return MaintenanceStateResult::Retry;
+    }
 
     if (MaintenanceMgr::NeedsMaintenance(maintenance_cfg)) {
         return MaintenanceStateResult::NeedsMaintenance;
@@ -492,21 +594,69 @@ MaintenanceStateResult RunFullMaintenanceState(uint32_t configured_outpost_map_i
     LogMaintenanceInventorySnapshot(prefix);
 
     const MaintenanceMgr::Config maintenance_cfg = BuildMaintenanceConfig(outpost_map_id, location);
-    PerformMaintenanceAtMerchant(
+    const bool primary_merchant_opened = PerformMaintenanceAtMerchant(
         location,
         options,
         maintenance_cfg,
         "Maintenance: merchant window failed to open, skipping shared maintenance",
         false);
+    if (!primary_merchant_opened) {
+        Log::Warn("%s: Maintenance: running storage/trader fallback without an open standard merchant",
+                  prefix);
+        MaintenanceMgr::PerformMaintenance(maintenance_cfg);
+        CallWait(options.wait_ms, options.post_maintenance_wait_ms);
+    }
 
-    const uint32_t free_slots = AdvancedInventory::CountFreeSlots();
-    const bool still_needs_maintenance = MaintenanceMgr::NeedsMaintenance(maintenance_cfg);
+    if (!AdvancedRuntime::WaitForTownRuntimeReady(outpost_map_id, options.town_runtime_timeout_ms)) {
+        Log::Warn("%s: Maintenance: town runtime not stable after merchant/conset maintenance; retrying next tick",
+                  prefix);
+        return MaintenanceStateResult::Retry;
+    }
+
+    uint32_t free_slots = AdvancedInventory::CountFreeSlots();
+    uint32_t emergency_sold = 0u;
+    const uint32_t cleanup_target =
+        maintenance_cfg.minFreeSlots > options.critical_free_slots
+            ? maintenance_cfg.minFreeSlots
+            : options.critical_free_slots;
+    if (free_slots < cleanup_target) {
+        if (OpenMaintenanceMerchantContext(location, options.move_to_point, options.wait_ms, prefix)) {
+            emergency_sold =
+                MaintenanceMgr::SellEmergencyItemsForFreeSlots(cleanup_target);
+            free_slots = AdvancedInventory::CountFreeSlots();
+            Log::Warn("%s: Maintenance emergency merchant cleanup sold %u item(s); freeSlots=%u/%u",
+                      prefix,
+                      emergency_sold,
+                      free_slots,
+                      cleanup_target);
+        } else {
+            Log::Warn("%s: Maintenance emergency merchant cleanup could not open merchant", prefix);
+        }
+    }
+
+    bool still_needs_maintenance = MaintenanceMgr::NeedsMaintenance(maintenance_cfg);
+    if (still_needs_maintenance && free_slots >= options.critical_free_slots) {
+        Log::Info("%s: Maintenance: running one follow-up merchant pass after inventory changed", prefix);
+        PerformMaintenanceAtMerchant(
+            location,
+            options,
+            maintenance_cfg,
+            "Maintenance: follow-up merchant window failed to open",
+            false);
+        if (!AdvancedRuntime::WaitForTownRuntimeReady(outpost_map_id, options.town_runtime_timeout_ms)) {
+            Log::Warn("%s: Maintenance: town runtime not stable after follow-up maintenance; retrying next tick",
+                      prefix);
+            return MaintenanceStateResult::Retry;
+        }
+        free_slots = AdvancedInventory::CountFreeSlots();
+        still_needs_maintenance = MaintenanceMgr::NeedsMaintenance(maintenance_cfg);
+    }
     if (free_slots < options.critical_free_slots) {
         Log::Warn("%s: Critically low inventory space (%u slots). Consider manual cleanup.",
                   prefix,
                   free_slots);
     }
-    if (free_slots < options.critical_free_slots || still_needs_maintenance) {
+    if (free_slots < options.critical_free_slots) {
         Log::Warn("%s: Maintenance: inventory not cleared enough to continue (freeSlots=%u preferred=%u critical=%u needsMaintenance=%s); stopping bot",
                   prefix,
                   free_slots,
@@ -514,6 +664,18 @@ MaintenanceStateResult RunFullMaintenanceState(uint32_t configured_outpost_map_i
                   options.critical_free_slots,
                   still_needs_maintenance ? "yes" : "no");
         return MaintenanceStateResult::Stop;
+    }
+    if (MaintenanceMgr::NeedsCharacterConsetRestock(maintenance_cfg)) {
+        Log::Warn("%s: Maintenance: consets still missing after maintenance; refusing explorable entry",
+                  prefix);
+        return MaintenanceStateResult::NeedsMaintenance;
+    }
+    if (still_needs_maintenance) {
+        Log::Warn("%s: Maintenance: continuing after exhausted cleanup with pending preferred upkeep (freeSlots=%u preferred=%u emergencySold=%u)",
+                  prefix,
+                  free_slots,
+                  maintenance_cfg.minFreeSlots,
+                  emergency_sold);
     }
     if (free_slots < maintenance_cfg.minFreeSlots) {
         Log::Info("%s: Maintenance: continuing after exhausted maintenance with %u free slots (preferred=%u)",

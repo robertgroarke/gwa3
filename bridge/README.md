@@ -44,6 +44,14 @@ python -m bridge `
 | `--pipe` | `\\.\pipe\gwa3_llm` | Named pipe exposed by the DLL |
 | `--kamadan-timeout` | `10.0` | Per-source timeout for Kamadan searches |
 | `--kamadan-cache-ttl` | `120.0` | Cache TTL for Kamadan search results |
+| `--llm-hourly-token-cap` | `10000000` | Hard rolling LLM token cap |
+| `--allow-remote-llm` | off | Required for non-local endpoints and `codex-exec` |
+
+Remote/cloud LLM backends are disabled unless `--allow-remote-llm` is supplied.
+The bridge tracks provider usage metadata and stops the agent if the rolling
+hourly token cap is exceeded. During sustained token spikes, prompts are
+temporarily restricted to Tier1/core state to reduce context size before the
+hard cap is reached.
 
 ## Notes
 

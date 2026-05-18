@@ -206,6 +206,8 @@ struct DungeonLoopOptions {
     uint32_t fallback_completion_map_id = 0u;
     int max_entry_refresh_retries_before_progress = 3;
     bool ignore_bot_running_for_routes = true;
+    bool require_objective_for_entry_return_completion = false;
+    bool complete_on_objective_in_dungeon_map = false;
     const char* log_prefix = "Dungeon";
     const char* loop_name = "Dungeon";
     const char* entry_refresh_context = "dungeon-loop-refresh";

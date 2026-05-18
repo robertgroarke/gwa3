@@ -15,6 +15,7 @@ namespace GWA3::Bot {
         Traveling,
         InDungeon,
         Looting,
+        AwaitingReturn,
         Merchant,
         Maintenance,
         Error,

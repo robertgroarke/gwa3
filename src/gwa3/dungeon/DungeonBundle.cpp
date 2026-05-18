@@ -1,9 +1,11 @@
 #include <gwa3/dungeon/DungeonBundle.h>
 
+#include <gwa3/advanced/Inventory.h>
 #include <gwa3/dungeon/DungeonBuiltinCombat.h>
 #include <gwa3/dungeon/DungeonInteractions.h>
 #include <gwa3/dungeon/DungeonLoot.h>
 #include <gwa3/dungeon/DungeonNavigation.h>
+#include <gwa3/dungeon/DungeonRunStats.h>
 #include <gwa3/core/Log.h>
 #include <gwa3/game/Agent.h>
 #include <gwa3/managers/AgentMgr.h>
@@ -16,6 +18,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace GWA3::DungeonBundle {
@@ -36,6 +39,7 @@ constexpr uint32_t kChestInteractSettleMs = 5000u;
 constexpr uint32_t kActionInteractCode = 0x80u;
 constexpr uint32_t kDropBundleActionCode = 0xCDu;
 constexpr uint32_t kDropBundleActionDownFlag = 0x1Eu;
+constexpr uint32_t kWeaponSetActionBase = 0x80u;
 constexpr float kBundleChestExactSignpostTolerance = 150.0f;
 constexpr float kBundleChestFollowupTolerance = 400.0f;
 constexpr float kBundleChestLoosePreferredTolerance = 650.0f;
@@ -43,10 +47,17 @@ constexpr uint32_t kMaxLoggedNearbyItems = 12u;
 constexpr uint32_t kMaxLoggedNearbyGadgets = 12u;
 constexpr uint32_t kMaxLoggedPlayerEffects = 12u;
 constexpr uint32_t kMaxLoggedPlayerBuffs = 8u;
+constexpr uint32_t kMaxBundleObjectFallbackCandidates = 8u;
 
 struct TrackedEffectProbe {
     uint32_t skill_id = 0u;
     const char* label = "";
+};
+
+struct BundleObjectCandidate {
+    uint32_t agent_id = 0u;
+    uint32_t gadget_id = 0u;
+    float dist_sq = 0.0f;
 };
 
 constexpr TrackedEffectProbe kTrackedBundleEffectProbes[] = {
@@ -116,6 +127,168 @@ uint32_t GetHeldOrEquippedBundleItemIdByModelImpl(uint32_t modelId, uint32_t kno
 
 bool HasHeldOrEquippedBundleByModel(uint32_t modelId, uint32_t knownMatchingItemId = 0u) {
     return GetHeldOrEquippedBundleItemIdByModelImpl(modelId, knownMatchingItemId) != 0u;
+}
+
+bool IsCombatWeaponType(uint8_t type) {
+    switch (type) {
+    case 2u:  // axe
+    case 5u:  // bow
+    case 15u: // hammer
+    case 22u: // wand
+    case 26u: // staff
+    case 27u: // sword
+    case 32u: // dagger
+    case 35u: // scythe
+    case 36u: // spear
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool HasCombatWeaponEquipped() {
+    const auto* me = AgentMgr::GetMyAgent();
+    if (!me || me->weapon_item_id == 0u) {
+        return false;
+    }
+
+    if (me->weapon_item_type == 6u) {
+        return false;
+    }
+    if (IsCombatWeaponType(me->weapon_item_type)) {
+        return true;
+    }
+
+    const auto* item = ItemMgr::GetItemById(me->weapon_item_id);
+    if (item) {
+        return IsCombatWeaponType(item->type);
+    }
+
+    return false;
+}
+
+Item* FindInventoryCombatWeapon() {
+    for (uint32_t bagIdx = 1u; bagIdx <= 5u; ++bagIdx) {
+        auto* bag = ItemMgr::GetBag(bagIdx);
+        if (!bag || !bag->items.buffer) {
+            continue;
+        }
+
+        for (uint32_t slot = 0u; slot < bag->items.size; ++slot) {
+            auto* item = bag->items.buffer[slot];
+            if (item && item->item_id != 0u && IsCombatWeaponType(item->type)) {
+                return item;
+            }
+        }
+    }
+    return nullptr;
+}
+
+bool TryRestoreWeaponBySetSwitch(uint32_t settleDelayMs) {
+    for (uint32_t setIndex = 1u; setIndex <= 4u; ++setIndex) {
+        const uint32_t action = kWeaponSetActionBase + setIndex;
+        const bool queued = UIMgr::ActionKeyPress(action);
+
+        Log::Info(
+            "DungeonBundle: restore weapon set switch set=%u action=0x%X queued=%d path=action-key-press",
+            setIndex,
+            action,
+            queued ? 1 : 0);
+        if (!queued) {
+            continue;
+        }
+
+        Sleep(settleDelayMs);
+        if (HasCombatWeaponEquipped()) {
+            const auto* me = AgentMgr::GetMyAgent();
+            Log::Info(
+                "DungeonBundle: restored combat weapon via set=%u weaponItem=%u weaponType=%u",
+                setIndex,
+                me ? me->weapon_item_id : 0u,
+                me ? me->weapon_item_type : 0u);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool TryRestoreWeaponByInventoryEquip(uint32_t settleDelayMs) {
+    auto* weapon = FindInventoryCombatWeapon();
+    if (!weapon) {
+        return false;
+    }
+
+    Log::Warn(
+        "DungeonBundle: restoring combat weapon by inventory equip item=%u model=%u type=%u",
+        weapon->item_id,
+        weapon->model_id,
+        weapon->type);
+    ItemMgr::EquipItem(weapon->item_id);
+    Sleep(settleDelayMs);
+    if (HasCombatWeaponEquipped()) {
+        return true;
+    }
+
+    const auto* me = AgentMgr::GetMyAgent();
+    Log::Warn(
+        "DungeonBundle: inventory weapon equip did not restore combat weapon item=%u currentWeapon=%u currentType=%u",
+        weapon->item_id,
+        me ? me->weapon_item_id : 0u,
+        me ? me->weapon_item_type : 0u);
+    return false;
+}
+
+const Item* GetGroundItemForAgent(uint32_t itemAgentId) {
+    auto* agent = AgentMgr::GetAgentByID(itemAgentId);
+    if (!agent || agent->type != 0x400u) {
+        return nullptr;
+    }
+
+    const auto* itemAgent = static_cast<const AgentItem*>(agent);
+    return ItemMgr::GetItemById(itemAgent->item_id);
+}
+
+bool GroundItemNeedsInventorySlot(const Item* item) {
+    return item == nullptr || item->type != DungeonLoot::TYPE_GOLD;
+}
+
+void TryEmergencyFreeSlotForRequiredPickup(const char* context, uint32_t delayMs) {
+    const uint32_t freeSlotsBefore = AdvancedInventory::CountFreeSlots();
+    if (freeSlotsBefore > 0u) {
+        return;
+    }
+
+    AdvancedInventory::EmergencyFreeSlotOptions options;
+    options.log_prefix = "DungeonBundle";
+    options.post_drop_wait_ms = delayMs == 0u ? 250u : delayMs;
+    options.allow_green_items = true;
+    const auto result = AdvancedInventory::DropEmergencyInventoryItemForFreeSlot(options);
+    if (result.dropped) {
+        Log::Warn(
+            "DungeonBundle: emergency cleanup for %s dropped item=%u model=%u reason=%s freeSlots=%u",
+            context ? context : "required pickup",
+            result.item_id,
+            result.model_id,
+            result.reason ? result.reason : "<unknown>",
+            AdvancedInventory::CountFreeSlots());
+    } else {
+        Log::Warn(
+            "DungeonBundle: required pickup %s has full inventory and no emergency drop candidate",
+            context ? context : "<unknown>");
+    }
+}
+
+void TryEmergencyFreeSlotForGroundItem(uint32_t itemAgentId, const char* context, uint32_t delayMs) {
+    if (AdvancedInventory::CountFreeSlots() > 0u) {
+        return;
+    }
+
+    const Item* item = GetGroundItemForAgent(itemAgentId);
+    if (!GroundItemNeedsInventorySlot(item)) {
+        return;
+    }
+
+    TryEmergencyFreeSlotForRequiredPickup(context, delayMs);
 }
 
 void LogPlayerEffectSnapshot(const char* label) {
@@ -713,6 +886,67 @@ uint32_t ResolveBundleNearbyObjectSignpostNearPoint(float x, float y, float sear
     return bestId;
 }
 
+uint32_t CollectBundleObjectFallbackCandidatesNearPoint(
+    float x,
+    float y,
+    float searchRadius,
+    uint32_t excludedSignpostId,
+    BundleObjectCandidate* outCandidates,
+    uint32_t maxCandidates) {
+    if (!outCandidates || maxCandidates == 0u || searchRadius <= 0.0f) {
+        return 0u;
+    }
+
+    uint32_t count = 0u;
+    const float maxDistSq = searchRadius * searchRadius;
+    const uint32_t maxAgents = AgentMgr::GetMaxAgents();
+    for (uint32_t i = 1u; i < maxAgents; ++i) {
+        if (i == excludedSignpostId) {
+            continue;
+        }
+
+        auto* agent = AgentMgr::GetAgentByID(i);
+        if (!agent || agent->type != 0x200u) {
+            continue;
+        }
+
+        const auto* gadget = static_cast<const AgentGadget*>(agent);
+        if (gadget->gadget_id == 3u || DungeonInteractions::IsChestGadgetId(gadget->gadget_id)) {
+            continue;
+        }
+
+        const float distSq = AgentMgr::GetSquaredDistance(x, y, gadget->x, gadget->y);
+        if (distSq > maxDistSq) {
+            continue;
+        }
+
+        if (count < maxCandidates) {
+            outCandidates[count++] = {i, gadget->gadget_id, distSq};
+            continue;
+        }
+
+        uint32_t worstIndex = 0u;
+        float worstDistSq = outCandidates[0].dist_sq;
+        for (uint32_t candidateIndex = 1u; candidateIndex < count; ++candidateIndex) {
+            if (outCandidates[candidateIndex].dist_sq > worstDistSq) {
+                worstDistSq = outCandidates[candidateIndex].dist_sq;
+                worstIndex = candidateIndex;
+            }
+        }
+        if (distSq < worstDistSq) {
+            outCandidates[worstIndex] = {i, gadget->gadget_id, distSq};
+        }
+    }
+
+    std::sort(
+        outCandidates,
+        outCandidates + count,
+        [](const BundleObjectCandidate& lhs, const BundleObjectCandidate& rhs) {
+            return lhs.dist_sq < rhs.dist_sq;
+        });
+    return count;
+}
+
 uint32_t ResolveBundleChestOrObjectSignpostNearPoint(
     float x,
     float y,
@@ -1107,6 +1341,7 @@ bool PickUpResolvedItem(uint32_t itemAgentId, int pickupAttempts, uint32_t delay
         return false;
     }
 
+    TryEmergencyFreeSlotForGroundItem(itemAgentId, "resolved item pickup", delayMs);
     ClearTargetAndStop();
     (void)DungeonNavigation::MoveToAgent(
         itemAgentId,
@@ -1121,6 +1356,7 @@ bool PickUpResolvedItem(uint32_t itemAgentId, int pickupAttempts, uint32_t delay
             return pickedAny;
         }
 
+        TryEmergencyFreeSlotForGroundItem(itemAgentId, "resolved item pickup attempt", delayMs);
         ClearTargetAndStop();
         ItemMgr::PickUpItem(itemAgentId);
         pickedAny = true;
@@ -1144,7 +1380,7 @@ uint32_t GetMatchingGroundItemId(uint32_t itemAgentId, uint32_t modelId) {
     return itemAgent->item_id;
 }
 
-bool PickUpHeldBundleByModelNearPoint(
+bool PickUpHeldBundleByModelNearPointImpl(
     float x,
     float y,
     uint32_t modelId,
@@ -1183,6 +1419,7 @@ int PickUpNearbyLootAtPoint(float x, float y, float searchRadius, uint32_t delay
     (void)MoveToPickupPointIfPossible(x, y);
 
     DungeonLoot::LootPickupOptions options;
+    options.log_prefix = "DungeonBundle";
     options.interact_threshold = 200.0f;
     options.move_timeout_ms = kPickupMoveTimeoutMs;
     options.move_poll_ms = 100u;
@@ -1195,7 +1432,110 @@ int PickUpNearbyLootAtPoint(float x, float y, float searchRadius, uint32_t delay
         options);
 }
 
+bool TryOpenAdditionalBundleObjectCandidates(
+    float x,
+    float y,
+    uint32_t modelId,
+    float signpostSearchRadius,
+    float itemSearchRadius,
+    uint32_t initialSignpostId,
+    int interactCount,
+    int pickupAttempts,
+    uint32_t interactDelayMs,
+    uint32_t pickupDelayMs,
+    uint32_t chestDelayMs,
+    const char* stageLabel) {
+    if (modelId == 0u || interactCount <= 0 || pickupAttempts <= 0) {
+        return false;
+    }
+
+    BundleObjectCandidate candidates[kMaxBundleObjectFallbackCandidates] = {};
+    const uint32_t candidateCount = CollectBundleObjectFallbackCandidatesNearPoint(
+        x,
+        y,
+        signpostSearchRadius,
+        initialSignpostId,
+        candidates,
+        kMaxBundleObjectFallbackCandidates);
+
+    for (uint32_t candidateIndex = 0u; candidateIndex < candidateCount; ++candidateIndex) {
+        const auto& candidate = candidates[candidateIndex];
+        if (candidate.agent_id == 0u) {
+            continue;
+        }
+
+        Log::Info(
+            "DungeonBundle: bundle-acquire %s fallback-object candidate=%u/%u signpost=%u gadget=%u distToPoint=%.0f",
+            stageLabel ? stageLabel : "object",
+            candidateIndex + 1u,
+            candidateCount,
+            candidate.agent_id,
+            candidate.gadget_id,
+            sqrtf(candidate.dist_sq));
+
+        if (!OpenBundleChestAtPoint(candidate.agent_id, x, y, interactCount, interactDelayMs)) {
+            continue;
+        }
+        Sleep(chestDelayMs);
+        LogBundleAcquireSnapshot("bundle-acquire after-fallback-object-open", x, y, itemSearchRadius, modelId);
+
+        if (HasHeldOrEquippedBundleByModel(modelId)) {
+            return true;
+        }
+        if (PickUpHeldBundleByModelNearPointImpl(
+                x,
+                y,
+                modelId,
+                itemSearchRadius,
+                pickupAttempts,
+                pickupDelayMs)) {
+            Log::Info(
+                "DungeonBundle: bundle-acquire %s fallback-object pickup succeeded signpost=%u acquiredItem=%u heldBundle=%u",
+                stageLabel ? stageLabel : "object",
+                candidate.agent_id,
+                GetHeldOrEquippedBundleItemIdByModelImpl(modelId),
+                DungeonInteractions::GetHeldBundleItemId());
+            return true;
+        }
+
+        const uint32_t nearbyCandidateAgentId =
+            DungeonInteractions::FindNearestItemByModel(x, y, itemSearchRadius, modelId);
+        const uint32_t nearbyCandidateItemId =
+            GetMatchingGroundItemId(nearbyCandidateAgentId, modelId);
+        const int nearbyPicked = PickUpNearbyLootAtPoint(x, y, itemSearchRadius, pickupDelayMs);
+        Log::Info(
+            "DungeonBundle: bundle-acquire %s fallback-object nearby loot signpost=%u picked=%d candidateItem=%u acquiredItem=%u heldBundle=%u",
+            stageLabel ? stageLabel : "object",
+            candidate.agent_id,
+            nearbyPicked,
+            nearbyCandidateItemId,
+            GetHeldOrEquippedBundleItemIdByModelImpl(modelId, nearbyCandidateItemId),
+            DungeonInteractions::GetHeldBundleItemId());
+        if (nearbyPicked > 0 && HasHeldOrEquippedBundleByModel(modelId, nearbyCandidateItemId)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 } // namespace
+
+bool PickUpHeldBundleByModelNearPoint(
+    float x,
+    float y,
+    uint32_t modelId,
+    float searchRadius,
+    int pickupAttempts,
+    uint32_t delayMs) {
+    return PickUpHeldBundleByModelNearPointImpl(
+        x,
+        y,
+        modelId,
+        searchRadius,
+        pickupAttempts,
+        delayMs);
+}
 
 bool InteractSignpostNearPoint(
     float x,
@@ -1416,6 +1756,8 @@ bool OpenChestAndPickUpBundle(
         return false;
     }
 
+    TryEmergencyFreeSlotForRequiredPickup("bundle chest open", pickupDelayMs);
+
     const uint32_t chestDelayMs = interactDelayMs == 0u
         ? 0u
         : (interactDelayMs > kChestInteractSettleMs ? interactDelayMs : kChestInteractSettleMs);
@@ -1428,9 +1770,11 @@ bool OpenChestAndPickUpBundle(
     for (int attempt = 0; attempt < pickupAttempts; ++attempt) {
         (void)MoveToPickupPointIfPossible(x, y);
         if (PickUpNearestItemNearPoint(x, y, itemSearchRadius, 1, pickupDelayMs)) {
+            DungeonRunStats::RecordChestOpenedByAgent(signpostId);
             return true;
         }
         if (PickUpNearbyLootAtPoint(x, y, itemSearchRadius, pickupDelayMs) > 0) {
+            DungeonRunStats::RecordChestOpenedByAgent(signpostId);
             return true;
         }
     }
@@ -1524,6 +1868,8 @@ bool OpenChestAndAcquireHeldBundleByModelImpl(
         return true;
     }
 
+    TryEmergencyFreeSlotForRequiredPickup("bundle acquire chest open", pickupDelayMs);
+
     LogBundleAcquireSnapshot("bundle-acquire before-open", x, y, itemSearchRadius, modelId);
     LogNearbyGadgets("bundle-acquire before-open", x, y, signpostSearchRadius);
 
@@ -1557,7 +1903,7 @@ bool OpenChestAndAcquireHeldBundleByModelImpl(
         if (HasHeldOrEquippedBundleByModel(modelId)) {
             return true;
         }
-        if (PickUpHeldBundleByModelNearPoint(
+        if (PickUpHeldBundleByModelNearPointImpl(
                 x,
                 y,
                 modelId,
@@ -1588,6 +1934,7 @@ bool OpenChestAndAcquireHeldBundleByModelImpl(
     if (!OpenBundleChestAtPoint(signpostId, x, y, interactCount, interactDelayMs)) {
         return false;
     }
+    DungeonRunStats::RecordChestOpenedByAgent(signpostId);
     Sleep(chestDelayMs);
     LogBundleAcquireSnapshot("bundle-acquire after-open", x, y, itemSearchRadius, modelId);
     LogNearbyGadgets("bundle-acquire after-open", x, y, signpostSearchRadius);
@@ -1624,16 +1971,33 @@ bool OpenChestAndAcquireHeldBundleByModelImpl(
                 x,
                 y);
             if (OpenBundleChestAtPoint(followupSignpostId, x, y, interactCount, interactDelayMs)) {
+                DungeonRunStats::RecordChestOpenedByAgent(followupSignpostId);
                 Sleep(chestDelayMs);
                 LogBundleAcquireSnapshot("bundle-acquire after-followup-open", x, y, itemSearchRadius, modelId);
                 LogNearbyGadgets("bundle-acquire after-followup-open", x, y, signpostSearchRadius);
             }
         }
+
+        if (TryOpenAdditionalBundleObjectCandidates(
+                x,
+                y,
+                modelId,
+                signpostSearchRadius,
+                itemSearchRadius,
+                signpostId,
+                interactCount,
+                pickupAttempts,
+                interactDelayMs,
+                pickupDelayMs,
+                chestDelayMs,
+                "chest-preferred")) {
+            return true;
+        }
     }
 
     for (int attempt = 0; attempt < pickupAttempts; ++attempt) {
         (void)MoveToPickupPointIfPossible(x, y);
-        if (PickUpHeldBundleByModelNearPoint(x, y, modelId, itemSearchRadius, 1, pickupDelayMs)) {
+        if (PickUpHeldBundleByModelNearPointImpl(x, y, modelId, itemSearchRadius, 1, pickupDelayMs)) {
             Log::Info(
                 "DungeonBundle: bundle-acquire direct pickup succeeded attempt=%d acquiredItem=%u heldBundle=%u",
                 attempt + 1,
@@ -1742,27 +2106,72 @@ bool OpenChestAndAcquireHeldBundleByModelActionInteract(
         return true;
     }
 
+    TryEmergencyFreeSlotForRequiredPickup("bundle action-interact chest open", pickupDelayMs);
+
     LogBundleAcquireSnapshot("bundle-acquire action-interact before-open", x, y, itemSearchRadius, modelId);
     LogNearbyGadgets("bundle-acquire action-interact before-open", x, y, 1500.0f);
 
-    (void)MoveToPickupPointIfPossible(x, y);
+    const uint32_t signpostId =
+        ResolveBundleChestOrObjectSignpostNearPoint(x, y, 1500.0f, true);
+    if (signpostId == 0u) {
+        Log::Info(
+            "DungeonBundle: bundle-acquire action-interact skipped no signpost center=(%.0f, %.0f)",
+            x,
+            y);
+        return false;
+    }
+
+    const auto approach = DungeonNavigation::MoveToAgent(
+        signpostId,
+        kSignpostInteractTolerance,
+        kSignpostMoveTimeoutMs,
+        500u,
+        MapMgr::GetMapId());
+    AgentMgr::ChangeTarget(signpostId);
+
     if (interactDelayMs > 0u) {
         Sleep(interactDelayMs > 1000u ? interactDelayMs : 1000u);
     }
-    ClearTargetAndStop();
 
     for (int press = 0; press < interactCount; ++press) {
-        const bool queued = AgentMgr::ActionInteract();
+        const bool worldQueued = AgentMgr::InteractAgentWorldAction(signpostId, true);
+        Sleep(interactDelayMs);
+        AgentMgr::ChangeTarget(signpostId);
+        Sleep(150u);
+        const bool actionQueued = UIMgr::ActionKeyPress(kActionInteractCode);
+        const bool queued = worldQueued || actionQueued;
         Log::Info(
-            "DungeonBundle: bundle-acquire action-interact open press=%d center=(%.0f, %.0f) queued=%d",
+            "DungeonBundle: bundle-acquire action-interact open press=%d signpost=%u center=(%.0f, %.0f) approached=%d worldQueued=%d actionQueued=%d",
             press + 1,
+            signpostId,
             x,
             y,
-            queued ? 1 : 0);
+            approach.arrived ? 1 : 0,
+            worldQueued ? 1 : 0,
+            actionQueued ? 1 : 0);
         Sleep(interactDelayMs);
         if (queued) {
             break;
         }
+    }
+
+    const uint32_t actionChestDelayMs = interactDelayMs == 0u
+        ? 0u
+        : (interactDelayMs > kChestInteractSettleMs ? interactDelayMs : kChestInteractSettleMs);
+    if (TryOpenAdditionalBundleObjectCandidates(
+            x,
+            y,
+            modelId,
+            1500.0f,
+            itemSearchRadius,
+            signpostId,
+            interactCount,
+            pickupAttempts,
+            interactDelayMs,
+            pickupDelayMs,
+            actionChestDelayMs,
+            "action-interact")) {
+        return true;
     }
 
     for (int attempt = 0; attempt < pickupAttempts; ++attempt) {
@@ -1774,7 +2183,7 @@ bool OpenChestAndAcquireHeldBundleByModelActionInteract(
             itemSearchRadius,
             modelId);
 
-        if (PickUpHeldBundleByModelNearPoint(x, y, modelId, itemSearchRadius, 1, pickupDelayMs)) {
+        if (PickUpHeldBundleByModelNearPointImpl(x, y, modelId, itemSearchRadius, 1, pickupDelayMs)) {
             Log::Info(
                 "DungeonBundle: bundle-acquire action-interact direct pickup succeeded attempt=%d acquiredItem=%u heldBundle=%u",
                 attempt + 1,
@@ -1872,6 +2281,41 @@ bool DropHeldOrEquippedBundleByModel(uint32_t modelId) {
 
     Log::Info("DungeonBundle: drop held-or-equipped bundle resolved item=%u model=%u", itemId, modelId);
     return DropHeldOrEquippedBundleItem(itemId);
+}
+
+bool RestoreCombatWeaponAfterBundleDrop(uint32_t settleDelayMs) {
+    if (settleDelayMs == 0u) {
+        settleDelayMs = 250u;
+    }
+
+    if (HasCombatWeaponEquipped()) {
+        const auto* me = AgentMgr::GetMyAgent();
+        Log::Info(
+            "DungeonBundle: combat weapon already equipped after bundle drop weaponItem=%u weaponType=%u",
+            me ? me->weapon_item_id : 0u,
+            me ? me->weapon_item_type : 0u);
+        return true;
+    }
+
+    const auto* before = AgentMgr::GetMyAgent();
+    Log::Warn(
+        "DungeonBundle: no combat weapon after bundle drop; attempting restore weaponItem=%u weaponType=%u",
+        before ? before->weapon_item_id : 0u,
+        before ? before->weapon_item_type : 0u);
+
+    if (TryRestoreWeaponByInventoryEquip(settleDelayMs)) {
+        return true;
+    }
+    if (TryRestoreWeaponBySetSwitch(settleDelayMs)) {
+        return true;
+    }
+
+    const auto* after = AgentMgr::GetMyAgent();
+    Log::Warn(
+        "DungeonBundle: failed to restore combat weapon after bundle drop weaponItem=%u weaponType=%u",
+        after ? after->weapon_item_id : 0u,
+        after ? after->weapon_item_type : 0u);
+    return false;
 }
 
 } // namespace GWA3::DungeonBundle

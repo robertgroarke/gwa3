@@ -1,6 +1,6 @@
 #pragma once
 
-// PlayerMgr — title tracking, player data, profession changes.
+// : PlayerMgr — title tracking, player data, profession changes.
 
 #include <gwa3/game/Player.h>
 #include <gwa3/game/Title.h>

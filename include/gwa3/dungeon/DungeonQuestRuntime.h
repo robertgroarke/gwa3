@@ -24,12 +24,15 @@ struct DialogExecutionOptions {
     uint32_t dialog_wait_timeout_ms = 0u;
     int interact_count = 1;
     int max_retries_per_dialog = 1;
+    int npc_dialog_candidate_count = 1;
     float move_to_npc_tolerance = 0.0f;
     bool use_direct_npc_interact = false;
     bool move_to_actual_npc = false;
     bool cancel_action_before_interact = false;
     bool clear_dialog_state_before_interact = false;
     bool require_dialog_before_send = false;
+    bool send_dialog_without_ready = false;
+    bool log_npc_dialog_candidates = false;
 };
 
 struct BootstrapExecutionOptions {
@@ -217,6 +220,8 @@ struct RewardNpcStageResult {
 
 struct RewardNpcResolveOptions {
     float local_search_radius = 3500.0f;
+    int resolve_attempts = 1;
+    uint32_t retry_delay_ms = 1000u;
     const char* log_prefix = nullptr;
     const char* label = nullptr;
 };
@@ -281,6 +286,9 @@ struct BossCompletionOptions {
     DungeonRuntime::SalvageRewardItemsFn salvage_reward_items = nullptr;
     float post_fight_loot_radius = 1500.0f;
     uint32_t post_fight_loot_delay_ms = 3000u;
+    float final_clear_range = 0.0f;
+    int final_clear_attempts = 0;
+    uint32_t final_clear_delay_ms = 500u;
     float chest_x = 0.0f;
     float chest_y = 0.0f;
     float chest_open_radius = 5000.0f;

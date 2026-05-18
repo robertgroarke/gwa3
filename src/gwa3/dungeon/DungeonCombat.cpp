@@ -47,6 +47,7 @@ FollowWaypointsWithAggro(const DungeonRoute::Waypoint* waypoints,
 
   int i = DungeonRoute::FindNearestWaypointIndex(waypoints, count, me->x, me->y);
   int retriesUsed = 0;
+  bool replayingBacktrack = false;
   while (i < count) {
     if (mapId != 0u && MapMgr::GetMapId() != mapId) {
       result.map_changed = true;
@@ -68,8 +69,18 @@ FollowWaypointsWithAggro(const DungeonRoute::Waypoint* waypoints,
     waypointOptions.timeout_ms = options.waypoint_timeout_ms;
     waypointOptions.move_wait_ms = options.reissue_ms;
 
+    const bool alreadyAtBacktrackWaypoint =
+        replayingBacktrack &&
+        callbacks.queue_move != nullptr &&
+        AdvancedCombat::DistanceToPoint(waypoints[i].x, waypoints[i].y) <= tolerance;
+    const bool beforeAdvanceOk =
+        CallAggroWaypointHook(waypointCallbacks, waypoints[i], i, AggroWaypointPhase::BeforeAdvance);
+    if (beforeAdvanceOk && alreadyAtBacktrackWaypoint) {
+      callbacks.queue_move(waypoints[i].x, waypoints[i].y);
+    }
+
     bool waypointCompleted = false;
-    if (CallAggroWaypointHook(waypointCallbacks, waypoints[i], i, AggroWaypointPhase::BeforeAdvance) &&
+    if (beforeAdvanceOk &&
         AdvancedCombat::AdvanceWithAggro(waypoints[i].x, waypoints[i].y, fightRange, callbacks, waypointOptions) &&
         CallAggroWaypointHook(waypointCallbacks, waypoints[i], i, AggroWaypointPhase::AfterAdvance)) {
       waypointCompleted = true;
@@ -77,6 +88,7 @@ FollowWaypointsWithAggro(const DungeonRoute::Waypoint* waypoints,
 
     if (waypointCompleted) {
       ++i;
+      replayingBacktrack = false;
       continue;
     }
 
@@ -115,6 +127,7 @@ FollowWaypointsWithAggro(const DungeonRoute::Waypoint* waypoints,
     }
 
     i = backtrackIndex;
+    replayingBacktrack = true;
     ++retriesUsed;
   }
 

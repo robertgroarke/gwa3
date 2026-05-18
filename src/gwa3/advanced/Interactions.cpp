@@ -17,6 +17,8 @@ namespace GWA3::AdvancedInteractions {
 namespace {
 
 constexpr uint32_t kDropBundleActionCode = 0xCDu;
+constexpr uint32_t kDropBundleActionDownFlag = 0x1Eu;
+constexpr uint32_t kActionInteractCode = 0x80u;
 
 bool TrySnapshotItem(uint32_t agentId, uint32_t& outItemId, float& outX, float& outY) {
     auto* agent = AgentMgr::GetAgentByID(agentId);
@@ -416,6 +418,10 @@ CandidateDialogResult InteractCandidateAndSendDialog(
 
     const char* prefix = options.log_prefix != nullptr ? options.log_prefix : "DungeonInteractions";
     auto isStopped = [&options]() {
+        if (options.stop_condition_with_context != nullptr &&
+            options.stop_condition_with_context(options.stop_context)) {
+            return true;
+        }
         return options.stop_condition != nullptr && options.stop_condition();
     };
     auto dialogReady = [&candidate]() {
@@ -446,19 +452,54 @@ CandidateDialogResult InteractCandidateAndSendDialog(
 
     for (int attempt = 1; attempt <= options.interact_attempts && !isStopped(); ++attempt) {
         if (!dialogReady()) {
+            const char* method = nullptr;
             if (candidate.use_signpost) {
-                AgentMgr::InteractSignpost(candidate.agent_id);
+                if (options.use_legacy_interact_fallbacks && attempt > 1) {
+                    const bool queued = CtoS::SendPacketBotshub(3, Packets::SIGNPOST_RUN, candidate.agent_id, 0u);
+                    method = queued ? "signpost_packet_botshub_retry" : "signpost_packet_retry";
+                    if (!queued) {
+                        CtoS::SendPacketDirect(3, Packets::SIGNPOST_RUN, candidate.agent_id, 0u);
+                    }
+                } else {
+                    method = "signpost_packet";
+                    AgentMgr::InteractSignpost(candidate.agent_id);
+                }
             } else {
-                CtoS::SendPacketDirect(3, Packets::INTERACT_NPC, candidate.agent_id, 0u);
+                if (options.use_legacy_interact_fallbacks && attempt == 2) {
+                    method = "native_npc_nocall";
+                    AgentMgr::InteractNPCEx(candidate.agent_id, AgentMgr::NpcInteractMode::NativePostNoCallTarget);
+                } else if (options.use_legacy_interact_fallbacks && attempt == 3) {
+                    method = "native_npc_pre_nocall";
+                    AgentMgr::InteractNPCEx(candidate.agent_id, AgentMgr::NpcInteractMode::NativePreNoCallTarget);
+                } else if (options.use_legacy_interact_fallbacks && attempt == 4) {
+                    const bool queued = UIMgr::ActionKeyPress(kActionInteractCode);
+                    method = queued ? "action_key_interact" : "action_key_interact_failed";
+                } else if (options.use_legacy_interact_fallbacks && attempt == 5) {
+                    method = "world_action_nocall";
+                    (void)AgentMgr::InteractAgentWorldAction(candidate.agent_id, false);
+                } else if (options.use_legacy_interact_fallbacks && attempt == 6) {
+                    method = "world_action_call";
+                    (void)AgentMgr::InteractAgentWorldAction(candidate.agent_id, true);
+                } else if (options.use_legacy_interact_fallbacks && attempt == 7) {
+                    method = "native_npc_retry";
+                    AgentMgr::InteractNPC(candidate.agent_id);
+                } else if (options.use_legacy_interact_fallbacks && attempt >= 8) {
+                    method = "native_npc_nocall_retry";
+                    AgentMgr::InteractNPCEx(candidate.agent_id, AgentMgr::NpcInteractMode::NativePostNoCallTarget);
+                } else {
+                    method = "native_npc";
+                    AgentMgr::InteractNPC(candidate.agent_id);
+                }
             }
             result.interacted = true;
             result.interact_attempts = attempt;
 
             const bool ready = WaitForPredicate(options.dialog_wait_ms, options.dialog_poll_ms, options.wait_ms, dialogReady);
-            Log::Info("%s: candidate=%u kind=%s attempt=%d sender=%u buttons=%u dialogOpen=%d ready=%d lastDialog=0x%X target=%u",
+            Log::Info("%s: candidate=%u kind=%s method=%s attempt=%d sender=%u buttons=%u dialogOpen=%d ready=%d lastDialog=0x%X target=%u",
                       prefix,
                       static_cast<unsigned>(options.candidate_index),
                       candidate.use_signpost ? "signpost" : "npc",
+                      method,
                       attempt,
                       DialogMgr::GetDialogSenderAgentId(),
                       DialogMgr::GetButtonCount(),
@@ -466,6 +507,27 @@ CandidateDialogResult InteractCandidateAndSendDialog(
                       ready ? 1 : 0,
                       DialogMgr::GetLastDialogId(),
                       AgentMgr::GetTargetId());
+            if (!ready &&
+                options.send_dialog_without_ready &&
+                !isStopped() &&
+                (DialogMgr::GetDialogSenderAgentId() == 0u ||
+                 DialogMgr::GetDialogSenderAgentId() == candidate.agent_id ||
+                 AgentMgr::GetTargetId() == candidate.agent_id)) {
+                QuestMgr::Dialog(options.dialog_id);
+                result.dialog_sent = true;
+                Log::Info("%s: blind accept candidate=%u kind=%s method=%s dialogPath=questmgr attempt=%d sender=%u buttons=%u dialogOpen=%d lastDialog=0x%X target=%u",
+                          prefix,
+                          static_cast<unsigned>(options.candidate_index),
+                          candidate.use_signpost ? "signpost" : "npc",
+                          method,
+                          attempt,
+                          DialogMgr::GetDialogSenderAgentId(),
+                          DialogMgr::GetButtonCount(),
+                          DialogMgr::IsDialogOpen() ? 1 : 0,
+                          DialogMgr::GetLastDialogId(),
+                          AgentMgr::GetTargetId());
+                CallWait(options.wait_ms, options.post_dialog_wait_ms);
+            }
             if (!ready &&
                 DialogMgr::GetDialogSenderAgentId() != 0u &&
                 DialogMgr::GetDialogSenderAgentId() != candidate.agent_id) {
@@ -650,8 +712,8 @@ bool DropHeldBundle(bool assumeBundleHeld, bool allowInventoryFallback) {
         return false;
     }
 
-    const bool actionKeyQueued = UIMgr::ActionKeyDown(kDropBundleActionCode);
-    Log::Info("DungeonInteractions: DropHeldBundle actionQueued=%d action=0x%X heldItem=%u path=action-key-down",
+    const bool actionKeyQueued = UIMgr::ActionKeyPress(kDropBundleActionCode);
+    Log::Info("DungeonInteractions: DropHeldBundle actionQueued=%d action=0x%X heldItem=%u path=action-key-press",
               actionKeyQueued ? 1 : 0,
               kDropBundleActionCode,
               bundleItemId);
@@ -659,23 +721,9 @@ bool DropHeldBundle(bool assumeBundleHeld, bool allowInventoryFallback) {
         return true;
     }
 
-    const bool directActionQueued = UIMgr::PerformUiActionDirect(kDropBundleActionCode);
-    Log::Info("DungeonInteractions: DropHeldBundle actionQueued=%d action=0x%X heldItem=%u path=perform-ui-action-direct",
-              directActionQueued ? 1 : 0,
+    Log::Info("DungeonInteractions: DropHeldBundle unsafe perform-action fallback skipped action=0x%X heldItem=%u",
               kDropBundleActionCode,
               bundleItemId);
-    if (directActionQueued) {
-        return true;
-    }
-
-    const bool queuedPerformAction = UIMgr::PerformUiAction(kDropBundleActionCode);
-    Log::Info("DungeonInteractions: DropHeldBundle actionQueued=%d action=0x%X heldItem=%u path=perform-ui-action",
-              queuedPerformAction ? 1 : 0,
-              kDropBundleActionCode,
-              bundleItemId);
-    if (queuedPerformAction) {
-        return true;
-    }
 
     if (!allowInventoryFallback || bundleItemId == 0u) {
         Log::Info("DungeonInteractions: DropHeldBundle no inventory fallback heldItem=%u", bundleItemId);

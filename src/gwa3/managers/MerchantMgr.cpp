@@ -66,6 +66,11 @@ struct CrafterTransactionTask {
     uint32_t material_quantities[kCrafterMaxMaterials];
 };
 
+struct CrafterPacketTask {
+    uint32_t quantity;
+    uint32_t item_id;
+};
+
 struct MerchantTransactionInfo {
     uint32_t item_count;
     uint32_t* item_ids;
@@ -161,6 +166,62 @@ static bool GetGlobalItemArrayBaseAndSize(uintptr_t& base, uint32_t& size) {
     return base > 0x10000 && size > 0 && size < 8192;
 }
 
+static Item* ScanItemArrayOwnerForItemId(uintptr_t owner, uint32_t itemId) {
+    if (owner <= 0x10000 || itemId == 0) return nullptr;
+
+    uintptr_t itemBase = 0;
+    uint32_t itemSize = 0;
+    if (!ReadPtr(owner + 0xB8, itemBase)) return nullptr;
+    if (!ReadU32(owner + 0xC0, itemSize)) return nullptr;
+    if (itemBase <= 0x10000 || itemSize == 0 || itemSize >= 8192) return nullptr;
+
+    if (itemId < itemSize) {
+        uintptr_t directPtr = 0;
+        if (ReadPtr(itemBase + static_cast<uintptr_t>(itemId) * 4u, directPtr)) {
+            auto* direct = reinterpret_cast<Item*>(directPtr);
+            __try {
+                if (direct && direct->item_id == itemId) return direct;
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            }
+        }
+    }
+
+    __try {
+        for (uint32_t i = 1; i < itemSize; ++i) {
+            uintptr_t itemPtr = 0;
+            if (!ReadPtr(itemBase + static_cast<uintptr_t>(i) * 4u, itemPtr)) continue;
+            auto* item = reinterpret_cast<Item*>(itemPtr);
+            if (item && item->item_id == itemId) return item;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+
+    return nullptr;
+}
+
+static Item* ScanKnownItemArrayRootsForItemId(uint32_t itemId) {
+    if (Offsets::BasePointer <= 0x10000 || itemId == 0) return nullptr;
+
+    uintptr_t p0 = 0;
+    uintptr_t p1 = 0;
+    if (!ReadPtr(Offsets::BasePointer, p0)) return nullptr;
+    if (!ReadPtr(p0 + 0x18, p1)) return nullptr;
+
+    static constexpr uintptr_t kOwnerOffsets[] = {0x40u, 0x44u, 0x2Cu};
+    for (uintptr_t ownerOffset : kOwnerOffsets) {
+        uintptr_t owner = 0;
+        if (!ReadPtr(p1 + ownerOffset, owner)) continue;
+        if (Item* item = ScanItemArrayOwnerForItemId(owner, itemId)) {
+            Log::Info("MerchantMgr: resolved merchant item id=%u via item-array owner +0x%X",
+                      itemId,
+                      static_cast<unsigned>(ownerOffset));
+            return item;
+        }
+    }
+    return nullptr;
+}
+
 static Item* FindInventoryItemByModelIdWithQuantity(uint32_t modelId, uint32_t minQuantity) {
     Inventory* inv = ItemMgr::GetInventory();
     if (!inv || modelId == 0 || minQuantity == 0) return nullptr;
@@ -188,18 +249,32 @@ static Item* FindInventoryItemByModelIdWithQuantity(uint32_t modelId, uint32_t m
 static Item* GetMerchantItemPtrByItemId(uint32_t itemId) {
     if (Offsets::BasePointer <= 0x10000 || itemId == 0) return nullptr;
 
-    uintptr_t p0 = 0;
-    uintptr_t p1 = 0;
-    uintptr_t p2 = 0;
-    uintptr_t p3 = 0;
-    if (!ReadPtr(Offsets::BasePointer, p0)) return nullptr;
-    if (!ReadPtr(p0 + 0x18, p1)) return nullptr;
-    if (!ReadPtr(p1 + 0x40, p2)) return nullptr;
-    if (!ReadPtr(p2 + 0xB8, p3)) return nullptr;
+    uintptr_t itemBase = 0;
+    uint32_t itemSize = 0;
+    if (GetGlobalItemArrayBaseAndSize(itemBase, itemSize)) {
+        if (itemId < itemSize) {
+            uintptr_t itemPtr = 0;
+            if (ReadPtr(itemBase + static_cast<uintptr_t>(itemId) * 4u, itemPtr)) {
+                auto* direct = reinterpret_cast<Item*>(itemPtr);
+                __try {
+                    if (direct && direct->item_id == itemId) return direct;
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                }
+            }
+        }
 
-    uintptr_t itemPtr = 0;
-    if (!ReadPtr(p3 + static_cast<uintptr_t>(itemId) * 4, itemPtr)) return nullptr;
-    return reinterpret_cast<Item*>(itemPtr);
+        __try {
+            for (uint32_t i = 1; i < itemSize; ++i) {
+                uintptr_t itemPtr = 0;
+                if (!ReadPtr(itemBase + static_cast<uintptr_t>(i) * 4u, itemPtr)) continue;
+                auto* item = reinterpret_cast<Item*>(itemPtr);
+                if (item && item->item_id == itemId) return item;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+
+    return ScanKnownItemArrayRootsForItemId(itemId);
 }
 
 static Item* ValidateMerchantItemPtr(Item* item, uint32_t expectedItemId) {
@@ -249,6 +324,7 @@ static Item* FindTraderVirtualItemByModelId(uint32_t modelId) {
     uint32_t itemSize = 0;
     if (!GetGlobalItemArrayBaseAndSize(itemBase, itemSize)) return nullptr;
 
+    Item* relaxedMatch = nullptr;
     __try {
         for (uint32_t id = 1; id < itemSize; ++id) {
             uintptr_t itemPtr = 0;
@@ -256,16 +332,24 @@ static Item* FindTraderVirtualItemByModelId(uint32_t modelId) {
 
             Item* item = reinterpret_cast<Item*>(itemPtr);
             if (!item) continue;
-            if (item->bag != nullptr || item->agent_id != 0) continue;
-            if (item->model_id == modelId && item->item_id != 0) {
+            if (item->model_id != modelId || item->item_id == 0) continue;
+            if (item->bag != nullptr) continue;
+            if (item->agent_id == 0) {
                 return item;
             }
+            if (!relaxedMatch) relaxedMatch = item;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return nullptr;
     }
 
-    return nullptr;
+    if (relaxedMatch) {
+        Log::Info("MerchantMgr: relaxed virtual merchant item match model=%u item=%u agent=%u",
+                  modelId,
+                  relaxedMatch->item_id,
+                  relaxedMatch->agent_id);
+    }
+    return relaxedMatch;
 }
 
 static uint32_t ResolveTraderMaterialItemId(uint32_t modelId, uint32_t pack, uint32_t packs) {
@@ -291,12 +375,40 @@ static void LogMerchantMaterialSnapshot(uint32_t targetModelId) {
         return;
     }
 
-    Log::Warn("MerchantMgr: Merchant snapshot targetModel=%u merchantItems=%u",
-              targetModelId, merchantSize);
+    uintptr_t p0 = 0;
+    uintptr_t p1 = 0;
+    uintptr_t p2 = 0;
+    if (ReadPtr(Offsets::BasePointer, p0) && ReadPtr(p0 + 0x18, p1) && ReadPtr(p1 + 0x2C, p2)) {
+        uint32_t raw24 = 0;
+        uint32_t raw28 = 0;
+        uint32_t raw2C = 0;
+        uint32_t raw30 = 0;
+        ReadU32(p2 + 0x24, raw24);
+        ReadU32(p2 + 0x28, raw28);
+        ReadU32(p2 + 0x2C, raw2C);
+        ReadU32(p2 + 0x30, raw30);
+        Log::Warn("MerchantMgr: Merchant snapshot targetModel=%u merchantItems=%u p2=0x%08X base=0x%08X raw24=0x%08X raw28=%u raw2C=%u raw30=%u",
+                  targetModelId,
+                  merchantSize,
+                  static_cast<unsigned>(p2),
+                  static_cast<unsigned>(merchantBase),
+                  raw24,
+                  raw28,
+                  raw2C,
+                  raw30);
+    } else {
+        Log::Warn("MerchantMgr: Merchant snapshot targetModel=%u merchantItems=%u base=0x%08X",
+                  targetModelId,
+                  merchantSize,
+                  static_cast<unsigned>(merchantBase));
+    }
     __try {
         for (uint32_t i = 0; i < merchantSize && i < 24u; ++i) {
             const uint32_t itemId = *reinterpret_cast<uint32_t*>(merchantBase + i * 4);
-            if (!itemId) continue;
+            if (!itemId) {
+                Log::Warn("MerchantMgr:   merchant[%u] item=0", i);
+                continue;
+            }
 
             Item* item = ValidateMerchantItemPtr(GetMerchantItemPtrByItemId(itemId), itemId);
             if (!item) {
@@ -343,7 +455,7 @@ static void TransactionBuyNative(uint32_t quantity, uint32_t itemId, uint32_t to
 
 static void TransactionSellNative(uint32_t quantity, uint32_t itemId, uint32_t totalValue) {
     if (!Offsets::Transaction || itemId == 0) return;
-    uint32_t qty = quantity;
+    (void)quantity;
     uint32_t id = itemId;
     const uintptr_t fn = Offsets::Transaction;
     __asm {
@@ -352,14 +464,7 @@ static void TransactionSellNative(uint32_t quantity, uint32_t itemId, uint32_t t
         push 0
         mov eax, totalValue
         push eax
-        cmp qty, 0
-        jz sell_all
-        lea eax, qty
-        push eax
-        jmp sell_qty_done
-sell_all:
         push 0
-sell_qty_done:
         lea eax, id
         push eax
         push 1
@@ -847,14 +952,28 @@ Item* GetMerchantItemByPosition(uint32_t itemPosition) {
     return itemId ? ValidateMerchantItemPtr(GetMerchantItemPtrByItemId(itemId), itemId) : nullptr;
 }
 
+uint32_t GetMerchantItemIdByPosition(uint32_t itemPosition) {
+    uintptr_t merchantBase = 0;
+    uint32_t merchantSize = 0;
+    if (!GetMerchantItemsBaseAndSize(merchantBase, merchantSize)) return 0u;
+    if (itemPosition == 0 || itemPosition > merchantSize) return 0u;
+
+    uint32_t itemId = 0;
+    if (!ReadU32(merchantBase + 4 * (itemPosition - 1), itemId)) return 0u;
+    return itemId;
+}
+
 Item* GetMerchantItemByModelId(uint32_t modelId) {
     uintptr_t merchantBase = 0;
     uint32_t merchantSize = 0;
-    if (!GetMerchantItemsBaseAndSize(merchantBase, merchantSize)) return nullptr;
+    if (!GetMerchantItemsBaseAndSize(merchantBase, merchantSize)) {
+        return FindTraderVirtualItemByModelId(modelId);
+    }
 
     __try {
         for (uint32_t i = 0; i < merchantSize; ++i) {
-            const uint32_t itemId = *reinterpret_cast<uint32_t*>(merchantBase + i * 4);
+            uint32_t itemId = 0;
+            if (!ReadU32(merchantBase + i * 4, itemId)) continue;
             if (!itemId) continue;
 
             Item* item = ValidateMerchantItemPtr(GetMerchantItemPtrByItemId(itemId), itemId);
@@ -864,10 +983,19 @@ Item* GetMerchantItemByModelId(uint32_t modelId) {
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return nullptr;
+        return FindTraderVirtualItemByModelId(modelId);
     }
 
-    return nullptr;
+    Item* virtualItem = FindTraderVirtualItemByModelId(modelId);
+    if (virtualItem) {
+        Log::Info("MerchantMgr: GetMerchantItemByModelId fallback-resolved virtual item model=%u item=%u merchantItems=%u",
+                  modelId,
+                  virtualItem->item_id,
+                  merchantSize);
+    } else {
+        LogMerchantMaterialSnapshot(modelId);
+    }
+    return virtualItem;
 }
 
 uint32_t GetMerchantItemIdByModelId(uint32_t modelId) {
@@ -1047,9 +1175,27 @@ bool CraftMerchantItemByPosition(uint32_t itemPosition, uint32_t quantity, uint3
                                                            materialModelIds, materialQuantities, materialCount);
 }
 
+static void __cdecl CraftMerchantItemPacketInvoker(void* storage) {
+    auto* task = reinterpret_cast<CrafterPacketTask*>(storage);
+    if (!task || task->item_id == 0 || task->quantity == 0) return;
+    CtoS::SendPacket(4, Packets::TRANSACT_ITEMS, 3u, task->quantity, task->item_id);
+}
+
 bool CraftMerchantItemByItemIdPacket(uint32_t itemId, uint32_t quantity) {
     if (itemId == 0 || quantity == 0) return false;
-    CtoS::SendPacket(4, Packets::TRANSACT_ITEMS, 3u, quantity, itemId);
+    if (!GameThread::IsInitialized()) {
+        Log::Warn("MerchantMgr: CraftMerchantItemByItemIdPacket rejected; game thread unavailable item=%u qty=%u",
+                  itemId, quantity);
+        return false;
+    }
+
+    const CrafterPacketTask task{quantity, itemId};
+    if (GameThread::IsOnGameThread()) {
+        CraftMerchantItemPacketInvoker(const_cast<CrafterPacketTask*>(&task));
+    } else {
+        GameThread::EnqueueRaw(&CraftMerchantItemPacketInvoker, &task, sizeof(task));
+    }
+    Log::Info("MerchantMgr: CraftMerchantItemByItemIdPacket queued item=%u qty=%u", itemId, quantity);
     return true;
 }
 

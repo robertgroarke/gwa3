@@ -22,6 +22,13 @@ import logging
 import struct
 import sys
 
+from .protocol import (
+    IPC_PROTOCOL_VERSION,
+    ProtocolMismatchError,
+    validate_protocol_version,
+    with_protocol_version,
+)
+
 # Windows named pipe support
 if sys.platform == "win32":
     import win32file
@@ -64,10 +71,36 @@ class IpcClient:
                 win32pipe.SetNamedPipeHandleState(
                     self._handle, win32pipe.PIPE_READMODE_BYTE, None, None
                 )
+                loop = asyncio.get_event_loop()
+                server_hello = await loop.run_in_executor(
+                    None, self._read_message_blocking
+                )
+                validate_protocol_version(server_hello, "server hello")
+                if server_hello.get("type") != "hello":
+                    raise ProtocolMismatchError(
+                        f"server hello type={server_hello.get('type')!r}; expected 'hello'"
+                    )
+                await loop.run_in_executor(
+                    None,
+                    self._write_message_blocking,
+                    {
+                        "type": "hello",
+                        "role": "bridge",
+                        "protocol_version": IPC_PROTOCOL_VERSION,
+                    },
+                )
                 self._connected = True
                 self._queue = asyncio.Queue()
                 self._reader_task = asyncio.create_task(self._reader_loop())
                 return True
+            except ProtocolMismatchError as e:
+                log.error("IpcClient: protocol handshake failed: %s", e)
+                self.disconnect()
+                return False
+            except (IOError, OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+                log.error("IpcClient: protocol handshake failed: %s", e)
+                self.disconnect()
+                return False
             except pywintypes.error:
                 await asyncio.sleep(0.5)
         return False
@@ -110,6 +143,20 @@ class IpcClient:
         """Write bytes to the pipe (blocking)."""
         win32file.WriteFile(self._handle, data)
 
+    def _read_message_blocking(self) -> dict:
+        header = self._read_bytes(4)
+        (length,) = struct.unpack("<I", header)
+        if length == 0 or length > 1024 * 1024:
+            raise IOError(f"Bogus length prefix 0x{length:x}")
+        payload = self._read_bytes(length)
+        return json.loads(payload.decode("utf-8"))
+
+    def _write_message_blocking(self, msg: dict):
+        stamped = with_protocol_version(msg)
+        payload = json.dumps(stamped).encode("utf-8")
+        header = struct.pack("<I", len(payload))
+        self._write_bytes(header + payload)
+
     async def _reader_loop(self):
         """Drain the pipe and push messages onto ``self._queue``.
 
@@ -149,6 +196,11 @@ class IpcClient:
                         "continuing", e.__class__.__name__,
                     )
                     continue
+                try:
+                    validate_protocol_version(msg, "ipc message")
+                except ProtocolMismatchError as e:
+                    log.error("IpcClient: %s", e)
+                    break
                 await self._queue.put(msg)
         finally:
             self._connected = False
@@ -178,7 +230,7 @@ class IpcClient:
     async def send_message(self, msg: dict):
         """Send a length-prefixed JSON message to the pipe."""
         async with self._write_lock:
-            payload = json.dumps(msg).encode("utf-8")
+            payload = json.dumps(with_protocol_version(msg)).encode("utf-8")
             header = struct.pack("<I", len(payload))
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._write_bytes, header + payload)
@@ -189,6 +241,7 @@ class IpcClient:
         """Send an action command to gwa3."""
         msg = {
             "type": "action",
+            "protocol_version": IPC_PROTOCOL_VERSION,
             "name": action_name,
             "params": params or {},
             "request_id": request_id,

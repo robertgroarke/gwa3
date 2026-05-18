@@ -16,8 +16,8 @@ constexpr DistrictRegionLanguage kDistrictOptions[] = {
     {2, 9u, "eu-pl"},
     {2, 10u, "eu-ru"},
     {-2, 0u, "international"},
-    {1, 0u, "america"},
-    {3, 0u, "asia-ko"},
+    {0, 0u, "america"},
+    {1, 0u, "asia-ko"},
     {4, 0u, "asia-jp"},
 };
 

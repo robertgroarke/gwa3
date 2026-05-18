@@ -73,6 +73,27 @@ static void CallSendFrameUI(void* thisPtr, uint32_t msgid, void* wParam, void* l
     }
 }
 
+bool SendFrameMessage(uintptr_t frame, uint32_t msgId, void* wParam, void* lParam) {
+    if (!s_sendFrameUIAddr || frame < 0x10000) {
+        Log::Warn("UIMgr: SendFrameMessage invalid frame=0x%08X msg=0x%X send=0x%08X",
+                  static_cast<unsigned>(frame),
+                  msgId,
+                  static_cast<unsigned>(s_sendFrameUIAddr));
+        return false;
+    }
+
+    __try {
+        CallSendFrameUI(reinterpret_cast<void*>(frame + 0xA8), msgId, wParam, lParam);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Error("UIMgr: SendFrameMessage exception 0x%08X frame=0x%08X msg=0x%X",
+                   GetExceptionCode(),
+                   static_cast<unsigned>(frame),
+                   msgId);
+        return false;
+    }
+}
+
 static void WriteLE32(uint8_t* dst, uint32_t value) {
     memcpy(dst, &value, sizeof(value));
 }
@@ -249,10 +270,22 @@ uintptr_t GetFrameByHash(uint32_t hash) {
 
     static bool s_logged = false;
     if (!s_logged) {
+        uintptr_t buffer = 0u;
+        uint32_t capacity = 0u;
+        uint32_t size = 0u;
+        __try {
+            buffer = reinterpret_cast<uintptr_t>(arr->buffer);
+            capacity = arr->capacity;
+            size = arr->size;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("UIMgr: FrameArray pointer volatile during initial log");
+            return 0;
+        }
         Log::Info("UIMgr: FrameArray at 0x%08X: buffer=0x%08X capacity=%u size=%u",
                   reinterpret_cast<uintptr_t>(arr),
-                  reinterpret_cast<uintptr_t>(arr->buffer),
-                  arr->capacity, arr->size);
+                  buffer,
+                  capacity,
+                  size);
         s_logged = true;
     }
 
@@ -569,6 +602,50 @@ uintptr_t GetFrameById(uint32_t frameId) {
     return 0;
 }
 
+uintptr_t GetFrameByCallback(uintptr_t callbackFn, bool visibleOnly) {
+    if (callbackFn < 0x10000) return 0;
+    auto* arr = GetFrameArray();
+    if (!arr || !arr->buffer || arr->size == 0) return 0;
+
+    __try {
+        for (uint32_t i = 0; i < arr->size; ++i) {
+            const uintptr_t frame = arr->buffer[i];
+            if (frame < 0x10000) continue;
+
+            if (visibleOnly) {
+                const uint32_t state = GetFrameState(frame);
+                if (!(state & FRAME_CREATED) || (state & FRAME_HIDDEN)) {
+                    continue;
+                }
+            }
+
+            const uintptr_t callbackData = *reinterpret_cast<uintptr_t*>(frame + 0xA8);
+            const uint32_t callbackCount = *reinterpret_cast<uint32_t*>(frame + 0xAC);
+            if (callbackData < 0x10000 || callbackCount == 0 || callbackCount > 32u) {
+                continue;
+            }
+
+            for (uint32_t ci = 0; ci < callbackCount; ++ci) {
+                const uintptr_t functionEntry = callbackData + ci * sizeof(uintptr_t);
+                const uintptr_t functionCallback = *reinterpret_cast<uintptr_t*>(functionEntry);
+                if (functionCallback == callbackFn) {
+                    return frame;
+                }
+
+                const uintptr_t entryBase = callbackData + ci * 12u;
+                const uintptr_t frameCallback = *reinterpret_cast<uintptr_t*>(entryBase);
+                if (frameCallback == callbackFn) {
+                    return frame;
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+
+    return 0;
+}
+
 uintptr_t GetParentFrame(uintptr_t frame) {
     if (frame < 0x10000) return 0;
     __try {
@@ -631,7 +708,15 @@ bool IsFrameDisabled(uintptr_t frame) {
 bool IsFrameVisible(uint32_t hash) {
     uintptr_t frame = GetFrameByHash(hash);
     if (!frame) return false;
-    uint32_t state = GetFrameState(frame);
+    uint32_t state = 0u;
+    __try {
+        state = GetFrameState(frame);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("UIMgr: IsFrameVisible volatile frame hash=0x%X frame=0x%08X",
+                  hash,
+                  static_cast<unsigned>(frame));
+        return false;
+    }
     return (state & FRAME_CREATED) && !(state & FRAME_HIDDEN);
 }
 
@@ -682,6 +767,13 @@ static bool HasUsableActionBaseSlots(uintptr_t base, ActionBaseDump* out) {
         if (IsPlausibleUserPointer(dump->slots[i])) return true;
     }
     return false;
+}
+
+static bool HasBotshubActionContextSlot(const ActionBaseDump& dump, uint32_t type) {
+    const uintptr_t slot = (type == kPerformActionTypeDefault)
+        ? dump.slots[3]
+        : dump.slots[1];
+    return IsPlausibleUserPointer(slot);
 }
 
 static bool SafeRead32(uintptr_t addr, uintptr_t* out) {
@@ -831,7 +923,10 @@ static bool PerformUiActionImpl(uint32_t action, bool preferEngineLane, uint32_t
         GetPreferredActionBase(&preferredDump, &usedBotsHubScan, preferEngineLane);
     const bool ctosReady = CtoS::Initialize();
     const bool engineLaneAvailable = ctosReady && CtoS::IsBotshubCommandLaneAvailable();
-    if (preferEngineLane && ctosReady && engineLaneAvailable && preferredActionBase >= 0x10000) {
+    const bool engineLaneContextReady =
+        HasBotshubActionContextSlot(preferredDump, kPerformActionTypeDefault);
+    if (preferEngineLane && ctosReady && engineLaneAvailable
+        && preferredActionBase >= 0x10000 && engineLaneContextReady) {
         if (!s_loggedPerformUiActionEngineLane) {
             Log::Info("UIMgr: PerformUiAction using engine command lane");
             s_loggedPerformUiActionEngineLane = true;
@@ -852,11 +947,12 @@ static bool PerformUiActionImpl(uint32_t action, bool preferEngineLane, uint32_t
         }
         Log::Warn("UIMgr: PerformUiAction engine lane rejected action=0x%X", action);
     } else if (preferEngineLane) {
-        Log::Warn("UIMgr: PerformUiAction engine lane unavailable action=0x%X ctosReady=%d laneAvailable=%d base=0x%08X",
+        Log::Warn("UIMgr: PerformUiAction engine lane unavailable action=0x%X ctosReady=%d laneAvailable=%d base=0x%08X branchPtr=0x%08X",
                   action,
                   ctosReady ? 1 : 0,
                   engineLaneAvailable ? 1 : 0,
-                  static_cast<unsigned>(preferredActionBase));
+                  static_cast<unsigned>(preferredActionBase),
+                  static_cast<unsigned>(preferredDump.slots[3]));
     }
 
     // BotsHub's Action command dereferences a pointer slot from ActionBase and

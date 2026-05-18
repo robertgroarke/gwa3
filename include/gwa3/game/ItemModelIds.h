@@ -166,6 +166,7 @@ inline constexpr uint32_t ASURA_FLAME_STAFF = 24350u;
 inline constexpr uint32_t DUNGEON_KEY_SORROWS_FURNACE = 25410u;
 inline constexpr uint32_t DUNGEON_KEY_PRISON = 25413u;
 inline constexpr uint32_t DUNGEON_KEY_BOGROOT = 25416u;
+inline constexpr uint32_t BOGROOT_ROD = 26985u;
 inline constexpr uint32_t BOGROOT_STAFF = 26983u;
 inline constexpr uint32_t BOGROOT_FOCUS = 26984u;
 inline constexpr uint32_t UNHOLY_TEXT = 2619u;
@@ -176,5 +177,23 @@ inline constexpr uint32_t AMPHIBIAN_TONGUE = 27036u;
 inline constexpr uint32_t DESTROYER_CORE = 27033u;
 inline constexpr uint32_t SUPERB_CHARR_CARVING = 27052u;
 inline constexpr uint32_t SUPREME_VIGOR_RUNE = 5551u;
+
+inline constexpr uint32_t POLYMOCK_ALOE_SEED = 24355u;
+inline constexpr uint32_t POLYMOCK_WIND_RIDER = 24356u;
+inline constexpr uint32_t POLYMOCK_EARTH_ELEMENTAL = 24357u;
+inline constexpr uint32_t POLYMOCK_FIRE_ELEMENTAL = 24358u;
+inline constexpr uint32_t POLYMOCK_FIRE_IMP = 24359u;
+inline constexpr uint32_t POLYMOCK_GAKI = 24360u;
+inline constexpr uint32_t POLYMOCK_GARGOYLE = 24361u;
+inline constexpr uint32_t POLYMOCK_MIRAGE_IBOGA = 24363u;
+inline constexpr uint32_t POLYMOCK_ICE_ELEMENTAL = 24365u;
+inline constexpr uint32_t POLYMOCK_ICE_IMP = 24366u;
+inline constexpr uint32_t POLYMOCK_KAPPA = 24367u;
+inline constexpr uint32_t POLYMOCK_MERGOYLE = 24369u;
+inline constexpr uint32_t POLYMOCK_MURSAAT_ELEMENTALIST = 24370u;
+inline constexpr uint32_t POLYMOCK_RUBY_DJINN = 24371u;
+inline constexpr uint32_t POLYMOCK_NAGA_SHAMAN = 24372u;
+inline constexpr uint32_t POLYMOCK_SKALE = 24373u;
+inline constexpr uint32_t POLYMOCK_STONE_RAIN = 24374u;
 
 } // namespace GWA3::ItemModelIds

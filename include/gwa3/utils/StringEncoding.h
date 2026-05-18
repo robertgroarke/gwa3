@@ -1,6 +1,6 @@
 #pragma once
 
-// String Encoding/Decoding for Guild Wars encoded text.
+// : String Encoding/Decoding for Guild Wars encoded text.
 //
 // GW uses variable-length encoded wchar_t* strings for quest names, item names,
 // NPC names, skill descriptions, etc. These must be decoded via a game function

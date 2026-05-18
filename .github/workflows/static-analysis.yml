@@ -1,0 +1,32 @@
+name: static-analysis
+
+on:
+  workflow_dispatch:
+
+jobs:
+  static-analysis:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install LLVM and Ninja
+        shell: pwsh
+        run: choco install -y llvm --version=18.1.8 ninja
+
+      - name: Run static analysis
+        shell: pwsh
+        run: .\tools\run-static-analysis.ps1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: static-analysis-reports
+          path: build-analysis/**

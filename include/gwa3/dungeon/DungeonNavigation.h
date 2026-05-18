@@ -164,6 +164,9 @@ struct AggroMoveOptions {
     bool exact_move_target = false;
     bool use_local_clear_cooldown = false;
     float arrival_threshold = 250.0f;
+    float move_enemy_gate_range = 0.0f;
+    float crowd_enemy_scan_range = 0.0f;
+    uint32_t crowd_enemy_count_gate = 0u;
     float move_random_radius = 100.0f;
     float sidestep_random_radius = 500.0f;
     float opportunistic_loot_radius = 3000.0f;
@@ -190,6 +193,9 @@ struct AggroMoveProfileConfig {
     bool exact_move_target = false;
     bool use_special_local_clear = false;
     bool use_local_clear_cooldown = false;
+    float move_enemy_gate_range = 0.0f;
+    float crowd_enemy_scan_range = 0.0f;
+    uint32_t crowd_enemy_count_gate = 0u;
     float sidestep_random_radius = 500.0f;
     float opportunistic_loot_radius = 3000.0f;
     uint32_t opportunistic_fight_budget_ms = 4000u;

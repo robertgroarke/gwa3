@@ -1,0 +1,11 @@
+; Mercenary Hero Configuration
+; Format: HeroID,SkillTemplateCode
+; Heroes are added in order (1-7)
+
+30,OAOiAyk8gNtePuwJ00ZaNbJA
+14,OAhjQkGZIT3BVVCPSTTODTjTciA
+21,OAhjYoHYIPWb7wnoqKNncDzqH
+4,OAljUwGpZSUBKgfBVVbh8Y7Y1YA
+24,OQhkAsC8gFKzJY6lDMd40hQG4iB
+15,OQhkAsC8gFKDNY6lDMd40hQG4iB
+29,OQljAkBsZSvAIg5ZkAcQsA7Y1YA

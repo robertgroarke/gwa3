@@ -23,7 +23,7 @@ namespace GWA3::EncStringCache {
 // frees. No caller-side wait. Lots of prior GWCA use (AgentMgr, ItemMgr,
 // tooltip rendering) validates this as a safe, thread-flexible pattern;
 // our earlier attempt to go via GameThread::Enqueue + blocking wait is
-// what was destabilizing GW.
+// what was destabilising GW. See local docs/QUEST_LOG_RESEARCH.md.
 
 typedef void(__cdecl* DecodeCallback)(void*, wchar_t*);
 typedef void(__cdecl* ValidateAsyncDecodeStrFn)(const wchar_t*, DecodeCallback, void*);
@@ -242,7 +242,9 @@ bool Initialize() {
     // Two independent scans for the same function. GWCA's byte-pattern
     // scan is considered authoritative upstream; our assertion-based
     // scan is what QuestMgr + prior testing has been using. Log both
-    // so we can spot cases where they disagree.
+    // so we can spot the case where they disagree — a difference there
+    // is the smoking gun for the delayed-crash we've been chasing. See
+    // local docs/QUEST_LOG_RESEARCH.md.
     const uintptr_t assertAddr = Offsets::ValidateAsyncDecodeStr;
     const uintptr_t gwcaAddr   = Offsets::ValidateAsyncDecodeStrGwca;
     Log::Info("EncStringCache: scan assertion=0x%08X gwca=0x%08X match=%s",
@@ -254,7 +256,7 @@ bool Initialize() {
     // GWCA's AsyncDecodeStr wrappers read/write text_parser->language_id
     // around every decode call; if that chain is null or garbage in our
     // injection state, the decoder is being driven blind and that could
-    // explain the delayed crashes.
+    // explain the delayed crashes. See local docs/QUEST_LOG_RESEARCH.md.
     uintptr_t gc = Offsets::ResolveGameContext();
     uintptr_t textParser = 0;
     uint32_t languageId = 0;

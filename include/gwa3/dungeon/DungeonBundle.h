@@ -64,6 +64,13 @@ bool PickUpNearestItemByModelNearPoint(
     float searchRadius = 18000.0f,
     int pickupAttempts = 3,
     uint32_t delayMs = 500u);
+bool PickUpHeldBundleByModelNearPoint(
+    float x,
+    float y,
+    uint32_t modelId,
+    float searchRadius = 18000.0f,
+    int pickupAttempts = 3,
+    uint32_t delayMs = 500u);
 bool OpenChestAndPickUpBundle(
     float x,
     float y,
@@ -132,5 +139,6 @@ bool OpenChestAndAcquireHeldBundleByModelLegacy(
 uint32_t GetHeldOrEquippedBundleItemIdByModel(uint32_t modelId);
 bool DropHeldOrEquippedBundleItem(uint32_t itemId);
 bool DropHeldOrEquippedBundleByModel(uint32_t modelId);
+bool RestoreCombatWeaponAfterBundleDrop(uint32_t settleDelayMs = 500u);
 
 } // namespace GWA3::DungeonBundle

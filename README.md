@@ -2,6 +2,8 @@
 
 GWA3 is a native C++ Guild Wars automation library and DLL. It provides typed APIs for game memory access, packet dispatch, manager-level game operations, LLM bridge snapshots/actions, and reusable dungeon bot support.
 
+This public repository is a filtered export of the private development tree. It intentionally excludes private account launchers, credentials, local coordination docs, machine-specific paths, and live lane harnesses.
+
 ## Demo
 
 ![Froggy HM running Bogroot Growths level 2 boss route with live command log](assets/gwa3_bogrootlvl2boss.gif)
@@ -9,10 +11,12 @@ GWA3 is a native C++ Guild Wars automation library and DLL. It provides typed AP
 ## Layers
 
 - `include/gwa3/` and `src/gwa3/`: core GWA3 headers and implementation.
-- `include/gwa3/dungeon/` and `src/gwa3/dungeon/`: dungeon support built on the core library.
-- `bots/`: concrete bot implementations. Froggy HM is the only bot currently expected to run end to end; the other dungeon bots are ports in progress.
-- `bridge/`: Python LLM bridge client. The bridge is public but still in active development.
-- `tools/`: injector utility.
+- `include/gwa3/dungeon/` and `src/gwa3/dungeon/`: shared dungeon support built on the core library.
+- `bots/`: concrete bot implementations.
+- `bridge/`: Python LLM bridge client and public unit tests.
+- `ui/`: WPF control panel for profiles, launch planning, and log/status monitoring.
+- `tests` and `src/tests`: offline and injected test support.
+- `tools/`: injector, signing helper, static analysis runner, and small support utilities.
 
 ## Build
 
@@ -21,56 +25,59 @@ Prerequisites:
 - Windows with Guild Wars installed.
 - Visual Studio 2022 with the Desktop development with C++ workload.
 - CMake 3.20 or newer.
+- .NET 8 SDK for the UI.
+- Python 3.11 for the bridge tests.
 - Internet access during the first configure, because CMake fetches MinHook and nlohmann/json.
 
 GWA3 targets the 32-bit Guild Wars client. The included preset uses Visual Studio 2022 with Win32 output:
 
 ```powershell
 cmake --preset vs2022
-cmake --build --preset vs2022 --target gwa3 injector
+cmake --build --preset vs2022 --target gwa3 injector gwa3_dungeon_tests gwa3_tests
 ```
 
 Release outputs are written under `build/bin/Release/`.
 
+## Tests
+
+```powershell
+.\build\bin\Release\gwa3_dungeon_tests.exe
+.\build\bin\Release\gwa3_tests.exe
+python -m unittest bridge.tests.test_o_protocol_contract bridge.tests.test_o_token_budget
+dotnet test ui\Gwa3.UI.sln -c Release
+```
+
+Injected/live tests require a running Guild Wars client and should be treated as operator-controlled validation, not CI-safe unit tests.
+
 ## Injection
 
-Build the DLL and injector first. Then launch Guild Wars normally, choose the character you want to run, and inject into that exact Guild Wars process.
+Build the DLL and injector first. Then launch Guild Wars, choose the character you want to run, and inject into that exact Guild Wars process.
 
-The public injector does not select by account or character name. It selects by process ID. If multiple Guild Wars clients are open, list them first:
+The injector selects by process ID. If multiple Guild Wars clients are open, list them first:
 
 ```powershell
 .\build\bin\Release\injector.exe --list
 ```
 
-Run the Froggy HM bot by injecting `gwa3.dll` into the chosen PID:
+Run the default bot module by injecting `gwa3.dll` into the chosen PID:
 
 ```powershell
 .\build\bin\Release\injector.exe --pid <GW_PID> --dll gwa3.dll
 ```
 
-If only one Guild Wars window is open, the injector can auto-detect it, but using `--pid` is the safest path when more than one client may be running.
-
-LLM bridge mode starts the named-pipe bridge without starting the Froggy bot:
+LLM bridge mode starts the named-pipe bridge without starting the default bot:
 
 ```powershell
 .\build\bin\Release\injector.exe --pid <GW_PID> --dll gwa3.dll --llm
 ```
 
-Advisory mode runs the Froggy bot and bridge together:
+Advisory mode runs the default bot and bridge together:
 
 ```powershell
 .\build\bin\Release\injector.exe --pid <GW_PID> --dll gwa3.dll --llm-advisory
 ```
 
 Runtime logs are written next to the DLL, including `gwa3_log_<PID>.txt` and `gwa3_bot.log`.
-
-## Froggy Runtime Notes
-
-Froggy HM is the default bot module compiled into `gwa3.dll`. The default route starts from Gadd's Encampment and targets Bogroot Growths HM.
-
-The public repo intentionally does not include private account launchers, credentials, character-specific test fixtures, or live harnesses. Public users should launch their own Guild Wars client and select the character in-game before injection.
-
-Froggy requires a hero template file to configure heroes. Without one, outpost setup stops before entering the dungeon.
 
 ## Hero Templates
 
@@ -94,24 +101,15 @@ Template files live in `config/hero_configs/`. Each non-comment line is:
 hero_id,template_code
 ```
 
-For example:
+The actual `config/gwa3.ini` file is ignored by Git so users can keep local character-specific settings out of source control.
 
-```text
-25,OwUTM0HD1ZxkAAAAgpAAACCAAA
+## UI
+
+Build and run the WPF UI with:
+
+```powershell
+dotnet build ui\Gwa3.UI.sln -c Release
+.\ui\Gwa3.UI.App\bin\Release\net8.0-windows\Gwa3.UI.App.exe
 ```
 
-The template code is the normal Guild Wars skill template code for that hero. Lines starting with `;` are comments. If `config/gwa3.ini` is missing, Froggy tries `Standard.txt`. If the selected template file cannot be loaded, outpost setup fails instead of adding heroes from embedded defaults.
-
-The actual `config/gwa3.ini` file and `config/hero_configs/*.txt` files are ignored by Git so users can keep character-specific hero setups local.
-
-## Project Layout
-
-```text
-bots/                         Concrete bot implementations
-bridge/                       Python LLM bridge
-include/gwa3/                 Public GWA3 headers
-include/gwa3/dungeon/         Shared dungeon helper headers
-src/gwa3/                     GWA3 DLL and library implementation
-src/gwa3/dungeon/             Shared dungeon helper implementation
-tools/                        Injector utility
-```
+The included default profile is a public seed. Configure launcher and injector paths for your own Guild Wars setup before live use.

@@ -21,7 +21,7 @@ struct CharSelectOptions {
 using MoveToPointFn = std::function<bool(float x, float y, float threshold)>;
 using OpenMerchantFn = std::function<bool(float x, float y, float searchRadius)>;
 using RefreshSkillCacheFn = std::function<void()>;
-using UseConsumablesFn = std::function<void(const BotConfig& cfg)>;
+using UseConsumablesFn = std::function<bool(const BotConfig& cfg)>;
 using SimpleActionFn = std::function<bool()>;
 using ContextActionFn = std::function<void(const char* context)>;
 using NeedsMaintenanceFn = std::function<bool()>;
@@ -89,6 +89,7 @@ struct DungeonProgressionOptions {
     const char* dungeon_name = "dungeon";
 
     uint32_t retry_wait_ms = 1000u;
+    bool stop_on_completed_dungeon_map = false;
 
     RefreshSkillCacheFn refresh_skill_cache = {};
     UseConsumablesFn use_consumables = {};

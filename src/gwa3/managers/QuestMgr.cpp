@@ -42,7 +42,7 @@ bool Initialize() {
 
     // GWCA QuestMgr::Init() — the UI callback that sits behind the in-game
     // quest log window contains near-calls into SetActiveQuest (+0x96) and
-    // AbandonQuest (+0x100). See GWA Censured/GWCA-master/Source/QuestMgr.cpp.
+    // AbandonQuest (+0x100). See the legacy GWCA QuestMgr implementation.
     uintptr_t questLogUi = Scanner::FindAssertion(
         "P:\\Code\\Gw\\Ui\\Game\\Quest\\QuestLog.cpp",
         "MISSION_MAP_OUTPOST == MissionCliGetMap()",
@@ -225,7 +225,7 @@ void RequestQuestInfo(uint32_t questId) {
     // (assertion=0x5F4C44, gwca=0x5F5050) but the GWCA-scanned address
     // still produces the same delayed crash. Prime call stays dormant
     // while we pursue the text_parser / AsyncDecodeStringPtr hook
-    // investigation.
+    // investigation. See local docs/QUEST_LOG_RESEARCH.md.
     //
     // if (Quest* q = GetQuestById(questId)) {
     //     EncStringCache::Prime(q->name);

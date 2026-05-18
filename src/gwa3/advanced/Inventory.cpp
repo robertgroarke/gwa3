@@ -34,7 +34,16 @@ uint32_t CountFreeSlots(uint32_t firstBag, uint32_t lastBag) {
     for (uint32_t bagIdx = firstBag; bagIdx <= lastBag; ++bagIdx) {
         auto* bag = ItemMgr::GetBag(bagIdx);
         if (!bag) continue;
-        freeSlots += (bag->items.size > bag->items_count) ? (bag->items.size - bag->items_count) : 0u;
+        if (bag->items.size > bag->items_count) {
+            freeSlots += bag->items.size - bag->items_count;
+            continue;
+        }
+        if (!bag->items.buffer) continue;
+        for (uint32_t slot = 0u; slot < bag->items.size; ++slot) {
+            if (!bag->items.buffer[slot]) {
+                ++freeSlots;
+            }
+        }
     }
     return freeSlots;
 }
@@ -122,6 +131,52 @@ bool IsSalvageKitModel(uint32_t modelId) {
     }
 }
 
+bool IsProtectedEmergencyDropType(uint8_t type) {
+    switch (type) {
+    case 6u:  // bundle
+    case 9u:  // usable / consumable
+    case 11u: // material
+    case 18u: // key
+    case 20u: // gold
+    case 29u: // kit
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool IsProtectedEmergencyDropModel(uint32_t modelId) {
+    switch (modelId) {
+    case ItemModelIds::VICTORY_TOKEN:
+    case ItemModelIds::LUNAR_FORTUNE:
+    case ItemModelIds::LUNAR_FORTUNE_2:
+    case ItemModelIds::TRICK_OR_TREAT_BAG:
+    case ItemModelIds::ELITE_WARRIOR_TOME:
+    case ItemModelIds::ELITE_RANGER_TOME:
+    case ItemModelIds::ELITE_MONK_TOME:
+    case ItemModelIds::ELITE_NECROMANCER_TOME:
+    case ItemModelIds::ELITE_MESMER_TOME:
+    case ItemModelIds::ELITE_ELEMENTALIST_TOME:
+    case ItemModelIds::ELITE_ASSASSIN_TOME:
+    case ItemModelIds::ELITE_RITUALIST_TOME:
+    case ItemModelIds::ELITE_PARAGON_TOME:
+    case ItemModelIds::ELITE_DERVISH_TOME:
+    case ItemModelIds::WARRIOR_TOME:
+    case ItemModelIds::RANGER_TOME:
+    case ItemModelIds::MONK_TOME:
+    case ItemModelIds::NECROMANCER_TOME:
+    case ItemModelIds::MESMER_TOME:
+    case ItemModelIds::ELEMENTALIST_TOME:
+    case ItemModelIds::ASSASSIN_TOME:
+    case ItemModelIds::RITUALIST_TOME:
+    case ItemModelIds::PARAGON_TOME:
+    case ItemModelIds::DERVISH_TOME:
+        return true;
+    default:
+        return false;
+    }
+}
+
 int SalvageKitDropPriority(uint32_t modelId) {
     switch (modelId) {
     case ItemModelIds::SALVAGE_KIT:
@@ -145,13 +200,29 @@ bool IsDroppableInventoryItem(const Item* item) {
            item->model_id != 0u &&
            item->bag != nullptr &&
            !item->equipped &&
-           item->customized == nullptr;
+           item->customized == nullptr &&
+           !IsProtectedEmergencyDropModel(item->model_id);
 }
 
 bool IsEmergencyWhiteWeapon(const Item* item) {
     return IsDroppableInventoryItem(item) &&
            IsWeaponType(item->type) &&
            GetItemRarity(item) == RARITY_WHITE &&
+           !MaintenanceMgr::IsRareSkin(item->model_id);
+}
+
+bool IsEmergencyWhiteJunk(const Item* item) {
+    return IsDroppableInventoryItem(item) &&
+           !IsWeaponType(item->type) &&
+           !IsProtectedEmergencyDropType(item->type) &&
+           GetItemRarity(item) == RARITY_WHITE &&
+           !MaintenanceMgr::IsRareSkin(item->model_id);
+}
+
+bool IsEmergencyGreenWeapon(const Item* item) {
+    return IsDroppableInventoryItem(item) &&
+           IsWeaponType(item->type) &&
+           GetItemRarity(item) == RARITY_GREEN &&
            !MaintenanceMgr::IsRareSkin(item->model_id);
 }
 
@@ -167,6 +238,36 @@ Item* FindFirstEmergencyWhiteWeapon(uint32_t firstBag, uint32_t lastBag) {
         for (uint32_t slot = 0u; slot < bag->items.size; ++slot) {
             auto* item = bag->items.buffer[slot];
             if (IsEmergencyWhiteWeapon(item)) {
+                return item;
+            }
+        }
+    }
+    return nullptr;
+}
+
+Item* FindFirstEmergencyWhiteJunk(uint32_t firstBag, uint32_t lastBag) {
+    if (firstBag > lastBag) return nullptr;
+    for (uint32_t bagIdx = firstBag; bagIdx <= lastBag; ++bagIdx) {
+        auto* bag = ItemMgr::GetBag(bagIdx);
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t slot = 0u; slot < bag->items.size; ++slot) {
+            auto* item = bag->items.buffer[slot];
+            if (IsEmergencyWhiteJunk(item)) {
+                return item;
+            }
+        }
+    }
+    return nullptr;
+}
+
+Item* FindFirstEmergencyGreenWeapon(uint32_t firstBag, uint32_t lastBag) {
+    if (firstBag > lastBag) return nullptr;
+    for (uint32_t bagIdx = firstBag; bagIdx <= lastBag; ++bagIdx) {
+        auto* bag = ItemMgr::GetBag(bagIdx);
+        if (!bag || !bag->items.buffer) continue;
+        for (uint32_t slot = 0u; slot < bag->items.size; ++slot) {
+            auto* item = bag->items.buffer[slot];
+            if (IsEmergencyGreenWeapon(item)) {
                 return item;
             }
         }
@@ -240,6 +341,14 @@ EmergencyFreeSlotDropResult DropEmergencyInventoryItemForFreeSlot(
         drop = FindLowestPriorityEmergencySalvageKit(options.first_bag, options.last_bag);
         result.reason = "salvage kit";
     }
+    if (drop == nullptr) {
+        drop = FindFirstEmergencyWhiteJunk(options.first_bag, options.last_bag);
+        result.reason = "white junk";
+    }
+    if (drop == nullptr && options.allow_green_items) {
+        drop = FindFirstEmergencyGreenWeapon(options.first_bag, options.last_bag);
+        result.reason = "green weapon";
+    }
 
     if (drop == nullptr) {
         Log::Warn("%s: no safe emergency inventory item found to drop for free slot", prefix);
@@ -250,6 +359,7 @@ EmergencyFreeSlotDropResult DropEmergencyInventoryItemForFreeSlot(
     result.model_id = drop->model_id;
     result.item_type = drop->type;
     result.rarity = GetItemRarity(drop);
+    const uint32_t freeSlotsBefore = CountFreeSlots(options.first_bag, options.last_bag);
     Log::Warn("%s: dropping emergency %s for free slot item=%u model=%u type=%u rarity=%u",
               prefix,
               result.reason,
@@ -258,9 +368,82 @@ EmergencyFreeSlotDropResult DropEmergencyInventoryItemForFreeSlot(
               result.item_type,
               result.rarity);
     ItemMgr::DropItem(result.item_id);
-    result.dropped = true;
-    CallWait(options.wait_ms, options.post_drop_wait_ms);
+    const uint32_t waitStepMs = 100u;
+    const uint32_t totalWaitMs = options.post_drop_wait_ms > 2500u ? options.post_drop_wait_ms : 2500u;
+    for (uint32_t elapsed = 0u; elapsed < totalWaitMs; elapsed += waitStepMs) {
+        CallWait(options.wait_ms, waitStepMs);
+        const Item* current = ItemMgr::GetItemById(result.item_id);
+        const uint32_t freeSlotsAfter = CountFreeSlots(options.first_bag, options.last_bag);
+        if (freeSlotsAfter > freeSlotsBefore || !current || current->model_id != result.model_id) {
+            result.dropped = true;
+            return result;
+        }
+    }
+
+    Log::Warn("%s: emergency drop not observed item=%u model=%u freeSlots=%u->%u",
+              prefix,
+              result.item_id,
+              result.model_id,
+              freeSlotsBefore,
+              CountFreeSlots(options.first_bag, options.last_bag));
     return result;
+}
+
+uint32_t EnsureEmergencyFreeSlots(uint32_t min_free_slots,
+                                  const EmergencyFreeSlotOptions& options) {
+    if (min_free_slots == 0u) return 0u;
+
+    uint32_t dropped = 0u;
+    uint32_t freeSlots = CountFreeSlots(options.first_bag, options.last_bag);
+    const char* prefix = Prefix(options.log_prefix);
+
+    while (freeSlots < min_free_slots) {
+        Item* drop = FindFirstEmergencyWhiteWeapon(options.first_bag, options.last_bag);
+        const char* reason = "white weapon";
+        if (drop == nullptr) {
+            drop = FindLowestPriorityEmergencySalvageKit(options.first_bag, options.last_bag);
+            reason = "salvage kit";
+        }
+        if (drop == nullptr) {
+            drop = FindFirstEmergencyWhiteJunk(options.first_bag, options.last_bag);
+            reason = "white junk";
+        }
+        if (drop == nullptr && options.allow_green_items) {
+            drop = FindFirstEmergencyGreenWeapon(options.first_bag, options.last_bag);
+            reason = "green weapon";
+        }
+        if (drop == nullptr) {
+            Log::Warn("%s: emergency cleanup stopped at freeSlots=%u/%u; no safe item found",
+                      prefix,
+                      freeSlots,
+                      min_free_slots);
+            break;
+        }
+
+        Log::Warn("%s: emergency cleanup dropping %s for critical free slots item=%u model=%u type=%u rarity=%u",
+                  prefix,
+                  reason,
+                  drop->item_id,
+                  drop->model_id,
+                  drop->type,
+                  GetItemRarity(drop));
+        ItemMgr::DropItem(drop->item_id);
+        ++dropped;
+        CallWait(options.wait_ms, options.post_drop_wait_ms);
+
+        const uint32_t nextFreeSlots = CountFreeSlots(options.first_bag, options.last_bag);
+        if (nextFreeSlots <= freeSlots) {
+            Log::Warn("%s: emergency cleanup drop did not increase free slots (%u -> %u)",
+                      prefix,
+                      freeSlots,
+                      nextFreeSlots);
+            freeSlots = nextFreeSlots;
+            break;
+        }
+        freeSlots = nextFreeSlots;
+    }
+
+    return dropped;
 }
 
 } // namespace GWA3::AdvancedInventory

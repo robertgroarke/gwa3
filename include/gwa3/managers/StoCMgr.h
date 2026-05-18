@@ -1,6 +1,6 @@
 #pragma once
 
-// StoCMgr — Server-to-Client packet callback system.
+// : StoCMgr — Server-to-Client packet callback system.
 //
 // Enables reactive event monitoring: register callbacks for specific
 // incoming packet types (damage events, loot drops, NPC spawns, etc.)

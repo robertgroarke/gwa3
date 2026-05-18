@@ -3,6 +3,7 @@
 #include <gwa3/core/CrashDiag.h>
 #include <gwa3/core/GameThread.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/dungeon/DungeonRunStats.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/MemoryMgr.h>
 
@@ -241,6 +242,7 @@ DWORD WINAPI ThreadProc(LPVOID) {
             Log::Info("[WATCHDOG] runtime alive map=%u gameThreadResponsive=%d",
                       currentMapId,
                       GameThread::IsResponsive(s_options.game_thread_idle_limit_ms) ? 1 : 0);
+            DungeonRunStats::PublishMonitoringLog("GWA3", "watchdog");
             lastProgressLog = now;
         }
     }

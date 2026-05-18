@@ -21,6 +21,21 @@ using WaitFn = void(*)(uint32_t ms);
 using BoolFn = bool(*)();
 using PickupNearbyLootFn = int(*)(float maxRange);
 
+struct PickedLootInfo {
+    uint32_t item_id = 0u;
+    uint32_t model_id = 0u;
+    uint32_t quantity = 0u;
+    uint32_t value = 0u;
+    uint32_t gold_before = 0u;
+    uint32_t gold_after = 0u;
+    uint16_t rarity = 0u;
+    uint8_t type = 0u;
+    uint8_t dye_tint = 0u;
+    bool gold_changed = false;
+};
+
+using LootPickedFn = void(*)(const PickedLootInfo& info, void* user_data);
+
 struct LootPickupOptions {
     uint32_t general_loot_min_free_slots = 2u;
     float interact_threshold = 200.0f;
@@ -29,9 +44,14 @@ struct LootPickupOptions {
     uint32_t pickup_retry_limit = 10u;
     uint32_t pickup_timeout_ms = 6000u;
     uint32_t pickup_delay_ms = 250u;
+    uint32_t failed_pickup_suppression_ms = 30000u;
     uint32_t global_timeout_ms = 120000u;
     uint32_t character_gold_cap = 100000u;
+    bool emergency_free_slot_for_required_pickups = true;
+    bool emergency_drop_green_items_for_required_pickups = true;
     BoolFn is_world_ready = nullptr;
+    LootPickedFn on_item_picked = nullptr;
+    void* on_item_picked_user_data = nullptr;
     const char* log_prefix = nullptr;
 };
 

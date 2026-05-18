@@ -504,8 +504,16 @@ WaypointHandlerResult ExecuteRouteLabelWaypoint(
             options.get_nearest_waypoint == nullptr) {
             return WaypointHandlerResult::NotHandled;
         }
-        (void)MoveLabelRouteWaypoint(waypoint, waypoint_index, options);
+        const auto move_result = MoveLabelRouteWaypoint(waypoint, waypoint_index, options);
         LogRouteLabelState("post-dungeon-door-checkpoint-move", waypoints, count, waypoint_index, options);
+        if (!move_result.reached) {
+            Log::Warn("%s: Dungeon Door Checkpoint movement failed wp=%d dist=%.0f threshold=%.0f; stopping route for recovery",
+                      PrefixOrDefault(options.log_prefix),
+                      waypoint_index,
+                      move_result.final_distance,
+                      move_result.threshold);
+            return WaypointHandlerResult::StopRoute;
+        }
 
         const auto recovery = RecoverRouteLabelWipeIfDead(
             waypoints,
@@ -529,6 +537,9 @@ WaypointHandlerResult ExecuteRouteLabelWaypoint(
         checkpoint_options.get_nearest_waypoint = options.get_nearest_waypoint;
         const auto checkpoint = DungeonCheckpoint::HandleLockedDoorCheckpoint(checkpoint_options);
         waypoint_index = checkpoint.waypoint_index;
+        if (!checkpoint.completed) {
+            return WaypointHandlerResult::StopRoute;
+        }
         return WaypointHandlerResult::ContinueRoute;
     }
 
@@ -838,6 +849,19 @@ DungeonLoopResult RunDungeonLoop(
                   HasReachedProgressLevel(callbacks, result) ? 1 : 0,
                   result.final_map_id);
 
+        if (level_index >= 0 &&
+            options.complete_on_objective_in_dungeon_map &&
+            result.objective_completed &&
+            HasReachedProgressLevel(callbacks, result)) {
+            result.completed = true;
+            result.final_map_id = map_id;
+            Log::Info("%s: %s loop completed with objective already finished inside dungeon map=%u",
+                      LoopPrefix(options),
+                      LoopName(options),
+                      map_id);
+            return result;
+        }
+
         if (level_index >= 0) {
             const auto& level = options.levels[level_index];
             WaitForLoopLevelSpawnGate(level_index, level, options);
@@ -901,6 +925,16 @@ DungeonLoopResult RunDungeonLoop(
                       options.max_entry_refresh_retries_before_progress);
             return result;
         } else if (map_id == options.entry_map_id && HasReachedProgressLevel(callbacks, result)) {
+            result.objective_completed = IsLoopObjectiveCompleted(callbacks);
+            if (options.require_objective_for_entry_return_completion &&
+                !result.objective_completed) {
+                result.returned_to_entry_map = true;
+                result.final_map_id = map_id;
+                Log::Info("%s: %s loop returned to entry map after progress without objective completion",
+                          LoopPrefix(options),
+                          LoopName(options));
+                return result;
+            }
             result.completed = true;
             result.returned_to_entry_map = true;
             result.final_map_id = map_id;
@@ -922,7 +956,11 @@ DungeonLoopResult RunDungeonLoop(
 
         if (result.final_map_id == options.entry_map_id) {
             result.returned_to_entry_map = true;
-            result.completed = HasReachedProgressLevel(callbacks, result);
+            result.objective_completed = IsLoopObjectiveCompleted(callbacks);
+            result.completed =
+                HasReachedProgressLevel(callbacks, result) &&
+                (!options.require_objective_for_entry_return_completion ||
+                 result.objective_completed);
             if (result.completed) {
                 Log::Info("%s: %s loop completed with entry-map return after progress",
                           LoopPrefix(options),

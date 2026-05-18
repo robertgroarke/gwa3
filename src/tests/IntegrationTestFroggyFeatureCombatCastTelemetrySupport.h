@@ -1,0 +1,4 @@
+#include "IntegrationTestFroggyFeatureCombatCastTelemetrySnapshot.h"
+#include "IntegrationTestFroggyFeatureCombatCastTelemetryReport.h"
+#include "IntegrationTestFroggyFeatureCombatCastTelemetrySetup.h"
+#include "IntegrationTestFroggyFeatureCombatCastTelemetryProbe.h"

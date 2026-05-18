@@ -73,14 +73,17 @@ StuckResolution EvaluateStuckMonitor(
     const float moved = AgentMgr::GetDistance(monitor.last_x, monitor.last_y, currentX, currentY);
     if (moved < minimumProgress) {
         ++monitor.low_movement_count;
-        if (monitor.low_movement_count == recoveryThreshold) {
+        if (monitor.low_movement_count >= abortThreshold) {
+            resolution.abort_move = true;
+        } else if (monitor.low_movement_count >= recoveryThreshold &&
+                   recoveryThreshold > 0 &&
+                   ((monitor.low_movement_count - recoveryThreshold) %
+                    recoveryThreshold) == 0) {
             const float offsetX = static_cast<float>(static_cast<int>(randomSeed % 600u) - 300);
             const float offsetY = static_cast<float>(static_cast<int>((randomSeed / 7u) % 600u) - 300);
             resolution.issue_recovery_move = true;
             resolution.recovery_x = currentX + (offsetX / 300.0f) * recoveryRadius;
             resolution.recovery_y = currentY + (offsetY / 300.0f) * recoveryRadius;
-        } else if (monitor.low_movement_count >= abortThreshold) {
-            resolution.abort_move = true;
         }
     } else {
         monitor.low_movement_count = 0;

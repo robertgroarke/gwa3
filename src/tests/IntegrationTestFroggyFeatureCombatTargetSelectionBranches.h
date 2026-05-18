@@ -1,0 +1,6 @@
+#include "IntegrationTestFroggyFeatureCombatTargetSelectionResolver.h"
+#include "IntegrationTestFroggyFeatureCombatLastActionTargetSelection.h"
+#include "IntegrationTestFroggyFeatureCombatDefaultFoeTargetSelection.h"
+#include "IntegrationTestFroggyFeatureCombatCastingFoeTargetSelection.h"
+#include "IntegrationTestFroggyFeatureCombatEnchantedFoeTargetSelection.h"
+#include "IntegrationTestFroggyFeatureCombatMeleeFoeTargetSelection.h"

@@ -1,0 +1,6 @@
+#include "IntegrationTestFroggyFeatureCombatCastGatingMetadata.h"
+#include "IntegrationTestFroggyFeatureCombatCastChosenSkillAssertions.h"
+#include "IntegrationTestFroggyFeatureCombatCastTransitionAssertions.h"
+#include "IntegrationTestFroggyFeatureCombatCastAftercastAssertions.h"
+#include "IntegrationTestFroggyFeatureCombatCastBlockedSlotAssertions.h"
+#include "IntegrationTestFroggyFeatureCombatCastGatingEntry.h"

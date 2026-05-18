@@ -1,5 +1,6 @@
 #include <gwa3/dungeon/DungeonCheckpoint.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/managers/AgentMgr.h>
 
 #include <Windows.h>
 
@@ -50,6 +51,14 @@ int ResolveNearestWaypoint(
     int waypointCount,
     NearestWaypointIndexFn getNearestWaypoint) {
     return getNearestWaypoint ? getNearestWaypoint(waypoints, waypointCount) : 0;
+}
+
+float DistanceToWaypoint(const DungeonRoute::Waypoint& waypoint) {
+    auto* me = AgentMgr::GetMyAgent();
+    if (!me) {
+        return -1.0f;
+    }
+    return AgentMgr::GetDistance(me->x, me->y, waypoint.x, waypoint.y);
 }
 
 } // namespace
@@ -180,6 +189,23 @@ WaypointWipeRecoveryResult RecoverWaypointWipe(
     }
     result.wipe_count = localWipeCount;
 
+    uint32_t totalWipeCount = options.total_wipe_count ? *options.total_wipe_count : 0u;
+    ++totalWipeCount;
+    if (options.total_wipe_count) {
+        *options.total_wipe_count = totalWipeCount;
+    }
+    if (options.max_total_wipes_before_outpost > 0u &&
+        totalWipeCount > options.max_total_wipes_before_outpost) {
+        Log::Warn("Dungeon: route wipe limit exceeded total=%u max=%u - returning to outpost",
+                  totalWipeCount,
+                  options.max_total_wipes_before_outpost);
+        if (options.return_to_outpost) {
+            options.return_to_outpost();
+        }
+        result.returned_to_outpost = true;
+        return result;
+    }
+
     const DWORD reviveStart = GetTickCount();
     while (IsDead(options.is_dead) &&
            (GetTickCount() - reviveStart) < options.revive_timeout_ms) {
@@ -250,6 +276,25 @@ RouteWipeRecoveryResult RecoverRouteWaypointWipe(
     result.used_dp_removal = recovery.used_dp_removal;
     result.restart_index = recovery.restart_index;
     result.wipe_count = recovery.wipe_count;
+
+    if (recovery.recovered &&
+        recoveryOptions.get_nearest_waypoint &&
+        recoveryOptions.waypoints &&
+        recoveryOptions.waypoint_count > 0) {
+        const int nearestIndex = ClampWaypointIndex(
+            recoveryOptions.get_nearest_waypoint(
+                recoveryOptions.waypoints,
+                recoveryOptions.waypoint_count),
+            recoveryOptions.waypoint_count);
+        if (nearestIndex > options.current_index && result.restart_index < nearestIndex) {
+            Log::Info("%s: %s recovered ahead of failed waypoint nearest=%d failed=%d; resuming forward",
+                      prefix,
+                      contextName,
+                      nearestIndex,
+                      options.current_index);
+            result.restart_index = nearestIndex;
+        }
+    }
 
     if (recovery.returned_to_outpost) {
         Log::Info("%s: %s party defeated - returning to outpost", prefix, contextName);
@@ -343,6 +388,23 @@ LockedDoorCheckpointResult HandleLockedDoorCheckpoint(
         result.nearest_index = nearest;
         result.waypoint_index = nearest;
         result.backtracked = true;
+    }
+
+    if (options.require_physical_reach) {
+        const float distToCheckpoint = DistanceToWaypoint(options.waypoints[options.current_index]);
+        if (distToCheckpoint < 0.0f ||
+            distToCheckpoint > options.physical_reach_threshold) {
+            Log::Warn("%s: %s not physically reached wp=%d nearest=%d dist=%.0f threshold=%.0f",
+                      prefix,
+                      checkpointName,
+                      options.current_index,
+                      result.nearest_index,
+                      distToCheckpoint,
+                      options.physical_reach_threshold);
+            result.completed = false;
+            result.waypoint_index = options.current_index;
+            return result;
+        }
     }
 
     Log::Info("%s: %s reached at wp=%d nearest=%d",

@@ -2,6 +2,7 @@
 
 #include <gwa3/advanced/Inventory.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/dungeon/DungeonRunStats.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/ItemMgr.h>
 #include <gwa3/managers/MaintenanceMgr.h>
@@ -25,12 +26,89 @@ bool IsDead(BoolFn is_dead_fn) {
     return is_dead_fn ? is_dead_fn() : false;
 }
 
+const char* LogPrefix(const LootPickupOptions& options) {
+    return options.log_prefix ? options.log_prefix : "AdvancedLoot";
+}
+
+struct FailedPickupEntry {
+    uint32_t map_id = 0u;
+    uint32_t agent_id = 0u;
+    uint32_t item_id = 0u;
+    DWORD suppress_until_ms = 0u;
+};
+
+FailedPickupEntry g_failedPickups[32] = {};
+uint32_t g_failedPickupNext = 0u;
+
+bool ItemRequiresInventorySlot(const Item* item) {
+    return item != nullptr && item->type != TYPE_GOLD;
+}
+
+bool IsRequiredPickupItem(const Item* item) {
+    if (!item) return false;
+    return item->type == TYPE_KEY ||
+           item->type == TYPE_BUNDLE ||
+           IsQuestPickupModel(item->model_id);
+}
+
+bool IsHeldBundleItem(uint32_t itemId) {
+    const auto* inventory = ItemMgr::GetInventory();
+    return inventory != nullptr &&
+           inventory->bundle != nullptr &&
+           inventory->bundle->item_id == itemId;
+}
+
+void EnsureFreeSlotForRequiredPickup(const Item* item,
+                                     const LootPickupOptions& options,
+                                     WaitFn wait_ms) {
+    if (!options.emergency_free_slot_for_required_pickups ||
+        !ItemRequiresInventorySlot(item) ||
+        !IsRequiredPickupItem(item) ||
+        AdvancedInventory::CountFreeSlots() > 0u) {
+        return;
+    }
+
+    AdvancedInventory::EmergencyFreeSlotOptions freeSlotOptions;
+    freeSlotOptions.log_prefix = LogPrefix(options);
+    freeSlotOptions.wait_ms = wait_ms;
+    freeSlotOptions.allow_green_items = options.emergency_drop_green_items_for_required_pickups;
+    const auto result = AdvancedInventory::DropEmergencyInventoryItemForFreeSlot(freeSlotOptions);
+    if (result.dropped) {
+        Log::Warn("%s: emergency cleanup before required pickup item=%u model=%u reason=%s freeSlots=%u",
+                  LogPrefix(options),
+                  result.item_id,
+                  result.model_id,
+                  result.reason ? result.reason : "<unknown>",
+                  AdvancedInventory::CountFreeSlots());
+    } else {
+        Log::Warn("%s: required pickup has full inventory but no emergency drop candidate model=%u type=%u",
+                  LogPrefix(options),
+                  item ? item->model_id : 0u,
+                  item ? item->type : 0u);
+    }
+}
+
 bool IsWorldReady(const LootPickupOptions& options) {
     return options.is_world_ready ? options.is_world_ready() : true;
 }
 
-const char* LogPrefix(const LootPickupOptions& options) {
-    return options.log_prefix ? options.log_prefix : "AdvancedLoot";
+bool IsFailedPickupSuppressed(uint32_t agentId, uint32_t itemId) {
+    const DWORD now = GetTickCount();
+    const uint32_t mapId = MapMgr::GetMapId();
+    for (const auto& entry : g_failedPickups) {
+        if (entry.map_id != mapId || entry.agent_id != agentId || entry.item_id != itemId) continue;
+        if (static_cast<int32_t>(entry.suppress_until_ms - now) > 0) return true;
+    }
+    return false;
+}
+
+void RememberFailedPickup(uint32_t agentId, uint32_t itemId, uint32_t suppressMs) {
+    if (suppressMs == 0u) return;
+    auto& entry = g_failedPickups[g_failedPickupNext++ % (sizeof(g_failedPickups) / sizeof(g_failedPickups[0]))];
+    entry.map_id = MapMgr::GetMapId();
+    entry.agent_id = agentId;
+    entry.item_id = itemId;
+    entry.suppress_until_ms = GetTickCount() + suppressMs;
 }
 
 } // namespace
@@ -219,6 +297,8 @@ uint32_t CountNearbyPickupCandidates(float maxRange, const LootPickupOptions& op
         auto* agent = AgentMgr::GetAgentByID(i);
         if (!agent || agent->type != 0x400u) continue;
         if (AgentMgr::GetDistance(me->x, me->y, agent->x, agent->y) > maxRange) continue;
+        auto* itemAgent = static_cast<const AgentItem*>(agent);
+        if (IsFailedPickupSuppressed(agent->agent_id, itemAgent->item_id)) continue;
         if (!ShouldPickUpItemAgent(agent, myId, freeSlots, options)) continue;
         ++count;
     }
@@ -241,12 +321,11 @@ int PickUpNearbyLoot(float maxRange, WaitFn wait_ms, BoolFn is_dead, const LootP
     const uint32_t myId = me->agent_id;
 
     uint32_t freeSlots = AdvancedInventory::CountFreeSlots();
-    if (freeSlots == 0u) return 0;
 
     const DWORD globalStart = GetTickCount();
     int picked = 0;
     const uint32_t maxAgents = AgentMgr::GetMaxAgents();
-    for (uint32_t i = 1u; i < maxAgents && freeSlots > 0u; ++i) {
+    for (uint32_t i = 1u; i < maxAgents; ++i) {
         if (!IsWorldReady(options)) {
             Log::Warn("%s: PickUpNearbyLoot aborting mid-scan world-not-ready map=%u loaded=%d myId=%u picked=%d",
                       LogPrefix(options),
@@ -261,6 +340,14 @@ int PickUpNearbyLoot(float maxRange, WaitFn wait_ms, BoolFn is_dead, const LootP
         if (!agent || agent->type != 0x400u) continue;
         const float dist = AgentMgr::GetDistance(me->x, me->y, agent->x, agent->y);
         if (dist > maxRange) continue;
+        auto* itemAgent = static_cast<const AgentItem*>(agent);
+        auto* item = ItemMgr::GetItemById(itemAgent->item_id);
+        if (!item) continue;
+        if (IsFailedPickupSuppressed(agent->agent_id, itemAgent->item_id)) continue;
+
+        freeSlots = AdvancedInventory::CountFreeSlots();
+        EnsureFreeSlotForRequiredPickup(item, options, wait_ms);
+        freeSlots = AdvancedInventory::CountFreeSlots();
         if (!ShouldPickUpItemAgent(agent, myId, freeSlots, options)) continue;
 
         if (dist > options.interact_threshold) {
@@ -284,9 +371,17 @@ int PickUpNearbyLoot(float maxRange, WaitFn wait_ms, BoolFn is_dead, const LootP
         }
 
         const uint32_t itemAgentId = agent->agent_id;
-        const auto* itemAgent = static_cast<const AgentItem*>(agent);
         const uint32_t itemId = itemAgent->item_id;
         const uint32_t goldBefore = ItemMgr::GetGoldCharacter();
+        PickedLootInfo pickupInfo = {};
+        pickupInfo.item_id = itemId;
+        pickupInfo.model_id = item->model_id;
+        pickupInfo.quantity = item->quantity;
+        pickupInfo.value = item->value;
+        pickupInfo.rarity = AdvancedInventory::GetItemRarity(item);
+        pickupInfo.type = item->type;
+        pickupInfo.dye_tint = item->dye.dye_tint;
+        pickupInfo.gold_before = goldBefore;
         const DWORD itemStart = GetTickCount();
         uint32_t retries = 0u;
         while (retries < options.pickup_retry_limit &&
@@ -302,6 +397,7 @@ int PickUpNearbyLoot(float maxRange, WaitFn wait_ms, BoolFn is_dead, const LootP
                           retries);
                 return picked;
             }
+            EnsureFreeSlotForRequiredPickup(item, options, wait_ms);
             ItemMgr::PickUpItem(itemAgentId);
             CallWait(wait_ms, options.pickup_delay_ms);
             ++retries;
@@ -319,6 +415,7 @@ int PickUpNearbyLoot(float maxRange, WaitFn wait_ms, BoolFn is_dead, const LootP
             if (!AgentMgr::GetAgentExists(itemAgentId)) break;
             auto* pickedItem = ItemMgr::GetItemById(itemId);
             if (pickedItem && pickedItem->bag != nullptr) break;
+            if (IsHeldBundleItem(itemId)) break;
             if (ItemMgr::GetGoldCharacter() != goldBefore) break;
             if (IsDead(is_dead)) return picked;
         }
@@ -326,10 +423,14 @@ int PickUpNearbyLoot(float maxRange, WaitFn wait_ms, BoolFn is_dead, const LootP
         const bool goldChanged = ItemMgr::GetGoldCharacter() != goldBefore;
         auto* pickedItem = ItemMgr::GetItemById(itemId);
         const bool movedIntoInventory = pickedItem && pickedItem->bag != nullptr;
-        const bool pickedUp = !AgentMgr::GetAgentExists(itemAgentId) || goldChanged || movedIntoInventory;
+        const bool heldBundle = IsHeldBundleItem(itemId);
+        const bool pickedUp = !AgentMgr::GetAgentExists(itemAgentId) || goldChanged || movedIntoInventory || heldBundle;
         if (!pickedUp) {
+            if (!IsRequiredPickupItem(item)) {
+                RememberFailedPickup(itemAgentId, itemId, options.failed_pickup_suppression_ms);
+            }
             if (options.log_prefix) {
-                Log::Warn("%s: PickUpNearbyLoot failed agent=%u item=%u range=%.0f retries=%u goldBefore=%u goldAfter=%u inventory=%d",
+                Log::Warn("%s: PickUpNearbyLoot failed agent=%u item=%u range=%.0f retries=%u goldBefore=%u goldAfter=%u inventory=%d heldBundle=%d",
                           LogPrefix(options),
                           itemAgentId,
                           itemId,
@@ -337,15 +438,21 @@ int PickUpNearbyLoot(float maxRange, WaitFn wait_ms, BoolFn is_dead, const LootP
                           retries,
                           goldBefore,
                           ItemMgr::GetGoldCharacter(),
-                          movedIntoInventory ? 1 : 0);
+                          movedIntoInventory ? 1 : 0,
+                          heldBundle ? 1 : 0);
             }
             continue;
         }
 
-        ++picked;
-        if (!goldChanged) {
-            --freeSlots;
+        pickupInfo.gold_after = ItemMgr::GetGoldCharacter();
+        pickupInfo.gold_changed = goldChanged;
+        DungeonRunStats::RecordPickedLoot(pickupInfo);
+        if (options.on_item_picked) {
+            options.on_item_picked(pickupInfo, options.on_item_picked_user_data);
         }
+
+        ++picked;
+        freeSlots = AdvancedInventory::CountFreeSlots();
         me = AgentMgr::GetMyAgent();
         if (!me) return picked;
         if ((GetTickCount() - globalStart) > options.global_timeout_ms) {

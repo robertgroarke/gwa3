@@ -1,10 +1,12 @@
 #include <bots/common/BotFramework.h>
 #include <gwa3/core/Log.h>
+#include <gwa3/dungeon/DungeonRunStats.h>
 
 #include <Windows.h>
 #include <cstdio>
 #include <cstdarg>
 #include <ctime>
+#include <share.h>
 #include <mutex>
 #include <map>
 
@@ -28,6 +30,7 @@ static const char* StateToString(BotState state) {
         case BotState::Traveling:   return "Traveling";
         case BotState::InDungeon:   return "InDungeon";
         case BotState::Looting:     return "Looting";
+        case BotState::AwaitingReturn: return "AwaitingReturn";
         case BotState::Merchant:    return "Merchant";
         case BotState::Maintenance: return "Maintenance";
         case BotState::Error:       return "Error";
@@ -48,7 +51,7 @@ static void InitBotLog() {
     char* slash = strrchr(path, '\\');
     if (slash) *(slash + 1) = '\0';
     strcat_s(path, "gwa3_bot.log");
-    fopen_s(&s_logFile, path, "a");
+    s_logFile = _fsopen(path, "a", _SH_DENYNO);
 }
 
 void LogBot(const char* fmt, ...) {
@@ -132,6 +135,7 @@ static DWORD WINAPI BotThreadProc(LPVOID) {
 void Start() {
     if (s_running) return;
 
+    DungeonRunStats::ResetSession();
     s_stopRequested = false;
     s_state = BotState::Idle;
     s_running = true;

@@ -20,7 +20,7 @@ namespace GWA3::CtoS {
     PacketTapSnapshot GetPacketTapSnapshot();
     void ResetPacketTap();
 
-    // ===== Game Command Queue =====
+    // ===== Game Command Queue () =====
     // Enqueue a game command to execute in the Engine hook context.
     // This runs in the same hook point as AutoIt's command queue ---
     // the correct context for operations like Salvage that need
@@ -30,6 +30,7 @@ namespace GWA3::CtoS {
     bool EnqueueBotshubCommand(const void* slot, size_t slotSize);
     bool IsGameCommandQueueIdle();  // true when no pending game commands
     bool IsBotshubQueueIdle();  // true when no pending botshub commands
+    int32_t GetBotshubQueuePending();
     void DumpBotshubQueueState(const char* label);
     bool IsBotshubCommandLaneAvailable();
 
@@ -79,6 +80,7 @@ void SendPacketDirectRaw(uint32_t size, uint32_t header, ...);
     void HeroBehavior(uint32_t heroIndex, uint32_t behavior);
     void HeroFlagSingle(uint32_t heroIndex, float x, float y);
     void HeroFlagAll(float x, float y);
+    void ChangeSecondProfession(uint32_t agentId, uint32_t profession);
 
     // Item commands
     void UseItem(uint32_t itemId);
@@ -95,6 +97,7 @@ void SendPacketDirectRaw(uint32_t size, uint32_t header, ...);
     // Skill
     // Packet form uses the resolved skill id, not the skillbar slot.
     void UseSkill(uint32_t skillId, uint32_t targetAgentId, uint32_t callTarget = 0);
+    void UseHeroSkill(uint32_t heroAgentId, uint32_t skillId, uint32_t targetAgentId = 0);
 
     // Trade
     void TradeOfferItem(uint32_t itemId, uint32_t quantity);

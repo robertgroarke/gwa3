@@ -1,0 +1,5 @@
+#include "IntegrationTestSessionCommonSupport.h"
+#include "IntegrationTestConsumableCraftingSupport.h"
+#include "IntegrationTestTradeHelperSupport.h"
+#include "IntegrationTestMerchantRuntimeSupport.h"
+#include "IntegrationTestIdentifySalvageSupport.h"

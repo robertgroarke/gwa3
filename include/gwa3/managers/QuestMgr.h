@@ -23,8 +23,9 @@ namespace GWA3::QuestMgr {
     //
     // Toggles: if the window is closed it opens; if open it closes.
     // Side effect of interest: opening it populates GW's UI label
-    // frames with decoded quest-name strings, which can then be read
-    // via the sibling-decode memory pattern. Only works while in an outpost or
+    // frames with decoded quest-name strings, which we can then read
+    // via the sibling-decode memory pattern documented in
+    // local docs/QUEST_LOG_RESEARCH.md. Only works while in an outpost or
     // explorable (ignored in pre-game / char-select).
     void ToggleQuestLogWindow();
 

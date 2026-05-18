@@ -1,6 +1,6 @@
 #pragma once
 
-// MemoryMgr — GW client version, skill timer, window handle, game heap.
+// : MemoryMgr — GW client version, skill timer, window handle, game heap.
 
 #include <cstdint>
 
@@ -17,7 +17,7 @@ namespace GWA3::MemoryMgr {
     // HWND of the Guild Wars game window
     void* GetGWWindowHandle();
 
-    // GW user data directory (e.g. "C:\Users\...\Documents\Guild Wars")
+    // GW user data directory (for example, "%USERPROFILE%\\Documents\\Guild Wars").
     bool GetPersonalDir(wchar_t* buf, uint32_t bufLen);
 
     // Game heap allocation (USE AT YOUR OWN RISK — no RAII, must manually free)

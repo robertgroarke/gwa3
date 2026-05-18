@@ -1,0 +1,4 @@
+#include "IntegrationTestFroggyFeatureAgentSnapshotSupport.h"
+#include "IntegrationTestFroggyFeatureNpcSearchSupport.h"
+#include "IntegrationTestFroggyFeatureMerchantNpcCandidates.h"
+#include "IntegrationTestFroggyFeatureFoeSearchSupport.h"
