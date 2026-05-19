@@ -432,71 +432,6 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeError("froggy_full_maintenance_failed");
     }
 
-    static ActionResult HandleAddHero(const json& p) {
-        if (!p.contains("hero_id")) return MakeError("missing hero_id");
-        uint32_t id = p["hero_id"].get<uint32_t>();
-        GWA3::GameThread::Enqueue([id]() { PartyMgr::AddHero(id); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleKickHero(const json& p) {
-        if (!p.contains("hero_id")) return MakeError("missing hero_id");
-        uint32_t id = p["hero_id"].get<uint32_t>();
-        GWA3::GameThread::Enqueue([id]() { PartyMgr::KickHero(id); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleKickAllHeroes(const json&) {
-        // Intentionally deprecated: the legacy bulk sentinel is not a
-        // confirmed reliable clear path in gwa3. Bridge clients should issue
-        // repeated kick_hero calls for the currently present hero IDs.
-        return MakeError("deprecated_use_kick_hero_individually");
-    }
-
-    static ActionResult HandleFlagHero(const json& p) {
-        if (!p.contains("hero_index") || !p.contains("x") || !p.contains("y"))
-            return MakeError("missing hero_index, x, or y");
-        uint32_t idx = p["hero_index"].get<uint32_t>();
-        float x = p["x"].get<float>();
-        float y = p["y"].get<float>();
-        if (std::abs(x) > 100000 || std::abs(y) > 100000) return MakeError("coordinates_out_of_range");
-        GWA3::GameThread::Enqueue([idx, x, y]() { PartyMgr::FlagHero(idx, x, y); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleFlagAll(const json& p) {
-        if (!p.contains("x") || !p.contains("y")) return MakeError("missing x or y");
-        float x = p["x"].get<float>();
-        float y = p["y"].get<float>();
-        if (std::abs(x) > 100000 || std::abs(y) > 100000) return MakeError("coordinates_out_of_range");
-        GWA3::GameThread::Enqueue([x, y]() { PartyMgr::FlagAll(x, y); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleUnflagAll(const json&) {
-        GWA3::GameThread::Enqueue([]() { PartyMgr::UnflagAll(); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleSetHeroBehavior(const json& p) {
-        if (!p.contains("hero_index") || !p.contains("behavior"))
-            return MakeError("missing hero_index or behavior");
-        uint32_t idx = p["hero_index"].get<uint32_t>();
-        uint32_t beh = p["behavior"].get<uint32_t>();
-        if (beh > 2) return MakeError("invalid_behavior");
-        GWA3::GameThread::Enqueue([idx, beh]() { PartyMgr::SetHeroBehavior(idx, beh); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleLockHeroTarget(const json& p) {
-        if (!p.contains("hero_index") || !p.contains("target_id"))
-            return MakeError("missing hero_index or target_id");
-        uint32_t idx = p["hero_index"].get<uint32_t>();
-        uint32_t tid = p["target_id"].get<uint32_t>();
-        GWA3::GameThread::Enqueue([idx, tid]() { PartyMgr::LockHeroTarget(idx, tid); });
-        return MakeOk();
-    }
-
     static ActionResult HandleTravel(const json& p) {
         if (!p.contains("map_id")) return MakeError("missing map_id");
         uint32_t mapId = p["map_id"].get<uint32_t>();
@@ -1084,17 +1019,6 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
-    static void RegisterPartyActions() {
-        g_dispatch["add_hero"] = HandleAddHero;
-        g_dispatch["kick_hero"] = HandleKickHero;
-        g_dispatch["kick_all_heroes"] = HandleKickAllHeroes;
-        g_dispatch["flag_hero"] = HandleFlagHero;
-        g_dispatch["flag_all"] = HandleFlagAll;
-        g_dispatch["unflag_all"] = HandleUnflagAll;
-        g_dispatch["set_hero_behavior"] = HandleSetHeroBehavior;
-        g_dispatch["lock_hero_target"] = HandleLockHeroTarget;
-    }
-
     static void RegisterTravelActions() {
         g_dispatch["travel"] = HandleTravel;
         g_dispatch["enter_mission"] = HandleEnterMission;
@@ -1163,7 +1087,7 @@ namespace GWA3::LLM::ActionExecutor {
         RegisterCombatActions(g_dispatch);
         RegisterInteractionActions(g_dispatch);
         RegisterQuestActions(g_dispatch);
-        RegisterPartyActions();
+        RegisterPartyActions(g_dispatch);
         RegisterTravelActions();
         RegisterItemActions();
         RegisterTradeAndCraftingActions();
