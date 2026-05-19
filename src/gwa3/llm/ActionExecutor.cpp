@@ -432,37 +432,6 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeError("froggy_full_maintenance_failed");
     }
 
-    static ActionResult HandleInteractNpc(const json& p) {
-        if (!p.contains("agent_id")) return MakeError("missing agent_id");
-        uint32_t id = p["agent_id"].get<uint32_t>();
-        if (!AgentMgr::GetAgentExists(id)) return MakeError("agent_not_found");
-        GWA3::GameThread::Enqueue([id]() { AgentMgr::InteractNPC(id); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleInteractPlayer(const json& p) {
-        if (!p.contains("agent_id")) return MakeError("missing agent_id");
-        uint32_t id = p["agent_id"].get<uint32_t>();
-        if (!AgentMgr::GetAgentExists(id)) return MakeError("agent_not_found");
-        GWA3::GameThread::Enqueue([id]() { AgentMgr::InteractPlayer(id); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleInteractSignpost(const json& p) {
-        if (!p.contains("agent_id")) return MakeError("missing agent_id");
-        uint32_t id = p["agent_id"].get<uint32_t>();
-        if (!AgentMgr::GetAgentExists(id)) return MakeError("agent_not_found");
-        GWA3::GameThread::Enqueue([id]() { AgentMgr::InteractSignpost(id); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleDialog(const json& p) {
-        if (!p.contains("dialog_id")) return MakeError("missing dialog_id");
-        uint32_t id = p["dialog_id"].get<uint32_t>();
-        GWA3::GameThread::Enqueue([id]() { QuestMgr::Dialog(id); });
-        return MakeOk();
-    }
-
     // --- Quest log manipulation ---
     // The quest must be present in the local quest log for the server to
     // honour any of these. GetQuestById guards against absurd IDs ??? we still
@@ -1154,13 +1123,6 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
-    static void RegisterInteractionActions() {
-        g_dispatch["interact_npc"] = HandleInteractNpc;
-        g_dispatch["interact_player"] = HandleInteractPlayer;
-        g_dispatch["interact_signpost"] = HandleInteractSignpost;
-        g_dispatch["dialog"] = HandleDialog;
-    }
-
     static void RegisterQuestActions() {
         g_dispatch["set_active_quest"] = HandleSetActiveQuest;
         g_dispatch["abandon_quest"] = HandleAbandonQuest;
@@ -1245,7 +1207,7 @@ namespace GWA3::LLM::ActionExecutor {
 
         RegisterMovementActions(g_dispatch);
         RegisterCombatActions(g_dispatch);
-        RegisterInteractionActions();
+        RegisterInteractionActions(g_dispatch);
         RegisterQuestActions();
         RegisterPartyActions();
         RegisterTravelActions();

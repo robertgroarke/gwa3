@@ -136,6 +136,7 @@ add_library(gwa3_core OBJECT
     src/gwa3/llm/RouteWalker.cpp
     src/gwa3/llm/ActionExecutor.cpp
     src/gwa3/llm/ActionExecutorCombat.cpp
+    src/gwa3/llm/ActionExecutorInteraction.cpp
     src/gwa3/llm/ActionExecutorMovement.cpp
     src/gwa3/llm/ActionExecutorUtility.cpp
     src/gwa3/llm/EventPush.cpp
