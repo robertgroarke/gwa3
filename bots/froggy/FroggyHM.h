@@ -141,6 +141,8 @@ namespace GWA3::Bot::Froggy {
     inline constexpr uint32_t TEKKS_ENTRY_VERIFY_REFRESH_INTERVAL_MS = 500u;
     inline constexpr uint32_t TEKKS_ENTRY_VERIFY_POLL_MS = 100u;
     inline constexpr uint32_t TEKKS_QUEST_REFRESH_DELAY_MS = 250u;
+    inline constexpr uint32_t SPARKFLY_ROUTE_READY_TIMEOUT_MS = 10000u;
+    inline constexpr uint32_t SPARKFLY_ROUTE_READY_POLL_MS = 100u;
     inline constexpr int TEKKS_DIALOG_RESET_FAILURE_THRESHOLD = 2;
     inline constexpr uint32_t TEKKS_DIALOG_RESET_SETTLE_MS = 1000u;
     inline constexpr float TELEMETRY_NEAREST_ENEMY_RANGE = 5000.0f;

@@ -101,6 +101,8 @@ GWA3_TEST(froggy_config_quest_plans, {
     GWA3_ASSERT_EQ(expanded[1], 0x833901u);
     GWA3_ASSERT_EQ(expanded[3], 0x833901u);
     GWA3_ASSERT_EQ(GWA3::DungeonQuest::GetExpandedDialogCount(rewardDialog), 3);
+    GWA3_ASSERT_EQ(Froggy::SPARKFLY_ROUTE_READY_TIMEOUT_MS, 10000u);
+    GWA3_ASSERT_EQ(Froggy::SPARKFLY_ROUTE_READY_POLL_MS, 100u);
 })
 } // namespace GWA3::Tests::Consolidated::test_froggy_config_quest_plans
 

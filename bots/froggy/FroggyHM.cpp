@@ -1627,8 +1627,23 @@ bool DebugClearAggroInPlace(float fightRange) {
 }
 
 bool DebugRunSparkflyRouteToTekks() {
-    auto* me = AgentMgr::GetMyAgent();
-    if (!me || me->hp <= 0.0f || !MapMgr::GetIsMapLoaded() || MapMgr::GetMapId() != MapIds::SPARKFLY_SWAMP) {
+    const bool runtimeReady = DungeonRuntime::WaitForCondition(
+        SPARKFLY_ROUTE_READY_TIMEOUT_MS,
+        []() {
+            auto* me = AgentMgr::GetMyAgent();
+            return me != nullptr &&
+                me->hp > 0.0f &&
+                MapMgr::GetIsMapLoaded() &&
+                MapMgr::GetMapId() == MapIds::SPARKFLY_SWAMP;
+        },
+        SPARKFLY_ROUTE_READY_POLL_MS);
+    if (!runtimeReady) {
+        auto* me = AgentMgr::GetMyAgent();
+        LogBot("DebugRunSparkflyRouteToTekks not ready map=%u loaded=%d hasAgent=%d hp=%.3f",
+               MapMgr::GetMapId(),
+               MapMgr::GetIsMapLoaded() ? 1 : 0,
+               me != nullptr ? 1 : 0,
+               me != nullptr ? me->hp : 0.0f);
         return false;
     }
 
