@@ -25,6 +25,7 @@ namespace GWA3::LLM::ActionExecutor {
     void RegisterItemActions(ActionDispatchTable& dispatch);
     void RegisterSkillbarActions(ActionDispatchTable& dispatch);
     void RegisterTradeAndCraftingActions(ActionDispatchTable& dispatch);
+    void RegisterFroggyActions(ActionDispatchTable& dispatch);
     void RegisterBotControlActions(ActionDispatchTable& dispatch);
     void RegisterUtilityActions(ActionDispatchTable& dispatch);
 
