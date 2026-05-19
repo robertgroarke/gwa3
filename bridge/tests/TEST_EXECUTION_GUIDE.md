@@ -5,7 +5,7 @@
 Run public-safe bridge contract tests from the repository root:
 
 ```powershell
-python -m unittest bridge.tests.test_o_protocol_contract bridge.tests.test_p_ipc_backpressure bridge.tests.test_q_handshake bridge.tests.test_r_action_coverage bridge.tests.test_s_route_contract bridge.tests.test_t_maintenance_contract bridge.tests.test_u_snapshot_diet bridge.tests.test_v_conditional_tools
+python -m unittest bridge.tests.test_o_protocol_contract bridge.tests.test_p_ipc_backpressure bridge.tests.test_q_handshake bridge.tests.test_r_action_coverage bridge.tests.test_s_route_contract bridge.tests.test_t_maintenance_contract bridge.tests.test_u_snapshot_diet bridge.tests.test_v_conditional_tools bridge.tests.test_w_trade_guard
 ```
 
 These tests do not require a live Guild Wars client unless explicitly enabled by environment variable.
@@ -38,3 +38,7 @@ The live probe sends `{}` to schema tools whose missing-parameter path is expect
 ## Conditional Tool Exposure
 
 `bridge.tests.test_v_conditional_tools` validates the Phase 6 tool selector. Player-trade mutation tools are hidden until the trade window is open, identify/salvage tools are hidden until inventory contains eligible items, and dungeon-only helpers are hidden outside known dungeon maps.
+
+## Trade Guard
+
+`bridge.tests.test_w_trade_guard` validates the Phase 7 player-trade safety guard. It blocks accept-trade when the partner offer changes after submit, when value is outside tolerance, when player-offered items match hard refusal terms, and when whisper text contains common scam strings.

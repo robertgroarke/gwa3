@@ -12,6 +12,31 @@ DEFAULT_MODEL = "deepseek-v4-pro:cloud"
 DEFAULT_LLM_PROVIDER = "openai-compatible"
 DEFAULT_LLM_HOURLY_TOKEN_CAP = 10_000_000
 
+# Trade safety rails
+TRADE_ACCEPT_VALUE_TOLERANCE = float(os.environ.get("GWA3_TRADE_ACCEPT_VALUE_TOLERANCE", "1.1"))
+TRADE_HARD_REFUSAL_TERMS = (
+    "soulbound",
+    "soul bound",
+    "account-bound",
+    "account bound",
+    "character-bound",
+    "character bound",
+    "customized",
+    "customised",
+    "dedicated",
+    "per-character",
+)
+TRADE_WHISPER_REFUSAL_TERMS = (
+    "/trade",
+    "trust",
+    "go first",
+    "you first",
+    "pay first",
+    "give first",
+    "send first",
+    "trade first",
+)
+
 # Agent loop settings
 MAX_HISTORY_MESSAGES = 50
 OBSERVATION_WINDOW_SIZE = 5

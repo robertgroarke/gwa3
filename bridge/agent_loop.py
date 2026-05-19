@@ -20,6 +20,7 @@ from .kamadan_client import KamadanClient
 from .llm_client import LLMClient, LLMResponse
 from .protocol import IPC_PROTOCOL_VERSION, TOOL_SCHEMA_VERSION
 from .token_budget import TokenBudgetExceeded, TokenBudgetGuard
+from .trade_guard import TradeGuard
 from .tool_schema import (
     FROGGY_AUTONOMOUS_TOOLS,
     FROGGY_AUTONOMOUS_TOOL_NAMES,
@@ -288,6 +289,7 @@ class AgentLoop:
         self.objective = objective or DEFAULT_OBJECTIVE
         self.observations = ObservationWindow()
         self.kamadan = kamadan_client or KamadanClient()
+        self.trade_guard = TradeGuard()
         self.token_budget = token_budget
         self.history: list[dict] = []
         self.max_history = 40
@@ -1152,6 +1154,16 @@ class AgentLoop:
                 continue
 
             # Static farming knowledge lookups — no game-thread round trip
+            if tc.name == "send_whisper":
+                guard_result = self.trade_guard.evaluate_whisper(params.get("message", ""))
+                if guard_result:
+                    self.history.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps(guard_result),
+                    })
+                    continue
+
             if tc.name == "get_recipe":
                 data = farming_knowledge.get_recipe(
                     params.get("consumable_model_id", 0))
@@ -1205,6 +1217,16 @@ class AgentLoop:
                 })
                 continue
 
+            if tc.name == "accept_trade":
+                guard_result = self.trade_guard.evaluate_accept_trade(self.observations.latest)
+                if guard_result:
+                    self.history.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps(guard_result),
+                    })
+                    continue
+
             await self.ipc.send_action(tc.name, params, req_id)
             self._last_action_time = time.monotonic()
 
@@ -1212,6 +1234,9 @@ class AgentLoop:
                 req_id,
                 self._tool_timeout_seconds(tc.name),
             )
+
+            if tc.name == "submit_trade_offer" and result.get("success"):
+                self.trade_guard.record_submit_offer(self.observations.latest)
 
             self.history.append({
                 "role": "tool",
