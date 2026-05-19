@@ -35,4 +35,4 @@
 ## Deferred
 
 - `GameSnapshot.cpp` physical file splitting is intentionally deferred. Its current SEH/json boundary is delicate, and the existing per-builder isolation is safer than moving memory-reading helpers without live validation evidence.
-- `ActionExecutor.cpp` now owns only dispatch setup, rate limiting, snapshot-pause policy, parameter exception handling, and action-result reporting. Handler implementations live in functional `ActionExecutor*.cpp` modules; `GameSnapshot.cpp` physical splitting remains deferred because its SEH/json memory-read boundary is riskier than the executor split.
+- No additional behavior-preserving `ActionExecutor` handler split remains. `ActionExecutor.cpp` now owns only dispatch setup, rate limiting, snapshot-pause policy, parameter exception handling, and action-result reporting.
