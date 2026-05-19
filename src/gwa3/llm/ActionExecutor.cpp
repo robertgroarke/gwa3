@@ -432,49 +432,6 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeError("froggy_full_maintenance_failed");
     }
 
-    static ActionResult HandlePickUpItem(const json& p) {
-        if (!p.contains("agent_id")) return MakeError("missing agent_id");
-        uint32_t id = p["agent_id"].get<uint32_t>();
-        if (!AgentMgr::GetAgentExists(id)) return MakeError("agent_not_found");
-        GWA3::GameThread::Enqueue([id]() { ItemMgr::PickUpItem(id); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleUseItem(const json& p) {
-        if (!p.contains("item_id")) return MakeError("missing item_id");
-        uint32_t id = p["item_id"].get<uint32_t>();
-        if (!ItemMgr::GetItemById(id)) return MakeError("item_not_found");
-        GWA3::GameThread::Enqueue([id]() { ItemMgr::UseItem(id); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleEquipItem(const json& p) {
-        if (!p.contains("item_id")) return MakeError("missing item_id");
-        uint32_t id = p["item_id"].get<uint32_t>();
-        if (!ItemMgr::GetItemById(id)) return MakeError("item_not_found");
-        GWA3::GameThread::Enqueue([id]() { ItemMgr::EquipItem(id); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleDropItem(const json& p) {
-        if (!p.contains("item_id")) return MakeError("missing item_id");
-        uint32_t id = p["item_id"].get<uint32_t>();
-        if (!ItemMgr::GetItemById(id)) return MakeError("item_not_found");
-        GWA3::GameThread::Enqueue([id]() { ItemMgr::DropItem(id); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleMoveItem(const json& p) {
-        if (!p.contains("item_id") || !p.contains("bag_id") || !p.contains("slot"))
-            return MakeError("missing item_id, bag_id, or slot");
-        uint32_t itemId = p["item_id"].get<uint32_t>();
-        uint32_t bagId = p["bag_id"].get<uint32_t>();
-        uint32_t slot = p["slot"].get<uint32_t>();
-        if (!ItemMgr::GetItemById(itemId)) return MakeError("item_not_found");
-        GWA3::GameThread::Enqueue([itemId, bagId, slot]() { ItemMgr::MoveItem(itemId, bagId, slot); });
-        return MakeOk();
-    }
-
     static ActionResult HandleBuyMaterials(const json& p) {
         if (!p.contains("model_id") || !p.contains("quantity"))
             return MakeError("missing model_id or quantity");
@@ -937,38 +894,6 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
-    static ActionResult HandleIdentifyItem(const json& p) {
-        if (!p.contains("item_id") || !p.contains("kit_id"))
-            return MakeError("missing item_id or kit_id");
-        uint32_t itemId = p["item_id"].get<uint32_t>();
-        uint32_t kitId = p["kit_id"].get<uint32_t>();
-        if (!ItemMgr::GetItemById(itemId)) return MakeError("item_not_found");
-        if (!ItemMgr::GetItemById(kitId)) return MakeError("kit_not_found");
-        GWA3::GameThread::Enqueue([itemId, kitId]() { ItemMgr::IdentifyItem(itemId, kitId); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleSalvageStart(const json& p) {
-        if (!p.contains("item_id") || !p.contains("kit_id"))
-            return MakeError("missing item_id or kit_id");
-        uint32_t itemId = p["item_id"].get<uint32_t>();
-        uint32_t kitId = p["kit_id"].get<uint32_t>();
-        if (!ItemMgr::GetItemById(itemId)) return MakeError("item_not_found");
-        if (!ItemMgr::GetItemById(kitId)) return MakeError("kit_not_found");
-        GWA3::GameThread::Enqueue([kitId, itemId]() { ItemMgr::SalvageSessionOpen(kitId, itemId); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleSalvageMaterials(const json&) {
-        GWA3::GameThread::Enqueue([]() { ItemMgr::SalvageMaterials(); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleSalvageDone(const json&) {
-        GWA3::GameThread::Enqueue([]() { ItemMgr::SalvageSessionDone(); });
-        return MakeOk();
-    }
-
     static ActionResult HandleLoadSkillbar(const json& p) {
         if (!p.contains("skill_ids")) return MakeError("missing skill_ids");
         auto ids = p["skill_ids"];
@@ -982,19 +907,6 @@ namespace GWA3::LLM::ActionExecutor {
             SkillMgr::LoadSkillbar(skillIds, heroIndex);
         });
         return MakeOk();
-    }
-
-    static void RegisterItemActions() {
-        g_dispatch["pick_up_item"] = HandlePickUpItem;
-        g_dispatch["use_item"] = HandleUseItem;
-        g_dispatch["equip_item"] = HandleEquipItem;
-        g_dispatch["drop_item"] = HandleDropItem;
-        g_dispatch["move_item"] = HandleMoveItem;
-
-        g_dispatch["identify_item"] = HandleIdentifyItem;
-        g_dispatch["salvage_start"] = HandleSalvageStart;
-        g_dispatch["salvage_materials"] = HandleSalvageMaterials;
-        g_dispatch["salvage_done"] = HandleSalvageDone;
     }
 
     static void RegisterTradeAndCraftingActions() {
@@ -1046,7 +958,7 @@ namespace GWA3::LLM::ActionExecutor {
         RegisterQuestActions(g_dispatch);
         RegisterPartyActions(g_dispatch);
         RegisterTravelActions(g_dispatch);
-        RegisterItemActions();
+        RegisterItemActions(g_dispatch);
         RegisterTradeAndCraftingActions();
         RegisterSkillbarAndFroggyActions();
         RegisterBotControlActions(g_dispatch);

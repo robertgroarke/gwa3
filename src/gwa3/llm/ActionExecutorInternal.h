@@ -22,6 +22,7 @@ namespace GWA3::LLM::ActionExecutor {
     void RegisterQuestActions(ActionDispatchTable& dispatch);
     void RegisterPartyActions(ActionDispatchTable& dispatch);
     void RegisterTravelActions(ActionDispatchTable& dispatch);
+    void RegisterItemActions(ActionDispatchTable& dispatch);
     void RegisterBotControlActions(ActionDispatchTable& dispatch);
     void RegisterUtilityActions(ActionDispatchTable& dispatch);
 

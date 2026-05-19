@@ -10,6 +10,7 @@
 - Moved quest action handlers into `ActionExecutorQuest.cpp`.
 - Moved party and hero action handlers into `ActionExecutorParty.cpp`, preserving the deprecated `kick_all_heroes` error contract.
 - Moved travel and map-transition action handlers into `ActionExecutorTravel.cpp`.
+- Moved inventory, identification, and salvage action handlers into `ActionExecutorItem.cpp`.
 - Updated the action coverage test to scan all `ActionExecutor*.cpp` sources, so future physical splits remain covered.
 - Kept handler bodies in place to avoid churn in live-client-sensitive action implementations.
 
@@ -30,4 +31,4 @@
 ## Deferred
 
 - `GameSnapshot.cpp` physical file splitting is intentionally deferred. Its current SEH/json boundary is delicate, and the existing per-builder isolation is safer than moving memory-reading helpers without live validation evidence.
-- Full `ActionExecutor.cpp` physical category split is still incremental. Combat, movement, interaction, quest, party, travel, bot-control, and utility handlers are now split; larger trade, Froggy, and route handlers remain in the monolith because they are tightly coupled to shared local helpers and hook-sensitive managers.
+- Full `ActionExecutor.cpp` physical category split is still incremental. Combat, movement, interaction, quest, party, travel, item, bot-control, and utility handlers are now split; larger trade, Froggy, and route handlers remain in the monolith because they are tightly coupled to shared local helpers and hook-sensitive managers.
