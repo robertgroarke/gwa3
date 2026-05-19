@@ -23,8 +23,8 @@ import struct
 import sys
 
 from .protocol import (
-    IPC_PROTOCOL_VERSION,
     ProtocolMismatchError,
+    lane_name_from_pipe,
     validate_protocol_version,
     with_protocol_version,
 )
@@ -42,13 +42,21 @@ log = logging.getLogger(__name__)
 class IpcClient:
     """Async-friendly named pipe client for the gwa3 LLM bridge."""
 
-    def __init__(self, pipe_name: str = r"\\.\pipe\gwa3_llm"):
+    def __init__(self, pipe_name: str = r"\\.\pipe\gwa3_llm", lane_name: str | None = None):
         self.pipe_name = pipe_name
+        self.lane_name = lane_name or lane_name_from_pipe(pipe_name)
         self._handle = None
         self._connected = False
         self._write_lock = asyncio.Lock()
         self._queue: asyncio.Queue | None = None
         self._reader_task: asyncio.Task | None = None
+
+    def _client_hello_message(self) -> dict:
+        return {
+            "type": "hello",
+            "role": "bridge",
+            "lane": self.lane_name,
+        }
 
     async def connect(self, timeout: float = 30.0) -> bool:
         """Connect to the gwa3 named pipe. Retries until timeout.
@@ -83,11 +91,7 @@ class IpcClient:
                 await loop.run_in_executor(
                     None,
                     self._write_message_blocking,
-                    {
-                        "type": "hello",
-                        "role": "bridge",
-                        "protocol_version": IPC_PROTOCOL_VERSION,
-                    },
+                    self._client_hello_message(),
                 )
                 self._connected = True
                 self._queue = asyncio.Queue()
@@ -241,7 +245,6 @@ class IpcClient:
         """Send an action command to gwa3."""
         msg = {
             "type": "action",
-            "protocol_version": IPC_PROTOCOL_VERSION,
             "name": action_name,
             "params": params or {},
             "request_id": request_id,

@@ -1999,7 +1999,7 @@ namespace GWA3::LLM::GameSnapshot {
         g_tick++;
         json j;
         j["type"] = "snapshot";
-        j["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
+        GWA3::LLM::StampProtocol(j);
         j["tier"] = 1;
         j["tick"] = g_tick;
         j["me"] = TryBuildPlayerJson();
@@ -2014,7 +2014,7 @@ namespace GWA3::LLM::GameSnapshot {
         g_tick++;
         json j;
         j["type"] = "snapshot";
-        j["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
+        GWA3::LLM::StampProtocol(j);
         j["tier"] = 2;
         j["tick"] = g_tick;
         j["me"] = TryBuildPlayerJson();
@@ -2035,7 +2035,7 @@ namespace GWA3::LLM::GameSnapshot {
         g_tick++;
         json j;
         j["type"] = "snapshot";
-        j["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
+        GWA3::LLM::StampProtocol(j);
         j["tier"] = 3;
         j["tick"] = g_tick;
         j["me"] = TryBuildPlayerJson();

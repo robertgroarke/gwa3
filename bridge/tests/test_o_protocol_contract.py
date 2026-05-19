@@ -7,6 +7,7 @@ from bridge.protocol import (
     IPC_PROTOCOL_VERSION,
     TOOL_SCHEMA_VERSION,
     ProtocolMismatchError,
+    lane_name_from_pipe,
     validate_protocol_version,
     with_protocol_version,
 )
@@ -19,7 +20,9 @@ class ProtocolContractTests(unittest.TestCase):
         stamped = with_protocol_version(source)
 
         self.assertEqual(stamped["protocol_version"], IPC_PROTOCOL_VERSION)
+        self.assertEqual(stamped["v"], IPC_PROTOCOL_VERSION)
         self.assertNotIn("protocol_version", source)
+        self.assertNotIn("v", source)
 
     def test_protocol_validator_rejects_mismatched_message(self):
         with self.assertRaises(ProtocolMismatchError):
@@ -32,15 +35,20 @@ class ProtocolContractTests(unittest.TestCase):
                 self.sent = None
 
             async def send_message(self, msg: dict):
-                self.sent = msg
+                self.sent = with_protocol_version(msg)
 
         client = RecordingClient()
 
         asyncio.run(client.send_action("wait", {"milliseconds": 1}, "req-1"))
 
         self.assertEqual(client.sent["protocol_version"], IPC_PROTOCOL_VERSION)
+        self.assertEqual(client.sent["v"], IPC_PROTOCOL_VERSION)
         self.assertEqual(client.sent["type"], "action")
         self.assertEqual(client.sent["request_id"], "req-1")
+
+    def test_lane_name_is_inferred_from_pipe(self):
+        self.assertEqual(lane_name_from_pipe(r"\\.\pipe\gwa3_llm"), "default")
+        self.assertEqual(lane_name_from_pipe(r"\\.\pipe\gwa3_llm_sample"), "sample")
 
     def test_agent_loop_emits_tool_schema_contract_in_llm_messages(self):
         class DummyIpc:

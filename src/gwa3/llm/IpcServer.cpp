@@ -3,7 +3,9 @@
 #include <gwa3/core/Log.h>
 
 #include <atomic>
+#include <cctype>
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -123,6 +125,27 @@ namespace GWA3::LLM::IpcServer {
         return true;
     }
 
+    static std::string InferLaneName() {
+        const char* marker = "gwa3_llm";
+        const char* found = strstr(PIPE_NAME, marker);
+        if (!found) return "default";
+
+        found += strlen(marker);
+        if (*found == '_' || *found == '-') {
+            ++found;
+        }
+        if (!*found) return "default";
+
+        std::string lane(found);
+        for (char& ch : lane) {
+            const unsigned char c = static_cast<unsigned char>(ch);
+            if (!std::isalnum(c) && ch != '_' && ch != '-') {
+                ch = '_';
+            }
+        }
+        return lane.empty() ? "default" : lane;
+    }
+
     // Read exactly `count` bytes from the pipe. Returns false on failure/disconnect.
     static bool PipeReadAll(void* buf, DWORD count) {
         uint8_t* p = static_cast<uint8_t*>(buf);
@@ -190,7 +213,8 @@ namespace GWA3::LLM::IpcServer {
         json hello;
         hello["type"] = "hello";
         hello["role"] = "gwa3";
-        hello["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
+        GWA3::LLM::StampProtocol(hello);
+        hello["lane"] = InferLaneName();
         hello["pipe_name"] = PIPE_NAME;
 
         const std::string payload = hello.dump();
@@ -206,7 +230,7 @@ namespace GWA3::LLM::IpcServer {
         try {
             json hello = json::parse(payload, payload + length);
             const std::string type = hello.value("type", "");
-            const int version = hello.value("protocol_version", -1);
+            const int version = GWA3::LLM::ReadProtocolVersion(hello);
             if (type != "hello") {
                 GWA3::Log::Warn("[LLM-IPC] Expected client hello, got type=%s", type.c_str());
                 return false;
@@ -216,6 +240,13 @@ namespace GWA3::LLM::IpcServer {
                                 version,
                                 GWA3::LLM::IPC_PROTOCOL_VERSION);
                 return false;
+            }
+            const std::string clientLane = hello.value("lane", "");
+            const std::string expectedLane = InferLaneName();
+            if (!clientLane.empty() && clientLane != expectedLane) {
+                GWA3::Log::Warn("[LLM-IPC] Client lane=%s connected to lane=%s",
+                                clientLane.c_str(),
+                                expectedLane.c_str());
             }
             return true;
         } catch (const std::exception& e) {

@@ -106,7 +106,7 @@ namespace GWA3::LLM::EventPush {
     static void SendEvent(const json& j) {
         if (!IpcServer::IsClientConnected()) return;
         json event = j;
-        event["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
+        GWA3::LLM::StampProtocol(event);
         std::string s = event.dump();
         IpcServer::Send(s.c_str(), static_cast<uint32_t>(s.size()), IpcServer::OutboundPriority::Event);
     }

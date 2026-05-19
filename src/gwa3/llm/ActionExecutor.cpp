@@ -140,7 +140,7 @@ namespace GWA3::LLM::ActionExecutor {
     static void SendResult(const char* requestId, bool success, const char* error) {
         json j;
         j["type"] = "action_result";
-        j["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
+        GWA3::LLM::StampProtocol(j);
         j["request_id"] = requestId ? requestId : "";
         j["success"] = success;
         j["error"] = (error && error[0]) ? json(error) : json(nullptr);

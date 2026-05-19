@@ -29,13 +29,13 @@ namespace GWA3::LLM {
     static void SendHeartbeat() {
         json j;
         j["type"] = "heartbeat";
-        j["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
+        GWA3::LLM::StampProtocol(j);
         std::string s = j.dump();
         IpcServer::Send(s.c_str(), static_cast<uint32_t>(s.size()), IpcServer::OutboundPriority::Heartbeat);
     }
 
     static bool HasExpectedProtocolVersion(const json& j) {
-        const int version = j.value("protocol_version", -1);
+        const int version = GWA3::LLM::ReadProtocolVersion(j);
         if (version == static_cast<int>(GWA3::LLM::IPC_PROTOCOL_VERSION)) {
             return true;
         }
