@@ -10,7 +10,7 @@ from bridge.tool_schema import ALL_TOOLS
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ACTION_EXECUTOR = ROOT / "src/gwa3/llm/ActionExecutor.cpp"
+ACTION_EXECUTOR_SOURCES = tuple((ROOT / "src/gwa3/llm").glob("ActionExecutor*.cpp"))
 DEFAULT_PIPE = r"\\.\pipe\gwa3_llm"
 
 LOCAL_ONLY_TOOLS = {
@@ -57,8 +57,11 @@ def all_tool_names() -> set[str]:
 
 
 def cxx_dispatch_names() -> set[str]:
-    source = ACTION_EXECUTOR.read_text(encoding="utf-8")
-    return set(re.findall(r'g_dispatch\["([^"]+)"\]', source))
+    names: set[str] = set()
+    for source_path in ACTION_EXECUTOR_SOURCES:
+        source = source_path.read_text(encoding="utf-8")
+        names.update(re.findall(r'(?:g_dispatch|dispatch)\["([^"]+)"\]', source))
+    return names
 
 
 class ActionCoverageContractTests(unittest.TestCase):

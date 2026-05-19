@@ -1,4 +1,5 @@
 #include <gwa3/llm/ActionExecutor.h>
+#include "ActionExecutorInternal.h"
 #include <gwa3/llm/IpcServer.h>
 #include <gwa3/llm/LlmBridge.h>
 #include <gwa3/llm/GameSnapshot.h>
@@ -110,14 +111,14 @@ namespace GWA3::LLM::ActionExecutor {
         return 600000u;
     }
 
-    static ActionResult MakeOk() {
+    ActionResult MakeOk() {
         ActionResult r;
         r.success = true;
         r.error[0] = '\0';
         return r;
     }
 
-    static ActionResult MakeError(const char* msg) {
+    ActionResult MakeError(const char* msg) {
         ActionResult r;
         r.success = false;
         strncpy_s(r.error, msg, sizeof(r.error) - 1);
@@ -157,8 +158,7 @@ namespace GWA3::LLM::ActionExecutor {
 
     // --- Action handlers ---
 
-    using ActionHandler = std::function<ActionResult(const json& params)>;
-    static std::unordered_map<std::string, ActionHandler> g_dispatch;
+    static ActionDispatchTable g_dispatch;
 
     static ActionResult HandleMoveTo(const json& p) {
         if (!p.contains("x") || !p.contains("y")) return MakeError("missing x or y");
@@ -837,46 +837,6 @@ namespace GWA3::LLM::ActionExecutor {
         return ok ? MakeOk() : MakeError("sell_inventory_item_failed");
     }
 
-    static ActionResult HandleSendChat(const json& p) {
-        if (!p.contains("message") || !p.contains("channel"))
-            return MakeError("missing message or channel");
-        std::string message = p["message"].get<std::string>();
-        std::string channel = p["channel"].get<std::string>();
-        if (message.empty()) return MakeError("empty_message");
-
-        wchar_t wMsg[256] = {};
-        MultiByteToWideChar(CP_UTF8, 0, message.c_str(), -1, wMsg, 255);
-        wchar_t ch = '!'; // default to all chat
-        if (channel == "team" || channel == "party") ch = '#';
-        else if (channel == "guild") ch = '@';
-        else if (channel == "trade") ch = '$';
-        else if (channel == "all") ch = '!';
-
-        GWA3::GameThread::Enqueue([wMsg, ch]() {
-            ChatMgr::SendChat(wMsg, ch);
-        });
-        return MakeOk();
-    }
-
-    static ActionResult HandleSendWhisper(const json& p) {
-        if (!p.contains("recipient") || !p.contains("message"))
-            return MakeError("missing recipient or message");
-        std::string recipient = p["recipient"].get<std::string>();
-        std::string message = p["message"].get<std::string>();
-        if (recipient.empty()) return MakeError("empty_recipient");
-        if (message.empty()) return MakeError("empty_message");
-
-        wchar_t wRecipient[128] = {};
-        wchar_t wMsg[256] = {};
-        MultiByteToWideChar(CP_UTF8, 0, recipient.c_str(), -1, wRecipient, 127);
-        MultiByteToWideChar(CP_UTF8, 0, message.c_str(), -1, wMsg, 255);
-
-        GWA3::GameThread::Enqueue([wRecipient, wMsg]() {
-            ChatMgr::SendWhisper(wRecipient, wMsg);
-        });
-        return MakeOk();
-    }
-
     static ActionResult HandleCraftItem(const json& p) {
         if (!p.contains("item_id")) return MakeError("missing item_id");
         uint32_t itemId = p["item_id"].get<uint32_t>();
@@ -1322,63 +1282,6 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
-    static ActionResult HandleDropGold(const json& p) {
-        if (!p.contains("amount")) return MakeError("missing amount");
-        uint32_t amount = p["amount"].get<uint32_t>();
-        GWA3::GameThread::Enqueue([amount]() { ItemMgr::DropGold(amount); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleSetCombatMode(const json& p) {
-        if (!p.contains("mode")) return MakeError("missing mode");
-        std::string mode = p["mode"].get<std::string>();
-        auto& cfg = GWA3::Bot::GetConfig();
-        if (mode == "builtin") {
-            cfg.combat_mode = GWA3::Bot::CombatMode::Builtin;
-        } else if (mode == "llm") {
-            cfg.combat_mode = GWA3::Bot::CombatMode::LLM;
-        } else {
-            return MakeError("unknown_mode");
-        }
-        GWA3::Log::Info("[LLM-Action] Combat mode set to: %s", mode.c_str());
-        return MakeOk();
-    }
-
-    static ActionResult HandleSetBotState(const json& p) {
-        if (!p.contains("state")) return MakeError("missing state");
-        std::string stateName = p["state"].get<std::string>();
-
-        GWA3::Bot::BotState target;
-        if (stateName == "idle") target = GWA3::Bot::BotState::Idle;
-        else if (stateName == "in_town") target = GWA3::Bot::BotState::InTown;
-        else if (stateName == "traveling") target = GWA3::Bot::BotState::Traveling;
-        else if (stateName == "in_dungeon") target = GWA3::Bot::BotState::InDungeon;
-        else if (stateName == "looting") target = GWA3::Bot::BotState::Looting;
-        else if (stateName == "awaiting_return") target = GWA3::Bot::BotState::AwaitingReturn;
-        else if (stateName == "merchant") target = GWA3::Bot::BotState::Merchant;
-        else if (stateName == "maintenance") target = GWA3::Bot::BotState::Maintenance;
-        else if (stateName == "llm_controlled") target = GWA3::Bot::BotState::LLMControlled;
-        else return MakeError("unknown_state");
-
-        GWA3::Bot::SetState(target);
-        GWA3::Log::Info("[LLM-Action] Bot state overridden to: %s", stateName.c_str());
-        return MakeOk();
-    }
-
-    static ActionResult HandleResign(const json&) {
-        wchar_t msg[] = L"/resign";
-        GWA3::GameThread::Enqueue([msg]() {
-            ChatMgr::SendChat(msg, L'/');
-        });
-        return MakeOk();
-    }
-
-    static ActionResult HandleWait(const json& p) {
-        // Wait is a no-op on the C++ side ??? the bridge handles timing
-        (void)p;
-        return MakeOk();
-    }
-
     static void RegisterMovementActions() {
         g_dispatch["move_to"] = HandleMoveTo;
         g_dispatch["aggro_move_to"] = HandleAggroMoveTo;
@@ -1477,19 +1380,6 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["froggy_run_full_maintenance"] = HandleFroggyRunFullMaintenance;
     }
 
-    static void RegisterBotControlActions() {
-        g_dispatch["set_bot_state"] = HandleSetBotState;
-        g_dispatch["set_combat_mode"] = HandleSetCombatMode;
-    }
-
-    static void RegisterUtilityActions() {
-        g_dispatch["send_chat"] = HandleSendChat;
-        g_dispatch["send_whisper"] = HandleSendWhisper;
-        g_dispatch["drop_gold"] = HandleDropGold;
-        g_dispatch["resign"] = HandleResign;
-        g_dispatch["wait"] = HandleWait;
-    }
-
     bool Initialize() {
         g_dispatch.clear();
         g_rateWindow = std::chrono::steady_clock::now();
@@ -1504,8 +1394,8 @@ namespace GWA3::LLM::ActionExecutor {
         RegisterItemActions();
         RegisterTradeAndCraftingActions();
         RegisterSkillbarAndFroggyActions();
-        RegisterBotControlActions();
-        RegisterUtilityActions();
+        RegisterBotControlActions(g_dispatch);
+        RegisterUtilityActions(g_dispatch);
 
         GWA3::Log::Info("[LLM-Action] Initialized with %u actions", static_cast<uint32_t>(g_dispatch.size()));
         return true;

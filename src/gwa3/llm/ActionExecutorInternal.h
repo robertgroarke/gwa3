@@ -1,0 +1,22 @@
+#pragma once
+
+#include <gwa3/llm/ActionExecutor.h>
+
+#include <functional>
+#include <string>
+#include <unordered_map>
+
+#include <nlohmann/json.hpp>
+
+namespace GWA3::LLM::ActionExecutor {
+
+    using ActionHandler = std::function<ActionResult(const nlohmann::json& params)>;
+    using ActionDispatchTable = std::unordered_map<std::string, ActionHandler>;
+
+    ActionResult MakeOk();
+    ActionResult MakeError(const char* msg);
+
+    void RegisterBotControlActions(ActionDispatchTable& dispatch);
+    void RegisterUtilityActions(ActionDispatchTable& dispatch);
+
+} // namespace GWA3::LLM::ActionExecutor
