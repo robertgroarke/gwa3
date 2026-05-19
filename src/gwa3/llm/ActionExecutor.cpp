@@ -1379,36 +1379,35 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
-    bool Initialize() {
-        g_dispatch.clear();
-        g_rateWindow = std::chrono::steady_clock::now();
-        g_rateCount = 0;
-
-        // Movement
+    static void RegisterMovementActions() {
         g_dispatch["move_to"] = HandleMoveTo;
         g_dispatch["aggro_move_to"] = HandleAggroMoveTo;
         g_dispatch["change_target"] = HandleChangeTarget;
         g_dispatch["cancel_action"] = HandleCancelAction;
+    }
 
-        // Combat
+    static void RegisterCombatActions() {
         g_dispatch["attack"] = HandleAttack;
         g_dispatch["call_target"] = HandleCallTarget;
         g_dispatch["use_skill"] = HandleUseSkill;
         g_dispatch["use_hero_skill"] = HandleUseHeroSkill;
+    }
 
-        // Interaction
+    static void RegisterInteractionActions() {
         g_dispatch["interact_npc"] = HandleInteractNpc;
         g_dispatch["interact_player"] = HandleInteractPlayer;
         g_dispatch["interact_signpost"] = HandleInteractSignpost;
         g_dispatch["dialog"] = HandleDialog;
+    }
 
-        // Quest log
+    static void RegisterQuestActions() {
         g_dispatch["set_active_quest"] = HandleSetActiveQuest;
         g_dispatch["abandon_quest"] = HandleAbandonQuest;
         g_dispatch["request_quest_info"] = HandleRequestQuestInfo;
         g_dispatch["open_quest_log"] = HandleOpenQuestLog;
+    }
 
-        // Party/Hero
+    static void RegisterPartyActions() {
         g_dispatch["add_hero"] = HandleAddHero;
         g_dispatch["kick_hero"] = HandleKickHero;
         g_dispatch["kick_all_heroes"] = HandleKickAllHeroes;
@@ -1417,28 +1416,30 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["unflag_all"] = HandleUnflagAll;
         g_dispatch["set_hero_behavior"] = HandleSetHeroBehavior;
         g_dispatch["lock_hero_target"] = HandleLockHeroTarget;
+    }
 
-        // Travel
+    static void RegisterTravelActions() {
         g_dispatch["travel"] = HandleTravel;
         g_dispatch["enter_mission"] = HandleEnterMission;
         g_dispatch["return_to_outpost"] = HandleReturnToOutpost;
         g_dispatch["set_hard_mode"] = HandleSetHardMode;
         g_dispatch["skip_cinematic"] = HandleSkipCinematic;
+    }
 
-        // Items
+    static void RegisterItemActions() {
         g_dispatch["pick_up_item"] = HandlePickUpItem;
         g_dispatch["use_item"] = HandleUseItem;
         g_dispatch["equip_item"] = HandleEquipItem;
         g_dispatch["drop_item"] = HandleDropItem;
         g_dispatch["move_item"] = HandleMoveItem;
 
-        // Salvage & Identify
         g_dispatch["identify_item"] = HandleIdentifyItem;
         g_dispatch["salvage_start"] = HandleSalvageStart;
         g_dispatch["salvage_materials"] = HandleSalvageMaterials;
         g_dispatch["salvage_done"] = HandleSalvageDone;
+    }
 
-        // Trade & Crafting
+    static void RegisterTradeAndCraftingActions() {
         g_dispatch["initiate_trade"] = HandleInitiateTrade;
         g_dispatch["offer_trade_item"] = HandleOfferTradeItem;
         g_dispatch["offer_trade_item_prompt_max"] = HandleOfferTradeItemPromptMax;
@@ -1461,8 +1462,9 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["deposit_gold"] = HandleDepositGold;
         g_dispatch["trader_buy"] = HandleTraderBuy;
         g_dispatch["query_state"] = HandleQueryState;
+    }
 
-        // Skillbar
+    static void RegisterSkillbarAndFroggyActions() {
         g_dispatch["load_skillbar"] = HandleLoadSkillbar;
         g_dispatch["froggy_refresh_combat_skillbar"] = HandleFroggyRefreshCombatSkillbar;
         g_dispatch["froggy_run_town_setup"] = HandleFroggyRunTownSetup;
@@ -1473,17 +1475,37 @@ namespace GWA3::LLM::ActionExecutor {
         g_dispatch["froggy_run_dungeon_loop"] = HandleFroggyRunDungeonLoop;
         g_dispatch["froggy_run_maintenance_cycle"] = HandleFroggyRunMaintenanceCycle;
         g_dispatch["froggy_run_full_maintenance"] = HandleFroggyRunFullMaintenance;
+    }
 
-        // Bot control (advisory mode)
+    static void RegisterBotControlActions() {
         g_dispatch["set_bot_state"] = HandleSetBotState;
         g_dispatch["set_combat_mode"] = HandleSetCombatMode;
+    }
 
-        // Utility
+    static void RegisterUtilityActions() {
         g_dispatch["send_chat"] = HandleSendChat;
         g_dispatch["send_whisper"] = HandleSendWhisper;
         g_dispatch["drop_gold"] = HandleDropGold;
         g_dispatch["resign"] = HandleResign;
         g_dispatch["wait"] = HandleWait;
+    }
+
+    bool Initialize() {
+        g_dispatch.clear();
+        g_rateWindow = std::chrono::steady_clock::now();
+        g_rateCount = 0;
+
+        RegisterMovementActions();
+        RegisterCombatActions();
+        RegisterInteractionActions();
+        RegisterQuestActions();
+        RegisterPartyActions();
+        RegisterTravelActions();
+        RegisterItemActions();
+        RegisterTradeAndCraftingActions();
+        RegisterSkillbarAndFroggyActions();
+        RegisterBotControlActions();
+        RegisterUtilityActions();
 
         GWA3::Log::Info("[LLM-Action] Initialized with %u actions", static_cast<uint32_t>(g_dispatch.size()));
         return true;
