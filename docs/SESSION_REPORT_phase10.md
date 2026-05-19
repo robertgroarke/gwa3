@@ -4,6 +4,7 @@
 
 - Split the `ActionExecutor` dispatch table into functional registration helpers for movement, combat, interaction, quests, party, travel, items, trade/crafting, Froggy, bot control, and utility actions.
 - Moved bot-control and utility action handlers into `ActionExecutorUtility.cpp` behind a private `ActionExecutorInternal.h` dispatch contract.
+- Moved movement action handlers into `ActionExecutorMovement.cpp` with the same private dispatch contract.
 - Updated the action coverage test to scan all `ActionExecutor*.cpp` sources, so future physical splits remain covered.
 - Kept handler bodies in place to avoid churn in live-client-sensitive action implementations.
 
@@ -24,4 +25,4 @@
 ## Deferred
 
 - `GameSnapshot.cpp` physical file splitting is intentionally deferred. Its current SEH/json boundary is delicate, and the existing per-builder isolation is safer than moving memory-reading helpers without live validation evidence.
-- Full `ActionExecutor.cpp` physical category split is still incremental. Bot-control and utility handlers are now split; larger trade, Froggy, and route handlers remain in the monolith because they are tightly coupled to shared local helpers and hook-sensitive managers.
+- Full `ActionExecutor.cpp` physical category split is still incremental. Movement, bot-control, and utility handlers are now split; larger trade, Froggy, and route handlers remain in the monolith because they are tightly coupled to shared local helpers and hook-sensitive managers.

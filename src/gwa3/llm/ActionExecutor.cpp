@@ -160,49 +160,6 @@ namespace GWA3::LLM::ActionExecutor {
 
     static ActionDispatchTable g_dispatch;
 
-    static ActionResult HandleMoveTo(const json& p) {
-        if (!p.contains("x") || !p.contains("y")) return MakeError("missing x or y");
-        float x = p["x"].get<float>();
-        float y = p["y"].get<float>();
-        if (std::abs(x) > 100000 || std::abs(y) > 100000) return MakeError("coordinates_out_of_range");
-        // Lenient gate: accept any state where GW has a non-zero map and a
-        // player id. The stricter GetIsMapLoaded() adds an extra check
-        // that GetAgentByID(myId) is non-null, which transiently fails
-        // for a few ticks after a skill cast (the agent pointer gets
-        // refreshed by the cast) and was blocking every subsequent
-        // action with map_not_loaded for ~30+ seconds at a time.
-        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
-        std::thread([x, y]() {
-            (void)GWA3::DungeonNavigation::MoveToAndWait(x, y, 250.0f, 30000u);
-        }).detach();
-        return MakeOk();
-    }
-
-    static ActionResult HandleAggroMoveTo(const json& p) {
-        if (!p.contains("x") || !p.contains("y")) return MakeError("missing x or y");
-        float x = p["x"].get<float>();
-        float y = p["y"].get<float>();
-        if (std::abs(x) > 100000 || std::abs(y) > 100000) return MakeError("coordinates_out_of_range");
-        // Lenient gate: accept any state where GW has a non-zero map and a
-        // player id. The stricter GetIsMapLoaded() adds an extra check
-        // that GetAgentByID(myId) is non-null, which transiently fails
-        // for a few ticks after a skill cast (the agent pointer gets
-        // refreshed by the cast) and was blocking every subsequent
-        // action with map_not_loaded for ~30+ seconds at a time.
-        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
-        // aggro_move_to wraps Froggy's DebugAggroMoveTo ??? it walks toward
-        // (x, y), fights any enemy that enters fight_range, sidesteps on
-        // stuck detection, and re-issues moves until it arrives or times
-        // out (internal ~240s budget). Handler returns immediately; the
-        // walk completes on the detached worker thread so the bridge
-        // pipe is not blocked.
-        const float fightRange = p.value("fight_range", 1350.0f);
-        std::thread([x, y, fightRange]() {
-            Bot::Froggy::DebugAggroMoveTo(x, y, fightRange);
-        }).detach();
-        return MakeOk();
-    }
-
     static uint32_t CountFroggySalvageKitFamily() {
         return MaintenanceMgr::CountItemByModel(ItemModelIds::SALVAGE_KIT) +
                MaintenanceMgr::CountItemByModel(ItemModelIds::EXPERT_SALVAGE_KIT) +
@@ -473,19 +430,6 @@ namespace GWA3::LLM::ActionExecutor {
             return MakeError("froggy_full_maintenance_retry");
         }
         return MakeError("froggy_full_maintenance_failed");
-    }
-
-    static ActionResult HandleChangeTarget(const json& p) {
-        if (!p.contains("agent_id")) return MakeError("missing agent_id");
-        uint32_t id = p["agent_id"].get<uint32_t>();
-        if (!AgentMgr::GetAgentExists(id)) return MakeError("agent_not_found");
-        GWA3::GameThread::Enqueue([id]() { AgentMgr::ChangeTarget(id); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleCancelAction(const json&) {
-        GWA3::GameThread::Enqueue([]() { AgentMgr::CancelAction(); });
-        return MakeOk();
     }
 
     static ActionResult HandleAttack(const json& p) {
@@ -1282,13 +1226,6 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
-    static void RegisterMovementActions() {
-        g_dispatch["move_to"] = HandleMoveTo;
-        g_dispatch["aggro_move_to"] = HandleAggroMoveTo;
-        g_dispatch["change_target"] = HandleChangeTarget;
-        g_dispatch["cancel_action"] = HandleCancelAction;
-    }
-
     static void RegisterCombatActions() {
         g_dispatch["attack"] = HandleAttack;
         g_dispatch["call_target"] = HandleCallTarget;
@@ -1385,7 +1322,7 @@ namespace GWA3::LLM::ActionExecutor {
         g_rateWindow = std::chrono::steady_clock::now();
         g_rateCount = 0;
 
-        RegisterMovementActions();
+        RegisterMovementActions(g_dispatch);
         RegisterCombatActions();
         RegisterInteractionActions();
         RegisterQuestActions();
