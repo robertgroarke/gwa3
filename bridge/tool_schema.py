@@ -1227,6 +1227,86 @@ def _tool_name(tool: dict) -> str:
     return tool["function"]["name"]
 
 
+PLAYER_TRADE_TOOL_NAMES = {
+    "offer_trade_item",
+    "offer_trade_item_prompt_max",
+    "offer_trade_item_prompt_default",
+    "offer_trade_item_prompt_quantity",
+    "submit_trade_offer",
+    "accept_trade",
+    "cancel_trade",
+    "change_trade_offer",
+    "remove_trade_item",
+}
+
+SALVAGE_IDENTIFY_TOOL_NAMES = {
+    "identify_item",
+    "salvage_start",
+    "salvage_materials",
+    "salvage_done",
+}
+
+DUNGEON_ONLY_TOOL_NAMES = {
+    "froggy_run_dungeon_loop",
+}
+
+DUNGEON_MAP_IDS = {
+    615,  # Bogroot Growths level 1
+    616,  # Bogroot Growths level 2
+}
+
+
+def _iter_inventory_items(observation: dict | None):
+    if not observation:
+        return
+    inventory = observation.get("inventory", {}) or {}
+    for bag in inventory.get("bags", []) or []:
+        for item in bag.get("items", []) or []:
+            yield item
+
+
+def _has_trade_window(observation: dict | None) -> bool:
+    trade = (observation or {}).get("trade", {}) or {}
+    return bool(trade.get("is_open"))
+
+
+def _has_salvage_or_identify_candidate(observation: dict | None) -> bool:
+    for item in _iter_inventory_items(observation):
+        if not bool(item.get("is_identified", True)):
+            return True
+        if bool(item.get("is_material_salvageable", False)):
+            return True
+    return False
+
+
+def _is_dungeon_map(observation: dict | None) -> bool:
+    map_id = int(((observation or {}).get("map", {}) or {}).get("map_id", 0) or 0)
+    return map_id in DUNGEON_MAP_IDS
+
+
+def filter_tools_for_observation(tools: list[dict], observation: dict | None) -> list[dict]:
+    """Return the tool subset that is valid for the latest observable state."""
+    trade_open = _has_trade_window(observation)
+    has_item_work = _has_salvage_or_identify_candidate(observation)
+    in_dungeon = _is_dungeon_map(observation)
+
+    filtered = []
+    for tool in tools:
+        name = _tool_name(tool)
+        if name in PLAYER_TRADE_TOOL_NAMES and not trade_open:
+            continue
+        if name in SALVAGE_IDENTIFY_TOOL_NAMES and not has_item_work:
+            continue
+        if name in DUNGEON_ONLY_TOOL_NAMES and not in_dungeon:
+            continue
+        filtered.append(tool)
+    return filtered
+
+
+def tools_for_observation(observation: dict | None) -> list[dict]:
+    return filter_tools_for_observation(ALL_TOOLS, observation)
+
+
 FROGGY_AUTONOMOUS_TOOLS = [
     FROGGY_RUN_TOWN_SETUP,
     FROGGY_TRAVEL_TO_GADDS,

@@ -20,7 +20,12 @@ from .kamadan_client import KamadanClient
 from .llm_client import LLMClient, LLMResponse
 from .protocol import IPC_PROTOCOL_VERSION, TOOL_SCHEMA_VERSION
 from .token_budget import TokenBudgetExceeded, TokenBudgetGuard
-from .tool_schema import ALL_TOOLS, FROGGY_AUTONOMOUS_TOOLS, FROGGY_AUTONOMOUS_TOOL_NAMES
+from .tool_schema import (
+    FROGGY_AUTONOMOUS_TOOLS,
+    FROGGY_AUTONOMOUS_TOOL_NAMES,
+    filter_tools_for_observation,
+    tools_for_observation,
+)
 from .observation import ObservationWindow
 from . import farming_knowledge
 
@@ -399,9 +404,10 @@ class AgentLoop:
         return any(token in text for token in ("froggy", "bogroot", "tekks"))
 
     def _tools_for_current_objective(self) -> list[dict]:
+        latest = self.observations.latest
         if self._is_froggy_objective():
-            return FROGGY_AUTONOMOUS_TOOLS
-        return ALL_TOOLS
+            return filter_tools_for_observation(FROGGY_AUTONOMOUS_TOOLS, latest)
+        return tools_for_observation(latest)
 
     def _track_runtime_health(self) -> bool:
         """Stop cleanly if Froggy snapshots stay unloaded for too long."""
