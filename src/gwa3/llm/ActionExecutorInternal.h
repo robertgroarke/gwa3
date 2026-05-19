@@ -17,6 +17,7 @@ namespace GWA3::LLM::ActionExecutor {
     ActionResult MakeError(const char* msg);
 
     void RegisterMovementActions(ActionDispatchTable& dispatch);
+    void RegisterCombatActions(ActionDispatchTable& dispatch);
     void RegisterBotControlActions(ActionDispatchTable& dispatch);
     void RegisterUtilityActions(ActionDispatchTable& dispatch);
 

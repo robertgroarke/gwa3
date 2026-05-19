@@ -432,78 +432,6 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeError("froggy_full_maintenance_failed");
     }
 
-    static ActionResult HandleAttack(const json& p) {
-        if (!p.contains("agent_id")) return MakeError("missing agent_id");
-        uint32_t id = p["agent_id"].get<uint32_t>();
-        if (!AgentMgr::GetAgentExists(id)) return MakeError("agent_not_found");
-        // Lenient gate: accept any state where GW has a non-zero map and a
-        // player id. The stricter GetIsMapLoaded() adds an extra check
-        // that GetAgentByID(myId) is non-null, which transiently fails
-        // for a few ticks after a skill cast (the agent pointer gets
-        // refreshed by the cast) and was blocking every subsequent
-        // action with map_not_loaded for ~30+ seconds at a time.
-        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
-        auto* agent = AgentMgr::GetAgentByID(id);
-        if (agent && agent->type == 0xDB) {
-            auto* living = reinterpret_cast<AgentLiving*>(agent);
-            if (living->hp <= 0.0f) return MakeError("target_dead");
-        }
-        GWA3::GameThread::Enqueue([id]() { AgentMgr::Attack(id); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleCallTarget(const json& p) {
-        if (!p.contains("agent_id")) return MakeError("missing agent_id");
-        uint32_t id = p["agent_id"].get<uint32_t>();
-        if (!AgentMgr::GetAgentExists(id)) return MakeError("agent_not_found");
-        GWA3::GameThread::Enqueue([id]() { AgentMgr::CallTarget(id); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleUseSkill(const json& p) {
-        if (!p.contains("slot")) return MakeError("missing slot");
-        uint32_t slot = p["slot"].get<uint32_t>();
-        if (slot >= 8) return MakeError("invalid_slot");
-        // Lenient gate: accept any state where GW has a non-zero map and a
-        // player id. The stricter GetIsMapLoaded() adds an extra check
-        // that GetAgentByID(myId) is non-null, which transiently fails
-        // for a few ticks after a skill cast (the agent pointer gets
-        // refreshed by the cast) and was blocking every subsequent
-        // action with map_not_loaded for ~30+ seconds at a time.
-        if (MapMgr::GetMapId() == 0 || AgentMgr::GetMyId() == 0) return MakeError("map_not_loaded");
-
-        // Check recharge (GetSkillbarSkill uses 0-based indexing)
-        auto* skill = SkillMgr::GetSkillbarSkill(slot);
-        if (skill && skill->recharge > 0) return MakeError("skill_on_recharge");
-
-        uint32_t target = p.value("target_agent_id", 0u);
-        uint32_t callTarget = p.value("call_target", 0u);
-        // SkillMgr::UseSkill uses 1-BASED slot indexing internally (it
-        // skips slot==0 as a sentinel and reads bar->skills[slot-1]).
-        // The bridge schema advertises 0..7, so translate here rather
-        // than leak the 1-based convention out to every LLM prompt.
-        uint32_t nativeSlot = slot + 1u;
-        GWA3::GameThread::Enqueue([nativeSlot, target, callTarget]() {
-            SkillMgr::UseSkill(nativeSlot, target, callTarget);
-        });
-        return MakeOk();
-    }
-
-    static ActionResult HandleUseHeroSkill(const json& p) {
-        if (!p.contains("hero_index") || !p.contains("slot")) return MakeError("missing hero_index or slot");
-        uint32_t heroIdx = p["hero_index"].get<uint32_t>();
-        uint32_t slot = p["slot"].get<uint32_t>();
-        if (slot >= 8) return MakeError("invalid_slot");
-        uint32_t target = p.value("target_agent_id", 0u);
-        // Match HandleUseSkill: the native SkillMgr helpers use 1-based
-        // slot indexing, the bridge schema advertises 0..7.
-        uint32_t nativeSlot = slot + 1u;
-        GWA3::GameThread::Enqueue([heroIdx, nativeSlot, target]() {
-            SkillMgr::UseHeroSkill(heroIdx, nativeSlot, target);
-        });
-        return MakeOk();
-    }
-
     static ActionResult HandleInteractNpc(const json& p) {
         if (!p.contains("agent_id")) return MakeError("missing agent_id");
         uint32_t id = p["agent_id"].get<uint32_t>();
@@ -1226,13 +1154,6 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
-    static void RegisterCombatActions() {
-        g_dispatch["attack"] = HandleAttack;
-        g_dispatch["call_target"] = HandleCallTarget;
-        g_dispatch["use_skill"] = HandleUseSkill;
-        g_dispatch["use_hero_skill"] = HandleUseHeroSkill;
-    }
-
     static void RegisterInteractionActions() {
         g_dispatch["interact_npc"] = HandleInteractNpc;
         g_dispatch["interact_player"] = HandleInteractPlayer;
@@ -1323,7 +1244,7 @@ namespace GWA3::LLM::ActionExecutor {
         g_rateCount = 0;
 
         RegisterMovementActions(g_dispatch);
-        RegisterCombatActions();
+        RegisterCombatActions(g_dispatch);
         RegisterInteractionActions();
         RegisterQuestActions();
         RegisterPartyActions();
