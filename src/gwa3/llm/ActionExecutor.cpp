@@ -432,41 +432,6 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeError("froggy_full_maintenance_failed");
     }
 
-    static ActionResult HandleTravel(const json& p) {
-        if (!p.contains("map_id")) return MakeError("missing map_id");
-        uint32_t mapId = p["map_id"].get<uint32_t>();
-        if (mapId == 0 || mapId > 999) return MakeError("invalid_map_id");
-        uint32_t region = p.value("region", 0u);
-        uint32_t district = p.value("district", 0u);
-        uint32_t language = p.value("language", 0u);
-        GWA3::GameThread::Enqueue([mapId, region, district, language]() {
-            MapMgr::Travel(mapId, region, district, language);
-        });
-        return MakeOk();
-    }
-
-    static ActionResult HandleEnterMission(const json&) {
-        GWA3::GameThread::Enqueue([]() { MapMgr::EnterMission(); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleReturnToOutpost(const json&) {
-        GWA3::GameThread::Enqueue([]() { MapMgr::ReturnToOutpost(); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleSetHardMode(const json& p) {
-        if (!p.contains("enabled")) return MakeError("missing enabled");
-        bool enabled = p["enabled"].get<bool>();
-        GWA3::GameThread::Enqueue([enabled]() { MapMgr::SetHardMode(enabled); });
-        return MakeOk();
-    }
-
-    static ActionResult HandleSkipCinematic(const json&) {
-        GWA3::GameThread::Enqueue([]() { MapMgr::SkipCinematic(); });
-        return MakeOk();
-    }
-
     static ActionResult HandlePickUpItem(const json& p) {
         if (!p.contains("agent_id")) return MakeError("missing agent_id");
         uint32_t id = p["agent_id"].get<uint32_t>();
@@ -1019,14 +984,6 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
-    static void RegisterTravelActions() {
-        g_dispatch["travel"] = HandleTravel;
-        g_dispatch["enter_mission"] = HandleEnterMission;
-        g_dispatch["return_to_outpost"] = HandleReturnToOutpost;
-        g_dispatch["set_hard_mode"] = HandleSetHardMode;
-        g_dispatch["skip_cinematic"] = HandleSkipCinematic;
-    }
-
     static void RegisterItemActions() {
         g_dispatch["pick_up_item"] = HandlePickUpItem;
         g_dispatch["use_item"] = HandleUseItem;
@@ -1088,7 +1045,7 @@ namespace GWA3::LLM::ActionExecutor {
         RegisterInteractionActions(g_dispatch);
         RegisterQuestActions(g_dispatch);
         RegisterPartyActions(g_dispatch);
-        RegisterTravelActions();
+        RegisterTravelActions(g_dispatch);
         RegisterItemActions();
         RegisterTradeAndCraftingActions();
         RegisterSkillbarAndFroggyActions();
