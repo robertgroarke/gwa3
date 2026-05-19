@@ -40,6 +40,7 @@
 #include <thread>
 #include <chrono>
 #include <cstring>
+#include <cstdio>
 
 using json = nlohmann::json;
 
@@ -123,6 +124,18 @@ namespace GWA3::LLM::ActionExecutor {
         return r;
     }
 
+    static ActionResult MakeBadParamsError(const nlohmann::json::exception& e) {
+        char msg[128] = {};
+        const char* field = "json";
+        if (e.id >= 300 && e.id < 400) {
+            field = "type_error";
+        } else if (e.id >= 400 && e.id < 500) {
+            field = "out_of_range";
+        }
+        sprintf_s(msg, "bad_params:%s", field);
+        return MakeError(msg);
+    }
+
     // Send action_result back to bridge
     static void SendResult(const char* requestId, bool success, const char* error) {
         json j;
@@ -136,7 +149,9 @@ namespace GWA3::LLM::ActionExecutor {
                         requestId ? requestId : "",
                         success ? 1 : 0,
                         static_cast<uint32_t>(s.size()));
-        IpcServer::Send(s.c_str(), static_cast<uint32_t>(s.size()));
+        IpcServer::Send(s.c_str(),
+                        static_cast<uint32_t>(s.size()),
+                        IpcServer::OutboundPriority::ActionResult);
         GWA3::Log::Info("[LLM-Action] SendResult end: request_id=%s", requestId ? requestId : "");
     }
 
@@ -1026,7 +1041,7 @@ namespace GWA3::LLM::ActionExecutor {
         uint32_t len = 0;
         char* snap = GameSnapshot::SerializeTier3(&len);
         if (snap) {
-            IpcServer::Send(snap, len);
+            IpcServer::Send(snap, len, IpcServer::OutboundPriority::Snapshot);
             delete[] snap;
         }
         return MakeOk();
@@ -1504,7 +1519,7 @@ namespace GWA3::LLM::ActionExecutor {
             try {
                 params = json::parse(paramsJson);
             } catch (...) {
-                auto r = MakeError("invalid_params_json");
+                auto r = MakeError("bad_params:json_parse");
                 SendResult(requestId, false, r.error);
                 return r;
             }
@@ -1516,19 +1531,31 @@ namespace GWA3::LLM::ActionExecutor {
         }
 
         GWA3::Log::Info("[LLM-Action] Executing: %s", actionName);
-        ActionResult result = it->second(params);
+        ActionResult result;
+        try {
+            result = it->second(params);
+        } catch (const nlohmann::json::exception& e) {
+            result = MakeBadParamsError(e);
+            GWA3::Log::Warn("[LLM-Action] Handler bad params: %s id=%d what=%s",
+                            actionName,
+                            e.id,
+                            e.what());
+        } catch (const std::exception& e) {
+            result = MakeError("handler_exception");
+            GWA3::Log::Warn("[LLM-Action] Handler exception: %s what=%s",
+                            actionName,
+                            e.what());
+        } catch (...) {
+            result = MakeError("handler_exception");
+            GWA3::Log::Warn("[LLM-Action] Handler unknown exception: %s", actionName);
+        }
         if (pauseSnapshots) {
             GWA3::LLM::PauseSnapshotsFor(0);
         }
         GWA3::Log::Info("[LLM-Action] Handler returned: %s success=%d error=%s",
                         actionName, result.success ? 1 : 0, result.error[0] ? result.error : "(none)");
-        const bool fireAndForget = !requestId || !requestId[0];
-        if (fireAndForget) {
-            GWA3::Log::Info("[LLM-Action] Fire-and-forget: skipping action_result for %s", actionName);
-        } else {
-            SendResult(requestId, result.success, result.error);
-            GWA3::Log::Info("[LLM-Action] SendResult done: %s", actionName);
-        }
+        SendResult(requestId, result.success, result.error);
+        GWA3::Log::Info("[LLM-Action] SendResult done: %s", actionName);
         return result;
     }
 

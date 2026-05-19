@@ -108,7 +108,7 @@ namespace GWA3::LLM::EventPush {
         json event = j;
         event["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
         std::string s = event.dump();
-        IpcServer::Send(s.c_str(), static_cast<uint32_t>(s.size()));
+        IpcServer::Send(s.c_str(), static_cast<uint32_t>(s.size()), IpcServer::OutboundPriority::Event);
     }
 
     // --- Callbacks ---

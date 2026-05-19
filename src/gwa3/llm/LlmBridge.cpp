@@ -31,7 +31,7 @@ namespace GWA3::LLM {
         j["type"] = "heartbeat";
         j["protocol_version"] = GWA3::LLM::IPC_PROTOCOL_VERSION;
         std::string s = j.dump();
-        IpcServer::Send(s.c_str(), static_cast<uint32_t>(s.size()));
+        IpcServer::Send(s.c_str(), static_cast<uint32_t>(s.size()), IpcServer::OutboundPriority::Heartbeat);
     }
 
     static bool HasExpectedProtocolVersion(const json& j) {
@@ -122,7 +122,7 @@ namespace GWA3::LLM {
                         if (!firstTier1Trace) {
                             GWA3::Log::Info("[LLM-Bridge] Tier1 send begin");
                         }
-                        IpcServer::Send(snap, len);
+                        IpcServer::Send(snap, len, IpcServer::OutboundPriority::Snapshot);
                         if (!firstTier1Trace) {
                             GWA3::Log::Info("[LLM-Bridge] Tier1 send end");
                         }
@@ -147,7 +147,7 @@ namespace GWA3::LLM {
                             GWA3::Log::Info("[LLM-Bridge] Tier2 serialized len=%u ptr=0x%08X", len, static_cast<unsigned>(reinterpret_cast<uintptr_t>(snap)));
                             GWA3::Log::Info("[LLM-Bridge] Tier2 send begin");
                         }
-                        bool sent = IpcServer::Send(snap, len);
+                        bool sent = IpcServer::Send(snap, len, IpcServer::OutboundPriority::Snapshot);
                         if (tier2TraceCount < 5) {
                             GWA3::Log::Info("[LLM-Bridge] Tier2 send end sent=%u", sent ? 1u : 0u);
                         }
@@ -172,7 +172,7 @@ namespace GWA3::LLM {
                             GWA3::Log::Info("[LLM-Bridge] Tier3 serialized len=%u ptr=0x%08X", len, static_cast<unsigned>(reinterpret_cast<uintptr_t>(snap)));
                             GWA3::Log::Info("[LLM-Bridge] Tier3 send begin");
                         }
-                        bool sent = IpcServer::Send(snap, len);
+                        bool sent = IpcServer::Send(snap, len, IpcServer::OutboundPriority::Snapshot);
                         if (tier3TraceCount < 3) {
                             GWA3::Log::Info("[LLM-Bridge] Tier3 send end sent=%u", sent ? 1u : 0u);
                         }

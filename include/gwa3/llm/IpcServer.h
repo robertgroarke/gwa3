@@ -5,6 +5,13 @@
 
 namespace GWA3::LLM::IpcServer {
 
+    enum class OutboundPriority : uint8_t {
+        Snapshot = 0,
+        Event = 1,
+        Heartbeat = 2,
+        ActionResult = 3,
+    };
+
     // Initialize the named pipe server on a dedicated thread.
     // Pipe name: \\.\pipe\gwa3_llm
     // Returns true if the IPC thread started successfully.
@@ -17,8 +24,9 @@ namespace GWA3::LLM::IpcServer {
 
     // Send a JSON message to the connected bridge client.
     // Thread-safe. Messages are length-prefixed (4-byte uint32 + payload).
-    // Returns false if no client is connected or write fails.
+    // Returns false if no client is connected or the outbound queue is full.
     bool Send(const char* json, uint32_t length);
+    bool Send(const char* json, uint32_t length, OutboundPriority priority);
 
     // --- Inbound (bridge -> gwa3) ---
 
