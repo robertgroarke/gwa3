@@ -5,7 +5,7 @@
 Run public-safe bridge contract tests from the repository root:
 
 ```powershell
-python -m unittest bridge.tests.test_o_protocol_contract bridge.tests.test_p_ipc_backpressure bridge.tests.test_q_handshake bridge.tests.test_r_action_coverage bridge.tests.test_s_route_contract bridge.tests.test_t_maintenance_contract bridge.tests.test_u_snapshot_diet bridge.tests.test_v_conditional_tools bridge.tests.test_w_trade_guard
+python -m unittest bridge.tests.test_o_protocol_contract bridge.tests.test_p_ipc_backpressure bridge.tests.test_q_handshake bridge.tests.test_r_action_coverage bridge.tests.test_s_route_contract bridge.tests.test_t_maintenance_contract bridge.tests.test_u_snapshot_diet bridge.tests.test_v_conditional_tools bridge.tests.test_w_trade_guard bridge.tests.test_x_run_summary_memory
 ```
 
 These tests do not require a live Guild Wars client unless explicitly enabled by environment variable.
@@ -42,3 +42,7 @@ The live probe sends `{}` to schema tools whose missing-parameter path is expect
 ## Trade Guard
 
 `bridge.tests.test_w_trade_guard` validates the Phase 7 player-trade safety guard. It blocks accept-trade when the partner offer changes after submit, when value is outside tolerance, when player-offered items match hard refusal terms, and when whisper text contains common scam strings.
+
+## Run Summary Memory
+
+`bridge.tests.test_x_run_summary_memory` covers persistent last-20 run summaries, prompt injection of prior summaries, and terminal-event hooks for completed dungeon runs, maintenance completion, chest interaction, and defeat recovery.

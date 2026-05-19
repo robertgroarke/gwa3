@@ -5,6 +5,7 @@ out/
 ui/**/bin/
 ui/**/obj/
 ui/runs/
+bridge/runtime/
 *.user
 CMakeCache.txt
 CMakeFiles/

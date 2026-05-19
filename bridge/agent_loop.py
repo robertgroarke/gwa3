@@ -19,6 +19,7 @@ from .ipc_client import IpcClient
 from .kamadan_client import KamadanClient
 from .llm_client import LLMClient, LLMResponse
 from .protocol import IPC_PROTOCOL_VERSION, TOOL_SCHEMA_VERSION
+from .run_summary_memory import RunSummaryMemory
 from .token_budget import TokenBudgetExceeded, TokenBudgetGuard
 from .trade_guard import TradeGuard
 from .tool_schema import (
@@ -282,6 +283,7 @@ class AgentLoop:
         objective: str | None = None,
         kamadan_client: KamadanClient | None = None,
         token_budget: TokenBudgetGuard | None = None,
+        run_summary_path: str | os.PathLike[str] | None = None,
     ):
         self.ipc = ipc
         self.llm = llm
@@ -290,6 +292,7 @@ class AgentLoop:
         self.observations = ObservationWindow()
         self.kamadan = kamadan_client or KamadanClient()
         self.trade_guard = TradeGuard()
+        self.run_summaries = RunSummaryMemory(path=run_summary_path)
         self.token_budget = token_budget
         self.history: list[dict] = []
         self.max_history = 40
@@ -359,6 +362,13 @@ class AgentLoop:
             "role": "user",
             "content": f"[OBJECTIVE] {self.objective}",
         })
+
+        run_summary_context = self.run_summaries.format_for_prompt()
+        if run_summary_context:
+            messages.append({
+                "role": "system",
+                "content": run_summary_context,
+            })
 
         # Add conversation history (user overrides, past actions)
         messages.extend(self.history)
@@ -738,6 +748,163 @@ class AgentLoop:
                 })
         return enriched
 
+    def _build_run_summary_event(
+        self,
+        tool_name: str,
+        params: dict | None,
+        result: dict,
+    ) -> dict | None:
+        if not result.get("success"):
+            return None
+
+        snap = self.observations.latest or {}
+        map_state = snap.get("map", {}) or {}
+        party_state = snap.get("party", {}) or {}
+        inventory_state = snap.get("inventory", {}) or {}
+        params = params or {}
+
+        map_id = int(result.get("current_map_id") or map_state.get("map_id") or 0)
+        event: dict[str, object] = {
+            "tool": tool_name,
+            "map_id": map_id,
+            "map_name": result.get("current_map_name")
+            or farming_knowledge.MAP_NAMES.get(map_id, "unknown"),
+        }
+        if "free_slots_total" in result or "free_slots_total" in inventory_state:
+            event["free_slots_total"] = result.get(
+                "free_slots_total", inventory_state.get("free_slots_total")
+            )
+        if "gold_character" in result or "gold_character" in inventory_state:
+            event["gold_character"] = result.get(
+                "gold_character", inventory_state.get("gold_character")
+            )
+
+        if result.get("completed_dungeon_run") or result.get("quest_reward_claimed"):
+            event["event_type"] = "dungeon_run_completed"
+            event["reward_claimed"] = bool(result.get("quest_reward_claimed"))
+            event["return_to_outpost_expected"] = bool(
+                result.get("return_to_outpost_was_expected")
+            )
+            event["next_action"] = result.get("recommended_next_action")
+            event["reason"] = result.get("reason")
+            return event
+
+        if result.get("completed_full_maintenance") or tool_name in {
+            "froggy_run_full_maintenance",
+            "froggy_run_maintenance_cycle",
+        }:
+            event["event_type"] = "maintenance_completed"
+            event["next_action"] = result.get("recommended_next_action", "query_state")
+            event["reason"] = result.get("reason", "maintenance_complete")
+            maintenance = result.get("froggy_maintenance") or inventory_state.get(
+                "froggy_maintenance"
+            )
+            if isinstance(maintenance, dict):
+                event["stored_consets_total"] = maintenance.get("stored_consets_total")
+                event["loose_consets_inventory_total"] = maintenance.get(
+                    "loose_consets_inventory_total"
+                )
+            return event
+
+        if tool_name == "interact_signpost":
+            agent_id = params.get("agent_id")
+            for agent in snap.get("agents", []) or []:
+                if agent.get("id") == agent_id and agent.get("is_chest"):
+                    event["event_type"] = "chest_interaction_completed"
+                    event["agent_id"] = agent_id
+                    return event
+
+        party_defeated = bool(result.get("party_defeated") or party_state.get("is_defeated"))
+        if tool_name == "return_to_outpost" and party_defeated:
+            event["event_type"] = "party_defeated_returned_to_outpost"
+            event["dead_count"] = result.get("dead_count", party_state.get("dead_count"))
+            return event
+
+        return None
+
+    async def _record_run_summary_if_needed(
+        self,
+        tool_name: str,
+        params: dict | None,
+        result: dict,
+    ) -> None:
+        event = self._build_run_summary_event(tool_name, params, result)
+        if event is None:
+            return
+
+        summary = await self._summarize_run_event(event)
+        entry = self.run_summaries.add(summary, event)
+        if entry is None:
+            return
+        self.history.append({
+            "role": "user",
+            "content": (
+                "[RUN SUMMARY RECORDED]\n"
+                + json.dumps({
+                    "event_type": event.get("event_type"),
+                    "summary": entry["summary"],
+                })
+            ),
+        })
+
+    async def _summarize_run_event(self, event: dict) -> str:
+        fallback = self._fallback_run_summary(event)
+        if not self.llm or not hasattr(self.llm, "chat_completion"):
+            return fallback
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Summarize this Guild Wars automation run event in one short "
+                    "sentence under 60 words. Do not include account names, "
+                    "character names, lane names, machine paths, or personal data."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(event, sort_keys=True),
+            },
+        ]
+        try:
+            response = await self.llm.chat_completion(
+                messages,
+                tools=None,
+                tool_choice="none",
+                temperature=0.1,
+                max_tokens=120,
+            )
+        except Exception:
+            return fallback
+
+        text = (response.content or "").strip()
+        return text or fallback
+
+    @staticmethod
+    def _fallback_run_summary(event: dict) -> str:
+        event_type = event.get("event_type")
+        map_name = event.get("map_name", "unknown map")
+        if event_type == "dungeon_run_completed":
+            next_action = event.get("next_action", "refresh state")
+            return (
+                f"Dungeon run completed on {map_name}; reward was claimed and "
+                f"the next safe step is {next_action}."
+            )
+        if event_type == "maintenance_completed":
+            next_action = event.get("next_action", "refresh state")
+            return (
+                f"Town maintenance completed on {map_name}; refresh inventory "
+                f"and continue with {next_action} if pressure is clear."
+            )
+        if event_type == "chest_interaction_completed":
+            return f"Reward chest interaction completed on {map_name}; verify loot and proceed."
+        if event_type == "party_defeated_returned_to_outpost":
+            return (
+                f"Party defeat was recovered by returning to outpost from {map_name}; "
+                "restart only after setup is safe."
+            )
+        return f"Run event completed on {map_name}; refresh state before continuing."
+
     def _record_failed_froggy_action(self, tool_name: str):
         now = time.monotonic()
         failures = [
@@ -856,6 +1023,7 @@ class AgentLoop:
                     + json.dumps(enriched)
                 ),
             })
+            await self._record_run_summary_if_needed(action, {}, enriched)
         if should_log:
             print(f"[Harness -> GW] {action} ({recommendation.get('reason')})")
         return bool(result.get("success", False))
@@ -1130,11 +1298,13 @@ class AgentLoop:
             if tc.name == "wait":
                 ms = params.get("milliseconds", 500)
                 await asyncio.sleep(ms / 1000.0)
+                enriched = self._enrich_tool_result(tc.name, {"success": True})
                 self.history.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": json.dumps(self._enrich_tool_result(tc.name, {"success": True})),
+                    "content": json.dumps(enriched),
                 })
+                await self._record_run_summary_if_needed(tc.name, params, enriched)
                 continue
 
             # Handle price lookup locally (HTTP, not game pipe)
@@ -1238,11 +1408,13 @@ class AgentLoop:
             if tc.name == "submit_trade_offer" and result.get("success"):
                 self.trade_guard.record_submit_offer(self.observations.latest)
 
+            enriched = self._enrich_tool_result(tc.name, result)
             self.history.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "content": json.dumps(self._enrich_tool_result(tc.name, result)),
+                "content": json.dumps(enriched),
             })
+            await self._record_run_summary_if_needed(tc.name, params, enriched)
 
     def _trim_history(self):
         """Keep history within bounds, preserving user override messages."""
