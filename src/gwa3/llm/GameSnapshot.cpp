@@ -29,15 +29,20 @@
 
 #include <Windows.h>
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <utility>
+#include <vector>
 
 using json = nlohmann::json;
 
 namespace GWA3::LLM::GameSnapshot {
 
     static uint32_t g_tick = 0;
+    static uint32_t g_lastNearbyFoeCount = 0;
+    static uint32_t g_lastNearbyFoesEmitted = 0;
+    static uint32_t g_lastNearbyInterruptCasterCount = 0;
     static uint32_t g_lastChatTimestamp = 0;  // track which chat messages we've already sent
     static constexpr uint32_t kMaxProfessionId = 10u;
 
@@ -929,11 +934,33 @@ namespace GWA3::LLM::GameSnapshot {
         return p;
     }
 
-    // Build nearby agents array (within range)
+    static bool IsInterruptPriorityCaster(const LivingAgentSeed& living) {
+        if (living.casting_skill_id == 0u) return false;
+
+        const Skill* skill = SkillMgr::GetSkillConstantData(living.casting_skill_id);
+        if (!skill) return true;
+
+        return skill->activation >= 0.75f
+            || skill->type == 3u
+            || skill->type == 10u
+            || skill->type == 16u;
+    }
+
+    // Build nearby agents array (within range).
+    // Foes are capped to the nearest five plus any interrupt-priority caster;
+    // allies, items, and gadgets remain fully visible.
     static json BuildNearbyAgentsJson(float maxRange = 2500.0f) {
         json agents = json::array();
         auto* me = AgentMgr::GetMyAgent();
-        if (!me) return agents;
+        if (!me) {
+            g_lastNearbyFoeCount = 0;
+            g_lastNearbyFoesEmitted = 0;
+            g_lastNearbyInterruptCasterCount = 0;
+            return agents;
+        }
+
+        std::vector<json> foes;
+        uint32_t interruptCasterCount = 0;
 
         ForEachAgent([&](Agent* agent) {
             NearbyAgentSeed nearby{};
@@ -955,6 +982,19 @@ namespace GWA3::LLM::GameSnapshot {
                 a["allegiance"] = living.allegiance;
                 a["is_alive"] = (living.hp > 0.0f);
                 a["player_number"] = living.player_number;
+                a["is_casting"] = (living.casting_skill_id != 0u);
+                a["casting_skill_id"] = living.casting_skill_id;
+                if (living.casting_skill_id != 0u) {
+                    if (const Skill* skill = SkillMgr::GetSkillConstantData(living.casting_skill_id)) {
+                        a["casting_skill_type"] = skill->type;
+                        a["casting_skill_activation"] = skill->activation;
+                    }
+                }
+                const bool interruptPriority = IsInterruptPriorityCaster(living);
+                if (interruptPriority) {
+                    a["interrupt_priority"] = true;
+                    interruptCasterCount++;
+                }
                 // Decoded nametag: players come from WorldContext.players,
                 // NPCs from WorldContext.agent_infos (with NPCArray fallback).
                 // EmitBestText prefers cached decoded text from the passive
@@ -966,6 +1006,10 @@ namespace GWA3::LLM::GameSnapshot {
                 if (wchar_t* encName = AgentMgr::GetAgentEncName(agent)) {
                     wchar_t* plainName = AgentMgr::GetAgentPlainName(agent);
                     EmitBestText(a, encName, "name", plainName);
+                }
+                if (living.allegiance == 3u && living.hp > 0.0f) {
+                    foes.push_back(std::move(a));
+                    return;
                 }
             } else if (ReadGadgetAgentSeed(agent, gadget)) {
                 a["agent_type"] = "gadget";
@@ -1007,7 +1051,33 @@ namespace GWA3::LLM::GameSnapshot {
             agents.push_back(a);
         });
 
+        std::sort(foes.begin(), foes.end(), [](const json& lhs, const json& rhs) {
+            return lhs.value("distance", 99999.0f) < rhs.value("distance", 99999.0f);
+        });
+
+        uint32_t emittedFoes = 0;
+        for (size_t i = 0; i < foes.size(); ++i) {
+            if (i < 5u || foes[i].value("interrupt_priority", false)) {
+                agents.push_back(foes[i]);
+                emittedFoes++;
+            }
+        }
+
+        g_lastNearbyFoeCount = static_cast<uint32_t>(foes.size());
+        g_lastNearbyFoesEmitted = emittedFoes;
+        g_lastNearbyInterruptCasterCount = interruptCasterCount;
         return agents;
+    }
+
+    static json BuildNearbyAgentsMetaJson() {
+        return {
+            {"foe_count", g_lastNearbyFoeCount},
+            {"foes_emitted", g_lastNearbyFoesEmitted},
+            {"foes_omitted", g_lastNearbyFoeCount > g_lastNearbyFoesEmitted
+                ? g_lastNearbyFoeCount - g_lastNearbyFoesEmitted
+                : 0u},
+            {"interrupt_caster_count", g_lastNearbyInterruptCasterCount},
+        };
     }
 
     // Serialize a single bag to JSON
@@ -2036,12 +2106,10 @@ namespace GWA3::LLM::GameSnapshot {
         j["type"] = "snapshot";
         GWA3::LLM::StampProtocol(j);
         j["tier"] = 2;
+        j["delta_from_tier"] = 1;
         j["tick"] = g_tick;
-        j["me"] = TryBuildPlayerJson();
-        j["skillbar"] = TryBuildSkillbarJson();
-        j["map"] = TryBuildMapJson();
-        j["party"] = TryBuildPartyBasicsJson();
         j["agents"] = TryBuildNearbyAgentsJson();
+        j["agents_meta"] = BuildNearbyAgentsMetaJson();
         j["heroes"] = TryBuildHeroSkillbarsJson();
         j["trade"] = TryBuildTradeJson();
         j["dialog"] = TryBuildDialogJson();
@@ -2057,12 +2125,10 @@ namespace GWA3::LLM::GameSnapshot {
         j["type"] = "snapshot";
         GWA3::LLM::StampProtocol(j);
         j["tier"] = 3;
+        j["delta_from_tier"] = 2;
         j["tick"] = g_tick;
-        j["me"] = TryBuildPlayerJson();
-        j["skillbar"] = TryBuildSkillbarJson();
-        j["map"] = TryBuildMapJson();
-        j["party"] = TryBuildPartyBasicsJson();
         j["agents"] = TryBuildNearbyAgentsJson();
+        j["agents_meta"] = BuildNearbyAgentsMetaJson();
         j["heroes"] = TryBuildHeroSkillbarsJson();
         j["trade"] = TryBuildTradeJson();
         j["dialog"] = TryBuildDialogJson();

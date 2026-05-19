@@ -12,6 +12,90 @@ from .gamedata import (
 from .farming_knowledge import MAP_NAMES
 
 
+def _skill_signature(skill: dict) -> tuple:
+    return (
+        _skill_slot(skill),
+        int(skill.get("skill_id", 0) or 0),
+        int(skill.get("recharge", 0) or 0),
+        int(skill.get("adrenaline", 0) or 0),
+        int(skill.get("event", 0) or 0),
+    )
+
+
+def _skill_slot(skill: dict) -> int:
+    value = skill.get("slot", -1)
+    if value is None:
+        return -1
+    return int(value)
+
+
+def _merge_skillbar(previous: list[dict], updates: list[dict]) -> list[dict]:
+    by_slot = {
+        _skill_slot(skill): deepcopy(skill)
+        for skill in previous
+        if _skill_slot(skill) >= 0
+    }
+    for skill in updates:
+        slot = _skill_slot(skill)
+        if slot >= 0:
+            by_slot[slot] = deepcopy(skill)
+    return [by_slot[slot] for slot in sorted(by_slot)]
+
+
+def _changed_skill_slots(previous: list[dict], current: list[dict]) -> list[dict]:
+    previous_by_slot = {
+        _skill_slot(skill): _skill_signature(skill)
+        for skill in previous
+        if _skill_slot(skill) >= 0
+    }
+    changed = []
+    for skill in current:
+        slot = _skill_slot(skill)
+        if slot < 0:
+            continue
+        if previous_by_slot.get(slot) != _skill_signature(skill):
+            changed.append(deepcopy(skill))
+    return changed
+
+
+def _ground_item_signature(agents: list[dict]) -> tuple:
+    items = []
+    for agent in agents:
+        if agent.get("agent_type") != "item":
+            continue
+        items.append((
+            int(agent.get("id", 0) or 0),
+            int(agent.get("item_id", 0) or 0),
+            int(agent.get("model_id", 0) or 0),
+            int(agent.get("quantity", 0) or 0),
+            int(agent.get("owner", 0) or 0),
+        ))
+    return tuple(sorted(items))
+
+
+def _is_interrupt_priority_caster(agent: dict) -> bool:
+    if not agent.get("is_casting") or not int(agent.get("casting_skill_id", 0) or 0):
+        return False
+    activation = agent.get("casting_skill_activation")
+    if activation is None:
+        return True
+    try:
+        return float(activation) >= 0.75
+    except (TypeError, ValueError):
+        return True
+
+
+def _compact_effect_name(effect: dict) -> str:
+    skill_id = int(effect.get("skill_id", 0) or 0)
+    name = skill_name(skill_id) if skill_id else "effect"
+    if len(name) > 24:
+        name = name[:21] + "..."
+    remaining = effect.get("time_remaining")
+    if isinstance(remaining, (int, float)) and remaining > 0:
+        return f"{name}#{skill_id}:{remaining:.0f}s"
+    return f"{name}#{skill_id}"
+
+
 class ObservationWindow:
     """Maintains a sliding window of the most recent game state snapshots."""
 
@@ -30,9 +114,29 @@ class ObservationWindow:
         tier-3 updates. Keep a merged view so decision code can see the latest
         core state plus the last known richer sections.
         """
-        self._snapshots.append(snapshot)
+        incoming = deepcopy(snapshot)
+        previous = self._latest_merged or {}
+
+        if "skillbar" in incoming:
+            updates = incoming.get("skillbar") or []
+            if incoming.get("skillbar_delta"):
+                incoming["skillbar_changed_slots"] = deepcopy(updates)
+                incoming["skillbar"] = _merge_skillbar(previous.get("skillbar", []), updates)
+            else:
+                incoming["skillbar_changed_slots"] = _changed_skill_slots(
+                    previous.get("skillbar", []),
+                    updates,
+                )
+
+        if "agents" in incoming:
+            incoming["items_on_ground_changed"] = (
+                _ground_item_signature(previous.get("agents", []))
+                != _ground_item_signature(incoming.get("agents", []))
+            )
+
+        self._snapshots.append(incoming)
         merged = deepcopy(self._latest_merged) if self._latest_merged else {}
-        for key, value in snapshot.items():
+        for key, value in incoming.items():
             merged[key] = value
         self._latest_merged = merged
 
@@ -154,8 +258,11 @@ class ObservationWindow:
         # Skillbar — show human-readable skill names
         skills = snap.get("skillbar", [])
         if skills:
+            changed_skills = snap.get("skillbar_changed_slots")
+            if changed_skills is None:
+                changed_skills = skills
             sk_parts = []
-            for sk in skills:
+            for sk in changed_skills:
                 sid = sk.get("skill_id", 0)
                 rech = sk.get("recharge", 0)
                 name = skill_name(sid) if sid else "Empty"
@@ -163,7 +270,12 @@ class ObservationWindow:
                 stype = skill_type_name(sk.get("type", -1)) if "type" in sk else ""
                 status = f"R{rech}" if rech > 0 else "ready"
                 sk_parts.append(f"[{sk['slot']}:{name}({sid}) {stype} {cost}e {status}]")
-            lines.append("Skills: " + " ".join(sk_parts))
+            if sk_parts and len(changed_skills) < len(skills):
+                lines.append("Skill changes: " + " ".join(sk_parts))
+            elif sk_parts:
+                lines.append("Skills: " + " ".join(sk_parts))
+            else:
+                lines.append("Skills: unchanged")
 
         # Party with per-member status
         party = snap.get("party", {})
@@ -210,10 +322,20 @@ class ObservationWindow:
                 f"(total {len(agents)} agents)"
             )
 
-            # List each foe with details
+            # List nearest foes plus interrupt-priority casters with details.
             if foes:
-                lines.append("  Foes:")
-                for foe in sorted(foes, key=lambda a: a.get("distance", 99999)):
+                sorted_foes = sorted(foes, key=lambda a: a.get("distance", 99999))
+                nearest = sorted_foes[:5]
+                nearest_ids = {foe.get("id") for foe in nearest}
+                priority_casters = [
+                    foe for foe in sorted_foes[5:]
+                    if foe.get("id") not in nearest_ids and _is_interrupt_priority_caster(foe)
+                ]
+                shown_foes = nearest + priority_casters
+                omitted = max(0, len(foes) - len(shown_foes))
+                suffix = f"; {omitted} farther non-casting foes omitted" if omitted else ""
+                lines.append(f"  Foes shown: {len(shown_foes)}/{len(foes)}{suffix}")
+                for foe in shown_foes:
                     prof = profession_name(foe.get("primary", 0))
                     sec = profession_name(foe.get("secondary", 0))
                     casting = ""
@@ -236,21 +358,24 @@ class ObservationWindow:
                         f"{cond_str}{casting}"
                     )
 
-            # List ground items with details
+            # List ground items only when the item set changed.
             if items:
-                lines.append("  Items on ground:")
-                for it in sorted(items, key=lambda a: a.get("distance", 99999)):
-                    model_id = it.get("model_id", 0)
-                    iname = item_name(model_id) if model_id else f"item_id={it.get('item_id', '?')}"
-                    itype = item_type_name(it.get("item_type", -1)) if "item_type" in it else ""
-                    qty = it.get("quantity", 1)
-                    owner = it.get("owner", 0)
-                    qty_str = f" x{qty}" if qty > 1 else ""
-                    owner_str = f" (yours)" if owner == snap.get("me", {}).get("agent_id", -1) else ""
-                    lines.append(
-                        f"    agent_id={it['id']} dist={it.get('distance', 0):.0f} "
-                        f"{iname}{qty_str} [{itype}] model={model_id}{owner_str}"
-                    )
+                if snap.get("items_on_ground_changed", True):
+                    lines.append("  Items on ground:")
+                    for it in sorted(items, key=lambda a: a.get("distance", 99999)):
+                        model_id = it.get("model_id", 0)
+                        iname = item_name(model_id) if model_id else f"item_id={it.get('item_id', '?')}"
+                        itype = item_type_name(it.get("item_type", -1)) if "item_type" in it else ""
+                        qty = it.get("quantity", 1)
+                        owner = it.get("owner", 0)
+                        qty_str = f" x{qty}" if qty > 1 else ""
+                        owner_str = f" (yours)" if owner == snap.get("me", {}).get("agent_id", -1) else ""
+                        lines.append(
+                            f"    agent_id={it['id']} dist={it.get('distance', 0):.0f} "
+                            f"{iname}{qty_str} [{itype}] model={model_id}{owner_str}"
+                        )
+                else:
+                    lines.append(f"  Items on ground unchanged: {len(items)} tracked")
 
             # List chests / interactive gadgets
             gadgets = [a for a in agents if a.get("agent_type") == "gadget"]
@@ -392,6 +517,14 @@ class ObservationWindow:
         if storage:
             total_stored = sum(b.get("item_count", 0) for b in storage)
             lines.append(f"Xunlai Storage: {total_stored} items across {len(storage)} panes")
+
+        # Timed effects (from tier 3)
+        effects = snap.get("effects", [])
+        if effects:
+            compact = [_compact_effect_name(effect) for effect in effects[:8]]
+            omitted = len(effects) - len(compact)
+            suffix = f" (+{omitted} more)" if omitted > 0 else ""
+            lines.append("Effects: " + ", ".join(compact) + suffix)
 
         # Title progression (from tier 3)
         titles = snap.get("titles", {})
