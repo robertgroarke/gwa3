@@ -894,21 +894,6 @@ namespace GWA3::LLM::ActionExecutor {
         return MakeOk();
     }
 
-    static ActionResult HandleLoadSkillbar(const json& p) {
-        if (!p.contains("skill_ids")) return MakeError("missing skill_ids");
-        auto ids = p["skill_ids"];
-        if (!ids.is_array() || ids.size() != 8) return MakeError("skill_ids must be array of 8");
-        uint32_t skillIds[8] = {};
-        for (int i = 0; i < 8; i++) {
-            skillIds[i] = ids[i].get<uint32_t>();
-        }
-        uint32_t heroIndex = p.value("hero_index", 0u);
-        GWA3::GameThread::Enqueue([skillIds, heroIndex]() {
-            SkillMgr::LoadSkillbar(skillIds, heroIndex);
-        });
-        return MakeOk();
-    }
-
     static void RegisterTradeAndCraftingActions() {
         g_dispatch["initiate_trade"] = HandleInitiateTrade;
         g_dispatch["offer_trade_item"] = HandleOfferTradeItem;
@@ -935,7 +920,6 @@ namespace GWA3::LLM::ActionExecutor {
     }
 
     static void RegisterSkillbarAndFroggyActions() {
-        g_dispatch["load_skillbar"] = HandleLoadSkillbar;
         g_dispatch["froggy_refresh_combat_skillbar"] = HandleFroggyRefreshCombatSkillbar;
         g_dispatch["froggy_run_town_setup"] = HandleFroggyRunTownSetup;
         g_dispatch["froggy_travel_to_gadds"] = HandleFroggyTravelToGadds;
@@ -960,6 +944,7 @@ namespace GWA3::LLM::ActionExecutor {
         RegisterTravelActions(g_dispatch);
         RegisterItemActions(g_dispatch);
         RegisterTradeAndCraftingActions();
+        RegisterSkillbarActions(g_dispatch);
         RegisterSkillbarAndFroggyActions();
         RegisterBotControlActions(g_dispatch);
         RegisterUtilityActions(g_dispatch);

@@ -141,6 +141,7 @@ add_library(gwa3_core OBJECT
     src/gwa3/llm/ActionExecutorMovement.cpp
     src/gwa3/llm/ActionExecutorParty.cpp
     src/gwa3/llm/ActionExecutorQuest.cpp
+    src/gwa3/llm/ActionExecutorSkillbar.cpp
     src/gwa3/llm/ActionExecutorTravel.cpp
     src/gwa3/llm/ActionExecutorUtility.cpp
     src/gwa3/llm/EventPush.cpp
