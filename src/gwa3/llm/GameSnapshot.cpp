@@ -1,5 +1,6 @@
 #include <gwa3/llm/GameSnapshot.h>
 #include <gwa3/llm/Protocol.h>
+#include <gwa3/llm/RouteWalker.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/SkillMgr.h>
 #include <gwa3/managers/MapMgr.h>
@@ -1786,6 +1787,7 @@ namespace GWA3::LLM::GameSnapshot {
     static void WriteQuestJson(json* out)        { *out = BuildQuestJson(); }
     static void WriteChatLogJson(json* out)      { *out = BuildChatLogJson(); }
     static void WriteInventoryJson(json* out)    { *out = BuildInventoryJson(); }
+    static void WriteRouteJson(json* out)        { RouteWalker::WriteRouteJson(*out); }
 
     // -- SEH gateways --------------------------------------------------------
     // Call WriteFoo(out) inside __try.  These functions have NO C++ locals
@@ -1880,6 +1882,13 @@ namespace GWA3::LLM::GameSnapshot {
         __try { WriteInventoryJson(out); return true; }
         __except(EXCEPTION_EXECUTE_HANDLER) {
             Log::Warn("[Snapshot] SEH in BuildInventoryJson");
+            return false;
+        }
+    }
+    __declspec(noinline) static bool TryWriteRouteJson(json* out) {
+        __try { WriteRouteJson(out); return true; }
+        __except(EXCEPTION_EXECUTE_HANDLER) {
+            Log::Warn("[Snapshot] SEH in WriteRouteJson");
             return false;
         }
     }
@@ -1993,6 +2002,16 @@ namespace GWA3::LLM::GameSnapshot {
         }
         return result;
     }
+    static json TryBuildRouteJson() {
+        json result;
+        if (!TryWriteRouteJson(&result)) {
+            result = json::object();
+            result["script_id"] = "bogroot_hm_v1";
+            result["phase"] = "seh_error";
+            result["deviation"] = nullptr;
+        }
+        return result;
+    }
     // -- Tier serializers using TryBuild* for per-builder isolation -----------
 
     char* SerializeTier1(uint32_t* outLength) {
@@ -2007,6 +2026,7 @@ namespace GWA3::LLM::GameSnapshot {
         j["map"] = TryBuildMapJson();
         j["party"] = TryBuildPartyBasicsJson();
         j["bot"] = TryBuildBotStateJson();
+        j["route"] = TryBuildRouteJson();
         return JsonToHeap(j, outLength);
     }
 

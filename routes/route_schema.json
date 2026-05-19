@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gwa3.local/schemas/route-script.schema.json",
+  "title": "GWA3 RouteScript",
+  "type": "object",
+  "required": ["schema_version", "script_id", "bot", "mode", "maps", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "script_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_\\-]+$"
+    },
+    "bot": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["hard_mode", "normal_mode"]
+    },
+    "maps": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["map_id", "name"],
+        "additionalProperties": false,
+        "properties": {
+          "map_id": {"type": "integer", "minimum": 1},
+          "name": {"type": "string"}
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "map_id", "kind", "label", "x", "y", "tolerance"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "map_id": {"type": "integer", "minimum": 1},
+          "kind": {
+            "type": "string",
+            "enum": [
+              "town_setup",
+              "travel",
+              "route",
+              "quest_accept",
+              "dungeon_entry",
+              "spawn",
+              "blessing",
+              "checkpoint",
+              "portal",
+              "key",
+              "door",
+              "boss_engagement",
+              "end_chest",
+              "reward_turnin",
+              "merchant_cycle"
+            ]
+          },
+          "label": {"type": "string"},
+          "x": {"type": "number"},
+          "y": {"type": "number"},
+          "tolerance": {"type": "number", "minimum": 0},
+          "phase": {"type": "string"},
+          "order": {"type": "integer", "minimum": 0},
+          "to_map_id": {"type": "integer", "minimum": 1},
+          "dialog_id": {"type": "integer", "minimum": 0},
+          "source": {"type": "string"}
+        }
+      }
+    }
+  }
+}

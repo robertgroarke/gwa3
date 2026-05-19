@@ -180,6 +180,9 @@ combat tools:
   route tools because explorable entry requires the validated waypoint/zone path.
 - If a Froggy tool result includes recommended_next_action, follow it unless the
   current game state clearly contradicts it.
+- When snapshot.route.deviation is null and a high-level Froggy route tool is
+  already controlling progress, prefer wait/query_state/no-op over raw movement
+  or duplicate route calls.
 - In Froggy mode, do not handle open dialogs with generic dialog actions. Town,
   merchant, Tekks, reward, blessing, and dungeon-entry dialogs are owned by the
   high-level Froggy tools. If a dialog is open in Gadd's Encampment, still follow

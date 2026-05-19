@@ -3988,9 +3988,37 @@ static bool CraftCharacterConsetRestock(const Config& cfg) {
     const uint32_t essence = CountItemByModel(ItemModelIds::ESSENCE_OF_CELERITY);
     const uint32_t armor = CountItemByModel(ItemModelIds::ARMOR_OF_SALVATION);
 
-    Log::Info("MaintenanceMgr: Character conset restock will be corrected by crafting, not Xunlai withdrawal "
-              "(grail=%u essence=%u armor=%u target=%u)",
-              grail, essence, armor, target);
+    Log::Info("MaintenanceMgr: Character conset restock needed "
+              "(grail=%u essence=%u armor=%u target=%u stored=%u/%u/%u)",
+              grail,
+              essence,
+              armor,
+              target,
+              CountItemByModelInStorage(ItemModelIds::GRAIL_OF_MIGHT),
+              CountItemByModelInStorage(ItemModelIds::ESSENCE_OF_CELERITY),
+              CountItemByModelInStorage(ItemModelIds::ARMOR_OF_SALVATION));
+
+    const bool hasConfiguredXunlai = cfg.xunlaiChestX != 0.0f || cfg.xunlaiChestY != 0.0f;
+    const bool hasStoredConsets =
+        CountItemByModelInStorage(ItemModelIds::GRAIL_OF_MIGHT) > 0u ||
+        CountItemByModelInStorage(ItemModelIds::ESSENCE_OF_CELERITY) > 0u ||
+        CountItemByModelInStorage(ItemModelIds::ARMOR_OF_SALVATION) > 0u;
+    if (hasConfiguredXunlai && hasStoredConsets) {
+        Log::Info("MaintenanceMgr: Attempting character conset restock from Xunlai before crafting");
+        OpenXunlaiChest(cfg.xunlaiChestX, cfg.xunlaiChestY);
+        const uint32_t withdrawn = WithdrawMissingConsetsFromStorage(target);
+        if (withdrawn > 0u) {
+            WaitMs(1000 + withdrawn * 200u);
+            if (!NeedsCharacterConsetRestock(cfg)) {
+                Log::Info("MaintenanceMgr: Character conset restock satisfied from Xunlai "
+                          "consets=%u/%u/%u",
+                          CountItemByModel(ItemModelIds::GRAIL_OF_MIGHT),
+                          CountItemByModel(ItemModelIds::ESSENCE_OF_CELERITY),
+                          CountItemByModel(ItemModelIds::ARMOR_OF_SALVATION));
+                return true;
+            }
+        }
+    }
 
     if (!EnsureMap(MapIds::EMBARK_BEACH)) {
         Log::Warn("MaintenanceMgr: Failed to reach Embark Beach for character conset restock crafting");

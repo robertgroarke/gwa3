@@ -131,6 +131,26 @@ class ObservationWindow:
             elif map_id in (615, 616):
                 lines.append("Froggy hint: in Bogroot Growths, use froggy_run_dungeon_loop; it owns dungeon routing, boss, reward, and return handling.")
 
+        # Route status (tier 1)
+        route = snap.get("route", {}) or {}
+        if route:
+            script_id = route.get("script_id", "?")
+            step_index = route.get("step_index", "?")
+            step_count = route.get("step_count", "?")
+            phase = route.get("phase", "?")
+            next_step = route.get("next_step", {}) or {}
+            kind = next_step.get("kind", "?")
+            lines.append(f"Route: On route {script_id} step {step_index}/{step_count} ({kind}) phase={phase}.")
+            deviation = route.get("deviation")
+            if deviation:
+                if isinstance(deviation, dict):
+                    reason = deviation.get("reason", "unknown")
+                    actions = deviation.get("recovery_actions") or []
+                    action_text = ", ".join(str(action) for action in actions) if actions else "none"
+                    lines.append(f"Route deviation: {reason}; available recovery actions: {action_text}.")
+                else:
+                    lines.append(f"Route deviation: {deviation}.")
+
         # Skillbar — show human-readable skill names
         skills = snap.get("skillbar", [])
         if skills:

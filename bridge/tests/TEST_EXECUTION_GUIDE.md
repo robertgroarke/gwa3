@@ -5,7 +5,7 @@
 Run public-safe bridge contract tests from the repository root:
 
 ```powershell
-python -m unittest bridge.tests.test_o_protocol_contract bridge.tests.test_p_ipc_backpressure bridge.tests.test_q_handshake bridge.tests.test_r_action_coverage
+python -m unittest bridge.tests.test_o_protocol_contract bridge.tests.test_p_ipc_backpressure bridge.tests.test_q_handshake bridge.tests.test_r_action_coverage bridge.tests.test_s_route_contract bridge.tests.test_t_maintenance_contract
 ```
 
 These tests do not require a live Guild Wars client unless explicitly enabled by environment variable.
@@ -22,3 +22,11 @@ Remove-Item Env:\GWA3_LIVE_ACTION_COVERAGE
 ```
 
 The live probe sends `{}` to schema tools whose missing-parameter path is expected to be safe and verifies each one returns an `action_result` other than `unknown_action`. Tools handled locally by the Python bridge and no-parameter tools with live side effects are covered by static registration checks instead.
+
+## Route Contract
+
+`bridge.tests.test_s_route_contract` validates the public Bogroot HM route script, Tier 1 snapshot route wiring, route status prompt text, and route-aware observation summary formatting. It is offline and does not require a live client.
+
+## Maintenance Contract
+
+`bridge.tests.test_t_maintenance_contract` verifies the character conset restock path pulls missing consets from Xunlai storage before falling back to Embark crafting. This prevents stored consets from being ignored when a crafter interaction is flaky.

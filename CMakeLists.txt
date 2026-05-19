@@ -133,6 +133,7 @@ add_library(gwa3_core OBJECT
     bots/froggy/FroggyHM.cpp
     src/gwa3/llm/IpcServer.cpp
     src/gwa3/llm/GameSnapshot.cpp
+    src/gwa3/llm/RouteWalker.cpp
     src/gwa3/llm/ActionExecutor.cpp
     src/gwa3/llm/EventPush.cpp
     src/gwa3/llm/LlmBridge.cpp
