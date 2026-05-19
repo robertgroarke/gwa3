@@ -17,6 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout game data source
+        uses: actions/checkout@v4
+        with:
+          repository: caustic-kronos/BotsHub
+          path: _gamedata_sources/BotsHub
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
@@ -30,6 +36,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r bridge/requirements.txt
+
+      - name: Check generated game data
+        shell: pwsh
+        run: python bridge/generate_gamedata.py --check --source-root _gamedata_sources/BotsHub
 
       - name: Configure production build
         shell: pwsh

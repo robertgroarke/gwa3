@@ -3072,7 +3072,7 @@ SKILL_NAMES = {
     3431: 'Heroic Refrain',
 }
 
-# 1091 item model ID mappings
+# 1092 item model ID mappings
 ITEM_NAMES = {
     0: 'Type Armor Salvage',
     2: 'Blue Dye',
@@ -4118,6 +4118,7 @@ ITEM_NAMES = {
     36442: 'El Gwen Tonic',
     36443: 'El Xandra Tonic',
     36444: 'El Kahmu Tonic',
+    36445: 'El Jora Tonic',
     36446: 'El Pyre Fiercehot Tonic',
     36447: 'El Anton Tonic',
     36448: 'El Hayda Tonic',
@@ -4126,7 +4127,7 @@ ITEM_NAMES = {
     36451: 'El Miku Tonic',
     36452: 'El Mox Tonic',
     36453: 'El Shiro Tonic',
-    36455: 'El Jora Tonic',
+    36455: 'El Prince Rurik Tonic',
     36456: 'El Margonite Tonic',
     36457: 'El Destroyer Tonic',
     36458: 'El Queen Salma Tonic',

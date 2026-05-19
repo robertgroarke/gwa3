@@ -1,24 +1,56 @@
 """Extract skill and item ID constants from AutoIt source files into Python dicts.
 
-Run once: python generate_gamedata.py
-Outputs: gamedata.py
+Regenerate:
+    python bridge/generate_gamedata.py --source-root path/to/BotsHub
+
+Check committed output:
+    python bridge/generate_gamedata.py --check --source-root path/to/BotsHub
 """
 
-import re
-import os
+from __future__ import annotations
 
-ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
-SKILLS_FILE = os.path.join(ROOT, "BotsHub-latest", "lib", "GWA2_ID_Skills.au3")
-ITEMS_FILE = os.path.join(ROOT, "BotsHub-latest", "lib", "GWA2_ID_Items.au3")
-IDS_FILE = os.path.join(ROOT, "BotsHub-latest", "lib", "GWA2_ID.au3")
-OUTPUT = os.path.join(os.path.dirname(__file__), "gamedata.py")
+import argparse
+import difflib
+import os
+from pathlib import Path
+import re
+import sys
+import tempfile
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_SOURCE_ROOT = Path(
+    os.environ.get("GWA3_GAMEDATA_SOURCE_ROOT", REPO_ROOT.parent / "BotsHub-latest")
+)
+DEFAULT_OUTPUT = Path(__file__).resolve().with_name("gamedata.py")
 
 CONST_RE = re.compile(r"Global Const \$ID_(\w+)\s*=\s*(\d+)")
 
 
-def extract_consts(path):
+def source_files(source_root: Path) -> tuple[Path, Path, Path]:
+    lib_root = source_root / "lib"
+    return (
+        lib_root / "GWA2_ID_Skills.au3",
+        lib_root / "GWA2_ID_Items.au3",
+        lib_root / "GWA2_ID.au3",
+    )
+
+
+def validate_source_root(source_root: Path) -> tuple[Path, Path, Path]:
+    files = source_files(source_root)
+    missing = [str(path) for path in files if not path.exists()]
+    if missing:
+        joined = "\n  ".join(missing)
+        raise FileNotFoundError(
+            "Missing gamedata source files. Pass --source-root or set "
+            f"GWA3_GAMEDATA_SOURCE_ROOT.\n  {joined}"
+        )
+    return files
+
+
+def extract_consts(path: Path):
     result = {}
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with path.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
             m = CONST_RE.match(line.strip())
             if m:
@@ -31,9 +63,11 @@ def format_name(raw):
     return raw.replace("_", " ").title()
 
 
-def main():
+def generate(source_root: Path, output: Path) -> None:
+    skills_file, items_file, ids_file = validate_source_root(source_root)
+
     # Skills
-    raw_skills = extract_consts(SKILLS_FILE)
+    raw_skills = extract_consts(skills_file)
     # Filter out weapon type constants (low IDs that start with SKILL_)
     skills = {}
     for k, v in raw_skills.items():
@@ -43,15 +77,15 @@ def main():
     print(f"Extracted {len(skills)} skill IDs")
 
     # Items
-    raw_items = extract_consts(ITEMS_FILE)
+    raw_items = extract_consts(items_file)
     items = {k: format_name(v) for k, v in raw_items.items()}
     print(f"Extracted {len(items)} item model IDs")
 
     # Professions and attributes from GWA2_ID.au3
-    raw_ids = extract_consts(IDS_FILE)
+    extract_consts(ids_file)
 
     # Write output
-    with open(OUTPUT, "w", encoding="utf-8") as f:
+    with output.open("w", encoding="utf-8") as f:
         f.write('"""Auto-generated Guild Wars game data lookups."""\n\n')
         f.write("# fmt: off\n\n")
 
@@ -130,8 +164,65 @@ def main():
         f.write("def item_type_name(type_id: int) -> str:\n")
         f.write("    return ITEM_TYPES.get(type_id, f\"Type#{type_id}\")\n")
 
-    print(f"Written to {OUTPUT}")
+    print(f"Written to {output}")
+
+
+def check(source_root: Path, output: Path) -> int:
+    with tempfile.TemporaryDirectory() as tmp:
+        generated = Path(tmp) / "gamedata.py"
+        generate(source_root, generated)
+        expected = output.read_text(encoding="utf-8").splitlines(keepends=True)
+        actual = generated.read_text(encoding="utf-8").splitlines(keepends=True)
+        if expected == actual:
+            print("gamedata.py is up to date")
+            return 0
+
+        diff = difflib.unified_diff(
+            expected,
+            actual,
+            fromfile=str(output),
+            tofile=str(generated),
+        )
+        sys.stdout.writelines(diff)
+        print("gamedata.py is stale; rerun bridge/generate_gamedata.py and commit the result")
+        return 1
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--source-root",
+        type=Path,
+        default=DEFAULT_SOURCE_ROOT,
+        help="Path to a BotsHub checkout containing lib/GWA2_ID*.au3 files.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_OUTPUT,
+        help="Output gamedata.py path.",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Regenerate to a temp file and fail if output differs.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    source_root = args.source_root.resolve()
+    output = args.output.resolve()
+    try:
+        if args.check:
+            return check(source_root, output)
+        generate(source_root, output)
+        return 0
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
