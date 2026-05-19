@@ -222,7 +222,12 @@ bool StopWhenBossRewardDialogReady(uint32_t npcId, void* context) {
     return DungeonDialog::IsDialogOpenFromSenderWithButton(npcId, options->reward_dialog_id);
 }
 
-void RunBossFinalClear(
+bool IsPlayerAliveForBossClear() {
+    const auto* me = AgentMgr::GetMyAgent();
+    return me != nullptr && me->hp > 0.0f;
+}
+
+bool RunBossFinalClear(
     float x,
     float y,
     const BossCompletionOptions& options,
@@ -232,10 +237,20 @@ void RunBossFinalClear(
     if (options.aggro_move_to == nullptr ||
         options.final_clear_range <= 0.0f ||
         options.final_clear_attempts <= 0) {
-        return;
+        return true;
     }
 
     for (int attempt = 1; attempt <= options.final_clear_attempts; ++attempt) {
+        if (!IsPlayerAliveForBossClear()) {
+            Log::Warn("%s: %s final clear phase=%s aborted dead before attempt=%d/%d range=%.0f",
+                      prefix,
+                      label,
+                      phase,
+                      attempt,
+                      options.final_clear_attempts,
+                      options.final_clear_range);
+            return false;
+        }
         float nearestDistance = 0.0f;
         const uint32_t nearestId =
             AdvancedCombat::FindNearestLivingEnemy(options.final_clear_range, &nearestDistance);
@@ -248,7 +263,7 @@ void RunBossFinalClear(
                       phase,
                       attempt,
                       options.final_clear_range);
-            return;
+            return true;
         }
 
         Log::Info("%s: %s final clear phase=%s attempt=%d/%d range=%.0f nearest=%u dist=%.0f nearby=%u",
@@ -265,6 +280,16 @@ void RunBossFinalClear(
         if (options.wait_ms != nullptr && options.final_clear_delay_ms > 0u) {
             options.wait_ms(options.final_clear_delay_ms);
         }
+        if (!IsPlayerAliveForBossClear()) {
+            Log::Warn("%s: %s final clear phase=%s aborted dead after attempt=%d/%d range=%.0f",
+                      prefix,
+                      label,
+                      phase,
+                      attempt,
+                      options.final_clear_attempts,
+                      options.final_clear_range);
+            return false;
+        }
     }
 
     Log::Warn("%s: %s final clear phase=%s exhausted range=%.0f remaining=%u",
@@ -273,6 +298,7 @@ void RunBossFinalClear(
               phase,
               options.final_clear_range,
               AdvancedCombat::CountLivingEnemiesInRange(options.final_clear_range));
+    return false;
 }
 
 QuestGiverEntryResult AcceptQuestAndEnter(
@@ -1176,7 +1202,11 @@ BossCompletionResult ExecuteBossCompletion(
     if (options.aggro_move_to != nullptr) {
         options.aggro_move_to(bossX, bossY, fightRange);
     }
-    RunBossFinalClear(bossX, bossY, options, prefix, label, "pre-chest");
+    result.final_clear_completed =
+        RunBossFinalClear(bossX, bossY, options, prefix, label, "pre-chest");
+    if (!result.final_clear_completed) {
+        return result;
+    }
     if (options.wait_ms != nullptr && options.post_fight_loot_delay_ms > 0u) {
         options.wait_ms(options.post_fight_loot_delay_ms);
     }
@@ -1233,13 +1263,16 @@ BossCompletionResult ExecuteBossCompletion(
         Log::Info("%s: %s reward NPC missing after chest; running final clear before resolve retry",
                   prefix,
                   label);
-        RunBossFinalClear(
+        result.final_clear_completed = RunBossFinalClear(
             options.reward_npc.x,
             options.reward_npc.y,
             options,
             prefix,
             label,
             "reward-resolve");
+        if (!result.final_clear_completed) {
+            return result;
+        }
         result.reward_resolve = ResolveRewardNpc(options.reward_npc, resolveOptions);
     }
 

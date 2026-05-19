@@ -309,6 +309,7 @@ struct BossCompletionResult {
     RewardNpcResolveResult reward_resolve = {};
     BossRewardClaimResult reward_claim = {};
     DungeonRuntime::PostRewardReturnResult post_reward = {};
+    bool final_clear_completed = true;
     bool reward_attempted = false;
     bool reward_claimed = false;
     bool reward_dialog_latched = false;

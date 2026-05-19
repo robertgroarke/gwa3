@@ -171,6 +171,40 @@ QuestRuntime::RewardClaimOptions RewardOptions() {
     return options;
 }
 
+uint32_t g_bossCompletionAggroCount = 0u;
+uint32_t g_bossCompletionStageCount = 0u;
+uint32_t g_bossCompletionOpenCount = 0u;
+uint32_t g_bossCompletionPickupCount = 0u;
+
+void ResetBossCompletionCallbackCounts() {
+    g_bossCompletionAggroCount = 0u;
+    g_bossCompletionStageCount = 0u;
+    g_bossCompletionOpenCount = 0u;
+    g_bossCompletionPickupCount = 0u;
+}
+
+void CountBossCompletionAggro(float, float, float) {
+    ++g_bossCompletionAggroCount;
+}
+
+bool CountBossCompletionStage(float, float, float) {
+    ++g_bossCompletionStageCount;
+    return true;
+}
+
+bool CountBossCompletionOpen(float, float, float) {
+    ++g_bossCompletionOpenCount;
+    return true;
+}
+
+int CountBossCompletionPickup(float) {
+    ++g_bossCompletionPickupCount;
+    return 0;
+}
+
+void BossCompletionNoWait(uint32_t) {
+}
+
 } // namespace
 
 GWA3_TEST(dungeon_quest_runtime_boss_reward_sequence, {
@@ -204,6 +238,35 @@ GWA3_TEST(dungeon_quest_runtime_boss_reward_sequence, {
     GWA3_ASSERT(bossResult.reward_npc_found);
     GWA3_ASSERT_EQ(ItemStubs::LastPickedItemAgentId(), 31u);
     GWA3_ASSERT_EQ(QuestStubs::DialogCount(), static_cast<std::size_t>(3));
+})
+
+GWA3_TEST(dungeon_quest_runtime_boss_completion_waits_for_final_clear_before_chest, {
+    AgentStubs::ResetAgents();
+    AgentStubs::SetPlayerAgent(0.0f, 0.0f, 1.0f);
+    AgentStubs::AddNpc(10u, 40.0f, 0.0f, 3u, 1.0f);
+    ResetBossCompletionCallbackCounts();
+
+    QuestRuntime::BossCompletionOptions options;
+    options.aggro_move_to = &CountBossCompletionAggro;
+    options.move_to_point = &CountBossCompletionStage;
+    options.open_chest_at = &CountBossCompletionOpen;
+    options.pickup_nearby_loot = &CountBossCompletionPickup;
+    options.wait_ms = &BossCompletionNoWait;
+    options.final_clear_range = 500.0f;
+    options.final_clear_attempts = 1;
+    options.final_clear_delay_ms = 0u;
+    options.chest_x = 100.0f;
+    options.chest_y = 100.0f;
+    options.log_prefix = "Test";
+    options.label = "Boss";
+
+    const auto result = QuestRuntime::ExecuteBossCompletion(0.0f, 0.0f, 500.0f, options);
+    GWA3_ASSERT(!result.final_clear_completed);
+    GWA3_ASSERT(!result.chest.staged);
+    GWA3_ASSERT_EQ(g_bossCompletionAggroCount, 2u);
+    GWA3_ASSERT_EQ(g_bossCompletionStageCount, 0u);
+    GWA3_ASSERT_EQ(g_bossCompletionOpenCount, 0u);
+    GWA3_ASSERT_EQ(g_bossCompletionPickupCount, 0u);
 })
 } // namespace GWA3::Tests::Consolidated::test_dungeon_quest_runtime_boss_reward_sequence
 
