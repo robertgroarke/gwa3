@@ -214,19 +214,16 @@ class PlannerLoop:
     ) -> list[ToolCall]:
         if plan is None or snapshot is None:
             return calls
-        if any(call.name != "wait" for call in calls):
-            return calls
-
-        map_state = snapshot.get("map") or {}
-        try:
-            map_id = int(map_state.get("map_id") or 0)
-        except (TypeError, ValueError):
-            map_id = 0
 
         route_tool = self._preferred_route_tool_from_plan(plan, snapshot)
 
         if route_tool is None:
             return calls
+        if any(call.name in ROUTE_TOOL_NAMES for call in calls):
+            return calls
+        if any(call.name not in {"wait", "query_state", "set_bot_state"} for call in calls):
+            return calls
+        calls = [call for call in calls if call.name != "query_state"]
         return [
             *calls,
             ToolCall(id=f"inferred-{route_tool}", name=route_tool, arguments="{}"),
