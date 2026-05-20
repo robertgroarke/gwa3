@@ -28,8 +28,8 @@ DEFAULT_OBJECTIVE = (
 )
 HEARTBEAT_TIMEOUT_SECONDS = 15.0
 MISSING_SNAPSHOT_QUERY_INTERVAL_SECONDS = 2.0
-RUN_SUMMARY_FRESH_QUERY_SECONDS = 2.5
 RUN_SUMMARY_POST_QUERY_DRAIN_SECONDS = 0.6
+RUN_SUMMARY_QUERY_RESULT_DRAIN_SECONDS = 5.0
 RUN_SUMMARY_TOOL_REASONS = {
     "froggy_run_dungeon_loop": "tool:froggy_run_dungeon_loop",
     "froggy_run_full_maintenance": "tool:froggy_run_full_maintenance",
@@ -117,19 +117,22 @@ class TwoModelAgentLoop:
             if msg is None:
                 break
             read_count += 1
-            msg_type = msg.get("type", "")
-            if msg_type == "snapshot":
-                self._missing_snapshot_query_outstanding = False
-                self.observations.add_snapshot(msg)
-                merged = self.observations.latest or msg
-                await self.emit("snapshot.summary", self._snapshot_summary(merged))
-                await self._maybe_summarize_snapshot(merged)
-            elif msg_type == "event":
-                self.observations.add_event(msg)
-                await self._maybe_summarize_event(msg)
-            elif msg_type == "heartbeat":
-                self._last_heartbeat_time = time.monotonic()
-                self._saw_heartbeat = True
+            await self._dispatch_observation_message(msg)
+
+    async def _dispatch_observation_message(self, msg: dict) -> None:
+        msg_type = msg.get("type", "")
+        if msg_type == "snapshot":
+            self._missing_snapshot_query_outstanding = False
+            self.observations.add_snapshot(msg)
+            merged = self.observations.latest or msg
+            await self.emit("snapshot.summary", self._snapshot_summary(merged))
+            await self._maybe_summarize_snapshot(merged)
+        elif msg_type == "event":
+            self.observations.add_event(msg)
+            await self._maybe_summarize_event(msg)
+        elif msg_type == "heartbeat":
+            self._last_heartbeat_time = time.monotonic()
+            self._saw_heartbeat = True
 
     async def _collect_observations_safe(self) -> None:
         try:
@@ -371,15 +374,40 @@ class TwoModelAgentLoop:
             await self._drain_summary_observations(RUN_SUMMARY_POST_QUERY_DRAIN_SECONDS)
             return
 
-        deadline = time.monotonic() + RUN_SUMMARY_FRESH_QUERY_SECONDS
-        while time.monotonic() < deadline:
-            await self._collect_observations_safe()
-            if pending_result is not None and pending_result.done():
-                break
-            await asyncio.sleep(0.1)
+        await self._drain_summary_observations_until_result(
+            request_id,
+            seconds=RUN_SUMMARY_QUERY_RESULT_DRAIN_SECONDS,
+            pending_result=pending_result,
+        )
 
         await self._drain_summary_observations(RUN_SUMMARY_POST_QUERY_DRAIN_SECONDS)
         self._forget_summary_query_result(request_id, pending_result)
+
+    async def _drain_summary_observations_until_result(
+        self,
+        request_id: str,
+        *,
+        seconds: float,
+        pending_result,
+    ) -> bool:
+        if not hasattr(self.ipc, "read_message"):
+            return False
+        deadline = time.monotonic() + seconds
+        saw_result = False
+        while time.monotonic() < deadline:
+            try:
+                msg = await asyncio.wait_for(self.ipc.read_message(), timeout=0.05)
+            except asyncio.TimeoutError:
+                if saw_result or (pending_result is not None and pending_result.done()):
+                    return saw_result
+                continue
+            if msg is None:
+                return saw_result
+            await self._dispatch_observation_message(msg)
+            if msg.get("type") == "action_result" and msg.get("request_id") == request_id:
+                saw_result = True
+                return True
+        return saw_result
 
     async def _drain_summary_observations(self, seconds: float) -> None:
         if not hasattr(self.ipc, "read_message"):
