@@ -261,6 +261,10 @@ static bool SendControlAction(uint32_t msgid, ControlAction action) {
     }
 }
 
+static bool IsPlausibleFramePointer(uintptr_t frame) {
+    return frame >= 0x10000 && frame < 0x80000000;
+}
+
 uintptr_t GetFrameByHash(uint32_t hash) {
     auto* arr = GetFrameArray();
     if (!arr) {
@@ -290,37 +294,52 @@ uintptr_t GetFrameByHash(uint32_t hash) {
     }
 
     static bool s_loggedScanAv = false;
+    uintptr_t* buffer = nullptr;
+    uint32_t size = 0u;
     __try {
-        if (!arr->buffer || arr->size == 0 || arr->size > 5000) return 0;
-
-        for (uint32_t i = 0; i < arr->size; ++i) {
-            uintptr_t frame = arr->buffer[i];
-            if (frame < 0x10000) continue;
-
-            uint32_t frameHash = 0u;
-            bool readable = true;
-            __try {
-                frameHash = *reinterpret_cast<uint32_t*>(frame + 0x134);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
-                readable = false;
-            }
-
-            if (!readable) {
-                if (!s_loggedScanAv) {
-                    Log::Warn("UIMgr: GetFrameByHash encountered volatile frame data during scan");
-                    s_loggedScanAv = true;
-                }
-                continue;
-            }
-
-            if (frameHash == hash) return frame;
-        }
+        buffer = arr->buffer;
+        size = arr->size;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         if (!s_loggedScanAv) {
-            Log::Warn("UIMgr: GetFrameByHash encountered volatile frame data during scan");
+            Log::Warn("UIMgr: GetFrameByHash frame array volatile before scan");
             s_loggedScanAv = true;
         }
         return 0;
+    }
+
+    if (!buffer || size == 0 || size > 5000) return 0;
+
+    for (uint32_t i = 0; i < size; ++i) {
+        uintptr_t frame = 0u;
+        __try {
+            frame = buffer[i];
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            if (!s_loggedScanAv) {
+                Log::Warn("UIMgr: GetFrameByHash frame buffer volatile during scan");
+                s_loggedScanAv = true;
+            }
+            continue;
+        }
+
+        if (!IsPlausibleFramePointer(frame)) continue;
+
+        uint32_t frameHash = 0u;
+        bool readable = true;
+        __try {
+            frameHash = *reinterpret_cast<uint32_t*>(frame + 0x134);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            readable = false;
+        }
+
+        if (!readable) {
+            if (!s_loggedScanAv) {
+                Log::Warn("UIMgr: GetFrameByHash encountered volatile frame data during scan");
+                s_loggedScanAv = true;
+            }
+            continue;
+        }
+
+        if (frameHash == hash) return frame;
     }
     return 0;
 }

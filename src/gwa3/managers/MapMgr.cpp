@@ -137,6 +137,38 @@ bool Travel(uint32_t mapId, uint32_t region, uint32_t district, uint32_t languag
     return true;
 }
 
+static bool TryClickReturnToOutpostButton(const char* phase, int attempt) {
+    uintptr_t frame = 0u;
+    __try {
+        frame = UIMgr::GetFrameByHash(UIMgr::Hashes::ReturnToOutpost);
+        if (!frame) {
+            Log::Info("MapMgr: ReturnToOutpost button not clickable phase=%s attempt=%d",
+                      phase ? phase : "unknown",
+                      attempt);
+            return false;
+        }
+        if (!UIMgr::ButtonClick(frame)) {
+            Log::Warn("MapMgr: ReturnToOutpost button click failed phase=%s attempt=%d frame=0x%08X",
+                      phase ? phase : "unknown",
+                      attempt,
+                      static_cast<unsigned>(frame));
+            return false;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log::Warn("MapMgr: ReturnToOutpost volatile UI click phase=%s attempt=%d",
+                  phase ? phase : "unknown",
+                  attempt);
+        return false;
+    }
+
+    Log::Info("MapMgr: ReturnToOutpost button click queued phase=%s attempt=%d hash=%u frame=0x%08X",
+              phase ? phase : "unknown",
+              attempt,
+              UIMgr::Hashes::ReturnToOutpost,
+              static_cast<unsigned>(frame));
+    return true;
+}
+
 static void ReturnToOutpostImpl() {
     s_lastTravelRequestAt = GetTickCount();
     uint32_t mapId = GetMapId();
@@ -150,14 +182,15 @@ static void ReturnToOutpostImpl() {
         Log::Info("MapMgr: ReturnToOutpost waiting for map load to settle map=%u budget=%lums",
                   mapId, static_cast<unsigned long>(settleMs));
         const DWORD start = GetTickCount();
+        DWORD nextButtonAttempt = start;
+        int attempt = 1;
         while ((GetTickCount() - start) < settleMs) {
-            if (UIMgr::IsFrameVisible(UIMgr::Hashes::ReturnToOutpost)) {
-                Log::Info("MapMgr: ReturnToOutpost button visible while map is not loaded; clicking hash=%u",
-                          UIMgr::Hashes::ReturnToOutpost);
-                if (UIMgr::ButtonClickByHash(UIMgr::Hashes::ReturnToOutpost)) {
+            const DWORD now = GetTickCount();
+            if (now >= nextButtonAttempt) {
+                if (TryClickReturnToOutpostButton("settle", attempt++)) {
                     return;
                 }
-                Log::Warn("MapMgr: ReturnToOutpost button click failed while map is not loaded");
+                nextButtonAttempt = now + 1000u;
             }
             if (GetIsMapLoaded()) {
                 break;
@@ -198,15 +231,8 @@ static void ReturnToOutpostImpl() {
     Sleep(5000);
 
     for (int attempt = 1; attempt <= 10; ++attempt) {
-        if (UIMgr::IsFrameVisible(UIMgr::Hashes::ReturnToOutpost)) {
-            Log::Info("MapMgr: ReturnToOutpost button visible on attempt %d; clicking hash=%u",
-                      attempt, UIMgr::Hashes::ReturnToOutpost);
-            if (UIMgr::ButtonClickByHash(UIMgr::Hashes::ReturnToOutpost)) {
-                return;
-            }
-            Log::Warn("MapMgr: ReturnToOutpost button click failed on attempt %d", attempt);
-        } else {
-            Log::Info("MapMgr: ReturnToOutpost button not yet visible (attempt %d)", attempt);
+        if (TryClickReturnToOutpostButton("resign", attempt)) {
+            return;
         }
         Sleep(500);
     }
