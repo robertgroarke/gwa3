@@ -359,6 +359,18 @@ class PlannerLoop:
         recently_ran_town_setup = self._recent_successful_tool("froggy_run_town_setup")
         map_id = self._snapshot_map_id(snapshot)
         for call in calls:
+            if (
+                call.name in {"froggy_travel_to_gadds", "return_to_outpost", "froggy_travel_to_sparkfly"}
+                and map_id == 558
+            ):
+                replaced = True
+                next_tool = "froggy_prepare_tekks_dungeon_entry" if near_tekks else "froggy_run_sparkfly_route_to_tekks"
+                guarded.append(ToolCall(
+                    id=f"{call.id}-sparkfly-route-guard",
+                    name=next_tool,
+                    arguments="{}",
+                ))
+                continue
             if call.name == "froggy_run_dungeon_loop" and recently_completed_dungeon:
                 replaced = True
                 if map_id == 638:
