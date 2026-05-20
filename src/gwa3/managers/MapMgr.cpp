@@ -182,8 +182,9 @@ static void ReturnToOutpostImpl() {
     const bool inExplorableLike = area && IsExplorableLikeMapRegionType(area->type);
 
     if (!inExplorableLike) {
-        Log::Info("MapMgr: ReturnToOutpost sending direct packet outside explorable-like map");
-        CtoS::SendPacket(1, Packets::PARTY_RETURN_TO_OUTPOST);
+        Log::Warn("MapMgr: ReturnToOutpost skipped outside explorable-like map=%u type=%u; direct packet path is unsafe",
+                  mapId,
+                  area ? area->type : 0u);
         return;
     }
 

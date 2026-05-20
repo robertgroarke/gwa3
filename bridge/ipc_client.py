@@ -50,6 +50,8 @@ class IpcClient:
         self._write_lock = asyncio.Lock()
         self._queue: asyncio.Queue | None = None
         self._reader_task: asyncio.Task | None = None
+        self._pending_action_results: dict[str, asyncio.Future] = {}
+        self._action_result_backlog: dict[str, dict] = {}
 
     def _client_hello_message(self) -> dict:
         return {
@@ -124,6 +126,10 @@ class IpcClient:
         if self._reader_task is not None and not self._reader_task.done():
             self._reader_task.cancel()
         self._reader_task = None
+        for future in self._pending_action_results.values():
+            if not future.done():
+                future.cancel()
+        self._pending_action_results.clear()
 
     @property
     def connected(self) -> bool:
@@ -205,6 +211,7 @@ class IpcClient:
                 except ProtocolMismatchError as e:
                     log.error("IpcClient: %s", e)
                     break
+                self._deliver_action_result(msg)
                 await self._queue.put(msg)
         finally:
             self._connected = False
@@ -250,3 +257,62 @@ class IpcClient:
             "request_id": request_id,
         }
         await self.send_message(msg)
+
+    def expect_action_result(self, request_id: str) -> asyncio.Future:
+        """Register interest in a specific action_result before sending."""
+        loop = asyncio.get_event_loop()
+        future = loop.create_future()
+        if not request_id:
+            future.set_result({
+                "type": "action_result",
+                "request_id": request_id,
+                "success": False,
+                "error": "missing_request_id",
+            })
+            return future
+        backlog = self._action_result_backlog.pop(request_id, None)
+        if backlog is not None:
+            future.set_result(backlog)
+            return future
+        self._pending_action_results[request_id] = future
+        return future
+
+    def forget_action_result(self, request_id: str, future=None) -> None:
+        current = self._pending_action_results.get(request_id)
+        if future is None or current is future:
+            self._pending_action_results.pop(request_id, None)
+        if current is not None and not current.done():
+            current.cancel()
+
+    async def wait_for_action_result(
+        self,
+        request_id: str,
+        timeout: float,
+        future=None,
+    ) -> dict:
+        """Wait for the matching action_result while the reader drains the pipe."""
+        waiter = future or self.expect_action_result(request_id)
+        try:
+            result = await asyncio.wait_for(asyncio.shield(waiter), timeout=timeout)
+            return result
+        finally:
+            current = self._pending_action_results.get(request_id)
+            if current is waiter:
+                self._pending_action_results.pop(request_id, None)
+                if not waiter.done():
+                    waiter.cancel()
+
+    def _deliver_action_result(self, msg: dict) -> None:
+        if msg.get("type") != "action_result":
+            return
+        request_id = msg.get("request_id", "")
+        if not request_id:
+            return
+        future = self._pending_action_results.get(request_id)
+        if future is not None and not future.done():
+            future.set_result(msg)
+            return
+        self._action_result_backlog[request_id] = msg
+        if len(self._action_result_backlog) > 100:
+            for stale in list(self._action_result_backlog)[:50]:
+                self._action_result_backlog.pop(stale, None)

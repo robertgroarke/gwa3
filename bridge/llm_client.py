@@ -1,7 +1,8 @@
 """OpenAI-compatible async HTTP client for local LLM inference (vLLM/Ollama)."""
 
-import json
 import asyncio
+import json
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -30,15 +31,30 @@ class LLMResponse:
     usage: dict = field(default_factory=dict)
 
 
+@dataclass
+class LLMRoleClients:
+    """Planner/executor clients for two-model mode."""
+    planner: Any
+    executor: Any
+
+    async def close(self):
+        await self.planner.close()
+        await self.executor.close()
+
+
 class LLMClient:
     """Async client for OpenAI-compatible chat completion API."""
 
     RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
-    def __init__(self, base_url: str, model: str):
+    def __init__(self, base_url: str, model: str, timeout: float = 120.0):
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self._client = httpx.AsyncClient(timeout=300.0)
+        headers = {}
+        api_key = os.environ.get("GWA3_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        self._client = httpx.AsyncClient(timeout=timeout, headers=headers)
 
     async def chat_completion(
         self,
@@ -102,5 +118,91 @@ class LLMClient:
             return last_response
         return await self._client.post(url, json=payload)
 
+    async def list_models(self) -> set[str]:
+        """Return model ids advertised by the OpenAI-compatible endpoint."""
+        resp = await self._client.get(f"{self.base_url}/models")
+        resp.raise_for_status()
+        data = resp.json()
+        models: set[str] = set()
+        for item in data.get("data", []):
+            model_id = item.get("id")
+            if isinstance(model_id, str):
+                models.add(model_id)
+        return models
+
     async def close(self):
         await self._client.aclose()
+
+
+async def check_models_available(
+    base_url: str,
+    required_models: list[str],
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Validate that an OpenAI-compatible endpoint can serve required models."""
+    client = LLMClient(base_url, "__model_preflight__", timeout=timeout)
+    try:
+        available = await client.list_models()
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        if status_code in {401, 403}:
+            return {
+                "ok": False,
+                "error": "auth_failed",
+                "message": (
+                    "LLM endpoint rejected authentication. Set OPENAI_API_KEY "
+                    "or GWA3_OPENAI_API_KEY for API-backed endpoints."
+                ),
+                "base_url": base_url,
+                "required_models": required_models,
+                "status_code": status_code,
+            }
+        return {
+            "ok": False,
+            "error": "model_list_failed",
+            "message": str(exc),
+            "base_url": base_url,
+            "required_models": required_models,
+            "status_code": status_code,
+        }
+    except httpx.HTTPError as exc:
+        return {
+            "ok": False,
+            "error": "model_list_failed",
+            "message": str(exc),
+            "base_url": base_url,
+            "required_models": required_models,
+        }
+    finally:
+        await client.close()
+
+    missing = [model for model in required_models if model not in available]
+    if missing:
+        return {
+            "ok": False,
+            "error": "models_unavailable",
+            "message": "Configured LLM endpoint does not advertise required planner/executor models.",
+            "base_url": base_url,
+            "required_models": required_models,
+            "missing_models": missing,
+            "available_models": sorted(available),
+        }
+    return {
+        "ok": True,
+        "base_url": base_url,
+        "required_models": required_models,
+    }
+
+
+def create_role_clients(
+    base_url: str,
+    planner_model: str,
+    executor_model: str,
+    planner_timeout: float = 10.0,
+    executor_timeout: float = 2.0,
+) -> LLMRoleClients:
+    """Create independent OpenAI-compatible planner and executor clients."""
+    return LLMRoleClients(
+        planner=LLMClient(base_url, planner_model, timeout=planner_timeout),
+        executor=LLMClient(base_url, executor_model, timeout=executor_timeout),
+    )

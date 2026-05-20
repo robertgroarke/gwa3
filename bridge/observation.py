@@ -12,6 +12,73 @@ from .gamedata import (
 from .farming_knowledge import MAP_NAMES
 
 
+def build_executor_view(snapshot: dict | None, plan: dict | None = None) -> dict:
+    """Return the small tactical view intended for the executor role."""
+    if not snapshot:
+        return {"plan": plan or {}, "snapshot": {}}
+    agents = snapshot.get("agents", []) or []
+    foes = [a for a in agents if a.get("allegiance") == 3 and a.get("is_alive", True)]
+    casters = [a for a in foes if a.get("is_casting")]
+    nearest = sorted(foes, key=lambda a: a.get("distance", 999999))[:5]
+    selected = {a.get("id"): a for a in nearest + casters if a.get("id") is not None}
+    items = [
+        a for a in agents
+        if a.get("agent_type") == "item" and a.get("distance", 999999) <= 1500
+    ]
+    return {
+        "plan": plan or {},
+        "me": snapshot.get("me", {}),
+        "map": snapshot.get("map", {}),
+        "connection": snapshot.get("connection", {}),
+        "bot": snapshot.get("bot", {}),
+        "party": {
+            key: (snapshot.get("party") or {}).get(key)
+            for key in ("size", "dead_count", "is_defeated", "morale")
+        },
+        "skillbar": snapshot.get("skillbar", []),
+        "foes": list(selected.values()),
+        "items_on_ground": items,
+        "route": snapshot.get("route", {}),
+        "inventory": {
+            "free_slots_total": (snapshot.get("inventory") or {}).get("free_slots_total")
+        },
+    }
+
+
+def build_planner_view(snapshot: dict | None, run_history: list[dict] | None = None) -> dict:
+    """Return the broader strategic view intended for the planner role."""
+    if not snapshot:
+        return {"snapshot": {}, "run_history": run_history or []}
+    agents = snapshot.get("agents", []) or []
+    foes = [a for a in agents if a.get("allegiance") == 3 and a.get("is_alive", True)]
+    items = [
+        a for a in agents
+        if a.get("agent_type") == "item" and a.get("distance", 999999) <= 5000
+    ]
+    skillbar = snapshot.get("skillbar", []) or []
+    ready = sum(1 for skill in skillbar if skill.get("skill_id") and skill.get("recharge", 0) <= 0)
+    return {
+        "me": snapshot.get("me", {}),
+        "map": snapshot.get("map", {}),
+        "connection": snapshot.get("connection", {}),
+        "bot": snapshot.get("bot", {}),
+        "party": snapshot.get("party", {}),
+        "skillbar_summary": {
+            "ready": ready,
+            "recharging": max(0, len([s for s in skillbar if s.get("skill_id")]) - ready),
+        },
+        "foes": sorted(foes, key=lambda a: a.get("distance", 999999))[:12],
+        "items_on_ground": items,
+        "dialog": snapshot.get("dialog", {}),
+        "merchant": snapshot.get("merchant", {}),
+        "inventory": snapshot.get("inventory", {}),
+        "route": snapshot.get("route", {}),
+        "quests": snapshot.get("quests", {}),
+        "chat": snapshot.get("chat", []),
+        "run_history": run_history or [],
+    }
+
+
 def _skill_signature(skill: dict) -> tuple:
     return (
         _skill_slot(skill),

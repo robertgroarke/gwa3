@@ -10,6 +10,7 @@ that same shape as strict JSON and then adapts it into the normal client model.
 import asyncio
 import json
 import os
+import shutil
 import tempfile
 import uuid
 from pathlib import Path
@@ -49,7 +50,7 @@ class CodexExecLLMClient:
     """Async LLM client that shells out to `codex exec` for each decision."""
 
     def __init__(self, model: str, timeout: float = 180.0, workdir: str | None = None):
-        self.model = model
+        self.model = normalize_codex_model_name(model)
         self.timeout = timeout
         self.workdir = workdir or os.getcwd()
 
@@ -73,7 +74,7 @@ class CodexExecLLMClient:
                 encoding="utf-8",
             )
             proc = await asyncio.create_subprocess_exec(
-                "codex",
+                _codex_executable(),
                 "exec",
                 "-m",
                 self.model,
@@ -215,6 +216,80 @@ def format_codex_exec_failure(stdout: bytes, stderr: bytes) -> str:
     return text[-4000:]
 
 
+def normalize_codex_model_name(model: str) -> str:
+    """Map architecture model names onto Codex CLI model ids."""
+    aliases = {
+        "gpt-5.3-spark": "gpt-5.3-codex-spark",
+        "gpt-5.3-codex-spark": "gpt-5.3-codex-spark",
+    }
+    return aliases.get((model or "").strip().lower(), model)
+
+
+async def check_codex_exec_available(model: str, timeout: float = 30.0) -> dict[str, Any]:
+    """Validate that `codex exec` can make a tiny call with the requested model."""
+    login = await _codex_login_status(timeout=min(timeout, 10.0))
+    if not login.get("ok"):
+        return {
+            "ok": False,
+            "error": "codex_auth_failed",
+            "model": model,
+            "message": login.get("message", "codex login status failed"),
+        }
+
+    client = CodexExecLLMClient(model, timeout=timeout)
+    try:
+        await client.chat_completion(
+            messages=[{
+                "role": "user",
+                "content": "Return {\"content\":\"ok\",\"tool_calls\":[]} exactly.",
+            }],
+            tools=[],
+        )
+    except Exception as exc:
+        text = str(exc)
+        lowered = text.lower()
+        if "usage limit" in lowered:
+            error = "codex_usage_limited"
+        elif "timed out" in lowered:
+            error = "codex_timeout"
+        elif "unauthorized" in lowered or "not logged in" in lowered or "401" in lowered:
+            error = "codex_auth_failed"
+        else:
+            error = "codex_exec_failed"
+        return {
+            "ok": False,
+            "error": error,
+            "model": model,
+            "message": text[-1000:],
+        }
+    finally:
+        await client.close()
+
+    return {"ok": True, "model": model}
+
+
+async def _codex_login_status(timeout: float = 10.0) -> dict[str, Any]:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            _codex_executable(),
+            "login",
+            "status",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except Exception as exc:
+        return {"ok": False, "message": str(exc)}
+
+    text = b"\n".join(part for part in (stdout, stderr) if part).decode(
+        "utf-8",
+        errors="replace",
+    ).strip()
+    if proc.returncode == 0:
+        return {"ok": True, "message": text}
+    return {"ok": False, "message": text or f"codex login status exited {proc.returncode}"}
+
+
 def _normalize_tool_call(raw_call: dict[str, Any]) -> tuple[str, str]:
     if "function" in raw_call and isinstance(raw_call["function"], dict):
         fn = raw_call["function"]
@@ -242,6 +317,10 @@ def _tool_names(tools: list[dict]) -> set[str]:
         if name:
             names.add(str(name))
     return names
+
+
+def _codex_executable() -> str:
+    return shutil.which("codex.cmd") or shutil.which("codex") or "codex"
 
 
 def _strip_markdown_fence(text: str) -> str:

@@ -1227,6 +1227,91 @@ def _tool_name(tool: dict) -> str:
     return tool["function"]["name"]
 
 
+EXECUTOR_TOOL_NAMES = {
+    "move_to",
+    "aggro_move_to",
+    "change_target",
+    "cancel_action",
+    "attack",
+    "call_target",
+    "use_skill",
+    "use_hero_skill",
+    "flag_hero",
+    "flag_all",
+    "unflag_all",
+    "set_hero_behavior",
+    "lock_hero_target",
+    "pick_up_item",
+    "interact_npc",
+    "interact_signpost",
+    "wait",
+    "resign",
+}
+
+PLANNER_ONLY_TOOL_NAMES = {
+    "travel",
+    "enter_mission",
+    "return_to_outpost",
+    "set_hard_mode",
+    "skip_cinematic",
+    "add_hero",
+    "kick_hero",
+    "load_skillbar",
+    "request_quote",
+    "buy_materials",
+    "merchant_buy",
+    "merchant_sell",
+    "transact_items",
+    "craft_item",
+    "open_xunlai",
+    "withdraw_gold",
+    "deposit_gold",
+    "query_state",
+    "initiate_trade",
+    "offer_trade_item",
+    "offer_trade_item_prompt_max",
+    "offer_trade_item_prompt_default",
+    "offer_trade_item_prompt_quantity",
+    "submit_trade_offer",
+    "accept_trade",
+    "cancel_trade",
+    "change_trade_offer",
+    "remove_trade_item",
+    "send_chat",
+    "send_whisper",
+    "set_combat_mode",
+    "set_bot_state",
+    "froggy_refresh_combat_skillbar",
+    "froggy_run_town_setup",
+    "froggy_travel_to_gadds",
+    "froggy_travel_to_sparkfly",
+    "froggy_run_sparkfly_route_to_tekks",
+    "froggy_prepare_tekks_dungeon_entry",
+    "froggy_run_dungeon_loop",
+    "froggy_run_maintenance_cycle",
+    "froggy_run_full_maintenance",
+    "search_trade_prices",
+    "get_recipe",
+    "get_outpost_info",
+    "get_material_info",
+    "get_dungeon_info",
+    "get_blessing_info",
+    "get_hero_build",
+    "get_quest_info",
+    "set_active_quest",
+    "abandon_quest",
+    "request_quest_info",
+    "open_quest_log",
+}
+
+EXECUTOR_TOOLS = [tool for tool in ALL_TOOLS if _tool_name(tool) in EXECUTOR_TOOL_NAMES]
+PLANNER_TOOLS = [
+    tool
+    for tool in ALL_TOOLS
+    if _tool_name(tool) in PLANNER_ONLY_TOOL_NAMES or _tool_name(tool) == "wait"
+]
+
+
 PLAYER_TRADE_TOOL_NAMES = {
     "offer_trade_item",
     "offer_trade_item_prompt_max",
