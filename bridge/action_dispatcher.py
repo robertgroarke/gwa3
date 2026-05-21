@@ -33,6 +33,12 @@ MAP_TRANSITION_ACTIONS = {
     "froggy_travel_to_gadds",
     "return_to_outpost",
 }
+ADVISORY_ASSUMED_CONTROL_ACTIONS = MAP_TRANSITION_ACTIONS | {
+    "froggy_refresh_combat_skillbar",
+    "froggy_run_full_maintenance",
+    "froggy_run_sparkfly_route_to_tekks",
+    "froggy_run_town_setup",
+}
 RETURN_TO_OUTPOST_ALLOWED_MAPS = {615, 616}
 
 
@@ -351,6 +357,8 @@ class ActionDispatcher:
                 return None
             return f"advisory_defers_to_froggy:bot_state={state or 'unknown'}"
         assumed_control = time.monotonic() < self._assume_llm_control_until
+        if assumed_control and action_name in ADVISORY_ASSUMED_CONTROL_ACTIONS:
+            return None
         if (state == "llm_controlled" or assumed_control) and bot.get("safe_for_llm_game_action", True):
             return None
         if state == "llm_controlled":

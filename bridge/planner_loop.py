@@ -364,7 +364,11 @@ class PlannerLoop:
                 and map_id == 558
             ):
                 replaced = True
-                next_tool = "froggy_prepare_tekks_dungeon_entry" if near_tekks else "froggy_run_sparkfly_route_to_tekks"
+                next_tool = (
+                    "froggy_prepare_tekks_dungeon_entry"
+                    if near_tekks or recently_routed_to_tekks
+                    else "froggy_run_sparkfly_route_to_tekks"
+                )
                 guarded.append(ToolCall(
                     id=f"{call.id}-sparkfly-route-guard",
                     name=next_tool,
