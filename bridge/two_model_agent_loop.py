@@ -28,6 +28,8 @@ DEFAULT_OBJECTIVE = (
 )
 HEARTBEAT_TIMEOUT_SECONDS = 15.0
 MISSING_SNAPSHOT_QUERY_INTERVAL_SECONDS = 2.0
+FIRST_SNAPSHOT_DEGRADATION_SECONDS = 10.0
+FIRST_SNAPSHOT_DEGRADATION_INTERVAL_SECONDS = 10.0
 RUN_SUMMARY_POST_QUERY_DRAIN_SECONDS = 0.6
 RUN_SUMMARY_QUERY_RESULT_DRAIN_SECONDS = 5.0
 RUN_SUMMARY_TOOL_REASONS = {
@@ -71,8 +73,11 @@ class TwoModelAgentLoop:
         self._last_summary_key: str | None = None
         self._last_telemetry_emit_time = 0.0
         self._last_missing_snapshot_query_time = 0.0
+        self._last_missing_snapshot_degradation_time = 0.0
+        self._loop_started_at = 0.0
         self._missing_snapshot_query_outstanding = False
         self._stop_error: str | None = None
+        self._seen_tool_result_request_ids: set[str] = set()
 
         self.dispatcher = ActionDispatcher(
             ipc=ipc,
@@ -130,6 +135,16 @@ class TwoModelAgentLoop:
         elif msg_type == "event":
             self.observations.add_event(msg)
             await self._maybe_summarize_event(msg)
+        elif msg_type == "action_result":
+            self.observations.add_event(msg)
+            request_id = str(msg.get("request_id") or "")
+            if request_id and request_id not in self._seen_tool_result_request_ids:
+                await self.emit("tool.result", {
+                    "request_id": request_id,
+                    "success": bool(msg.get("success", False)),
+                    "error": msg.get("error"),
+                    "orphan": True,
+                })
         elif msg_type == "heartbeat":
             self._last_heartbeat_time = time.monotonic()
             self._saw_heartbeat = True
@@ -142,6 +157,7 @@ class TwoModelAgentLoop:
 
     async def run(self) -> None:
         self._running = True
+        self._loop_started_at = time.monotonic()
         await self.emit("bridge.status", {"status": "connected"})
         await self.emit("plan.updated", (await self.plan_state.get()).to_dict())
         await self._emit_telemetry_snapshot("loop_start")
@@ -247,6 +263,7 @@ class TwoModelAgentLoop:
 
     async def _request_snapshot_if_missing(self) -> None:
         now = time.monotonic()
+        await self._maybe_emit_missing_snapshot_degradation(now)
         if self._missing_snapshot_query_outstanding:
             return
         if now - self._last_missing_snapshot_query_time < MISSING_SNAPSHOT_QUERY_INTERVAL_SECONDS:
@@ -260,6 +277,23 @@ class TwoModelAgentLoop:
             self._missing_snapshot_query_outstanding = True
         except Exception:
             return
+
+    async def _maybe_emit_missing_snapshot_degradation(self, now: float) -> None:
+        if self.observations.latest is not None or self._loop_started_at <= 0.0:
+            return
+        if now - self._loop_started_at < FIRST_SNAPSHOT_DEGRADATION_SECONDS:
+            return
+        if now - self._last_missing_snapshot_degradation_time < FIRST_SNAPSHOT_DEGRADATION_INTERVAL_SECONDS:
+            return
+        self._last_missing_snapshot_degradation_time = now
+        await self.emit("degradation", {
+            "reason": "awaiting_first_snapshot",
+            "surface": (
+                "connected, waiting for first game snapshot; "
+                "a long native Froggy action may still be finishing"
+            ),
+            **self._telemetry_payload(error="awaiting_first_snapshot"),
+        })
 
     def _heartbeat_timed_out(self) -> bool:
         if not self._saw_heartbeat:
@@ -296,6 +330,9 @@ class TwoModelAgentLoop:
         await self._summarize_run(f"snapshot:{state}")
 
     async def _maybe_summarize_tool_result(self, result: dict) -> None:
+        request_id = str(result.get("request_id") or "")
+        if request_id:
+            self._seen_tool_result_request_ids.add(request_id)
         if not result.get("success"):
             return
         action = str(result.get("action") or "")

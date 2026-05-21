@@ -29,6 +29,7 @@ def lane_error() -> dict[str, str]:
 LANE = configured_lane()
 LANE_ERROR = lane_error()
 RECOVERABLE_DEGRADATION_PREFIXES = (
+    "awaiting_first_snapshot",
     "planner_invalid_json:",
     "planner_slow",
 )
@@ -68,6 +69,7 @@ class BridgeHttpState:
             self.run_summaries.appendleft(payload)
         elif event == "snapshot.summary":
             self.last_snapshot_summary = payload
+            await self._clear_recovered_degradation()
         elif event == "llm.telemetry":
             self.telemetry = payload
         elif event == "plan.updated":
