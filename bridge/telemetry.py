@@ -28,6 +28,13 @@ class RoleTelemetry:
     latencies: list[float] = field(default_factory=list)
     tool_calls: int = 0
     tool_errors: int = 0
+    prompt_samples: int = 0
+    prompt_bytes: int = 0
+    prompt_section_bytes: Counter[str] = field(default_factory=Counter)
+    last_prompt_sections: dict[str, int] = field(default_factory=dict)
+    idle_ticks: int = 0
+    stalled_ticks: int = 0
+    idle_reasons: Counter[str] = field(default_factory=Counter)
 
     def record_call(self, latency: float, usage: dict[str, Any] | None = None) -> None:
         self.calls += 1
@@ -36,6 +43,19 @@ class RoleTelemetry:
         self.prompt_tokens += int(usage.get("prompt_tokens", 0) or 0)
         self.completion_tokens += int(usage.get("completion_tokens", 0) or 0)
         self.total_tokens += int(usage.get("total_tokens", 0) or 0)
+
+    def record_prompt(self, prompt_bytes: int, sections: dict[str, int] | None = None) -> None:
+        self.prompt_samples += 1
+        self.prompt_bytes += max(0, int(prompt_bytes))
+        sections = sections or {}
+        self.last_prompt_sections = {key: max(0, int(value)) for key, value in sections.items()}
+        self.prompt_section_bytes.update(self.last_prompt_sections)
+
+    def record_idle(self, reason: str, *, counts_as_stall: bool = False) -> None:
+        self.idle_ticks += 1
+        if counts_as_stall:
+            self.stalled_ticks += 1
+        self.idle_reasons[reason or "unknown"] += 1
 
     def snapshot(self, elapsed_seconds: float) -> dict[str, Any]:
         return {
@@ -49,6 +69,15 @@ class RoleTelemetry:
             "p95_latency_seconds": _percentile(self.latencies, 95),
             "tool_calls": self.tool_calls,
             "tool_errors": self.tool_errors,
+            "prompt_samples": self.prompt_samples,
+            "prompt_bytes": self.prompt_bytes,
+            "prompt_bytes_per_sample": self.prompt_bytes / self.prompt_samples if self.prompt_samples else 0.0,
+            "estimated_prompt_tokens_per_sample": (self.prompt_bytes / 4.0) / self.prompt_samples if self.prompt_samples else 0.0,
+            "prompt_section_bytes": dict(self.prompt_section_bytes),
+            "last_prompt_sections": self.last_prompt_sections,
+            "idle_ticks": self.idle_ticks,
+            "stalled_ticks": self.stalled_ticks,
+            "idle_reasons": dict(self.idle_reasons),
         }
 
 
@@ -68,6 +97,13 @@ class BridgeTelemetry:
 
     def record_llm_call(self, role: str, latency: float, usage: dict[str, Any] | None = None) -> None:
         self.roles[role].record_call(latency, usage)
+
+    def record_prompt(self, role: str, messages: list[dict], sections: dict[str, int] | None = None) -> None:
+        encoded = json.dumps(messages, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        self.roles[role].record_prompt(len(encoded), sections)
+
+    def record_idle_tick(self, role: str, reason: str, *, counts_as_stall: bool = False) -> None:
+        self.roles[role].record_idle(reason, counts_as_stall=counts_as_stall)
 
     def record_tool_result(self, role: str, success: bool) -> None:
         self.roles[role].tool_calls += 1

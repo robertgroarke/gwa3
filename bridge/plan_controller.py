@@ -12,9 +12,29 @@ HARD_EVENTS = {
     "party_defeated",
     "inventory_full",
     "map_changed",
+    "instance_load",
     "dialog_opened",
     "merchant_opened",
+    "maintenance_complete",
+    "maintenance_completed",
+    "dungeon_complete",
+    "dungeon_completed",
+    "reward_complete",
+    "reward_claimed",
+    "return_to_outpost",
+    "wipe_recovery",
     "trade_request_received",
+}
+
+BYPASS_DEBOUNCE_REASONS = {
+    "map_changed",
+    "instance_load",
+    "dungeon_complete",
+    "dungeon_completed",
+    "reward_complete",
+    "reward_claimed",
+    "return_to_outpost",
+    "wipe_recovery",
 }
 
 
@@ -30,10 +50,11 @@ class PlanController:
     def __init__(self, min_interval_seconds: float = 5.0):
         self.min_interval_seconds = min_interval_seconds
         self._last_replan_at = 0.0
-        self._idle_ticks = 0
+        self._stalled_ticks = 0
+        self._last_map_id: int | None = None
 
-    def observe_executor_tick(self, had_tool_call: bool) -> None:
-        self._idle_ticks = 0 if had_tool_call else self._idle_ticks + 1
+    def observe_executor_tick(self, counts_as_stall: bool) -> None:
+        self._stalled_ticks = self._stalled_ticks + 1 if counts_as_stall else 0
 
     def evaluate(
         self,
@@ -42,15 +63,14 @@ class PlanController:
         events: list[dict],
     ) -> ReplanDecision:
         now = time.time()
-        if now - self._last_replan_at < self.min_interval_seconds:
-            return ReplanDecision(False)
-
         reason = self._reason(plan, snapshot or {}, events)
         if not reason:
             return ReplanDecision(False)
+        if reason not in BYPASS_DEBOUNCE_REASONS and now - self._last_replan_at < self.min_interval_seconds:
+            return ReplanDecision(False)
 
         self._last_replan_at = now
-        self._idle_ticks = 0
+        self._stalled_ticks = 0
         return ReplanDecision(True, reason)
 
     def _reason(self, plan: Plan, snapshot: dict, events: list[dict]) -> str:
@@ -58,6 +78,13 @@ class PlanController:
             name = str(event.get("event") or event.get("type") or "")
             if name in HARD_EVENTS:
                 return name
+
+        map_id = self._snapshot_map_id(snapshot)
+        if map_id is not None:
+            if self._last_map_id is not None and map_id != self._last_map_id:
+                self._last_map_id = map_id
+                return "map_changed"
+            self._last_map_id = map_id
 
         if plan.expired:
             return "plan_expired"
@@ -74,10 +101,20 @@ class PlanController:
         if abort_reason:
             return abort_reason
 
-        if self._idle_ticks >= 5:
+        if self._stalled_ticks >= 5:
             return "executor_stalled"
 
         return ""
+
+    @staticmethod
+    def _snapshot_map_id(snapshot: dict) -> int | None:
+        try:
+            value = (snapshot.get("map") or {}).get("map_id")
+            if value is None:
+                return None
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _abort_reason(plan: Plan, snapshot: dict) -> str:

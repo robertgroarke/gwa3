@@ -41,6 +41,8 @@ class ToolExecutionSummary:
     had_tool_call: bool = False
     had_game_action: bool = False
     results: list[dict] = field(default_factory=list)
+    idle_reason: str = ""
+    counts_as_stall: bool = False
 
 
 class ActionDispatcher:

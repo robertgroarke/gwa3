@@ -203,7 +203,7 @@ class TwoModelAgentLoop:
                     break
 
                 summary = await self.executor.tick(plan, snapshot)
-                self.controller.observe_executor_tick(summary.had_game_action)
+                self.controller.observe_executor_tick(summary.counts_as_stall)
                 await self._emit_telemetry_snapshot("periodic", min_interval_seconds=5.0)
                 await asyncio.sleep(0.3)
             except asyncio.CancelledError:

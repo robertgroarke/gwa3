@@ -628,6 +628,7 @@ class PlannerLoop:
         user_messages: list[str],
     ) -> list[dict]:
         view = build_planner_view(snapshot, self.run_history)
+        history = self._prompt_history()
         current_plan = None
         if self.plan_state is not None:
             # Caller owns async plan access; prompt can rely on latest UI state copy.
@@ -640,11 +641,77 @@ class PlannerLoop:
             "current_plan": current_plan,
             "planner_view": view,
         }
-        return [
+        payload_json = json.dumps(payload, separators=(",", ":"))
+        messages = [
             {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
-            *self.history[-12:],
-            {"role": "user", "content": json.dumps(payload, separators=(",", ":"))},
+            *history,
+            {"role": "user", "content": payload_json},
         ]
+        if self.telemetry is not None:
+            self.telemetry.record_prompt("planner", messages, {
+                "system": len(PLANNER_SYSTEM_PROMPT.encode("utf-8")),
+                "history": self._json_size(history),
+                "payload": len(payload_json.encode("utf-8")),
+                "planner_view": self._json_size(view),
+                "events": self._json_size(events[-10:]),
+                "run_history": self._json_size(view.get("run_history", [])),
+            })
+        return messages
+
+    def _prompt_history(self) -> list[dict]:
+        compact: list[dict] = []
+        for item in self.history[-8:]:
+            role = item.get("role")
+            if role == "tool":
+                compact.append({
+                    "role": "tool",
+                    "tool_call_id": item.get("tool_call_id", ""),
+                    "content": json.dumps(
+                        self._compact_tool_history_result(item.get("content")),
+                        separators=(",", ":"),
+                    ),
+                })
+                continue
+            content = str(item.get("content") or "")
+            try:
+                plan = json.loads(content)
+                if isinstance(plan, dict):
+                    content = json.dumps({
+                        key: plan.get(key)
+                        for key in ("phase", "intent", "next_step", "deviation")
+                        if plan.get(key) is not None
+                    }, separators=(",", ":"))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                content = content[:600]
+            compact.append({"role": role or "assistant", "content": content})
+        return compact
+
+    @staticmethod
+    def _compact_tool_history_result(content: object) -> dict:
+        try:
+            result = json.loads(str(content or "{}"))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return {"content": str(content or "")[:400]}
+        if not isinstance(result, dict):
+            return {"content": str(result)[:400]}
+        return {
+            key: result.get(key)
+            for key in (
+                "success",
+                "error",
+                "action",
+                "request_id",
+                "game_action",
+                "waited_ms",
+                "map_id",
+                "final_map_id",
+            )
+            if result.get(key) is not None
+        }
+
+    @staticmethod
+    def _json_size(value: object) -> int:
+        return len(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
 
     def _parse_plan(
         self,

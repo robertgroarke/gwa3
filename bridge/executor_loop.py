@@ -9,7 +9,7 @@ import httpx
 
 from .action_dispatcher import ActionDispatcher, ToolExecutionSummary
 from .event_bus import BridgeEventBus
-from .llm_client import LLMClient, LLMResponse, ToolCall
+from .llm_client import LLMClient
 from .observation import build_executor_view
 from .plan import Plan
 from .telemetry import BridgeTelemetry
@@ -53,37 +53,25 @@ class ExecutorLoop:
 
     async def tick(self, plan: Plan, snapshot: dict | None) -> ToolExecutionSummary:
         if snapshot is None:
-            return ToolExecutionSummary()
+            return self._idle("missing_snapshot")
         bot = snapshot.get("bot", {}) or {}
         if bot.get("state") != "llm_controlled":
-            response = LLMResponse(tool_calls=[
-                ToolCall(id="froggy-control-wait", name="wait", arguments='{"milliseconds":500}')
-            ])
-            self.history.append({
-                "role": "assistant",
-                "content": "froggy native control active; waiting for planner takeover",
-            })
-            return await self.dispatcher.execute_response(response, "executor", EXECUTOR_TOOL_NAMES, self.history)
+            self._append_idle_history("froggy native control active; executor idle")
+            return self._idle("froggy_native_control")
         if self._abort_fired(plan, snapshot):
-            response = LLMResponse(tool_calls=[
-                ToolCall(id="abort-wait", name="wait", arguments='{"milliseconds":500}')
-            ])
-            self.history.append({"role": "assistant", "content": "abort condition fired; waiting for planner"})
-            return await self.dispatcher.execute_response(response, "executor", EXECUTOR_TOOL_NAMES, self.history)
+            self._append_idle_history("abort condition fired; executor waiting for planner")
+            return self._idle("abort_condition", counts_as_stall=True)
         if not self._plan_allows_executor_action(plan):
-            response = LLMResponse(tool_calls=[
-                ToolCall(id="planner-helper-wait", name="wait", arguments='{"milliseconds":500}')
-            ])
-            self.history.append({
-                "role": "assistant",
-                "content": "plan does not explicitly authorize executor tools; waiting for planner",
-            })
-            return await self.dispatcher.execute_response(response, "executor", EXECUTOR_TOOL_NAMES, self.history)
+            self._append_idle_history("planner-owned plan; executor idle")
+            return self._idle("planner_owned_plan")
 
         started = time.perf_counter()
         try:
+            messages = self._build_messages(plan, snapshot)
+            if self.telemetry is not None:
+                self.telemetry.record_prompt("executor", messages, self._prompt_sections(messages))
             response = await self.active_llm.chat_completion(
-                messages=self._build_messages(plan, snapshot),
+                messages=messages,
                 tools=EXECUTOR_TOOLS,
                 tool_choice="auto",
                 temperature=0.1,
@@ -104,7 +92,7 @@ class ExecutorLoop:
                 self.telemetry.record_degradation("executor_timeout")
             if self.consecutive_timeouts >= 3:
                 await self.enable_single_model_fallback("three_executor_timeouts")
-            return ToolExecutionSummary()
+            return self._idle("executor_timeout", counts_as_stall=True)
         except httpx.HTTPError as exc:
             self.consecutive_timeouts += 1
             await self.emit("degradation", {
@@ -114,7 +102,7 @@ class ExecutorLoop:
             })
             if self.consecutive_timeouts >= 3:
                 await self.enable_single_model_fallback("executor_http_errors")
-            return ToolExecutionSummary()
+            return self._idle("executor_http_error", counts_as_stall=True)
 
         if response.content:
             await self.emit("chat.assistant", {"message": response.content})
@@ -129,6 +117,8 @@ class ExecutorLoop:
         if self.telemetry is not None:
             for result in summary.results:
                 self.telemetry.record_tool_result("executor", bool(result.get("success")))
+        if not summary.had_game_action:
+            summary.counts_as_stall = True
         if response.tool_calls:
             self.history.append({
                 "role": "assistant",
@@ -144,6 +134,23 @@ class ExecutorLoop:
             })
         self._trim_history()
         return summary
+
+    def _idle(self, reason: str, *, counts_as_stall: bool = False) -> ToolExecutionSummary:
+        if self.telemetry is not None:
+            self.telemetry.record_idle_tick("executor", reason, counts_as_stall=counts_as_stall)
+        return ToolExecutionSummary(
+            had_tool_call=False,
+            had_game_action=False,
+            idle_reason=reason,
+            counts_as_stall=counts_as_stall,
+            results=[{"success": True, "action": "idle", "reason": reason}],
+        )
+
+    def _append_idle_history(self, content: str) -> None:
+        if self.history and self.history[-1].get("content") == content:
+            return
+        self.history.append({"role": "assistant", "content": content})
+        self._trim_history()
 
     async def enable_single_model_fallback(self, reason: str) -> None:
         if self.using_single_model_fallback:
@@ -173,6 +180,14 @@ class ExecutorLoop:
             *self.history[-8:],
             {"role": "user", "content": json.dumps(payload, separators=(",", ":"))},
         ]
+
+    @staticmethod
+    def _prompt_sections(messages: list[dict]) -> dict[str, int]:
+        return {
+            "system": len((messages[0].get("content") or "").encode("utf-8")) if messages else 0,
+            "history": sum(len(json.dumps(message, separators=(",", ":")).encode("utf-8")) for message in messages[1:-1]),
+            "payload": len((messages[-1].get("content") or "").encode("utf-8")) if messages else 0,
+        }
 
     @staticmethod
     def _abort_fired(plan: Plan, snapshot: dict) -> bool:

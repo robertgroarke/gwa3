@@ -45,10 +45,156 @@ def build_executor_view(snapshot: dict | None, plan: dict | None = None) -> dict
     }
 
 
+def _compact_number(value):
+    if isinstance(value, float):
+        return round(value, 3)
+    if isinstance(value, str):
+        return value[:240]
+    return value
+
+
+def _compact_scalar_mapping(data: dict | None, keys: tuple[str, ...]) -> dict:
+    source = data or {}
+    return {
+        key: _compact_number(source.get(key))
+        for key in keys
+        if source.get(key) is not None
+    }
+
+
+def _compact_agent(agent: dict) -> dict:
+    compact = _compact_scalar_mapping(agent, (
+        "id",
+        "agent_id",
+        "agent_type",
+        "item_id",
+        "model_id",
+        "quantity",
+        "distance",
+        "hp",
+        "energy",
+        "level",
+        "primary",
+        "secondary",
+        "is_casting",
+        "casting_skill_id",
+        "is_chest",
+        "owner",
+    ))
+    if agent.get("name"):
+        compact["name"] = str(agent.get("name"))[:48]
+    return compact
+
+
+def _compact_inventory(inventory: dict | None) -> dict:
+    inv = inventory or {}
+    bags = inv.get("bags", []) or []
+    items = [
+        item
+        for bag in bags
+        for item in (bag.get("items", []) or [])
+        if not item.get("equipped", False)
+    ]
+    summary = _compact_scalar_mapping(inv, (
+        "free_slots_total",
+        "gold_character",
+        "gold_storage",
+        "identification_kits",
+        "salvage_kits",
+        "regular_salvage_kits",
+        "expert_salvage_kits",
+        "high_grade_salvage_kits",
+    ))
+    summary["bag_count"] = len(bags)
+    summary["item_count"] = len(items)
+    summary["unidentified_count"] = sum(1 for item in items if item.get("is_identified") is False)
+    summary["salvageable_count"] = sum(1 for item in items if item.get("is_material_salvageable") or item.get("is_upgrade_salvageable"))
+    froggy = inv.get("froggy_maintenance") or {}
+    if froggy:
+        summary["froggy_maintenance"] = _compact_scalar_mapping(froggy, (
+            "conset_material_stacks_inventory",
+            "conset_material_quantity_inventory",
+            "loose_consets_inventory_total",
+            "stored_consets_total",
+            "grail_inventory",
+            "essence_inventory",
+            "armor_inventory",
+            "stored_grail",
+            "stored_essence",
+            "stored_armor",
+        ))
+    return summary
+
+
+def _compact_quests(quests: dict | None) -> dict:
+    source = quests or {}
+    active = source.get("active_quest") or {}
+    log = source.get("quest_log", []) or []
+    return {
+        "active_quest_id": source.get("active_quest_id"),
+        "active_quest": _compact_scalar_mapping(active, (
+            "quest_id",
+            "name",
+            "is_completed",
+            "objectives",
+        )),
+        "quest_log": [
+            _compact_scalar_mapping(quest, ("quest_id", "name", "is_active", "is_completed"))
+            for quest in log[:8]
+        ],
+        "quest_log_count": len(log),
+    }
+
+
+def _compact_chat(chat: list[dict] | None) -> list[dict]:
+    return [
+        {
+            "channel": msg.get("channel"),
+            "sender": str(msg.get("sender", ""))[:32],
+            "message": str(msg.get("message", ""))[:160],
+        }
+        for msg in (chat or [])[-5:]
+    ]
+
+
+def _compact_run_history(run_history: list[dict] | None) -> list[dict]:
+    result = []
+    for item in (run_history or [])[-5:]:
+        stats = item.get("stats") or {}
+        outcome = item.get("last_outcome") or {}
+        result.append({
+            "reason": item.get("reason"),
+            "captured_at": item.get("captured_at"),
+            "map": item.get("map"),
+            "free_slots": item.get("free_slots"),
+            "title": item.get("title"),
+            "stats": _compact_scalar_mapping(stats, (
+                "runs",
+                "failures",
+                "wipes",
+                "chests_opened",
+                "gold_items",
+                "rare_skins",
+                "tomes",
+            )),
+            "last_outcome": _compact_scalar_mapping(outcome, (
+                "entered_lvl2",
+                "boss_completed",
+                "chest_successes",
+                "reward_claimed",
+                "reward_dialog_latched",
+                "final_map_id",
+                "last_waypoint_label",
+                "maintenance_decision",
+            )),
+        })
+    return result
+
+
 def build_planner_view(snapshot: dict | None, run_history: list[dict] | None = None) -> dict:
     """Return the broader strategic view intended for the planner role."""
     if not snapshot:
-        return {"snapshot": {}, "run_history": run_history or []}
+        return {"snapshot": {}, "run_history": _compact_run_history(run_history)}
     agents = snapshot.get("agents", []) or []
     foes = [a for a in agents if a.get("allegiance") == 3 and a.get("is_alive", True)]
     items = [
@@ -57,25 +203,89 @@ def build_planner_view(snapshot: dict | None, run_history: list[dict] | None = N
     ]
     skillbar = snapshot.get("skillbar", []) or []
     ready = sum(1 for skill in skillbar if skill.get("skill_id") and skill.get("recharge", 0) <= 0)
+    bot = snapshot.get("bot") or {}
     return {
-        "me": snapshot.get("me", {}),
-        "map": snapshot.get("map", {}),
-        "connection": snapshot.get("connection", {}),
-        "bot": snapshot.get("bot", {}),
-        "party": snapshot.get("party", {}),
+        "me": _compact_scalar_mapping(snapshot.get("me"), (
+            "agent_id",
+            "hp",
+            "energy",
+            "x",
+            "y",
+            "is_moving",
+            "is_casting",
+            "target_id",
+        )),
+        "map": _compact_scalar_mapping(snapshot.get("map"), (
+            "map_id",
+            "map_name",
+            "loading_state",
+            "instance_time",
+            "is_explorable",
+            "district",
+            "region",
+        )),
+        "connection": _compact_scalar_mapping(snapshot.get("connection"), (
+            "state",
+            "disconnected",
+            "reason",
+            "likely_disconnect_code",
+            "last_nonzero_map_id",
+        )),
+        "bot": {
+            **_compact_scalar_mapping(bot, (
+                "state",
+                "phase",
+                "busy",
+                "safe_to_enter_llm_control",
+                "safe_for_llm_game_action",
+                "maintenance_needed",
+            )),
+            "froggy_dungeon_loop": _compact_scalar_mapping(bot.get("froggy_dungeon_loop"), (
+                "entered_lvl2",
+                "boss_completed",
+                "chest_successes",
+                "reward_claimed",
+                "reward_dialog_latched",
+                "final_map_id",
+                "last_waypoint_label",
+                "waypoint_iterations",
+            )),
+            "froggy_monitoring": _compact_scalar_mapping(bot.get("froggy_monitoring"), (
+                "run_count",
+                "fail_count",
+                "monitoring_wipes",
+                "route_wipe_count",
+                "chests_opened",
+                "free_slots",
+                "map_id",
+            )),
+        },
+        "party": _compact_scalar_mapping(snapshot.get("party"), (
+            "size",
+            "dead_count",
+            "is_defeated",
+            "morale",
+        )),
         "skillbar_summary": {
             "ready": ready,
             "recharging": max(0, len([s for s in skillbar if s.get("skill_id")]) - ready),
         },
-        "foes": sorted(foes, key=lambda a: a.get("distance", 999999))[:12],
-        "items_on_ground": items,
+        "foes": [_compact_agent(foe) for foe in sorted(foes, key=lambda a: a.get("distance", 999999))[:8]],
+        "foe_count": len(foes),
+        "items_on_ground": [_compact_agent(item) for item in sorted(items, key=lambda a: a.get("distance", 999999))[:10]],
+        "item_count": len(items),
         "dialog": snapshot.get("dialog", {}),
-        "merchant": snapshot.get("merchant", {}),
-        "inventory": snapshot.get("inventory", {}),
+        "merchant": _compact_scalar_mapping(snapshot.get("merchant"), (
+            "is_open",
+            "npc_id",
+            "item_count",
+            "gold",
+        )),
+        "inventory": _compact_inventory(snapshot.get("inventory")),
         "route": snapshot.get("route", {}),
-        "quests": snapshot.get("quests", {}),
-        "chat": snapshot.get("chat", []),
-        "run_history": run_history or [],
+        "quests": _compact_quests(snapshot.get("quests")),
+        "chat": _compact_chat(snapshot.get("chat")),
+        "run_history": _compact_run_history(run_history),
     }
 
 

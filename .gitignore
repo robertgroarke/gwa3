@@ -6,6 +6,7 @@ ui/**/bin/
 ui/**/obj/
 ui/runs/
 bridge/runtime/
+bridge/benchmarks/latest_two_model_telemetry.json
 docs/SESSION_REPORT_phase*.md
 *.user
 CMakeCache.txt
