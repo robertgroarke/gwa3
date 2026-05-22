@@ -3,21 +3,33 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
 from .agent_loop import AgentLoop
 from .codex_exec_client import CodexExecLLMClient, check_codex_exec_available
-from .config import parse_args
-from .http_api import BridgeHttpServer, BridgeHttpState, configured_lane
+from .config import BridgeRuntimeConfig, RUNTIME_CONFIG, parse_args
+from .http_api import BridgeHttpServer, BridgeHttpState
 from .ipc_client import IpcClient
 from .kamadan_client import KamadanClient
-from .lane_launcher import BridgeLaneLauncher
+try:
+    from .lane_launcher import LaneLauncher
+except ImportError:
+    from .lane_launcher import BridgeLaneLauncher as LaneLauncher
 from .llm_client import LLMClient, LLMRoleClients, check_models_available
-from .run_history import RunHistoryStore
-from .token_budget import RemoteLlmNotAllowed, TokenBudgetError, TokenBudgetGuard
+from .run_summary_memory import RunSummaryMemory
 from .two_model_agent_loop import TwoModelAgentLoop
+
+
+HTTP_LAUNCHER_LANES = frozenset({
+    "blumpkins",
+    "beastrit",
+    "disco",
+    "marvin",
+    "biscuit",
+})
 
 
 def should_enable_chat(stdin=sys.stdin) -> bool:
@@ -28,14 +40,47 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def _make_client(provider: str, llm_url: str, model: str, timeout: float) -> Any:
+def _infer_lane(pipe: str, runtime_config: BridgeRuntimeConfig | None = None) -> str:
+    runtime_config = runtime_config or RUNTIME_CONFIG
+    configured = runtime_config.dll_lane
+    if configured:
+        return configured
+    normalized = (pipe or "").lower()
+    for lane in ("blumpkins", "beastrit", "disco", "marvin", "biscuit", "trade"):
+        if lane in normalized:
+            return lane
+    return "default"
+
+
+def _should_configure_lane_launcher(lane: str) -> bool:
+    return bool(os.environ.get("GWA3_LAUNCHER_SCRIPT")) or (lane or "").lower() in HTTP_LAUNCHER_LANES
+
+
+def _create_lane_launcher(repo_root: Path, lane: str):
+    try:
+        return LaneLauncher(repo_root, lane=lane)
+    except TypeError:
+        return LaneLauncher(repo_root)
+
+
+def _role_retry_wall_timeout(timeout: float) -> float:
+    return timeout + LLMClient.ROLE_RETRY_WALL_EXTRA_SECONDS
+
+
+def _make_client(
+    provider: str,
+    llm_url: str,
+    model: str,
+    timeout: float,
+    retry_wall_timeout: float | None = None,
+) -> Any:
     if provider == "codex-exec":
         return CodexExecLLMClient(model, timeout=timeout, workdir=str(_repo_root()))
-    return LLMClient(llm_url, model, timeout=timeout)
+    return LLMClient(llm_url, model, timeout=timeout, retry_wall_timeout=retry_wall_timeout)
 
 
-def _seed_http_run_summaries(http_state: BridgeHttpState, run_history_store: RunHistoryStore) -> None:
-    for summary in run_history_store.list():
+def _seed_http_run_summaries(http_state: BridgeHttpState, run_summaries: RunSummaryMemory) -> None:
+    for summary in run_summaries.list():
         http_state.run_summaries.appendleft(summary)
 
 
@@ -46,10 +91,10 @@ async def _check_model(provider: str, llm_url: str, model: str, timeout: float) 
 
 
 async def _preflight_two_model(args) -> dict[str, Any]:
-    for role, provider, model, timeout in [
-        ("planner", args.planner_provider, args.planner_model, args.planner_timeout),
-        ("executor", args.executor_provider, args.executor_model, args.executor_timeout),
-    ]:
+    checks = [("planner", args.planner_provider, args.planner_model, args.planner_timeout)]
+    if getattr(args, "preflight_executor", True) and args.executor_mode == "llm":
+        checks.append(("executor", args.executor_provider, args.executor_model, args.executor_timeout))
+    for role, provider, model, timeout in checks:
         result = await _check_model(provider, args.llm_url, model, timeout)
         if not result.get("ok"):
             return {
@@ -70,46 +115,29 @@ async def main():
     print(f"  LLM:       {args.llm_url}")
     print(f"  Provider:  {args.llm_provider}")
     print(f"  Model:     {args.model}")
+    print(f"  Profile:   {args.profile}")
     if args.two_model:
         print(f"  Planner:   {args.planner_provider}:{args.planner_model}")
         print(f"  Executor:  {args.executor_provider}:{args.executor_model}")
+        print(f"  Modes:     supervisor={args.supervisor_mode} executor={args.executor_mode} planner={args.planner_mode} prompt={args.prompt_mode}")
     print(f"  Autonomy:  {args.autonomy}")
     print(f"  Pipe:      {args.pipe}")
+    lane = _infer_lane(args.pipe)
+    print(f"  Lane:      {lane}")
     if args.objective:
         print(f"  Objective: {args.objective}")
     else:
         print("  Objective: (default - farm continuously)")
     print("=" * 60)
 
-    try:
-        if args.llm_provider == "codex-exec":
-            token_budget = TokenBudgetGuard.for_codex_exec(
-                hourly_token_cap=args.llm_hourly_token_cap,
-                allow_remote=args.allow_remote_llm,
-            )
-        else:
-            token_budget = TokenBudgetGuard.for_openai_endpoint(
-                args.llm_url,
-                hourly_token_cap=args.llm_hourly_token_cap,
-                allow_remote=args.allow_remote_llm,
-            )
-    except RemoteLlmNotAllowed as exc:
-        print(f"[Bridge] ERROR: {exc}")
-        print("[Bridge] Use --allow-remote-llm only when an operator-approved budget is in place.")
-        return 2
-    except TokenBudgetError as exc:
-        print(f"[Bridge] ERROR: {exc}")
-        return 2
-
-    lane_name = configured_lane()
-    run_history_store = RunHistoryStore()
-    http_state = BridgeHttpState(status="stopped")
-    _seed_http_run_summaries(http_state, run_history_store)
+    run_summaries = RunSummaryMemory()
+    http_state = BridgeHttpState(status="stopped", lane=lane, profile=args.profile_state)
+    _seed_http_run_summaries(http_state, run_summaries)
     http_server = BridgeHttpServer(http_state, args.http_host, args.http_port)
     await http_server.start()
     print(f"[Bridge] HTTP/SSE listening on http://{args.http_host}:{http_server.port}")
 
-    lane_launcher = BridgeLaneLauncher(_repo_root())
+    lane_launcher = _create_lane_launcher(_repo_root(), lane) if _should_configure_lane_launcher(lane) else None
     runtime_lock = asyncio.Lock()
     runtime_task: asyncio.Task | None = None
     ipc: IpcClient | None = None
@@ -135,14 +163,17 @@ async def main():
                 return {"ok": True, "status": http_state.status, "noop": True}
 
             if surface_connecting:
-                await http_state.emit("bridge.status", {"status": "connecting", "lane": lane_name})
+                await http_state.emit("bridge.status", {
+                    "status": "connecting",
+                    "lane": lane,
+                })
             ipc = IpcClient(args.pipe)
             print(f"[Bridge] Connecting to gwa3 pipe {args.pipe}...")
             if not await ipc.connect(timeout=timeout):
                 print("[Bridge] Could not connect to gwa3 pipe yet; HTTP launch remains available.")
                 await http_state.emit("bridge.status", {
                     "status": "stopped",
-                    "lane": lane_name,
+                    "lane": lane,
                     "error": "pipe_connect_failed",
                 })
                 ipc.disconnect()
@@ -159,28 +190,36 @@ async def main():
                     })
                     await http_state.emit("bridge.status", {
                         "status": "degraded",
-                        "lane": lane_name,
+                        "lane": lane,
                         "error": model_check.get("error"),
                     })
                     await close_clients()
                     return {"ok": False, "status": "degraded", **model_check}
 
+                planner_timeout = (
+                    max(args.planner_timeout, args.codex_exec_timeout)
+                    if args.planner_provider == "codex-exec"
+                    else args.planner_timeout
+                )
+                executor_timeout = (
+                    max(args.executor_timeout, args.codex_exec_timeout)
+                    if args.executor_provider == "codex-exec"
+                    else args.executor_timeout
+                )
                 role_clients = LLMRoleClients(
                     planner=_make_client(
                         args.planner_provider,
                         args.llm_url,
                         args.planner_model,
-                        max(args.planner_timeout, args.codex_exec_timeout)
-                        if args.planner_provider == "codex-exec"
-                        else args.planner_timeout,
+                        planner_timeout,
+                        retry_wall_timeout=_role_retry_wall_timeout(planner_timeout),
                     ),
                     executor=_make_client(
                         args.executor_provider,
                         args.llm_url,
                         args.executor_model,
-                        max(args.executor_timeout, args.codex_exec_timeout)
-                        if args.executor_provider == "codex-exec"
-                        else args.executor_timeout,
+                        executor_timeout,
+                        retry_wall_timeout=_role_retry_wall_timeout(executor_timeout),
                     ),
                 )
                 llm = None
@@ -208,7 +247,13 @@ async def main():
                     objective=args.objective,
                     kamadan_client=kamadan,
                     event_bus=http_state,
-                    run_history_store=run_history_store,
+                    run_summary_memory=run_summaries,
+                    profile=args.profile_state,
+                    supervisor_mode=args.supervisor_mode,
+                    executor_mode=args.executor_mode,
+                    planner_mode=args.planner_mode,
+                    prompt_mode=args.prompt_mode,
+                    replan_policy=args.replan_policy,
                 )
             else:
                 agent = AgentLoop(
@@ -217,7 +262,7 @@ async def main():
                     autonomy=args.autonomy,
                     objective=args.objective,
                     kamadan_client=kamadan,
-                    token_budget=token_budget,
+                    event_bus=http_state,
                 )
             http_state.agent_loop = agent
 
@@ -229,6 +274,7 @@ async def main():
                     await close_clients()
 
             runtime_task = asyncio.create_task(run_agent())
+            await http_state.emit("bridge.status", {"status": "connected", "lane": lane})
             return {"ok": True, "status": "connected"}
 
     async def launch_runtime() -> dict:
@@ -242,10 +288,32 @@ async def main():
                 })
                 await http_state.emit("bridge.status", {
                     "status": "degraded",
-                    "lane": lane_name,
+                    "lane": lane,
                     "error": model_check.get("error"),
                 })
                 return {"ok": False, "status": "degraded", **model_check}
+        if lane_launcher is None:
+            result = {
+                "ok": False,
+                "status": "stopped",
+                "lane": lane,
+                "error": "launcher_not_configured_for_lane",
+                "message": (
+                    f"HTTP launch is not configured for the {lane.upper()} lane; "
+                    "start this lane through its approved runner and attach "
+                    "the bridge to the lane-specific pipe."
+                ),
+            }
+            await http_state.emit("degradation", {
+                "reason": result["error"],
+                "surface": result["message"],
+            })
+            await http_state.emit("bridge.status", {
+                "status": "stopped",
+                "lane": lane,
+                "error": result["error"],
+            })
+            return result
         result = await lane_launcher.launch_and_inject()
         if not result.get("ok"):
             await http_state.emit("degradation", {
@@ -254,7 +322,7 @@ async def main():
             })
             await http_state.emit("bridge.status", {
                 "status": "stopped",
-                "lane": lane_name,
+                "lane": lane,
                 "error": result.get("error") or result.get("status"),
             })
             return result
@@ -277,11 +345,17 @@ async def main():
                     pass
         runtime_task = None
         await close_clients()
-        stop_result = await lane_launcher.stop_started_client()
-        await http_state.emit("bridge.status", {"status": "stopped", "lane": lane_name})
+        if lane_launcher is not None:
+            stop_result = await lane_launcher.stop_started_client()
+        else:
+            stop_result = {
+                "ok": True,
+                "status": "no_lane_client_started_by_bridge",
+            }
+        await http_state.emit("bridge.status", {"status": "stopped", "lane": lane})
         return {
             "ok": bool(stop_result.get("ok", True)),
-            "lane": lane_name,
+            "lane": lane,
             "runtime_stopped": True,
             "lane_stop": stop_result,
         }

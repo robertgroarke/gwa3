@@ -1,20 +1,40 @@
 """OpenAI function-calling tool definitions for gwa3 game actions."""
 
+from functools import lru_cache
+
+from .knowledge_tools import KNOWLEDGE_TOOL_NAMES
+from .plan import PLAN_ARGUMENT_SCHEMA
+from .route_spec import route_safety_map_ids
+
 
 def _tool(name: str, description: str, parameters: dict) -> dict:
     """Helper to build an OpenAI-format tool definition."""
+    schema = {
+        "type": "object",
+        "properties": parameters.get("properties", {}),
+        "required": parameters.get("required", []),
+    }
+    for key, value in parameters.items():
+        if key not in {"properties", "required"}:
+            schema[key] = value
     return {
         "type": "function",
         "function": {
             "name": name,
             "description": description,
-            "parameters": {
-                "type": "object",
-                "properties": parameters.get("properties", {}),
-                "required": parameters.get("required", []),
-            },
+            "parameters": schema,
         },
     }
+
+
+# --- Planner contract ---
+
+SUBMIT_PLAN = _tool(
+    "submit_plan",
+    "Submit the complete strategic Plan object for the current planner turn. "
+    "This is a planner-local contract tool; it is not dispatched to the game.",
+    PLAN_ARGUMENT_SCHEMA,
+)
 
 
 # --- Movement ---
@@ -836,14 +856,14 @@ SET_COMBAT_MODE = _tool(
 
 SET_BOT_STATE = _tool(
     "set_bot_state",
-    "Override the Froggy bot's current state (advisory mode only). "
+    "Request a Froggy bot state transition (advisory mode only). "
     "States: idle, in_town, traveling, in_dungeon, looting, merchant, "
     "maintenance, llm_controlled. Use llm_controlled to take full control.",
     {
         "properties": {
             "state": {
                 "type": "string",
-                "description": "Bot state: idle, in_town, traveling, in_dungeon, looting, merchant, maintenance, llm_controlled",
+                "description": "Requested bot state: idle, in_town, traveling, in_dungeon, looting, merchant, maintenance, llm_controlled",
             },
         },
         "required": ["state"],
@@ -900,9 +920,12 @@ FROGGY_RUN_DUNGEON_LOOP = _tool(
     "Run one complete Bogroot Growths HM loop from the current Bogroot map. "
     "Preferred use is after froggy_prepare_tekks_dungeon_entry has entered "
     "Bogroot level 1. In Sparkfly Swamp, use froggy_run_sparkfly_route_to_tekks "
-    "then froggy_prepare_tekks_dungeon_entry; call this from Sparkfly only as "
-    "recovery when segmented entry state is ambiguous. Inside Bogroot it runs "
-    "Froggy's route, combat, key, door, boss, reward, and post-run return logic.",
+    "then froggy_prepare_tekks_dungeon_entry; this tool is only valid once the "
+    "latest observation is inside a Bogroot dungeon map. Inside Bogroot it runs "
+    "Froggy's route, combat, key, door, boss, reward, and post-run return logic. "
+    "After reward it should normally wait for the automatic timer return to "
+    "Sparkfly near Tekks; it returns to Gadd's only when maintenance or recovery "
+    "is needed.",
     {"properties": {}, "required": []},
 )
 
@@ -1010,7 +1033,7 @@ GET_OUTPOST_INFO = _tool(
         "properties": {
             "map_id": {
                 "type": "integer",
-                "description": "Outpost map ID (e.g. 857=Embark Beach, 638=Gadd's Encampment)",
+                "description": "Outpost map ID from the current route or map metadata",
             },
         },
         "required": ["map_id"],
@@ -1248,6 +1271,18 @@ EXECUTOR_TOOL_NAMES = {
     "resign",
 }
 
+PLAYER_TRADE_TOOL_NAMES = {
+    "offer_trade_item",
+    "offer_trade_item_prompt_max",
+    "offer_trade_item_prompt_default",
+    "offer_trade_item_prompt_quantity",
+    "submit_trade_offer",
+    "accept_trade",
+    "cancel_trade",
+    "change_trade_offer",
+    "remove_trade_item",
+}
+
 PLANNER_ONLY_TOOL_NAMES = {
     "travel",
     "enter_mission",
@@ -1291,38 +1326,27 @@ PLANNER_ONLY_TOOL_NAMES = {
     "froggy_run_maintenance_cycle",
     "froggy_run_full_maintenance",
     "search_trade_prices",
-    "get_recipe",
-    "get_outpost_info",
-    "get_material_info",
-    "get_dungeon_info",
-    "get_blessing_info",
-    "get_hero_build",
-    "get_quest_info",
+    *KNOWLEDGE_TOOL_NAMES,
     "set_active_quest",
     "abandon_quest",
     "request_quest_info",
     "open_quest_log",
 }
 
+PLANNER_CONTROL_TOOL_NAMES = {
+    "submit_plan",
+}
+
 EXECUTOR_TOOLS = [tool for tool in ALL_TOOLS if _tool_name(tool) in EXECUTOR_TOOL_NAMES]
 PLANNER_TOOLS = [
-    tool
-    for tool in ALL_TOOLS
-    if _tool_name(tool) in PLANNER_ONLY_TOOL_NAMES or _tool_name(tool) == "wait"
+    SUBMIT_PLAN,
+    *[
+        tool
+        for tool in ALL_TOOLS
+        if _tool_name(tool) in PLANNER_ONLY_TOOL_NAMES or _tool_name(tool) == "wait"
+    ],
 ]
 
-
-PLAYER_TRADE_TOOL_NAMES = {
-    "offer_trade_item",
-    "offer_trade_item_prompt_max",
-    "offer_trade_item_prompt_default",
-    "offer_trade_item_prompt_quantity",
-    "submit_trade_offer",
-    "accept_trade",
-    "cancel_trade",
-    "change_trade_offer",
-    "remove_trade_item",
-}
 
 SALVAGE_IDENTIFY_TOOL_NAMES = {
     "identify_item",
@@ -1334,12 +1358,6 @@ SALVAGE_IDENTIFY_TOOL_NAMES = {
 DUNGEON_ONLY_TOOL_NAMES = {
     "froggy_run_dungeon_loop",
 }
-
-DUNGEON_MAP_IDS = {
-    615,  # Bogroot Growths level 1
-    616,  # Bogroot Growths level 2
-}
-
 
 def _iter_inventory_items(observation: dict | None):
     if not observation:
@@ -1364,9 +1382,14 @@ def _has_salvage_or_identify_candidate(observation: dict | None) -> bool:
     return False
 
 
+@lru_cache(maxsize=1)
+def _route_dungeon_map_ids() -> frozenset[int]:
+    return frozenset(route_safety_map_ids("dungeon_map_keys"))
+
+
 def _is_dungeon_map(observation: dict | None) -> bool:
     map_id = int(((observation or {}).get("map", {}) or {}).get("map_id", 0) or 0)
-    return map_id in DUNGEON_MAP_IDS
+    return map_id in _route_dungeon_map_ids()
 
 
 def filter_tools_for_observation(tools: list[dict], observation: dict | None) -> list[dict]:
@@ -1392,7 +1415,16 @@ def tools_for_observation(observation: dict | None) -> list[dict]:
     return filter_tools_for_observation(ALL_TOOLS, observation)
 
 
+def planner_tools_for_observation(observation: dict | None) -> list[dict]:
+    return filter_tools_for_observation(PLANNER_TOOLS, observation)
+
+
+def planner_tool_names_for_observation(observation: dict | None) -> set[str]:
+    return {_tool_name(tool) for tool in planner_tools_for_observation(observation)}
+
+
 FROGGY_AUTONOMOUS_TOOLS = [
+    SET_BOT_STATE,
     FROGGY_RUN_TOWN_SETUP,
     FROGGY_TRAVEL_TO_GADDS,
     FROGGY_TRAVEL_TO_SPARKFLY,

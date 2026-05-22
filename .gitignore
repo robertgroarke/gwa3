@@ -7,6 +7,13 @@ ui/**/obj/
 ui/runs/
 bridge/runtime/
 bridge/benchmarks/latest_two_model_telemetry.json
+runner_current_*.txt
+runner_out_*.txt
+runner_err_*.txt
+*.out.txt
+*.err.txt
+*.png
+*.bmp
 docs/SESSION_REPORT_phase*.md
 *.user
 CMakeCache.txt

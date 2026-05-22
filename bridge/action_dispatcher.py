@@ -40,6 +40,57 @@ ADVISORY_ASSUMED_CONTROL_ACTIONS = MAP_TRANSITION_ACTIONS | {
     "froggy_run_town_setup",
 }
 RETURN_TO_OUTPOST_ALLOWED_MAPS = {615, 616}
+TOOL_RESULT_EVENT_FIELDS = (
+    "action",
+    "game_action",
+    "waited_ms",
+    "map_id",
+    "current_map_id",
+    "final_map_id",
+    "reward_claimed",
+    "quest_reward_claimed",
+    "completed_dungeon_run",
+    "completed_full_maintenance",
+    "completed_town_setup",
+    "completed_entry_travel",
+    "completed_sparkfly_route_to_tekks",
+    "completed_tekks_entry_prepare",
+    "completed_recovery_travel",
+    "waypoint_iterations",
+    "chest_successes",
+    "boss_completed",
+    "recommended_next_action",
+    "reason",
+    "blocked_tool",
+    "bot_state",
+    "bot_phase",
+    "route_progress",
+    "connection_state",
+    "connection_disconnected",
+    "disconnect_detected",
+    "disconnect_code",
+    "screenshot_path",
+)
+
+
+def build_tool_result_event_payload(
+    request_id: str,
+    result: dict,
+    *,
+    orphan: bool = False,
+) -> dict:
+    """Build the compact `tool.result` payload exposed to UI state."""
+    payload = {
+        "request_id": result.get("request_id", request_id),
+        "success": bool(result.get("success", False)),
+        "error": result.get("error"),
+    }
+    if orphan:
+        payload["orphan"] = True
+    for key in TOOL_RESULT_EVENT_FIELDS:
+        if result.get(key) is not None:
+            payload[key] = result.get(key)
+    return payload
 
 
 @dataclass

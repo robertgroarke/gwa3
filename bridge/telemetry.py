@@ -84,16 +84,26 @@ class RoleTelemetry:
 class BridgeTelemetry:
     """Small in-memory telemetry store for benchmark JSON capture."""
 
-    def __init__(self):
+    def __init__(self, profile: dict[str, Any] | None = None):
         self.started_at = time.time()
+        self.profile = profile or {}
         self.roles: dict[str, RoleTelemetry] = defaultdict(RoleTelemetry)
         self.replan_reasons: Counter[str] = Counter()
+        self.replan_suppressions: Counter[str] = Counter()
         self.degradations: Counter[str] = Counter()
+        self.prompt_sections: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self.executor_ticks: Counter[str] = Counter()
         self.ui: dict[str, dict[str, Any]] = {
             "desktop": {"chat_round_trip_ms": [], "sse_dropped_events": 0, "launch_to_connected_ms": None},
             "web": {"chat_round_trip_ms": [], "sse_dropped_events": 0, "launch_to_connected_ms": None},
         }
+        self.ipc: dict[str, Any] = {
+            "outbound_snapshots_dropped": 0,
+        }
         self.runs: list[dict[str, Any]] = []
+
+    def set_profile(self, profile: dict[str, Any]) -> None:
+        self.profile = dict(profile)
 
     def record_llm_call(self, role: str, latency: float, usage: dict[str, Any] | None = None) -> None:
         self.roles[role].record_call(latency, usage)
@@ -113,11 +123,53 @@ class BridgeTelemetry:
     def record_replan(self, reason: str) -> None:
         self.replan_reasons[reason or "unknown"] += 1
 
+    def record_replan_suppressed(self, reason: str) -> None:
+        self.replan_suppressions[reason or "unknown"] += 1
+
     def record_degradation(self, reason: str) -> None:
         self.degradations[reason or "unknown"] += 1
 
     def record_run_summary(self, summary: dict[str, Any]) -> None:
         self.runs.append(summary)
+
+    def record_heartbeat(self, heartbeat: dict[str, Any]) -> None:
+        if "outbound_snapshots_dropped" in heartbeat:
+            self.ipc["outbound_snapshots_dropped"] = int(
+                heartbeat.get("outbound_snapshots_dropped") or 0
+            )
+
+    def record_prompt_sections(
+        self,
+        role: str,
+        mode: str,
+        context_hash: str,
+        sections: dict[str, int],
+    ) -> None:
+        bucket = self.prompt_sections[role]
+        normalized = {key: max(0, int(value)) for key, value in sections.items()}
+        bucket.append({
+            "mode": mode,
+            "context_hash": context_hash,
+            "sections": normalized,
+            "total_bytes": sum(normalized.values()),
+            "captured_at": time.time(),
+        })
+        if len(bucket) > 40:
+            del bucket[:-40]
+
+    def record_executor_tick(
+        self,
+        mode: str,
+        outcome: str,
+        *,
+        llm_call: bool = False,
+        useful: bool = False,
+    ) -> None:
+        self.executor_ticks[f"{mode}:{outcome or 'unknown'}"] += 1
+        if llm_call:
+            self.executor_ticks[f"{mode}:llm_calls"] += 1
+        if useful:
+            self.executor_ticks[f"{mode}:useful"] += 1
 
     def snapshot(self, phase: str, notes: str = "") -> dict[str, Any]:
         elapsed = max(0.001, time.time() - self.started_at)
@@ -126,12 +178,20 @@ class BridgeTelemetry:
             "captured_at": time.time(),
             "elapsed_seconds": elapsed,
             "notes": notes,
+            "profile": self.profile,
             "roles": {
                 role: telemetry.snapshot(elapsed)
                 for role, telemetry in sorted(self.roles.items())
             },
             "replan_reasons": dict(self.replan_reasons),
+            "replan_suppressions": dict(self.replan_suppressions),
             "degradations": dict(self.degradations),
+            "prompt_sections": {
+                role: list(items)
+                for role, items in sorted(self.prompt_sections.items())
+            },
+            "executor_ticks": dict(self.executor_ticks),
+            "ipc": dict(self.ipc),
             "ui": self.ui,
             "runs": self.runs[-20:],
             "runs_per_hour": len(self.runs) * 3600.0 / elapsed if elapsed > 0 else 0.0,

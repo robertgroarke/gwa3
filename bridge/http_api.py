@@ -7,29 +7,19 @@ import json
 import os
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
 from .event_bus import BridgeEventBus
+from .flight_recorder import FlightRecorder, RECORDED_EVENTS, compact_payload
 from .plan import PlanState
 
-
-def configured_lane() -> str:
-    return (os.environ.get("GWA3_LLM_LANE") or "default").strip().lower()
-
-
-def lane_error() -> dict[str, str]:
-    lane = configured_lane()
-    return {
-        "error": "lane_not_permitted",
-        "message": f"Configured lane only ({lane})",
-    }
-
-
-LANE = configured_lane()
-LANE_ERROR = lane_error()
-RECOVERABLE_DEGRADATION_PREFIXES = (
+DEFAULT_LANE = "default"
+SNAPSHOT_RECOVERABLE_DEGRADATION_PREFIXES = (
     "awaiting_first_snapshot",
+)
+PLAN_RECOVERABLE_DEGRADATION_PREFIXES = (
     "planner_invalid_json:",
     "planner_slow",
 )
@@ -39,19 +29,33 @@ RECOVERABLE_DEGRADATION_PREFIXES = (
 class BridgeHttpState:
     event_bus: BridgeEventBus = field(default_factory=BridgeEventBus)
     plan_state: PlanState = field(default_factory=PlanState)
+    lane: str = DEFAULT_LANE
     status: str = "stopped"
     last_status_error: str | None = None
     agent_loop: Any | None = None
     last_tool_calls: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=10))
     run_summaries: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=20))
     telemetry: dict[str, Any] = field(default_factory=dict)
+    telemetry_timeline: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=50))
+    profile: dict[str, Any] = field(default_factory=dict)
+    last_disconnect: dict[str, Any] | None = None
     last_degradation: dict[str, Any] | None = None
     last_snapshot_summary: dict[str, Any] | None = None
     launcher: Callable[[], Awaitable[dict[str, Any]]] | None = None
     stopper: Callable[[], Awaitable[dict[str, Any]]] | None = None
+    flight_recorder: FlightRecorder | None = None
+
+    def __post_init__(self) -> None:
+        if self.flight_recorder is not None:
+            return
+        directory = os.environ.get("GWA3_FLIGHT_RECORDER_DIR", "").strip()
+        if directory:
+            self.flight_recorder = FlightRecorder(Path(directory), lane=self.lane)
 
     async def emit(self, event: str, data: dict[str, Any] | None = None) -> None:
-        payload = data or {}
+        payload = dict(data or {})
+        if event == "bridge.status" and self.profile:
+            payload.setdefault("profile", self.profile)
         if event == "bridge.status":
             self.status = str(payload.get("status", self.status))
             if payload.get("error"):
@@ -69,36 +73,54 @@ class BridgeHttpState:
             self.run_summaries.appendleft(payload)
         elif event == "snapshot.summary":
             self.last_snapshot_summary = payload
-            await self._clear_recovered_degradation()
+            await self._clear_recovered_degradation(SNAPSHOT_RECOVERABLE_DEGRADATION_PREFIXES)
         elif event == "llm.telemetry":
             self.telemetry = payload
+        elif event == "disconnect_detected":
+            self.last_disconnect = payload
+            if self.status not in {"stopped", "connecting"}:
+                self.status = "degraded"
         elif event == "plan.updated":
-            await self._clear_recovered_degradation()
+            await self._clear_recovered_degradation(PLAN_RECOVERABLE_DEGRADATION_PREFIXES)
         elif event == "degradation":
             self.last_degradation = payload
             if self.status not in {"stopped", "connecting"}:
                 self.status = "degraded"
+        self._record_telemetry_event(event, payload)
         await self.event_bus.emit(event, payload)
 
-    async def _clear_recovered_degradation(self) -> None:
+    def _record_telemetry_event(self, event: str, payload: dict[str, Any]) -> None:
+        if event not in RECORDED_EVENTS:
+            return
+        record = {"event": event, "payload": compact_payload(payload)}
+        self.telemetry_timeline.appendleft(record)
+        if self.flight_recorder is None:
+            return
+        try:
+            self.flight_recorder.record(event, payload)
+        except Exception:
+            return
+
+    async def _clear_recovered_degradation(self, prefixes: tuple[str, ...]) -> None:
         if self.status != "degraded" or not self.last_degradation:
             return
         reason = str(self.last_degradation.get("reason", ""))
-        if not reason.startswith(RECOVERABLE_DEGRADATION_PREFIXES):
+        if not reason.startswith(prefixes):
             return
         self.last_degradation = None
         self.status = "connected"
         await self.event_bus.emit("bridge.status", {
             "status": self.status,
-            "lane": LANE,
+            "lane": self.lane,
             "observers": self.event_bus.subscriber_count,
+            "profile": self.profile,
         })
 
     async def snapshot(self) -> dict[str, Any]:
         return {
             "bridge": {
                 "status": self.status,
-                "lane": LANE,
+                "lane": self.lane,
                 "observers": self.event_bus.subscriber_count,
                 "error": self.last_status_error,
             },
@@ -107,6 +129,10 @@ class BridgeHttpState:
             "last_tool_calls": list(self.last_tool_calls)[:10],
             "run_summaries": list(self.run_summaries)[:20],
             "telemetry": self.telemetry,
+            "profile": self.profile,
+            "telemetry_timeline": list(self.telemetry_timeline)[:50],
+            "flight_recorder": self.flight_recorder.snapshot() if self.flight_recorder else None,
+            "last_disconnect": self.last_disconnect,
             "degradation": self.last_degradation,
         }
 
@@ -125,7 +151,10 @@ class BridgeHttpServer:
         sockets = self._server.sockets or []
         if sockets:
             self.port = int(sockets[0].getsockname()[1])
-        await self.state.emit("bridge.status", {"status": self.state.status, "lane": LANE})
+        await self.state.emit("bridge.status", {
+            "status": self.state.status,
+            "lane": self.state.lane,
+        })
 
     async def stop(self) -> None:
         if self._server is not None:
@@ -184,17 +213,23 @@ class BridgeHttpServer:
             return
         if method == "POST" and path == "/api/llm/launch":
             if not self._lane_allowed(payload):
-                await self._json(writer, 400, LANE_ERROR)
+                await self._json(writer, 400, self._lane_error())
                 return
             if self.state.status in {"connecting", "connected"}:
                 await self._json(writer, 200, {"ok": True, "status": self.state.status, "noop": True})
                 return
-            await self.state.emit("bridge.status", {"status": "connecting", "lane": LANE})
+            await self.state.emit("bridge.status", {
+                "status": "connecting",
+                "lane": self.state.lane,
+            })
             result = await self.state.launcher() if self.state.launcher else {"ok": True, "mode": "bridge_already_loaded"}
             await self._json(writer, 200, result)
             return
         if method == "POST" and path == "/api/llm/stop":
-            await self.state.emit("bridge.status", {"status": "stopped", "lane": LANE})
+            await self.state.emit("bridge.status", {
+                "status": "stopped",
+                "lane": self.state.lane,
+            })
             if self.state.agent_loop is not None:
                 self.state.agent_loop.stop()
             result = await self.state.stopper() if self.state.stopper else {"ok": True}
@@ -202,10 +237,15 @@ class BridgeHttpServer:
             return
         await self._json(writer, 404, {"error": "not_found"})
 
-    @staticmethod
-    def _lane_allowed(payload: dict) -> bool:
-        lane = str(payload.get("lane", LANE)).lower()
-        return lane == LANE
+    def _lane_allowed(self, payload: dict) -> bool:
+        lane = str(payload.get("lane", self.state.lane)).lower()
+        return lane == self.state.lane.lower()
+
+    def _lane_error(self) -> dict[str, str]:
+        return {
+            "error": "lane_not_permitted",
+            "message": f"{self.state.lane.upper()} lane only",
+        }
 
     async def _stream(self, writer: asyncio.StreamWriter) -> None:
         writer.write(
@@ -219,7 +259,7 @@ class BridgeHttpServer:
         queue = await self.state.event_bus.subscribe(replay=True)
         await self.state.emit("bridge.status", {
             "status": self.state.status,
-            "lane": LANE,
+            "lane": self.state.lane,
             "observers": self.state.event_bus.subscriber_count,
         })
         try:
@@ -232,7 +272,7 @@ class BridgeHttpServer:
             await self.state.event_bus.unsubscribe(queue)
             await self.state.emit("bridge.status", {
                 "status": self.state.status,
-                "lane": LANE,
+                "lane": self.state.lane,
                 "observers": self.state.event_bus.subscriber_count,
             })
 

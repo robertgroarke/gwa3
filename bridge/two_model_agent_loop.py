@@ -8,17 +8,29 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .action_dispatcher import ActionDispatcher
+from .action_dispatcher import ActionDispatcher, build_tool_result_event_payload
+from .bridge_core import (
+    HeartbeatMonitor,
+    HeartbeatPayloadState,
+    ObservationPump,
+    RunSummarizer,
+    UserMessageInbox,
+)
 from .event_bus import BridgeEventBus
 from .executor_loop import ExecutorLoop
 from .ipc_client import IpcClient
 from .kamadan_client import KamadanClient
-from .llm_client import LLMClient
+from .froggy_supervisor import FroggySupervisor, SUPERVISOR_TOOL_NAMES
+from .llm_client import LLMClient, LLMResponse
 from .observation import ObservationWindow
 from .plan import PlanState
 from .plan_controller import PlanController
 from .planner_loop import PlannerLoop
-from .run_history import RunHistoryStore
+from .run_summary_events import build_froggy_summary_stats
+from .run_summary_memory import RunSummaryMemory
+from .runtime_health import connection_disconnect_reason
+from .disconnect import disconnect_details
+from .snapshot_events import build_snapshot_summary
 from .telemetry import BridgeTelemetry
 
 
@@ -52,7 +64,13 @@ class TwoModelAgentLoop:
         kamadan_client: KamadanClient | None = None,
         event_bus: BridgeEventBus | None = None,
         telemetry: BridgeTelemetry | None = None,
-        run_history_store: RunHistoryStore | None = None,
+        run_summary_memory: RunSummaryMemory | None = None,
+        profile: dict[str, Any] | None = None,
+        supervisor_mode: str = "llm",
+        executor_mode: str = "llm",
+        planner_mode: str = "sync",
+        prompt_mode: str = "full",
+        replan_policy: str = "balanced",
     ):
         self.ipc = ipc
         self.planner_llm = planner_llm
@@ -62,14 +80,20 @@ class TwoModelAgentLoop:
         self.objective = objective or DEFAULT_OBJECTIVE
         self.observations = ObservationWindow()
         self.event_bus = event_bus
-        self.telemetry = telemetry or BridgeTelemetry()
-        self.run_history_store = run_history_store or RunHistoryStore()
+        self.profile = profile or {}
+        self.supervisor_mode = supervisor_mode
+        self.executor_mode = executor_mode
+        self.planner_mode = planner_mode
+        self.prompt_mode = prompt_mode
+        self.replan_policy = replan_policy
+        self.telemetry = telemetry or BridgeTelemetry(profile=self.profile)
+        self.telemetry.set_profile(self.profile)
+        self.run_summaries = RunSummarizer(run_summary_memory or RunSummaryMemory())
         self._running = False
-        self._user_message_queue: asyncio.Queue[str] = asyncio.Queue()
+        self.user_messages = UserMessageInbox()
         self._pending_user_messages: list[str] = []
         self._cycle_count = 0
-        self._last_heartbeat_time = 0.0
-        self._saw_heartbeat = False
+        self.heartbeat = HeartbeatMonitor(HEARTBEAT_TIMEOUT_SECONDS)
         self._last_summary_key: str | None = None
         self._last_telemetry_emit_time = 0.0
         self._last_missing_snapshot_query_time = 0.0
@@ -78,6 +102,20 @@ class TwoModelAgentLoop:
         self._missing_snapshot_query_outstanding = False
         self._stop_error: str | None = None
         self._seen_tool_result_request_ids: set[str] = set()
+        self._async_planner_task: asyncio.Task | None = None
+        self._async_planner_key: tuple[int, str] | None = None
+        self._last_supervisor_signature: str | None = None
+        self._supervisor_native_active = False
+        self.supervisor = FroggySupervisor() if supervisor_mode in {"deterministic", "hybrid"} else None
+        self.heartbeat_payload = HeartbeatPayloadState(self.telemetry)
+        self.observation_pump = ObservationPump(
+            ipc,
+            on_snapshot=self._record_snapshot_observation,
+            on_event=self._record_event_observation,
+            on_action_result=self._record_action_result_observation,
+            on_heartbeat=self.heartbeat.mark,
+            on_heartbeat_message=self._record_heartbeat_message,
+        )
 
         self.dispatcher = ActionDispatcher(
             ipc=ipc,
@@ -88,7 +126,7 @@ class TwoModelAgentLoop:
             on_tool_result=self._maybe_summarize_tool_result,
             autonomy=autonomy,
         )
-        self.controller = PlanController(min_interval_seconds=5.0)
+        self.controller = PlanController(min_interval_seconds=5.0, policy=replan_policy)
         self.planner = PlannerLoop(
             llm=planner_llm,
             plan_state=plan_state,
@@ -96,7 +134,9 @@ class TwoModelAgentLoop:
             event_bus=event_bus,
             telemetry=self.telemetry,
             objective=self.objective,
-            run_history=self.run_history_store.list(),
+            run_history=self.run_summaries.list(),
+            prompt_mode=prompt_mode,
+            profile_name=str(self.profile.get("name") or ""),
         )
         self.executor = ExecutorLoop(
             executor_llm=executor_llm,
@@ -104,6 +144,7 @@ class TwoModelAgentLoop:
             dispatcher=self.dispatcher,
             event_bus=event_bus,
             telemetry=self.telemetry,
+            executor_mode=executor_mode,
         )
 
     async def emit(self, event: str, data: dict | None = None) -> None:
@@ -111,43 +152,41 @@ class TwoModelAgentLoop:
             await self.event_bus.emit(event, data or {})
 
     async def inject_user_message(self, message: str) -> None:
-        await self._user_message_queue.put(message)
+        await self.user_messages.put(message)
         await self.emit("chat.user", {"message": message})
 
     async def _collect_observations(self, max_messages: int = 32, max_seconds: float = 0.15) -> None:
-        started = time.monotonic()
-        read_count = 0
-        while read_count < max_messages and time.monotonic() - started < max_seconds:
-            msg = await asyncio.wait_for(self.ipc.read_message(), timeout=0.05)
-            if msg is None:
-                break
-            read_count += 1
-            await self._dispatch_observation_message(msg)
+        await self.observation_pump.drain(
+            max_messages=max_messages,
+            max_seconds=max_seconds,
+            read_timeout=0.05,
+        )
 
-    async def _dispatch_observation_message(self, msg: dict) -> None:
-        msg_type = msg.get("type", "")
-        if msg_type == "snapshot":
-            self._missing_snapshot_query_outstanding = False
-            self.observations.add_snapshot(msg)
-            merged = self.observations.latest or msg
-            await self.emit("snapshot.summary", self._snapshot_summary(merged))
-            await self._maybe_summarize_snapshot(merged)
-        elif msg_type == "event":
-            self.observations.add_event(msg)
-            await self._maybe_summarize_event(msg)
-        elif msg_type == "action_result":
-            self.observations.add_event(msg)
-            request_id = str(msg.get("request_id") or "")
-            if request_id and request_id not in self._seen_tool_result_request_ids:
-                await self.emit("tool.result", {
-                    "request_id": request_id,
-                    "success": bool(msg.get("success", False)),
-                    "error": msg.get("error"),
-                    "orphan": True,
-                })
-        elif msg_type == "heartbeat":
-            self._last_heartbeat_time = time.monotonic()
-            self._saw_heartbeat = True
+    async def _record_snapshot_observation(self, msg: dict) -> None:
+        self._missing_snapshot_query_outstanding = False
+        self.observations.add_snapshot(msg)
+        merged = self.observations.latest or msg
+        await self.emit("snapshot.summary", build_snapshot_summary(merged))
+        await self._maybe_summarize_snapshot(merged)
+
+    async def _record_event_observation(self, msg: dict) -> None:
+        self.observations.add_event(msg)
+        await self._maybe_summarize_event(msg)
+
+    async def _record_action_result_observation(self, msg: dict) -> None:
+        self.observations.add_event(msg)
+        if self.supervisor is not None:
+            self.supervisor.observe_tool_result(msg)
+        request_id = str(msg.get("request_id") or "")
+        if not request_id or request_id in self._seen_tool_result_request_ids:
+            return
+        await self.emit(
+            "tool.result",
+            build_tool_result_event_payload(request_id, msg, orphan=True),
+        )
+
+    def _record_heartbeat_message(self, msg: dict) -> None:
+        self.heartbeat_payload.record(msg)
 
     async def _collect_observations_safe(self) -> None:
         try:
@@ -179,8 +218,15 @@ class TwoModelAgentLoop:
                 disconnect_reason = self._connection_disconnect_reason()
                 if disconnect_reason:
                     self._stop_error = disconnect_reason
+                    details = disconnect_details(
+                        self.observations.latest,
+                        heartbeat_age_s=self.heartbeat.age_seconds(),
+                    ) or {"reason": disconnect_reason, "heartbeat_age_s": self.heartbeat.age_seconds()}
+                    details.setdefault("reason", disconnect_reason)
+                    await self.emit("disconnect_detected", details)
                     await self.emit("degradation", {
                         "reason": disconnect_reason,
+                        "disconnect": details,
                         **self._telemetry_payload(error=disconnect_reason),
                     })
                     await self.emit("bridge.status", {
@@ -199,20 +245,40 @@ class TwoModelAgentLoop:
 
                 events = self.observations.drain_events()
                 plan = await self.plan_state.get()
+                completed_plan = await self._poll_async_planner()
+                if completed_plan is not None:
+                    plan = completed_plan
+                supervisor_needs_planner = await self._run_supervisor_tick(snapshot, events)
+                if self.supervisor is not None:
+                    plan = await self.plan_state.get()
                 decision = self.controller.evaluate(plan, snapshot, events)
+                if decision.suppression_reason:
+                    self.telemetry.record_replan_suppressed(decision.suppression_reason)
+                decision = self._apply_supervisor_replan_suppression(decision)
                 if self._pending_user_messages and not decision.should_replan:
                     decision = type(decision)(True, "user_message")
+                if supervisor_needs_planner and not decision.should_replan:
+                    decision = type(decision)(True, "supervisor_unknown_state")
 
                 if decision.should_replan or plan.phase == "idle":
-                    new_plan = await self.planner.replan(
-                        decision.reason or "initial",
-                        snapshot,
-                        events,
-                        self._pending_user_messages,
-                    )
-                    self._pending_user_messages.clear()
-                    if new_plan is not None:
-                        plan = new_plan
+                    if self.planner_mode == "async":
+                        self._schedule_async_replan(
+                            decision.reason or "initial",
+                            snapshot,
+                            events,
+                            self._pending_user_messages,
+                        )
+                        self._pending_user_messages.clear()
+                    else:
+                        new_plan = await self.planner.replan(
+                            decision.reason or "initial",
+                            snapshot,
+                            events,
+                            self._pending_user_messages,
+                        )
+                        self._pending_user_messages.clear()
+                        if new_plan is not None:
+                            plan = new_plan
 
                 if self.planner.unhealthy and self.executor.unhealthy:
                     await self._handoff_to_froggy("both_llms_unhealthy")
@@ -240,9 +306,112 @@ class TwoModelAgentLoop:
         print("[TwoModel] Loop stopped", flush=True)
 
     async def _drain_user_messages(self) -> None:
-        while not self._user_message_queue.empty():
-            message = self._user_message_queue.get_nowait()
-            self._pending_user_messages.append(message)
+        self._pending_user_messages.extend(self.user_messages.drain_nowait())
+
+    async def _run_supervisor_tick(self, snapshot: dict, events: list[dict]) -> bool:
+        if self.supervisor is None:
+            return False
+        decision = self.supervisor.decide(snapshot, events)
+        if decision is None:
+            self._supervisor_native_active = False
+            return False
+        self._supervisor_native_active = (
+            decision.action == "wait"
+            and decision.reason.startswith("native_")
+            and decision.reason.endswith("_in_progress")
+        )
+        if decision.signature != self._last_supervisor_signature:
+            supervisor_plan = decision.to_plan()
+            await self.plan_state.replace(supervisor_plan)
+            await self.emit("plan.updated", supervisor_plan.to_dict())
+            self._last_supervisor_signature = decision.signature
+        if decision.control_required and self.supervisor.should_execute(decision):
+            if await self._supervisor_enter_llm_control_if_needed(snapshot):
+                return decision.needs_planner
+            response = LLMResponse(tool_calls=[decision.to_tool_call()])
+            summary = await self.dispatcher.execute_response(
+                response,
+                role="planner",
+                allowed_tool_names=SUPERVISOR_TOOL_NAMES,
+                history=[],
+            )
+            for result in summary.results:
+                self.telemetry.record_tool_result("supervisor", bool(result.get("success")))
+        return decision.needs_planner
+
+    def _apply_supervisor_replan_suppression(self, decision):
+        if (
+            self._supervisor_native_active
+            and decision.should_replan
+            and decision.reason == "plan_expired"
+        ):
+            self.telemetry.record_replan_suppressed("native_active:plan_expired")
+            return type(decision)(False, suppression_reason="native_active:plan_expired")
+        return decision
+
+    async def _supervisor_enter_llm_control_if_needed(self, snapshot: dict) -> bool:
+        bot = snapshot.get("bot") or {}
+        if bot.get("state") == "llm_controlled":
+            return False
+        if not bot.get("safe_to_enter_llm_control"):
+            return False
+        result = await self.dispatcher.force_game_action(
+            "set_bot_state",
+            {"state": "llm_controlled"},
+            role="planner",
+            request_id="supervisor-control",
+        )
+        self.telemetry.record_tool_result("supervisor", bool(result.get("success")))
+        return True
+
+    def _schedule_async_replan(
+        self,
+        reason: str,
+        snapshot: dict,
+        events: list[dict],
+        user_messages: list[str],
+    ) -> None:
+        if self._async_planner_task is not None and not self._async_planner_task.done():
+            self.telemetry.record_replan_suppressed("planner_async_inflight")
+            return
+        key = self._planner_context_key(snapshot)
+        self._async_planner_key = key
+        self._async_planner_task = asyncio.create_task(
+            self.planner.replan(
+                reason,
+                snapshot,
+                list(events),
+                list(user_messages),
+                accept_plan=lambda _plan, expected=key: self._planner_context_key(self.observations.latest) == expected,
+            )
+        )
+
+    async def _poll_async_planner(self):
+        if self._async_planner_task is None or not self._async_planner_task.done():
+            return None
+        task = self._async_planner_task
+        self._async_planner_task = None
+        self._async_planner_key = None
+        try:
+            return task.result()
+        except Exception as exc:
+            await self.emit("degradation", {
+                "reason": "planner_async_error",
+                "error": str(exc),
+            })
+            self.telemetry.record_degradation("planner_async_error")
+            return None
+
+    @staticmethod
+    def _planner_context_key(snapshot: dict | None) -> tuple[int, str]:
+        snapshot = snapshot or {}
+        try:
+            map_id = int((snapshot.get("map") or {}).get("map_id") or 0)
+        except (TypeError, ValueError):
+            map_id = 0
+        bot = snapshot.get("bot") or {}
+        phase = str(bot.get("phase") or bot.get("state") or "")
+        return (map_id, phase)
 
     async def _handoff_to_froggy(self, reason: str) -> None:
         await self.emit("degradation", {
@@ -296,21 +465,10 @@ class TwoModelAgentLoop:
         })
 
     def _heartbeat_timed_out(self) -> bool:
-        if not self._saw_heartbeat:
-            return False
-        return time.monotonic() - self._last_heartbeat_time > HEARTBEAT_TIMEOUT_SECONDS
+        return self.heartbeat.timed_out()
 
     def _connection_disconnect_reason(self, snapshot: dict | None = None) -> str | None:
-        snap = snapshot or self.observations.latest or {}
-        connection = snap.get("connection", {}) or {}
-        if connection.get("disconnected"):
-            reason = connection.get("reason") or connection.get("state") or "unknown"
-            return f"gw_disconnected:{reason}"
-
-        map_state = snap.get("map", {}) or {}
-        if map_state.get("loading_state") == 2:
-            return "gw_disconnected:loading_state_disconnected"
-        return None
+        return connection_disconnect_reason(snapshot or self.observations.latest)
 
     async def _maybe_summarize_event(self, event: dict) -> None:
         name = str(event.get("event") or event.get("type") or "")
@@ -363,19 +521,10 @@ class TwoModelAgentLoop:
             "run_number": bot.get("run_number") or bot.get("run"),
             "instance_time": map_state.get("instance_time"),
             "last_outcome": last_outcome,
-            "stats": {
-                "runs": stats.get("run_count"),
-                "fails": stats.get("fail_count"),
-                "wipes": stats.get("monitoring_wipes"),
-                "route_wipes": stats.get("route_wipe_count"),
-                "chests_opened": stats.get("chests_opened"),
-                "gold_items": stats.get("gold_items"),
-                "rare_skins": stats.get("rare_skins"),
-                "tomes": stats.get("tomes"),
-            },
+            "stats": build_froggy_summary_stats(stats),
         }
-        item = self.run_history_store.append(summary)
-        self.planner.run_history = self.run_history_store.list()
+        item = self.run_summaries.append(summary)
+        self.planner.run_history = self.run_summaries.list()
         self.telemetry.record_run_summary(item)
         await self.emit("run.summary", item)
         await self._emit_telemetry_snapshot("run_summary")
@@ -440,7 +589,7 @@ class TwoModelAgentLoop:
                 continue
             if msg is None:
                 return saw_result
-            await self._dispatch_observation_message(msg)
+            await self.observation_pump._dispatch(msg)
             if msg.get("type") == "action_result" and msg.get("request_id") == request_id:
                 saw_result = True
                 return True
@@ -462,32 +611,6 @@ class TwoModelAgentLoop:
             except Exception:
                 return
 
-    @staticmethod
-    def _snapshot_summary(snapshot: dict) -> dict:
-        me = snapshot.get("me", {}) or {}
-        party = snapshot.get("party", {}) or {}
-        inv = snapshot.get("inventory", {}) or {}
-        bot = snapshot.get("bot", {}) or {}
-        map_state = snapshot.get("map", {}) or {}
-        connection = snapshot.get("connection", {}) or {}
-        return {
-            "map": map_state.get("map_id"),
-            "connection": {
-                "state": connection.get("state"),
-                "disconnected": connection.get("disconnected"),
-                "reason": connection.get("reason"),
-                "likely_disconnect_code": connection.get("likely_disconnect_code"),
-            },
-            "hp": me.get("hp"),
-            "party": {
-                "size": party.get("size"),
-                "dead": party.get("dead_count"),
-                "defeated": party.get("is_defeated"),
-            },
-            "free_slots": inv.get("free_slots_total"),
-            "current_phase": bot.get("state"),
-        }
-
     def _telemetry_payload(
         self,
         *,
@@ -500,10 +623,8 @@ class TwoModelAgentLoop:
         payload = {
             "autonomy": self.autonomy,
             "error": error,
-            "heartbeat_age_seconds": (
-                max(0.0, time.monotonic() - self._last_heartbeat_time)
-                if self._saw_heartbeat else None
-            ),
+            "heartbeat_age_seconds": self.heartbeat.age_seconds(),
+            "outbound_snapshots_dropped": self.heartbeat_payload.outbound_snapshots_dropped,
             "bot_phase": bot.get("phase") or bot.get("state"),
             "route_progress": route.get("progress"),
             "connection_state": connection.get("state"),
