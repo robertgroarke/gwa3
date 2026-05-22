@@ -5,9 +5,14 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "dev": "node --watch server/index.js"
+    "dev": "node --watch server/index.js",
+    "test:web": "playwright test",
+    "test:parity": "node tests/parity/check-parity.js"
   },
   "dependencies": {
     "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
   }
 }

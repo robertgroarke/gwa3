@@ -29,6 +29,75 @@
 
     <div id="bot-grid" class="bot-grid"></div>
 
+    <section id="llm-workspace" class="llm-workspace">
+      <div id="llm-degradation" class="degradation-banner hidden"></div>
+
+      <div class="llm-panel lane-launcher">
+        <div class="panel-header">
+          <h2>Lane Launcher</h2>
+          <span id="llm-observers" class="status-badge status-idle">BEASTRIT lane only</span>
+        </div>
+        <div class="lane-row">
+          <div>
+            <span class="label">Lane</span>
+            <strong>BEASTRIT</strong>
+          </div>
+          <div>
+            <span class="label">Profile</span>
+            <strong id="llm-profile-name">qwen-safe</strong>
+          </div>
+          <div>
+            <span class="label">Supervisor</span>
+            <strong id="llm-supervisor-mode">deterministic</strong>
+          </div>
+          <div>
+            <span class="label">Executor</span>
+            <strong id="llm-executor-mode">health-check</strong>
+          </div>
+          <div>
+            <span class="label">Planner</span>
+            <strong id="llm-planner-model">qwen3.5:cloud</strong>
+          </div>
+          <div>
+            <span class="label">Prompt</span>
+            <strong id="llm-prompt-mode">delta</strong>
+          </div>
+          <span id="llm-status" class="status-badge status-stopped">stopped</span>
+          <button id="llm-launch-btn" onclick="llmLaunch()">Launch</button>
+          <button id="llm-stop-btn" onclick="llmStop()">Stop</button>
+        </div>
+      </div>
+
+      <div class="llm-panel chat-panel">
+        <div class="panel-header"><h2>Live Chat Panel</h2></div>
+        <div id="llm-chat-log" class="chat-log"></div>
+        <form class="chat-form" onsubmit="llmSendChat(event)">
+          <input id="llm-chat-input" placeholder="Message the LLM agent">
+          <button type="submit">Send</button>
+        </form>
+      </div>
+
+      <div class="llm-panel plan-panel">
+        <div class="panel-header"><h2>Plan + State Panel</h2></div>
+        <div class="plan-grid">
+          <div><span class="label">Phase</span><span id="llm-plan-phase">--</span></div>
+          <div><span class="label">Intent</span><span id="llm-plan-intent">--</span></div>
+          <div><span class="label">Next Step</span><span id="llm-plan-next">--</span></div>
+          <div><span class="label">Deviation</span><span id="llm-plan-deviation">--</span></div>
+          <div><span class="label">Map</span><span id="llm-snapshot-map">--</span></div>
+          <div><span class="label">HP</span><span id="llm-snapshot-hp">--</span></div>
+          <div><span class="label">Party</span><span id="llm-snapshot-party">--</span></div>
+          <div><span class="label">Free Slots</span><span id="llm-snapshot-slots">--</span></div>
+        </div>
+        <ul id="llm-tool-list" class="tool-list"></ul>
+      </div>
+
+      <div class="llm-panel run-history-panel">
+        <div class="panel-header"><h2>Run History Panel</h2></div>
+        <div id="llm-run-history" class="run-history"></div>
+      </div>
+    </section>
+
     <div id="aggregate" class="aggregate-panel">
       <div><span class="label">Total Runs</span><span id="agg-runs">0</span></div>
       <div><span class="label">Online</span><span id="agg-online">0/0</span></div>

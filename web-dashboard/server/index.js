@@ -7,7 +7,10 @@ const envFile = path.join(__dirname, '..', '.env');
 if (fs.existsSync(envFile)) {
   for (const line of fs.readFileSync(envFile, 'utf8').split('\n')) {
     const match = line.match(/^([^#=]+)=(.*)$/);
-    if (match) process.env[match[1].trim()] = match[2].trim();
+    if (match) {
+      const key = match[1].trim();
+      if (process.env[key] === undefined) process.env[key] = match[2].trim();
+    }
   }
 }
 
@@ -18,6 +21,7 @@ const authMiddleware = require('./auth');
 const botsRouter = require('./routes/bots');
 const configRouter = require('./routes/config');
 const eventsRouter = require('./routes/events');
+const llmRouter = require('./routes/llm');
 
 const PORT = process.env.PORT || 3847;
 const AUTH_TOKEN = process.env.AUTH_TOKEN || 'changeme';
@@ -56,6 +60,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/bots', botsRouter(reader, writer, launcher));
 app.use('/api/config', configRouter(launcher));
 app.use('/api/events', eventsRouter(reader));
+app.use('/api/llm', llmRouter());
 
 // Serve static frontend
 app.use(express.static(path.join(__dirname, '..', 'public')));

@@ -2,7 +2,26 @@ const API = '';
 let token = localStorage.getItem('gwa-token');
 let selectedBot = null;
 let eventSource = null;
+let llmEventSource = null;
 let allCharacters = [];
+let llmState = {
+  status: 'stopped',
+  observers: 0,
+  plan: {},
+  snapshot: {},
+  toolCalls: [],
+  runHistory: [],
+  degradation: null,
+  profile: {
+    name: 'qwen-safe',
+    supervisor_mode: 'deterministic',
+    executor_mode: 'health-check',
+    planner_mode: 'async',
+    prompt_mode: 'delta',
+    planner_model: 'qwen3.5:cloud',
+    executor_model: 'qwen3.5:cloud',
+  },
+};
 
 // Map IDs to human-readable names
 const MAP_NAMES = {
@@ -42,6 +61,7 @@ function logout() {
   token = null;
   localStorage.removeItem('gwa-token');
   if (eventSource) eventSource.close();
+  if (llmEventSource) llmEventSource.close();
   document.getElementById('login-page').classList.remove('hidden');
   document.getElementById('dashboard-page').classList.add('hidden');
 }
@@ -56,6 +76,8 @@ async function showDashboard() {
   document.getElementById('dashboard-page').classList.remove('hidden');
   await loadCharacters();
   connectSSE();
+  connectLlmSSE();
+  await loadLlmState();
   // Initial load
   const res = await api('/api/bots');
   if (res.ok) renderBots(await res.json());
@@ -70,6 +92,216 @@ function connectSSE() {
   eventSource.onerror = () => {
     setTimeout(connectSSE, 5000);
   };
+}
+
+async function loadLlmState() {
+  const res = await api('/api/llm/state');
+  if (!res.ok) {
+    setLlmStatus('degraded');
+    return;
+  }
+  const data = await res.json();
+  llmState.status = (data.bridge || {}).status || 'stopped';
+  llmState.observers = (data.bridge || {}).observers || 0;
+  llmState.plan = data.plan || {};
+  llmState.toolCalls = data.last_tool_calls || [];
+  llmState.runHistory = data.run_summaries || [];
+  llmState.degradation = data.degradation || null;
+  llmState.profile = data.profile || llmState.profile;
+  renderLlm();
+}
+
+function connectLlmSSE() {
+  if (llmEventSource) llmEventSource.close();
+  llmEventSource = new EventSource(API + `/api/llm/stream?token=${token}`);
+  llmEventSource.addEventListener('bridge.status', e => {
+    const data = parseEvent(e);
+    llmState.observers = data.observers == null ? llmState.observers : data.observers;
+    if (data.profile) llmState.profile = data.profile;
+    setLlmStatus(data.status || 'stopped');
+  });
+  llmEventSource.addEventListener('llm.telemetry', e => {
+    const data = parseEvent(e);
+    if (data.profile) llmState.profile = data.profile;
+    renderLlmProfile();
+  });
+  llmEventSource.addEventListener('chat.user', e => {
+    appendChat('Operator', parseEvent(e).message || '');
+  });
+  llmEventSource.addEventListener('chat.assistant', e => {
+    appendChat('Assistant', parseEvent(e).message || '');
+  });
+  llmEventSource.addEventListener('tool.call', e => {
+    const data = parseEvent(e);
+    llmState.toolCalls.unshift({ ...data, kind: 'call' });
+    llmState.toolCalls = llmState.toolCalls.slice(0, 10);
+    appendChat('Tool', `[${data.role || '?'} -> ${data.name || '?'}]`);
+    renderLlmTools();
+  });
+  llmEventSource.addEventListener('tool.result', e => {
+    const data = parseEvent(e);
+    llmState.toolCalls.unshift({ ...data, kind: 'result' });
+    llmState.toolCalls = llmState.toolCalls.slice(0, 10);
+    renderLlmTools();
+  });
+  llmEventSource.addEventListener('plan.updated', e => {
+    llmState.plan = parseEvent(e);
+    document.querySelector('.plan-panel').classList.add('plan-flash');
+    setTimeout(() => document.querySelector('.plan-panel').classList.remove('plan-flash'), 900);
+    renderLlm();
+  });
+  llmEventSource.addEventListener('snapshot.summary', e => {
+    llmState.snapshot = parseEvent(e);
+    renderLlm();
+  });
+  llmEventSource.addEventListener('run.summary', e => {
+    llmState.runHistory.unshift(parseEvent(e));
+    llmState.runHistory = llmState.runHistory.slice(0, 20);
+    renderRunHistory();
+  });
+  llmEventSource.addEventListener('degradation', e => {
+    const data = parseEvent(e);
+    llmState.degradation = data;
+    renderLlmDegradation();
+  });
+  llmEventSource.onerror = () => {
+    setLlmStatus('reconnecting');
+    setTimeout(connectLlmSSE, 5000);
+  };
+}
+
+function parseEvent(e) {
+  try { return JSON.parse(e.data || '{}'); } catch { return {}; }
+}
+
+function setLlmStatus(status) {
+  llmState.status = status;
+  renderLlm();
+}
+
+async function llmLaunch() {
+  const res = await api('/api/llm/launch', {
+    method: 'POST',
+    body: JSON.stringify({ lane: 'beastrit' }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    llmState.degradation = {
+      reason: data.error || 'launch_failed',
+      surface: data.message || data.error || 'Launch failed',
+    };
+    renderLlmDegradation();
+    await loadLlmState();
+  } else if (data.status) {
+    setLlmStatus(data.status);
+  }
+}
+
+async function llmStop() {
+  document.getElementById('llm-stop-btn').disabled = true;
+  await api('/api/llm/stop', { method: 'POST', body: '{}' });
+  document.getElementById('llm-stop-btn').disabled = false;
+}
+
+async function llmSendChat(event) {
+  event.preventDefault();
+  const input = document.getElementById('llm-chat-input');
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = '';
+  await api('/api/llm/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  });
+}
+
+function appendChat(author, message) {
+  if (!message) return;
+  const log = document.getElementById('llm-chat-log');
+  const row = document.createElement('div');
+  row.className = `chat-row chat-${author.toLowerCase()}`;
+  row.innerHTML = `<span>${escapeHtml(author)}</span><p>${escapeHtml(message)}</p>`;
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+}
+
+function renderLlm() {
+  const status = document.getElementById('llm-status');
+  if (!status) return;
+  status.textContent = llmState.status || 'stopped';
+  status.className = `status-badge status-${llmState.status || 'stopped'}`;
+  const observers = document.getElementById('llm-observers');
+  if (observers) {
+    observers.textContent = `${llmState.observers || 0} observers connected`;
+  }
+  renderLlmProfile();
+
+  const plan = llmState.plan || {};
+  document.getElementById('llm-plan-phase').textContent = plan.phase || '--';
+  document.getElementById('llm-plan-intent').textContent = plan.intent || '--';
+  document.getElementById('llm-plan-next').textContent = plan.next_step || '--';
+  document.getElementById('llm-plan-deviation').textContent = plan.deviation || '--';
+
+  const snap = llmState.snapshot || {};
+  document.getElementById('llm-snapshot-map').textContent = snap.map || '--';
+  document.getElementById('llm-snapshot-hp').textContent =
+    typeof snap.hp === 'number' ? `${Math.round(snap.hp * 100)}%` : '--';
+  const party = snap.party || {};
+  document.getElementById('llm-snapshot-party').textContent =
+    party.size ? `${party.size} members, ${party.dead || 0} dead` : '--';
+  document.getElementById('llm-snapshot-slots').textContent =
+    snap.free_slots == null ? '--' : String(snap.free_slots);
+
+  renderLlmTools();
+  renderRunHistory();
+  renderLlmDegradation();
+}
+
+function renderLlmProfile() {
+  const profile = llmState.profile || {};
+  setText('llm-profile-name', profile.name || 'qwen-safe');
+  setText('llm-supervisor-mode', profile.supervisor_mode || '--');
+  setText('llm-executor-mode', profile.executor_mode || '--');
+  setText('llm-planner-model', profile.planner_model || profile.model || '--');
+  setText('llm-prompt-mode', profile.prompt_mode || '--');
+}
+
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+
+function renderLlmDegradation() {
+  const banner = document.getElementById('llm-degradation');
+  const degradation = llmState.degradation;
+  if (!banner) return;
+  if (!degradation || llmState.status === 'stopped') {
+    banner.classList.add('hidden');
+    banner.textContent = '';
+    return;
+  }
+  banner.textContent = degradation.surface || degradation.reason || 'LLM bridge degraded';
+  banner.classList.remove('hidden');
+}
+
+function renderLlmTools() {
+  const list = document.getElementById('llm-tool-list');
+  list.innerHTML = llmState.toolCalls.slice(0, 10).map(call => {
+    if (call.kind === 'result' || Object.prototype.hasOwnProperty.call(call, 'success')) {
+      return `<li class="${call.success ? 'ok' : 'bad'}">result ${escapeHtml(call.request_id || '')}: ${call.success ? 'ok' : escapeHtml(call.error || 'error')}</li>`;
+    }
+    return `<li>[${escapeHtml(call.role || '?')} -> ${escapeHtml(call.name || '?')}]</li>`;
+  }).join('');
+}
+
+function renderRunHistory() {
+  const el = document.getElementById('llm-run-history');
+  el.innerHTML = llmState.runHistory.map((run, idx) => `
+    <details ${idx === 0 ? 'open' : ''}>
+      <summary>${escapeHtml(run.title || run.phase || `Run ${idx + 1}`)}</summary>
+      <pre>${escapeHtml(JSON.stringify(run, null, 2))}</pre>
+    </details>
+  `).join('') || '<p class="muted">No run summaries yet.</p>';
 }
 
 function renderBots(bots) {

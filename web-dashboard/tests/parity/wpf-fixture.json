@@ -1,0 +1,17 @@
+{
+  "panels": [
+    "Lane Launcher",
+    "Live Chat Panel",
+    "Plan + State Panel",
+    "Run History Panel"
+  ],
+  "values": {
+    "lane": "BEASTRIT",
+    "profile": "qwen-safe",
+    "supervisor": "deterministic",
+    "executorMode": "health-check",
+    "promptMode": "delta",
+    "planner": "qwen3.5:cloud",
+    "beastritOnly": "BEASTRIT lane only"
+  }
+}
