@@ -25,8 +25,12 @@ let llmState = {
 
 // Map IDs to human-readable names
 const MAP_NAMES = {
-  0: 'Unknown', 638: "Gadd's Encampment", 495: 'Sparkfly Swamp',
-  857: 'Embark Beach', 558: 'Bogroot Growths Lv1', 559: 'Bogroot Growths Lv2',
+  0: 'Unknown',
+  638: "Gadd's Encampment",
+  558: 'Sparkfly Swamp',
+  615: 'Bogroot Growths Lv1',
+  616: 'Bogroot Growths Lv2',
+  857: 'Embark Beach',
 };
 
 // ---- Auth ----
@@ -243,7 +247,9 @@ function renderLlm() {
   document.getElementById('llm-plan-deviation').textContent = plan.deviation || '--';
 
   const snap = llmState.snapshot || {};
-  document.getElementById('llm-snapshot-map').textContent = snap.map || '--';
+  const mapId = snap.map;
+  document.getElementById('llm-snapshot-map').textContent =
+    snap.map_name || MAP_NAMES[mapId] || (mapId == null ? '--' : `Map ${mapId}`);
   document.getElementById('llm-snapshot-hp').textContent =
     typeof snap.hp === 'number' ? `${Math.round(snap.hp * 100)}%` : '--';
   const party = snap.party || {};
@@ -262,6 +268,7 @@ function renderLlmProfile() {
   setText('llm-profile-name', profile.name || 'qwen-safe');
   setText('llm-supervisor-mode', profile.supervisor_mode || '--');
   setText('llm-executor-mode', profile.executor_mode || '--');
+  setText('llm-planner-mode', profile.planner_mode || '--');
   setText('llm-planner-model', profile.planner_model || profile.model || '--');
   setText('llm-prompt-mode', profile.prompt_mode || '--');
 }
@@ -471,6 +478,7 @@ function formatUptime(secs) {
 }
 
 function escapeHtml(s) {
+  s = String(s == null ? '' : s);
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 

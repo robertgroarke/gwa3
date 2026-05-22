@@ -10,6 +10,7 @@
     "profile": "qwen-safe",
     "supervisor": "deterministic",
     "executorMode": "health-check",
+    "plannerMode": "async",
     "promptMode": "delta",
     "planner": "qwen3.5:cloud",
     "beastritOnly": "BEASTRIT lane only"

@@ -133,6 +133,7 @@ test('LLM panel proxies launch, chat, stream, and stop', async ({ page }) => {
     await expect(page.locator('#llm-profile-name')).toHaveText('qwen-safe');
     await expect(page.locator('#llm-supervisor-mode')).toHaveText('deterministic');
     await expect(page.locator('#llm-executor-mode')).toHaveText('health-check');
+    await expect(page.locator('#llm-planner-mode')).toHaveText('async');
 
     await page.locator('#llm-launch-btn').click();
     await expect(page.locator('#llm-status')).toHaveText(/connected/i);
