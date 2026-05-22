@@ -22,6 +22,7 @@ ACTION_RESULT_TIMEOUT_SECONDS = 2.0
 CONTROL_ACTION_RESULT_TIMEOUT_SECONDS = 180.0
 PLANNER_ACTION_RESULT_TIMEOUT_SECONDS = 3600.0
 LOCAL_WAIT_POLL_SECONDS = 0.25
+ACTION_RESULT_OBSERVATION_POLL_SECONDS = 0.5
 POST_ACTION_OBSERVATION_SECONDS = 0.75
 MAP_TRANSITION_OBSERVATION_SECONDS = 2.0
 ADVISORY_CONTROL_ACTION = "set_bot_state"
@@ -325,11 +326,19 @@ class ActionDispatcher:
                 "request_id": request_id,
             }
         try:
-            result = await wait_for_result(
-                request_id,
-                timeout=timeout,
-                future=pending_result,
-            )
+            if self.collect_observations is None or pending_result is None:
+                result = await wait_for_result(
+                    request_id,
+                    timeout=timeout,
+                    future=pending_result,
+                )
+            else:
+                result = await self._await_action_result_with_observation_poll(
+                    wait_for_result,
+                    request_id,
+                    timeout,
+                    pending_result,
+                )
         except asyncio.TimeoutError:
             return {
                 "success": False,
@@ -343,6 +352,43 @@ class ActionDispatcher:
             "action": action_name,
             "request_id": result.get("request_id", request_id),
         }
+
+    async def _await_action_result_with_observation_poll(
+        self,
+        wait_for_result,
+        request_id: str,
+        timeout: float,
+        pending_result,
+    ) -> dict:
+        waiter = asyncio.create_task(wait_for_result(
+            request_id,
+            timeout=timeout,
+            future=pending_result,
+        ))
+        deadline = time.monotonic() + max(0.0, timeout)
+        try:
+            while not waiter.done():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    waiter.cancel()
+                    try:
+                        await waiter
+                    except asyncio.CancelledError:
+                        pass
+                    raise asyncio.TimeoutError()
+                done, _ = await asyncio.wait(
+                    {waiter},
+                    timeout=min(ACTION_RESULT_OBSERVATION_POLL_SECONDS, remaining),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if done:
+                    break
+                if self.collect_observations is not None:
+                    await self.collect_observations()
+            return await waiter
+        except asyncio.CancelledError:
+            waiter.cancel()
+            raise
 
     async def _wait_locally(self, milliseconds: int | float) -> None:
         try:

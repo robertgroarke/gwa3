@@ -37,7 +37,10 @@ python -m bridge `
 `snapshot.summary`. Long native helpers can pause fresh snapshot emission while
 the game is still moving. The metadata reports snapshot age plus the pending
 helper name/request id so UI clients can show "native helper running" instead
-of making a healthy long helper look frozen.
+of making a healthy long helper look frozen. If a helper is still pending and
+the last snapshot is older than 15 seconds, `/api/llm/state` returns
+`snapshot_meta.stale=true`, `snapshot_meta.stale_reason`, and a recoverable
+`snapshot_stale_during_native_action` degradation for operator-facing banners.
 
 ## Launch Profiles
 

@@ -24,6 +24,7 @@ PLAN_RECOVERABLE_DEGRADATION_PREFIXES = (
     "planner_invalid_json:",
     "planner_slow",
 )
+STALE_SNAPSHOT_DURING_ACTION_SECONDS = 15.0
 
 
 @dataclass
@@ -144,6 +145,29 @@ class BridgeHttpState:
             if pending_tool_started is not None
             else None
         )
+        stale_during_native_action = (
+            bool(pending_tools)
+            and snapshot_age is not None
+            and snapshot_age > STALE_SNAPSHOT_DURING_ACTION_SECONDS
+        )
+        stale_snapshot_reason = (
+            "snapshot_stale_during_native_action"
+            if stale_during_native_action
+            else None
+        )
+        computed_degradation = self.last_degradation
+        if computed_degradation is None and stale_during_native_action:
+            computed_degradation = {
+                "reason": stale_snapshot_reason,
+                "surface": (
+                    "native Froggy action is still pending; "
+                    "the last game snapshot is stale"
+                ),
+                "snapshot_age_seconds": snapshot_age,
+                "pending_tool_name": pending_tool.get("name"),
+                "pending_tool_age_seconds": pending_tool_age,
+                "recoverable": True,
+            }
         return {
             "bridge": {
                 "status": self.status,
@@ -156,6 +180,9 @@ class BridgeHttpState:
             "snapshot_meta": {
                 "received_at": self.last_snapshot_received_at,
                 "age_seconds": snapshot_age,
+                "stale": bool(stale_during_native_action),
+                "stale_reason": stale_snapshot_reason,
+                "stale_threshold_seconds": STALE_SNAPSHOT_DURING_ACTION_SECONDS,
                 "native_action_active": bool(pending_tools),
                 "pending_tool_name": pending_tool.get("name"),
                 "pending_tool_request_id": pending_tool.get("request_id"),
@@ -169,7 +196,7 @@ class BridgeHttpState:
             "telemetry_timeline": list(self.telemetry_timeline)[:50],
             "flight_recorder": self.flight_recorder.snapshot() if self.flight_recorder else None,
             "last_disconnect": self.last_disconnect,
-            "degradation": self.last_degradation,
+            "degradation": computed_degradation,
         }
 
 
