@@ -52,6 +52,14 @@ function createBridgeStub() {
           executor_model: 'qwen3.5:cloud',
         },
         plan: { phase: 'idle', intent: 'wait', next_step: 'wait', deviation: '-' },
+        snapshot: { map: 558, hp: 1, party: { size: 8, dead: 0 }, free_slots: 5 },
+        snapshot_meta: {
+          age_seconds: 7,
+          native_action_active: true,
+          pending_tool_name: 'froggy_run_sparkfly_route_to_tekks',
+          pending_tool_request_id: 'route-1',
+          pending_tool_age_seconds: 42,
+        },
         last_tool_calls: [],
         run_summaries: [],
       }));
@@ -134,6 +142,8 @@ test('LLM panel proxies launch, chat, stream, and stop', async ({ page }) => {
     await expect(page.locator('#llm-supervisor-mode')).toHaveText('deterministic');
     await expect(page.locator('#llm-executor-mode')).toHaveText('health-check');
     await expect(page.locator('#llm-planner-mode')).toHaveText('async');
+    await expect(page.locator('#llm-snapshot-age')).toHaveText('7s');
+    await expect(page.locator('#llm-native-helper')).toContainText('froggy_run_sparkfly_route_to_tekks running 42s');
 
     await page.locator('#llm-launch-btn').click();
     await expect(page.locator('#llm-status')).toHaveText(/connected/i);

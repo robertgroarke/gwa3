@@ -3,7 +3,9 @@
     "Lane Launcher",
     "Live Chat Panel",
     "Plan + State Panel",
-    "Run History Panel"
+    "Run History Panel",
+    "Snapshot Freshness",
+    "Native Helper"
   ],
   "values": {
     "lane": "BEASTRIT",

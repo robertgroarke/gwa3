@@ -9,6 +9,7 @@ let llmState = {
   observers: 0,
   plan: {},
   snapshot: {},
+  snapshotMeta: {},
   toolCalls: [],
   runHistory: [],
   degradation: null,
@@ -108,6 +109,8 @@ async function loadLlmState() {
   llmState.status = (data.bridge || {}).status || 'stopped';
   llmState.observers = (data.bridge || {}).observers || 0;
   llmState.plan = data.plan || {};
+  llmState.snapshot = data.snapshot || {};
+  llmState.snapshotMeta = data.snapshot_meta || {};
   llmState.toolCalls = data.last_tool_calls || [];
   llmState.runHistory = data.run_summaries || [];
   llmState.degradation = data.degradation || null;
@@ -139,14 +142,28 @@ function connectLlmSSE() {
     const data = parseEvent(e);
     llmState.toolCalls.unshift({ ...data, kind: 'call' });
     llmState.toolCalls = llmState.toolCalls.slice(0, 10);
+    llmState.snapshotMeta = {
+      ...(llmState.snapshotMeta || {}),
+      native_action_active: true,
+      pending_tool_name: data.name,
+      pending_tool_request_id: data.request_id,
+      pending_tool_age_seconds: 0,
+    };
     appendChat('Tool', `[${data.role || '?'} -> ${data.name || '?'}]`);
-    renderLlmTools();
+    renderLlm();
   });
   llmEventSource.addEventListener('tool.result', e => {
     const data = parseEvent(e);
     llmState.toolCalls.unshift({ ...data, kind: 'result' });
     llmState.toolCalls = llmState.toolCalls.slice(0, 10);
-    renderLlmTools();
+    llmState.snapshotMeta = {
+      ...(llmState.snapshotMeta || {}),
+      native_action_active: false,
+      pending_tool_name: null,
+      pending_tool_request_id: null,
+      pending_tool_age_seconds: null,
+    };
+    renderLlm();
   });
   llmEventSource.addEventListener('plan.updated', e => {
     llmState.plan = parseEvent(e);
@@ -257,6 +274,11 @@ function renderLlm() {
     party.size ? `${party.size} members, ${party.dead || 0} dead` : '--';
   document.getElementById('llm-snapshot-slots').textContent =
     snap.free_slots == null ? '--' : String(snap.free_slots);
+  const meta = llmState.snapshotMeta || {};
+  document.getElementById('llm-snapshot-age').textContent = formatSeconds(meta.age_seconds, 'no snapshot');
+  document.getElementById('llm-native-helper').textContent = meta.native_action_active
+    ? `${meta.pending_tool_name || 'native helper'} running ${formatSeconds(meta.pending_tool_age_seconds, '')}`.trim()
+    : 'native helper idle';
 
   renderLlmTools();
   renderRunHistory();
@@ -475,6 +497,15 @@ function formatUptime(secs) {
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
   return `${h}h ${m}m`;
+}
+
+function formatSeconds(value, fallback = '--') {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  const seconds = Math.max(0, Math.round(value));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rem = seconds % 60;
+  return `${minutes}m ${rem}s`;
 }
 
 function escapeHtml(s) {
