@@ -336,6 +336,7 @@ class TwoModelAgentLoop:
                 history=[],
             )
             for result in summary.results:
+                self.supervisor.observe_tool_result(result)
                 self.telemetry.record_tool_result("supervisor", bool(result.get("success")))
         return decision.needs_planner
 
@@ -353,7 +354,11 @@ class TwoModelAgentLoop:
         bot = snapshot.get("bot") or {}
         if bot.get("state") == "llm_controlled":
             return False
-        if not bot.get("safe_to_enter_llm_control"):
+        block_reason = self.dispatcher.advisory_block_reason(
+            "set_bot_state",
+            {"state": "llm_controlled"},
+        )
+        if block_reason is not None:
             return False
         result = await self.dispatcher.force_game_action(
             "set_bot_state",

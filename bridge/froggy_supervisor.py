@@ -263,20 +263,58 @@ class FroggySupervisor:
                 return True
         return False
 
-    @staticmethod
-    def _active_froggy_state(snapshot: dict) -> str | None:
+    def _active_froggy_state(self, snapshot: dict) -> str | None:
         bot = snapshot.get("bot") or {}
         state = str(bot.get("state") or "").strip()
         if not state or state in {"idle", "in_town", "llm_controlled"}:
             return None
-        if bot.get("busy") or state in ACTIVE_FROGGY_STATES:
+        if self._pending_sparkfly_handoff(snapshot, state):
+            return None
+        if bot.get("busy"):
+            return state
+        if state in ACTIVE_FROGGY_STATES and self._player_busy(snapshot):
             return state
         if bot.get("safe_for_llm_game_action", True):
             return None
         phase = str(bot.get("phase") or "").strip()
-        if phase in ACTIVE_FROGGY_STATES:
+        if phase in ACTIVE_FROGGY_STATES and self._player_busy(snapshot):
             return phase
         return None
+
+    def _pending_sparkfly_handoff(self, snapshot: dict, state: str) -> bool:
+        if state != "traveling":
+            return False
+        if self._map_id(snapshot) != GADDS_MAP_ID:
+            return False
+        if not self._recent_success("froggy_run_town_setup"):
+            return False
+        if self._recent_success("froggy_travel_to_sparkfly", newer_than="froggy_run_town_setup"):
+            return False
+
+        route = snapshot.get("route") or {}
+        next_step = route.get("next_step") or {}
+        if route.get("progress") != "preparing":
+            return False
+        if route.get("phase") not in (None, "town"):
+            return False
+        if next_step.get("kind") != "travel":
+            return False
+        try:
+            if int(next_step.get("map_id") or 0) != SPARKFLY_MAP_ID:
+                return False
+        except (TypeError, ValueError):
+            return False
+
+        me = snapshot.get("me") or {}
+        if me.get("is_moving") or me.get("is_casting"):
+            return False
+        party = snapshot.get("party") or {}
+        return not bool(party.get("is_defeated"))
+
+    @staticmethod
+    def _player_busy(snapshot: dict) -> bool:
+        me = snapshot.get("me") or {}
+        return bool(me.get("is_moving") or me.get("is_casting"))
 
     @staticmethod
     def _near_tekks(snapshot: dict) -> bool:

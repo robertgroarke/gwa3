@@ -100,9 +100,8 @@ class PlannerLoop:
                     self.telemetry.record_llm_call("planner", time.perf_counter() - started, response.usage)
                 plan = self._parse_plan(response, snapshot=snapshot, reason=reason)
                 if accept_plan is not None and not accept_plan(plan):
-                    await self.emit("degradation", {"reason": "planner_output_discarded_stale"})
                     if self.telemetry is not None:
-                        self.telemetry.record_degradation("planner_output_discarded_stale")
+                        self.telemetry.record_replan_suppressed("planner_output_discarded_stale")
                     return None
                 await self.plan_state.replace(plan)
                 await self.emit("plan.updated", plan.to_dict())
