@@ -78,8 +78,10 @@ public sealed class UiSmokeTests
         Assert.Equal(42_000, result.GuildWarsProcessId);
         Verify(statusSink.Events.Any(evt => evt.Stage == SessionStage.Running), "Dry-run session should publish Running stage.");
 
-        var bridgePlan = plan with { Mode = SupervisorLaunchMode.Llm };
+        var bridgePlan = plan with { Mode = SupervisorLaunchMode.Llm, Bridge = plan.Bridge with { Profile = "qwen-safe" } };
         var bridgeCommand = new BridgeService(processRunner).BuildCommand(bridgePlan);
+        Verify(bridgeCommand.Arguments.Contains("--profile"), "Bridge command must pass the configured LLM launch profile.");
+        Verify(bridgeCommand.Arguments.Contains("qwen-safe"), "Bridge command must include the configured LLM launch profile value.");
         Verify(bridgeCommand.Arguments.Contains("--llm-url"), "Bridge command must pass the LLM endpoint with the Python bridge's --llm-url flag.");
         Verify(!bridgeCommand.Arguments.Contains("--endpoint"), "Bridge command must not use unsupported --endpoint flag.");
         Verify(bridgeCommand.Arguments.Contains("--llm-hourly-token-cap"), "Bridge command must pass the configured token cap.");
@@ -443,6 +445,7 @@ public sealed class UiSmokeTests
                 BridgeWorkingDirectory = repoRoot,
                 Endpoint = profile.Llm.Endpoint,
                 Model = profile.Llm.Model,
+                Profile = profile.Llm.Profile,
                 HourlyTokenCap = profile.Llm.HourlyTokenCap,
                 AllowRemote = profile.Llm.AllowRemote
             },

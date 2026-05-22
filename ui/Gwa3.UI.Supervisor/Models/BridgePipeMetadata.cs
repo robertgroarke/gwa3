@@ -9,6 +9,7 @@ public sealed record BridgePipeMetadata
     public string? BridgeWorkingDirectory { get; init; }
     public string? Endpoint { get; init; }
     public string? Model { get; init; }
+    public string? Profile { get; init; }
     public int? HourlyTokenCap { get; init; }
     public bool AllowRemote { get; init; }
 

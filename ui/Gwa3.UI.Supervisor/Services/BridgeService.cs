@@ -31,6 +31,12 @@ public sealed class BridgeService : IBridgeService
             plan.Bridge.PipeName
         };
 
+        if (!string.IsNullOrWhiteSpace(plan.Bridge.Profile))
+        {
+            arguments.Add("--profile");
+            arguments.Add(plan.Bridge.Profile);
+        }
+
         if (!string.IsNullOrWhiteSpace(plan.Bridge.Endpoint))
         {
             arguments.Add("--llm-url");

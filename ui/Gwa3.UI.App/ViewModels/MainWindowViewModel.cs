@@ -2595,6 +2595,7 @@ public sealed class MainWindowViewModel : ObservableObject
                 BridgeWorkingDirectory = repositoryRoot,
                 Endpoint = profile.Llm.Endpoint,
                 Model = profile.Llm.Model,
+                Profile = profile.Llm.Profile,
                 HourlyTokenCap = profile.Llm.HourlyTokenCap,
                 AllowRemote = profile.Llm.AllowRemote
             },

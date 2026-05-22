@@ -8,6 +8,8 @@ public sealed class LlmSettings
 
     public string Model { get; set; } = "";
 
+    public string Profile { get; set; } = "";
+
     public int HourlyTokenCap { get; set; } = 10_000_000;
 
     public bool AllowRemote { get; set; }
