@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,8 @@ class BridgeHttpState:
     last_disconnect: dict[str, Any] | None = None
     last_degradation: dict[str, Any] | None = None
     last_snapshot_summary: dict[str, Any] | None = None
+    last_snapshot_received_at: float | None = None
+    pending_tool_calls: dict[str, dict[str, Any]] = field(default_factory=dict)
     launcher: Callable[[], Awaitable[dict[str, Any]]] | None = None
     stopper: Callable[[], Awaitable[dict[str, Any]]] | None = None
     flight_recorder: FlightRecorder | None = None
@@ -65,14 +68,24 @@ class BridgeHttpState:
             if self.status == "stopped" and not payload.get("error"):
                 self.last_status_error = None
                 self.last_degradation = None
+                self.pending_tool_calls.clear()
         elif event == "tool.call":
+            payload.setdefault("started_at", time.time())
+            request_id = str(payload.get("request_id", "")).strip()
+            if request_id:
+                self.pending_tool_calls[request_id] = payload
             self.last_tool_calls.appendleft(payload)
         elif event == "tool.result":
+            request_id = str(payload.get("request_id", "")).strip()
+            pending = self.pending_tool_calls.pop(request_id, None) if request_id else None
+            if pending and "duration_seconds" not in payload:
+                payload["duration_seconds"] = max(0.0, time.time() - float(pending.get("started_at", time.time())))
             self.last_tool_calls.appendleft(payload)
         elif event == "run.summary":
             self.run_summaries.appendleft(payload)
         elif event == "snapshot.summary":
             self.last_snapshot_summary = payload
+            self.last_snapshot_received_at = time.time()
             await self._clear_recovered_degradation(SNAPSHOT_RECOVERABLE_DEGRADATION_PREFIXES)
         elif event == "llm.telemetry":
             self.telemetry = payload
@@ -117,6 +130,20 @@ class BridgeHttpState:
         })
 
     async def snapshot(self) -> dict[str, Any]:
+        now = time.time()
+        snapshot_age = (
+            max(0.0, now - self.last_snapshot_received_at)
+            if self.last_snapshot_received_at is not None
+            else None
+        )
+        pending_tools = list(self.pending_tool_calls.values())
+        pending_tool = pending_tools[0] if pending_tools else {}
+        pending_tool_started = pending_tool.get("started_at")
+        pending_tool_age = (
+            max(0.0, now - float(pending_tool_started))
+            if pending_tool_started is not None
+            else None
+        )
         return {
             "bridge": {
                 "status": self.status,
@@ -126,6 +153,15 @@ class BridgeHttpState:
             },
             "plan": await self.plan_state.snapshot(),
             "snapshot": self.last_snapshot_summary,
+            "snapshot_meta": {
+                "received_at": self.last_snapshot_received_at,
+                "age_seconds": snapshot_age,
+                "native_action_active": bool(pending_tools),
+                "pending_tool_name": pending_tool.get("name"),
+                "pending_tool_request_id": pending_tool.get("request_id"),
+                "pending_tool_age_seconds": pending_tool_age,
+                "pending_tool_calls": pending_tools[:10],
+            },
             "last_tool_calls": list(self.last_tool_calls)[:10],
             "run_summaries": list(self.run_summaries)[:20],
             "telemetry": self.telemetry,
