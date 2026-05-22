@@ -43,6 +43,13 @@ of making a healthy long helper look frozen.
 
 The default profile is `qwen-safe`. It keeps deterministic route control in the native Froggy supervisor, uses the executor as a zero-LLM health checker, and wakes the planner only for ambiguity, recovery, unexpected state, repeated failure, or user chat.
 
+For deterministic-supervisor profiles, routine native-route bookkeeping stays
+deterministic: normal `plan_expired`, `map_changed`, and `instance_load`
+wake-ups are suppressed while the native supervisor has a valid route action.
+User chat and explicit supervisor unknown-state escalation still wake the
+planner. This keeps `qwen-safe` and `qwen-deterministic` from spending cloud
+calls on normal route churn.
+
 | Profile | Intended Use |
 |---------|--------------|
 | `qwen-safe` | Recommended operator default: deterministic supervisor, async qwen planner, health-check executor, cached/delta prompts, strict replans |

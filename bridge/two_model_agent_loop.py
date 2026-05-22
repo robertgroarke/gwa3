@@ -48,6 +48,11 @@ RUN_SUMMARY_TOOL_REASONS = {
     "froggy_run_dungeon_loop": "tool:froggy_run_dungeon_loop",
     "froggy_run_full_maintenance": "tool:froggy_run_full_maintenance",
 }
+DETERMINISTIC_SUPERVISOR_OWNED_REPLAN_REASONS = {
+    "plan_expired",
+    "map_changed",
+    "instance_load",
+}
 
 
 class TwoModelAgentLoop:
@@ -254,13 +259,16 @@ class TwoModelAgentLoop:
                 decision = self.controller.evaluate(plan, snapshot, events)
                 if decision.suppression_reason:
                     self.telemetry.record_replan_suppressed(decision.suppression_reason)
-                decision = self._apply_supervisor_replan_suppression(decision)
+                decision = self._apply_supervisor_replan_suppression(
+                    decision,
+                    supervisor_needs_planner=supervisor_needs_planner,
+                )
                 if self._pending_user_messages and not decision.should_replan:
                     decision = type(decision)(True, "user_message")
                 if supervisor_needs_planner and not decision.should_replan:
                     decision = type(decision)(True, "supervisor_unknown_state")
 
-                if decision.should_replan or plan.phase == "idle":
+                if self._should_run_planner(decision, plan, supervisor_needs_planner):
                     if self.planner_mode == "async":
                         self._schedule_async_replan(
                             decision.reason or "initial",
@@ -340,7 +348,7 @@ class TwoModelAgentLoop:
                 self.telemetry.record_tool_result("supervisor", bool(result.get("success")))
         return decision.needs_planner
 
-    def _apply_supervisor_replan_suppression(self, decision):
+    def _apply_supervisor_replan_suppression(self, decision, supervisor_needs_planner: bool = False):
         if (
             self._supervisor_native_active
             and decision.should_replan
@@ -348,7 +356,32 @@ class TwoModelAgentLoop:
         ):
             self.telemetry.record_replan_suppressed("native_active:plan_expired")
             return type(decision)(False, suppression_reason="native_active:plan_expired")
+        if (
+            self.supervisor is not None
+            and self.supervisor_mode == "deterministic"
+            and decision.should_replan
+            and not supervisor_needs_planner
+            and decision.reason in DETERMINISTIC_SUPERVISOR_OWNED_REPLAN_REASONS
+        ):
+            reason = f"deterministic_supervisor:{decision.reason}"
+            self.telemetry.record_replan_suppressed(reason)
+            return type(decision)(False, suppression_reason=reason)
         return decision
+
+    def _should_run_planner(self, decision, plan, supervisor_needs_planner: bool) -> bool:
+        if decision.should_replan:
+            return True
+        if plan.phase != "idle":
+            return False
+        if (
+            self.supervisor is not None
+            and self.supervisor_mode == "deterministic"
+            and not supervisor_needs_planner
+            and not self._pending_user_messages
+        ):
+            self.telemetry.record_replan_suppressed("deterministic_supervisor:idle")
+            return False
+        return True
 
     async def _supervisor_enter_llm_control_if_needed(self, snapshot: dict) -> bool:
         bot = snapshot.get("bot") or {}
