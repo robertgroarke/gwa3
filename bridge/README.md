@@ -33,6 +33,12 @@ python -m bridge `
   --objective "Farm continuously, sell when inventory is full, and restock before the next run."
 ```
 
+`GET /api/llm/state` includes `snapshot_meta` in addition to the latest
+`snapshot.summary`. Long native helpers can pause fresh snapshot emission while
+the game is still moving. The metadata reports snapshot age plus the pending
+helper name/request id so UI clients can show "native helper running" instead
+of making a healthy long helper look frozen.
+
 ## Launch Profiles
 
 The default profile is `qwen-safe`. It keeps deterministic route control in the native Froggy supervisor, uses the executor as a zero-LLM health checker, and wakes the planner only for ambiguity, recovery, unexpected state, repeated failure, or user chat.
