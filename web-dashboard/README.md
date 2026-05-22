@@ -44,6 +44,7 @@ Identical:
 
 - BEASTRIT lane-only launch/stop controls
 - active profile and policy-mode labels
+- snapshot freshness and native-helper-active labels
 - chat send path through `POST /api/llm/chat`
 - `chat.user` echo from either frontend to all connected observers
 - assistant replies through `chat.assistant`
