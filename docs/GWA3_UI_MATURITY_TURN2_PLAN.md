@@ -39,6 +39,28 @@ To unblock without elevating the agent itself:
 Once those two are in place, `/goal resume` on the blocked slice-3 session
 continues from a warm context with no agent elevation required.
 
+## Commit cadence (mandatory — for operator monitoring)
+
+**Commit small, commit often.** The operator monitors progress by watching
+the `gwa3-private` git log; long-running uncommitted changes are invisible
+to them and impossible to review incrementally. Concretely:
+
+- One logical change → one commit. Do not batch unrelated edits.
+- Commit at every natural checkpoint: a defect closed, a backlog item
+  finished, a panel extracted, a test added, a screenshot captured.
+- Commits during a single goal-turn should land **as you go**, not all at
+  the end. If a turn does 4 backlog items, that should be 4+ commits, not
+  one mega-commit.
+- Use a clear conventional-style subject (`feat: ...`, `refactor: ...`,
+  `fix: ...`, `docs: ...`, `test: ...`).
+- Do not skip hooks (`--no-verify`) or amend across goal turns.
+- Push or do nothing about remotes — the existing repo rules apply.
+- After each commit, the goal-turn report should include the short SHA
+  so the operator can jump straight to the diff.
+- If a working-tree change is unrelated to the current goal (e.g.
+  bridge/native/Kamadan dirty state), do not stage it. Leave it for its
+  owning claim.
+
 ## Active backlog (authoritative — goal is NOT complete while this section is non-empty)
 
 This section is the running task list for the resumed slice-3 goal. Each
@@ -76,6 +98,114 @@ M1–M6 + S1–S4 + L1–L5 are all satisfied, only then may the goal complete.
    max fan-out, UI working-set growth (<50 MB), drift-watcher false
    positives (zero), any UI freeze >250 ms, clean UI Stop with no orphan
    PID/registry/pipe.
+
+### Code-review-derived items (production-quality)
+
+The findings below come from the 2026-05-23 deep-dive review documented
+in [`GWA3_UI_MATURITY_PROMPT.md`](GWA3_UI_MATURITY_PROMPT.md) under
+"Production-Quality Findings". Read that section before starting each
+item — it contains the file:line context.
+
+6. **B1 — Real shell-VM decomposition (not partials).** `MainWindowViewModel`
+   today lives across 5 partial files totalling ~5,052 lines (`.cs` 741 +
+   `.Launch.cs` 1883 + `.LlmBridge.cs` 719 + `.ProfileAndValidation.cs`
+   1131 + `.Utilities.cs` 578). Extract `LaunchOrchestrationViewModel`
+   from `.Launch.cs` and `LlmBridgeViewModel` from `.LlmBridge.cs` as
+   *separate* classes the shell holds references to. Delete the
+   partials when their content has moved. Update `UiDecompositionTests`
+   to count combined partial sizes so the gate cannot be passed by
+   sharding the same class again.
+   Evidence: commit hash; partial file count = 0 for
+   `MainWindowViewModel`; combined VM line count published in
+   the live-validation report; tests still green.
+7. **B3 — Move LLM display fields off the shell.** ~30 `llmSnapshotMap` /
+   `llmObserverText` / `llmPlanPhase` / `llmPlannerMode` etc. properties
+   (`MainWindowViewModel.cs:166-186`) should live on `LlmConsoleViewModel`
+   (104 lines, already exists). Shell binds via `MainViewModel.LlmConsole.X`.
+   Evidence: commit hash; `MainWindowViewModel.cs` field count for
+   `llm*` private fields = 0; existing UI tests still pass; one new
+   `LlmConsoleViewModelTests` exercising the migrated state.
+8. **C1 — Remove hardcoded operator-machine paths.** `KnownCharacterLaunchDefaults`
+   in `MainWindowViewModel.cs:85-132` hardcodes
+   `C:\Users\Robert\Documents\GWA Censured X BotsHub\GWA Censured\debug_scripts\launch_*.au3`
+   for every lane. Resolve from `repositoryRoot` or move into the
+   profile JSON.
+   Evidence: commit hash; grep for `C:\\Users\\Robert` in `ui/`
+   returns zero hits; a smoke test that constructs the VM with a
+   relocated `repositoryRoot` still resolves launcher paths correctly.
+9. **D4 — `BrokerProcessTerminator`.** The current `ProcessTerminator`
+   cannot recover from `Win32Exception (Access denied)` (this is the
+   exact wall hit on PID 30372 today). Add an `IProcessTerminator`
+   implementation that drops a kill-request JSON into
+   `%LOCALAPPDATA%\gwa3-inject-broker\requests\` mirroring the inject
+   broker contract, and wire `SessionSupervisor` to fall back to it
+   when the direct `Stop-Process` path returns access denied. Extend
+   `tools/inject_broker.ps1` (in the parent repo) to handle
+   `kill.req.json` shapes in addition to inject ones.
+   Evidence: commit hash; new `BrokerProcessTerminator.cs` + test;
+   broker script handles both kinds; documented in the broker section
+   of this file.
+10. **D2 — Surface real injector stderr in `InjectionResult.Message`.**
+    `InjectorService.cs:75-82` returns generic `"DLL injection failed."`
+    while the real `"OpenProcess failed (error 5)"` is buried in the
+    inner `ProcessCommandResult`. Compose the result `Message` from
+    `result.StandardError` when non-empty.
+    Evidence: commit hash; an offline injector-mock test asserting the
+    propagated message includes the simulated stderr text.
+11. **A1 — Per-lane bearer-token auth on `/api/llm/launch|chat|stop`.**
+    `bridge/http_api.py:280-313` accepts unauthenticated POSTs. Generate
+    a per-lane token at bridge startup, write it into the
+    `%PROGRAMDATA%\gwa3\sessions\<pid>.json` record next to `http_port`,
+    require `Authorization: Bearer <token>` on state-mutating routes.
+    The WPF UI reads the token from the registry. Public state /
+    snapshot reads stay open.
+    Evidence: commit hash; new `bridge/tests/test_http_api_auth.py`
+    asserting 401 without token and 200 with; WPF
+    `Gwa3SessionRegistryService` surfaces the token; per-session UI
+    requests carry it.
+12. **A2 — Replace the hand-rolled HTTP/1.1 parser.** `http_api.py`
+    `_handle` parses requests manually with `split(" ", 2)`, no chunked
+    encoding, connection-per-request, trusts attacker-supplied
+    Content-Length. Migrate to `aiohttp` (already common in the
+    ecosystem) or `hypercorn` with the SSE handler preserved.
+    Evidence: commit hash; existing route-shape tests pass; new
+    fuzz-style test for malformed request lines returns 400 not 500.
+13. **D1 — Tighten `LiveSettingsDrift.Normalize`.** Current normalize
+    strips spaces and underscores (`LiveSettingsDrift.cs:63-64`), so
+    `"true"` matches `"t r u e"`. Reduce to trim-only or
+    case-insensitive-trim.
+    Evidence: commit hash; updated `LiveSettingsDriftTests` covering
+    `"on"` vs `"o n"` (must NOT match), `" true "` vs `"true"` (must
+    match).
+14. **D6 — Replace token-substring health classification.**
+    `MainWindowViewModel.cs:47-83` uses `string.Contains` on
+    `UnhealthyHealthTokens` / `HealthyHealthTokens`. `"issue"` matches
+    `"issued"`, `"blocked"` matches `"unblocked"`. Replace with an
+    enum-based status published by the supervisor (or whole-token
+    matching with word boundaries).
+    Evidence: commit hash; new tests showing `"issued"` no longer
+    classifies as unhealthy.
+15. **E1 — Singleton `HttpClient` lifecycle.** Two `HttpClient`
+    instances are created in field initializers and never disposed
+    (`MainWindowViewModel.cs:39-40`). Switch to a single shared
+    `SocketsHttpHandler` or `IHttpClientFactory`.
+    Evidence: commit hash; ownership documented in code comment;
+    smoke test that disposing the VM does not leak handles.
+16. **E3 + F3 — SSE keepalive + `/healthz`.** Add a server-side
+    `:ping\n\n` every 15s on the SSE stream (`http_api.py:_stream`)
+    and a `GET /healthz` route returning `{ok:true, lane, status}`
+    with no auth required. WPF uses `/healthz` for its bridge chip
+    instead of relying on the SSE stream.
+    Evidence: commit hash; new `bridge/tests/test_http_api_healthz.py`;
+    SSE timing test asserting at least one ping per 20s.
+17. **G3 — Broker smoke test.** `tools/inject_broker.ps1` and
+    `tools/inject_via_broker.ps1` (parent repo) are untested. Add a
+    Pester or PowerShell-based smoke test that mocks `injector.exe`
+    with a script printing a known string + exit code, drops a synthetic
+    request, and asserts `.done.json`, `.exit`, and `.out` appear with
+    the expected contents within the configured timeout.
+    Evidence: commit hash; new `tools/tests/inject_broker.tests.ps1`;
+    test runs as part of the slice-3 verification report.
 
 ### How to extend
 

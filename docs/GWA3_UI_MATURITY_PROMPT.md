@@ -112,6 +112,172 @@ Success criteria:
 - A 30-minute soak with one re-injection completes with clean Stop, no orphan PID/registry/pipe, no UI hang, no measurable memory growth beyond ~50 MB.
 ```
 
+## Production-Quality Findings (deep-dive review, 2026-05-23)
+
+This appendix records concrete defects found in a code-level review of both
+UIs (WPF desktop + bridge HTTP/SSE API). Each finding names a file:line, an
+observed defect, and a concrete fix direction. The active backlog in
+[`GWA3_UI_UX_POLISH_FOLLOWUP_PROMPT.md`](GWA3_UI_UX_POLISH_FOLLOWUP_PROMPT.md)
+and [`GWA3_UI_MATURITY_TURN2_PLAN.md`](GWA3_UI_MATURITY_TURN2_PLAN.md) will
+add numbered items 6+ that pick these up.
+
+### A. Security / hardening
+
+- **A1. `bridge/http_api.py` has NO authentication on control endpoints.**
+  `/api/llm/chat`, `/api/llm/launch`, `/api/llm/stop` accept any local
+  POST. On a multi-agent box, any process can drive any lane's bridge —
+  lateral-movement vector even though bind is `127.0.0.1`. Add per-lane
+  bearer token: generate at launch, write into the `%PROGRAMDATA%\gwa3\sessions\<pid>.json`
+  record next to `http_port`, require `Authorization: Bearer <token>` on
+  state-mutating endpoints. The WPF UI and other legitimate clients read
+  the token from the registry record.
+- **A2. Hand-rolled HTTP/1.1 parser is fragile.** `http_api.py:237`
+  `request_line.decode("iso-8859-1").strip().split(" ", 2)` throws
+  `ValueError` on malformed input, caught only by the outer 500-handler
+  which leaks `str(exc)` to the caller (`http_api.py:251`). No chunked
+  encoding, no keep-alive reuse, `readexactly(length)` trusts attacker-
+  supplied `Content-Length`. Replace with a vetted minimal stack
+  (`aiohttp` or `hypercorn`); the bridge already runs asyncio.
+- **A3. CORS `*` baked into every response.** `http_api.py:333,361` —
+  acceptable for localhost but blocks future non-localhost binding
+  without an audit. Make CORS origin configurable; default to disallow.
+
+### B. Architecture / decomposition reality
+
+- **B1. The slice-3 decomposition didn't actually split the shell VM.**
+  `MainWindowViewModel` lives across 5 partial files totalling **~5,052
+  lines**:
+  - `MainWindowViewModel.cs` 741
+  - `MainWindowViewModel.Launch.cs` 1,883
+  - `MainWindowViewModel.LlmBridge.cs` 719
+  - `MainWindowViewModel.ProfileAndValidation.cs` 1,131
+  - `MainWindowViewModel.Utilities.cs` 578
+
+  The `UiDecompositionTests` line-count gate (`≤ 2000` on
+  `MainWindowViewModel.cs`) passes only because it inspects the primary
+  partial file. Same class, same coupling, same merge surface — just
+  spread across more files. The real fix is to extract per-feature view
+  models that the shell *holds references to*, not partials of the same
+  type. Candidates: `LaunchOrchestrationViewModel` (the 1.8k-line
+  Launch partial), `LlmBridgeViewModel` (the 0.7k LlmBridge partial),
+  `ProfileEditorViewModel` already exists but lots of profile logic is
+  still in `ProfileAndValidation.cs`.
+- **B2. `SessionAndDetailViewModels.cs` is 1,822 lines** — a "VM god
+  file" holding every per-session/detail VM in one source. Split by
+  concept (SessionViewModel.cs / SessionMonitoringViewModel.cs /
+  ValidationCheckViewModel.cs / HeroBuildViewModel.cs / ...).
+- **B3. The shell VM still owns ~30 LLM display fields.** `llmSnapshotMap`,
+  `llmSnapshotHp`, `llmObserverText`, `llmPlanPhase`, `llmPlanIntent`,
+  `llmPlanNextStep`, `llmPlanDeviation`, `llmExecutorMode`,
+  `llmPlannerMode`, `llmPromptMode`, etc. (MainWindowViewModel.cs:166–186).
+  `LlmConsoleViewModel` exists (104 lines) and should own these — the
+  shell should bind through it via `MainViewModel.LlmConsole.PlanPhase`.
+
+### C. Portability / hardcoded developer paths
+
+- **C1. `KnownCharacterLaunchDefaults` hardcodes
+  `C:\Users\Robert\Documents\GWA Censured X BotsHub\...`** for every
+  lane's launcher script (`MainWindowViewModel.cs:85-132`). The
+  application will not run on any other developer's box or under a
+  different repo layout. Move launcher paths into the profile JSON or
+  resolve relative to `repositoryRoot` (the field is right there).
+- **C2. `llmEndpoint = "http://localhost:11434/v1"`** and
+  `llmBridgeEndpoint = "http://127.0.0.1:8765"` are hardcoded field
+  initializers (`MainWindowViewModel.cs:164-165`). Move to profile or
+  to the per-session registry record. The whole point of the registry's
+  `http_port` field is exactly this.
+
+### D. Reliability / error surfaces
+
+- **D1. `LiveSettingsDrift.Normalize` is too aggressive.** Strips
+  spaces AND underscores before equality (`LiveSettingsDrift.cs:63-64`).
+  So `"true"` matches `"t r u e"` and `"hard_mode"` value matches
+  `"hardmode"`. For boolean settings this hides nothing, but for any
+  setting where whitespace/underscores are meaningful it masks drift
+  silently. Tighten to trim-only.
+- **D2. `InjectorService.InjectAsync` returns generic
+  `"DLL injection failed."`** (`InjectorService.cs:80`). The real
+  message — `"OpenProcess failed (error 5). Run as Administrator?"` —
+  is buried in the inner `ProcessCommandResult` and never surfaced to
+  the operator without manual log digging. Bubble the injector's stderr
+  into the result `Message` field directly.
+- **D3. `ProcessHealthGate.TryResolveHealthyCharacterProcess` swallows
+  WMI failures silently** (`ProcessHealthGate.cs:164-175`). Catches
+  `ManagementException`, `InvalidOperationException`, `ArgumentException`
+  and returns `null` — caller cannot distinguish "no candidate" from
+  "WMI broken." Promote these to a logged warning on the status sink.
+- **D4. `SessionSupervisor.CleanupOwnedClientAsync` cannot recover from
+  the elevation case the operator just hit.** When
+  `Win32Exception (Access denied)` fires (`SessionSupervisor.cs:140`),
+  it publishes a warning and leaves the orphan PID. The new
+  `tools/inject_broker.ps1` could perform the kill on behalf of the
+  non-elevated process; the supervisor needs an `IProcessTerminator`
+  alternate implementation (`BrokerProcessTerminator`) that drops a
+  kill-request into the broker's request directory the same way
+  `inject_via_broker.ps1` does for inject. This is the same exact
+  surface the user manually fixed today.
+- **D5. `LauncherService.TryReadLauncherLog` has dead code and silent
+  IO swallowing.** `var candidates = new[] { ... };` has exactly one
+  element so `Distinct(...)` is dead (`LauncherService.cs:83-85`).
+  `catch (IOException) {}` / `catch (UnauthorizedAccessException) {}`
+  silently return empty — if the .log file is locked, the launcher PID
+  parse degrades silently to whatever stdout/stderr produced. Log the
+  IO failure to the status sink.
+- **D6. Token-substring health classification is fragile.**
+  `MainWindowViewModel.cs:47-83` declares `UnhealthyHealthTokens` and
+  `HealthyHealthTokens` lists used for `string.Contains` matching. So
+  `"issue"` matches `"issued"`, `"blocked"` matches `"unblocked"`,
+  `"failed"` matches `"unfailed"`. Replace with a small state-machine
+  parser keyed on whole tokens or status enums published from the
+  supervisor.
+
+### E. Resource lifecycle
+
+- **E1. Two `HttpClient` instances created in field initializers, never
+  disposed.** `MainWindowViewModel.cs:39-40`. The VM has no `IDisposable`.
+  Move to a singleton (`SocketsHttpHandler` shared) or
+  `IHttpClientFactory` if DI is added.
+- **E2. SSE per-subscriber queue is unbounded.** `http_api.py:343-347` does
+  `await queue.get()` with no max size enforcement on the producing
+  side. Confirm `BridgeEventBus.subscribe` bounds the queue per
+  subscriber; if not, a slow client grows bridge memory without limit.
+- **E3. SSE has no heartbeat/keepalive.** Stream timeout is
+  `Timeout.InfiniteTimeSpan` by design (`BridgeHttpClientPolicy.cs:16`),
+  but there is no application-layer ping (`:keepalive\n\n` comment per
+  the SSE spec). If TCP silently dies (NAT timeout, mid-network
+  failure), the client never knows. Add a 15s `:ping\n\n` from the
+  server side and a client-side last-event-received-at watchdog.
+
+### F. UX / observability
+
+- **F1. `/api/llm/launch` noop response is ambiguous.**
+  `http_api.py:295-297` returns `{ok: true, noop: true}` when status is
+  already `connected/connecting`. UI cannot tell pre-existing from new.
+  Return a distinct status code (208 Already Reported) or a clear
+  `state: "already_running"`.
+- **F2. SSE resume-from-id is silently dropped.** `http_api.py:248`
+  parses the URL but only `parsed.path` is used; `?last_id=N` query
+  arg the SSE spec defines for resume is ignored. Honor it.
+- **F3. No `/healthz`.** Trivial unauthenticated cheap liveness probe is
+  missing; both the WPF UI's bridge-status chip and any external
+  monitor would benefit.
+
+### G. Test coverage
+
+- **G1. `SessionSupervisor` has no integration tests** covering the
+  full state machine (validate → launch → health-gate → inject →
+  bridge → running). All current tests target leaves of the pipeline.
+- **G2. `bridge/http_api.py` has no auth / CORS / endpoint contract
+  tests.** Add `bridge/tests/test_http_api.py` exercising each route
+  including malformed input, oversized Content-Length, unauthorized
+  requests once A1 lands.
+- **G3. The broker path has no tests.** `tools/inject_broker.ps1` /
+  `inject_via_broker.ps1` (parent repo) are untested. Add a smoke test
+  that mocks `injector.exe`, drops a synthetic request, and verifies
+  the done/exit/out files appear within the timeout.
+
+---
+
 ## Compact prompt
 
 ```text
