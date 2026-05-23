@@ -328,6 +328,121 @@ operation) over plumbing.
     Evidence: commit hash; `KeyboardShortcuts.cs` + tests; help drawer
     lists them; screenshot of the menu showing them.
 
+### DLL-surface items (expose live state + controls from the native managers)
+
+The findings below come from the "DLL-Surface Findings" section in
+[`GWA3_UI_MATURITY_PROMPT.md`](GWA3_UI_MATURITY_PROMPT.md). Read that
+section first — it inventories the 22 managers and 6 bot modules and
+maps the gaps. Many items below depend on shared IPC plumbing: the
+first item (32) lands that plumbing so the rest can ride it.
+
+32. **Live snapshot IPC + bridge event bus extension.** Foundation for
+    items 33–40. Add new IPC verbs that return JSON snapshots:
+    `get_player_state`, `get_party_state`, `get_skillbar`,
+    `get_agents_nearby`, `get_effects`, `get_dialog`, `get_quest_log`,
+    `get_inventory`, `get_chat_recent`. Each reads from cached manager
+    state — one-native-call-per-tick rule still applies. Add bridge
+    bus events: `player.state`, `party.state`, `skillbar.state`,
+    `agents.snapshot` (rate-limited), `effects.changed`, `dialog.shown`,
+    `quest.updated`, `inventory.changed`, `drop.received`, `chat.received`.
+    Each event is emitted from the DLL's existing tick paths where the
+    underlying state already changes.
+    Evidence: commit hash; Python `bridge/tests/test_ipc_snapshots.py`
+    round-trips every new verb against a mock pipe; new bridge events
+    documented in `docs/IPC_PROTOCOL.md` (create if absent); one
+    `get_player_state` round-trip captured live on DISCOPANIC.
+33. **Live player + party state panel.** New top-of-Monitoring widget
+    showing player HP/energy bar, position (map + coords), active
+    title, and a compact row per hero with HP/energy/effects pips. Wired
+    to the `player.state` / `party.state` events from item 32; refreshed
+    on event, not polled.
+    Evidence: commit hash; new `PlayerPartyStateViewModel` + tests;
+    screenshot showing live HP bars during a DISCOPANIC run.
+34. **Live skill bar overlay.** 8 slots with cooldown rings + recharge
+    seconds + last-cast indicator, rendered above the Monitoring tab.
+    Wired to `skillbar.state`. Includes hero skill bars on hover.
+    Evidence: commit hash; new `SkillBarViewModel` + tests with synthetic
+    `CachedSkill` fixtures; screenshot during a cast cycle.
+35. **Mini-map with agents and bot route.** A small canvas showing the
+    bot's position + nearby agents (color-coded by hostility) + the
+    last-N path waypoints, refreshed off `agents.snapshot` /
+    `player.state`. Click an agent to copy its name/id for diagnostics.
+    Closes the long-standing kanban backlog item "Add visual
+    route/debug map panels inspired by Py4GW widgets."
+    Evidence: commit hash; new `MiniMapView` + offline render test
+    with a fixture agent list; screenshot during a real run with at
+    least one hostile + one party agent rendered.
+36. **Live inventory grid + drop toast.** Visual bag grid (4 bags × 20
+    slots), tile-per-item with stack count and rarity tint, hover
+    tooltip with full mod string. Drop events fire a small slide-in
+    toast in the Monitoring tab (separate from system notifications in
+    item 22) that decays after 3 s; rare drops persist until
+    acknowledged.
+    Evidence: commit hash; new `InventoryGridView` + tests with fixture
+    inventory + drop events; screenshot of populated bags + one
+    in-flight drop toast.
+37. **Bot module catalog + per-bot default profiles.** Builds on item
+    27 (discovery via DLL). For every registered bot module the
+    catalog lists, generate a starter profile JSON under
+    `ui/profiles/defaults/<bot>-<lane>.default.json` covering the
+    five built lanes (BEASTRIT / DISCO / BLUMPKINS / MARVIN / BISCUIT)
+    and the six built bots (Froggy / Arachnis / Frostmaws / Kathandrax
+    / Ravens / Rragars). Operators get 30 profiles instead of 3.
+    Evidence: commit hash; new profile JSONs present and validate clean
+    under `ProfileValidator`; UI smoke test loads the new catalog and
+    populates the Bot combo from it.
+38. **Per-bot dashboard templates.** Each bot module declares a
+    dashboard schema (key milestones, drop-of-interest list, ETA model).
+    The Monitoring tab swaps to the template that matches the running
+    bot — Froggy keeps its dungeon-level/ETA panel; Kathandrax gets
+    boss-stage tracking; Arachnis gets web-room tracking, etc.
+    Evidence: commit hash; new `BotDashboardSchema` contract + per-bot
+    schema files; offline render test for each of the 6 bots with
+    fixture telemetry; live-validation screenshot of Froggy on
+    DISCOPANIC using the new templated view.
+39. **Bidirectional chat panel.** A Chat tab (or sidebar) showing
+    incoming whispers/party/all (from `chat.received`) and a send box
+    that drops a `send_chat` IPC verb to ChatMgr. Supports filtering by
+    channel and operator-only acknowledged-whispers indicator.
+    Evidence: commit hash; new `ChatPanelView` + VM tests; live
+    DISCOPANIC validation: operator sends a `/team` message via the UI
+    and confirms it appears in-game.
+40. **Manual control mode.** A "Take the wheel" toggle that suspends
+    the bot's planner loop and lets the operator drive: click an agent
+    to target, click the map to move, click a skill slot to cast (uses
+    `SkillMgr`/`CombatMgr`/`TravelMgr` write paths). Releasing the
+    toggle hands control back to the bot at the current state.
+    Evidence: commit hash; new `ManualControlViewModel` + IPC verbs;
+    live DISCOPANIC validation: take wheel, move to a coord, cast a
+    skill, release, confirm bot resumes from new position.
+41. **Run comparison view.** Picks N runs from the persisted history
+    (item 18) and renders a side-by-side table with deltas highlighted
+    — best/worst time, drop differences, fail-point overlap. Sparkline
+    per metric.
+    Evidence: commit hash; new `RunComparisonViewModel` + tests with
+    fixture run history; screenshot of a 3-run comparison.
+42. **Multi-agent coordination dashboard.** A new view rendering
+    `AGENT_WORK_REGISTRY.md` and `AGENT_ACCOUNT_REGISTRY.md` as live
+    tables: who-owns-what-claim, current state, when claimed, files
+    touched. Detect collisions (same lane on multiple active claims)
+    and flag. Lets the operator see the exact state that caused the
+    slice-3 elevation block without alt-tabbing to a markdown file.
+    Evidence: commit hash; new `AgentRegistryView` + parser tests with
+    fixture registry markdown; screenshot showing at least one active
+    claim and one collision warning.
+43. **Full MaintenanceMgr config coverage + raw JSON profile editor
+    fallback.** The Maintenance tab surfaces every `Config` field with
+    labels and tooltips (deposit thresholds, conset triggers, material
+    trader coords, gold floors, kit targets — 20+ knobs). A "Raw JSON"
+    tab on the Profile editor lets the operator edit any field the
+    fixed-field UI does not surface, with on-the-fly validation against
+    the profile schema. New maintenance-town entries (xunlai/material-
+    trader coords) are editable.
+    Evidence: commit hash; updated Maintenance XAML covers every field
+    in the `Config` struct (test asserts coverage by reflection over the
+    struct vs the XAML bindings); raw-JSON editor round-trips; screenshot
+    of the expanded Maintenance tab + the JSON editor mid-edit.
+
 ### How to extend
 
 Append numbered items below item 5 with: a concrete acceptance criterion

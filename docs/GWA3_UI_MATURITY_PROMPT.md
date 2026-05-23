@@ -367,6 +367,137 @@ work units.
 
 ---
 
+## DLL-Surface Findings (controls/statuses available but not exposed, 2026-05-23)
+
+A third deep-dive pass, this time inventorying the native DLL's state-
+and-control surface against what the UI actually shows. The TL;DR: the
+DLL has 22 managers and 6 bot modules; the UI surfaces a thin slice of
+one of them. There is a large, cheap inventory of "expose this state /
+add this control" work the UI can pick up without touching game-side
+logic.
+
+### A. Untapped live state (read paths)
+
+The DLL maintains all of this in-process every tick; the UI sees almost
+none of it.
+
+| Manager | State held | UI surface today |
+|---|---|---|
+| `PlayerMgr` | HP/energy/position/map/active title | none (log scrape only) |
+| `PartyMgr` | hero list, hero builds, party leader | none |
+| `SkillMgr` | 8-slot skill bar, cooldowns, recharge, last cast | none |
+| `EffectMgr` | active buffs/debuffs on player + party | none |
+| `AgentMgr` | live agents with type/HP/distance/name | none (no mini-map) |
+| `DialogMgr` | current NPC dialog text + options | none |
+| `QuestMgr` | active quests, current objective | none |
+| `ItemMgr` | inventory bags with stacks + mods | indirect via maintenance rules only |
+| `ChatLogMgr` / `ChatMgr` | incoming whispers + party + all chat | none (no chat panel) |
+| `FriendListMgr` / `GuildMgr` | friends online, guild state | none |
+| `MapMgr` / `TravelMgr` | current outpost / explorable / travel state | partial ("Dungeon" label only) |
+| `MerchantMgr` | last merchant interaction, prices | none |
+| `TradeMgr` | trade window state | partial (Kamadan trading is a separate WIP) |
+| `CombatMgr` | current target, combat state, aggro | none |
+
+Each of these is a candidate "live state" panel. Most need one new IPC
+verb (e.g. `get_player_state`, `get_skillbar`, `get_agents_nearby`) and a
+periodic snapshot event on the bridge bus.
+
+### B. Untapped controls (write paths)
+
+The DLL exposes these operations but the UI cannot invoke them directly.
+
+| Manager | Control | Why it matters in the UI |
+|---|---|---|
+| `TravelMgr` | travel to outpost / move-to coords | "send the bot to Kamadan" / "go to my position" |
+| `SkillMgr` / `SkillCombat` | cast skill on target | operator-driven combat assists |
+| `CombatMgr` | set target / attack / disengage | nudge target priority without editing the bot |
+| `ChatMgr` | send chat message | reply to a whisper from the UI |
+| `MerchantMgr` | buy / sell | operator-overridden vendor flow |
+| `TradeMgr` | open trade with player by name | trading lane workflows |
+| `PlayerMgr` | set active title | quick title switching for farms |
+| `DialogMgr` | choose dialog option | resolve stuck NPC interactions |
+| `QuestMgr` | accept / decline / abandon quest | recover from stuck quest state |
+| bot framework | pause / resume / stop / step / re-run | unattended-mode controls beyond just Stop |
+
+### C. IPC vocabulary is too small
+
+The full IPC verb set today: `hello`, `whoami`, `action`, `action_result`,
+`get_settings`, `set_settings`. Every state read goes through the
+generic `action` request. Bridge bus events: `bridge.status`,
+`chat.assistant`, `chat.user`, `degradation`, `disconnect_detected`,
+`llm.telemetry`, `message`, `plan.updated`, `run.summary`,
+`snapshot.summary`, `tool.call`, `tool.result`.
+
+There is no event for: drop received, item picked up, agent spotted
+(rare/named mob), skill cast, effect applied/removed, dialog shown,
+quest updated, party member died, inventory changed. Each of these is
+a one-line `event_bus.emit` away from being subscribable.
+
+### D. Bot-module coverage is wildly uneven
+
+Built bot modules: `arachnis_haunt`, `froggy`, `frostmaws_burrows`,
+`kathandrax`, `ravens_point`, `rragars_menagerie`. Profile JSONs in
+`ui/profiles/defaults/`:
+- `00-froggy-hm-beastrit-qwen-safe.json`
+- `01-froggy-hm-disco-qwen-safe.json`
+- `froggy-hm.default.json`
+
+**Five of six bots are UI-invisible.** The Bot combo box reads from
+profile JSONs, so the operator cannot launch Kathandrax / Frostmaws /
+Ravens / Arachnis / Rragars from the UI even though the native code is
+built. The bot-module-discovery item (#27) starts to fix this; the
+catalog needs companion per-bot default profiles and per-bot dashboard
+templates (#37, #38 below).
+
+### E. MaintenanceMgr config is mostly hidden
+
+`MaintenanceMgr::Config` has 20+ tunable knobs:
+`minFreeSlots`, `minIdKits`, `minSalvageKits`, `targetIdKits`,
+`targetSalvageKits`, `targetExpertSalvageKits`, `maxCharacterGold`,
+`maintenanceTown`, `xunlaiChestX/Y`, `materialTraderX/Y`,
+`materialTraderPlayerNumber`, `depositKeepOnChar`,
+`depositWhenCharacterGoldAtLeast`, `consetStorageGoldTrigger`,
+`consetStorageGoldFloor`, `targetStoredConsetsEach`,
+`targetCharacterConsetsEach`, `consetBatchSets`,
+`consetWithdrawGoldTarget`, `consetMaterialStackTrigger`,
+`consetMaterialPressureFreeSlots`, `enableConsetRestock`,
+`salvageMatchedUpgradesBeforeMaterials`.
+
+The Maintenance tab in the UI surfaces a subset; many are profile-JSON-
+only. There is no UI workflow to add a new maintenance town (with its
+own Xunlai/material-trader coordinates), so the bot is effectively
+locked to whichever towns came with the default profiles.
+
+### F. UX maturity beyond data exposure
+
+Things that aren't about "show more state" but about how the operator
+works:
+
+- **No mini-map** — `AgentMgr` + `PlayerMgr` have the data; the Py4GW
+  precedent shows it; backlog has long mentioned a route/debug panel
+  but it has not been built.
+- **No live skill bar overlay** — operators currently squint at the GW
+  window to see which skills are recharging.
+- **No drop toast** — every drop is silent from the UI's perspective.
+- **No inventory grid view** — only policy rules, no visual bag.
+- **No chat panel** — operator cannot read or send chat from the UI
+  while the bot runs.
+- **No comparison view** — "this Froggy run vs my last 10" is a manual
+  spreadsheet exercise today.
+- **No multi-agent coordination dashboard** — `AGENT_WORK_REGISTRY.md`
+  and `AGENT_ACCOUNT_REGISTRY.md` are markdown the operator and the
+  agents edit by hand. A live view of who-owns-what-claim with a
+  timeline would prevent the kind of lane collisions that wedge work
+  (the slice-3 elevation block was downstream of one of these).
+- **No raw-JSON profile editor fallback** — the fixed-field UI cannot
+  edit a profile field the UI doesn't know about. Adding a new
+  setting to a bot module means a UI change before operators can
+  test it.
+- **No per-bot dashboard template** — Froggy has dungeon-level + ETA
+  display; the other 5 bots have no dashboard at all.
+
+---
+
 ## Compact prompt
 
 ```text
