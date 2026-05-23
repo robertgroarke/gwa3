@@ -122,6 +122,12 @@ work claims. The CLI takes a file lock on `AGENT_WORK_REGISTRY.md`, refuses
 non-`available` rows, and refuses lane collisions with existing `active` or
 `blocked` rows unless the requested lane is `none`.
 
+Use `python scripts/agent_work_registry.py check` to compare active work-registry
+lanes with the live DLL self-registration files in
+`%PROGRAMDATA%\gwa3\sessions\*.json`. Set `GWA3_SESSION_REGISTRY_DIR` to override
+the session directory for tests. The check exits non-zero on mismatches unless
+`--warn-only` is supplied.
+
 ## Test And Build Discipline
 
 Before reporting any test or bridge regression:

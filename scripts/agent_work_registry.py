@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 import time
 from contextlib import contextmanager
@@ -13,11 +15,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REGISTRY = REPO_ROOT / "AGENT_WORK_REGISTRY.md"
+DEFAULT_SESSION_REGISTRY_DIR = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "gwa3" / "sessions"
 TABLE_HEADER = "| Work Area | Status | Owner | Lane | Heartbeat | Scope | Primary Files | Notes |"
 LEGAL_LANES = {"none", "beastrit", "disco", "blumpkins", "marvin", "biscuit", "any"}
 STALE_STATUSES = {"active", "blocked"}
 HELD_STATUSES = {"active", "blocked"}
 WINDOWS_LOCK_OFFSET = 2**31 - 1
+SESSIONLESS_LANES = {"none", "any"}
 
 
 @dataclass
@@ -201,6 +205,114 @@ def prune_stale_rows(
     return pruned
 
 
+def session_registry_dir_from_env() -> Path:
+    return Path(os.environ.get("GWA3_SESSION_REGISTRY_DIR") or DEFAULT_SESSION_REGISTRY_DIR)
+
+
+def load_session_registry(session_dir: Path | None = None) -> list[dict[str, object]]:
+    session_dir = session_dir or session_registry_dir_from_env()
+    sessions: list[dict[str, object]] = []
+    if not session_dir.exists():
+        return sessions
+    for path in sorted(session_dir.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            payload = {"_path": str(path), "_error": str(exc)}
+        else:
+            payload["_path"] = str(path)
+        sessions.append(payload)
+    return sessions
+
+
+def _session_lane(session: dict[str, object]) -> str:
+    lane = session.get("lane")
+    return str(lane).strip().lower() if lane is not None else ""
+
+
+def _session_is_live(session: dict[str, object]) -> bool:
+    if session.get("_error"):
+        return False
+    status = str(session.get("status", "running")).strip().lower()
+    return status not in {"stopped", "exited", "terminated", "dead"}
+
+
+def _format_session(session: dict[str, object]) -> str:
+    pid = session.get("gw_pid") or session.get("pid") or "?"
+    character = session.get("character") or "?"
+    path = session.get("_path") or "?"
+    return f"pid={pid} character={character} file={path}"
+
+
+def find_session_mismatches(
+    rows: list[WorkRow],
+    sessions: list[dict[str, object]],
+    lane_filter: str | None = None,
+) -> list[str]:
+    lane_filter = normalize_lane(lane_filter) if lane_filter else None
+    active_rows = [
+        row
+        for row in rows
+        if row.status == "active"
+        and row.lane not in SESSIONLESS_LANES
+        and (lane_filter is None or row.lane == lane_filter)
+    ]
+    live_sessions = [
+        session
+        for session in sessions
+        if _session_is_live(session)
+        and _session_lane(session)
+        and (lane_filter is None or _session_lane(session) == lane_filter)
+    ]
+
+    live_by_lane: dict[str, list[dict[str, object]]] = {}
+    for session in live_sessions:
+        live_by_lane.setdefault(_session_lane(session), []).append(session)
+
+    active_by_lane: dict[str, list[WorkRow]] = {}
+    for row in active_rows:
+        active_by_lane.setdefault(row.lane, []).append(row)
+
+    mismatches: list[str] = []
+    for row in active_rows:
+        if row.lane not in live_by_lane:
+            mismatches.append(
+                f"MISMATCH active-without-live-session lane={row.lane} "
+                f"row={row.work_area} owner={row.owner}"
+            )
+
+    for lane, lane_sessions in sorted(live_by_lane.items()):
+        if lane not in active_by_lane:
+            session_text = "; ".join(_format_session(session) for session in lane_sessions)
+            mismatches.append(
+                f"MISMATCH live-session-without-active-claim lane={lane} "
+                f"sessions=[{session_text}]"
+            )
+
+    for lane, lane_rows in sorted(active_by_lane.items()):
+        if len(lane_rows) > 1:
+            row_text = ", ".join(f"{row.work_area}(owner={row.owner})" for row in lane_rows)
+            mismatches.append(f"MISMATCH multiple-active-rows lane={lane} rows=[{row_text}]")
+
+    return mismatches
+
+
+def format_check_report(rows: list[WorkRow], sessions: list[dict[str, object]], lane_filter: str | None = None) -> str:
+    mismatches = find_session_mismatches(rows, sessions, lane_filter=lane_filter)
+    live_lanes = sorted({_session_lane(session) for session in sessions if _session_is_live(session) and _session_lane(session)})
+    active_lanes = sorted({row.lane for row in rows if row.status == "active" and row.lane not in SESSIONLESS_LANES})
+    header = [
+        "Agent work registry reality check",
+        f"active_lanes={','.join(active_lanes) if active_lanes else '-'}",
+        f"live_session_lanes={','.join(live_lanes) if live_lanes else '-'}",
+    ]
+    if lane_filter:
+        header.append(f"lane_filter={normalize_lane(lane_filter)}")
+    if mismatches:
+        return "\n".join(header + mismatches)
+    return "\n".join(header + ["OK no mismatches"])
+
+
 def claim_row(
     rows: list[WorkRow],
     work_area: str,
@@ -247,7 +359,7 @@ def release_row(row: WorkRow, owner: str, notes: str | None = None) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Manage AGENT_WORK_REGISTRY.md")
-    parser.add_argument("command", choices=["list", "claim", "release", "prune-stale"])
+    parser.add_argument("command", choices=["list", "claim", "release", "prune-stale", "check"])
     parser.add_argument("work_area", nargs="?")
     parser.add_argument("--area")
     parser.add_argument("--owner", default="-")
@@ -258,6 +370,7 @@ def main() -> int:
     parser.add_argument("--status")
     parser.add_argument("--max-age-minutes", type=int, default=15)
     parser.add_argument("--lock-timeout-seconds", type=float, default=10.0)
+    parser.add_argument("--warn-only", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
     args = parser.parse_args()
@@ -267,6 +380,14 @@ def main() -> int:
             _, rows, _ = load_registry(args.registry)
             print(list_rows(rows, status=args.status))
             return 0
+
+        if args.command == "check":
+            _, rows, _ = load_registry(args.registry)
+            sessions = load_session_registry()
+            report = format_check_report(rows, sessions, lane_filter=args.lane if args.lane != "none" else None)
+            print(report)
+            has_mismatch = "MISMATCH " in report
+            return 0 if args.warn_only or not has_mismatch else 1
 
         work_area = args.work_area or args.area
         with lock_registry(args.registry, timeout_seconds=args.lock_timeout_seconds):

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -36,6 +38,13 @@ WORK_REGISTRY_FIXTURE = """# Agent Work Registry
 | `malformed-heartbeat` | `active` | `CODEX` | `biscuit` | `not-a-time` | malformed fixture | `file` | malformed heartbeat |
 """
 
+CHECK_REGISTRY_TEMPLATE = """# Agent Work Registry
+
+| Work Area | Status | Owner | Lane | Heartbeat | Scope | Primary Files | Notes |
+|---|---|---|---|---|---|---|---|
+{rows}
+"""
+
 
 class TestAgentWorkRegistry(unittest.TestCase):
     def _temp_registry(self) -> Path:
@@ -43,6 +52,22 @@ class TestAgentWorkRegistry(unittest.TestCase):
             path = Path(tmp.name)
         path.write_text(WORK_REGISTRY_FIXTURE, encoding="utf-8")
         return path
+
+    def _temp_registry_with_rows(self, rows: str) -> Path:
+        with tempfile.NamedTemporaryFile(suffix="_agent_work_registry.md", delete=False) as tmp:
+            path = Path(tmp.name)
+        path.write_text(CHECK_REGISTRY_TEMPLATE.format(rows=rows), encoding="utf-8")
+        return path
+
+    def _write_session(self, directory: Path, name: str, lane: str) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "lane": lane,
+            "status": "running",
+            "gw_pid": int(name),
+            "character": f"{lane}-character",
+        }
+        (directory / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
 
     def test_list_rows_filters_active(self):
         """PASS: list_rows can show only active work areas."""
@@ -221,6 +246,75 @@ with module.lock_registry(Path({str(registry_path)!r}), timeout_seconds=5):
         row = agent_work_registry.find_row(rows, "malformed-heartbeat")
         self.assertEqual(row.status, "available")
         self.assertEqual(row.owner, "-")
+
+    def test_check_flags_active_lane_without_live_session(self):
+        """PASS: check reports an active registry lane with no live DLL session."""
+        registry_path = self._temp_registry_with_rows(
+            "| `active-beastrit` | `active` | `CODEX` | `beastrit` | `2026-05-23T23:45:00Z` | scope | `file` | - |"
+        )
+        _, rows, _ = agent_work_registry.load_registry(registry_path)
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions = agent_work_registry.load_session_registry(Path(tmp))
+        issues = agent_work_registry.find_session_mismatches(rows, sessions)
+        self.assertTrue(any("active-without-live-session lane=beastrit" in issue for issue in issues))
+
+    def test_check_flags_live_session_without_active_claim(self):
+        """PASS: check reports a live DLL session whose lane has no active work row."""
+        registry_path = self._temp_registry_with_rows(
+            "| `available-disco` | `available` | `-` | `disco` | `2026-05-23T23:45:00Z` | scope | `file` | - |"
+        )
+        _, rows, _ = agent_work_registry.load_registry(registry_path)
+        with tempfile.TemporaryDirectory() as tmp:
+            session_dir = Path(tmp)
+            self._write_session(session_dir, "1234", "disco")
+            sessions = agent_work_registry.load_session_registry(session_dir)
+        issues = agent_work_registry.find_session_mismatches(rows, sessions)
+        self.assertTrue(any("live-session-without-active-claim lane=disco" in issue for issue in issues))
+
+    def test_check_flags_multiple_active_rows_same_lane(self):
+        """PASS: check reports duplicate active work rows on one lane."""
+        registry_path = self._temp_registry_with_rows(
+            "\n".join(
+                [
+                    "| `first-disco` | `active` | `CODEX` | `disco` | `2026-05-23T23:45:00Z` | scope | `file` | - |",
+                    "| `second-disco` | `active` | `BISCUIT` | `disco` | `2026-05-23T23:45:00Z` | scope | `file` | - |",
+                ]
+            )
+        )
+        _, rows, _ = agent_work_registry.load_registry(registry_path)
+        with tempfile.TemporaryDirectory() as tmp:
+            session_dir = Path(tmp)
+            self._write_session(session_dir, "1234", "disco")
+            sessions = agent_work_registry.load_session_registry(session_dir)
+        issues = agent_work_registry.find_session_mismatches(rows, sessions)
+        self.assertTrue(any("multiple-active-rows lane=disco" in issue for issue in issues))
+
+    def test_check_warn_only_exits_zero_on_mismatch(self):
+        """PASS: --warn-only prints mismatches but exits successfully."""
+        registry_path = self._temp_registry_with_rows(
+            "| `available-disco` | `available` | `-` | `disco` | `2026-05-23T23:45:00Z` | scope | `file` | - |"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            session_dir = Path(tmp)
+            self._write_session(session_dir, "1234", "disco")
+            env = dict(os.environ)
+            env["GWA3_SESSION_REGISTRY_DIR"] = str(session_dir)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "check",
+                    "--registry",
+                    str(registry_path),
+                    "--warn-only",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+            )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("MISMATCH live-session-without-active-claim lane=disco", result.stdout)
 
 
 def _run_case(case_type: type[unittest.TestCase]) -> None:
