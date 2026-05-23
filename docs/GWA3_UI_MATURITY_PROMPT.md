@@ -498,6 +498,55 @@ works:
 
 ---
 
+## LLM Bridge Observability & Steering Findings (2026-05-23)
+
+A fourth focused pass on the LLM operator workflow. The question:
+*if the bot is running Froggy and I want to redirect it ("go do
+maintenance", "go sell in Kamadan") without restarting, can the UI
+support that?* Today: partially.
+
+### What works end-to-end
+
+- The LLM Interface tab renders plan phase / intent / next step /
+  deviation / snapshot / chat history / tool calls / run summaries /
+  degradation banner. `LlmConsoleViewModel.ApplyBridgeEvent` handles
+  10+ bus events including `plan.updated`, `snapshot.summary`,
+  `snapshot.meta`, `tool.call`, `tool.result`, `run.summary`,
+  `chat.user`, `chat.assistant`, `degradation`, `bridge.status`,
+  `llm.telemetry`.
+- The chat box DOES drive the planner: typing → `SendChatCommand` →
+  `POST /api/llm/chat` → `state.agent_loop.inject_user_message(message)`
+  (`bridge/agent_loop.py:285`) → next planner turn sees the message.
+
+### What's missing for real steering
+
+- **No structured objective override.** The launch-time objective
+  ("FroggyHM HM") is immutable mid-session. A chat message is a hint,
+  not a directive — the planner is still optimized for its original
+  goal. There is no `set_objective` IPC verb.
+- **No directive queue or acknowledgment loop.** Operator types "go do
+  maintenance" and has to watch `plan.updated` events to guess whether
+  the planner heard them. No queued / acknowledged / in-progress /
+  done states.
+- **No prompt / context inspector.** The planner's *outputs* are
+  visible; the *inputs* (system prompt, observation history, tool
+  results, current directive) are not. "Why didn't the LLM act on my
+  instruction?" cannot be diagnosed from the UI.
+- **No cost / tokens / latency surface.** `agent_loop._record_llm_token_usage`
+  exists but the data is not displayed anywhere.
+- **No quick-action library.** Every steering ask is free-form chat.
+  Common directives ("go to maintenance town", "deposit at Xunlai",
+  "sell all whites", "travel to Kamadan", "swap to seller bot",
+  "pause until I resume") should be one-click buttons.
+- **Autonomy / allowed-actions are display-only mid-session.** Tighten-
+  the-leash controls exist as static profile fields but cannot be
+  toggled while the LLM is running.
+
+Items 44–49 in [`GWA3_UI_MATURITY_TURN2_PLAN.md`](GWA3_UI_MATURITY_TURN2_PLAN.md)
+close these gaps.
+
+---
+
 ## Compact prompt
 
 ```text

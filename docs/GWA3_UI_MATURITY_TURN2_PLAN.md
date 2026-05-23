@@ -443,6 +443,81 @@ first item (32) lands that plumbing so the rest can ride it.
     struct vs the XAML bindings); raw-JSON editor round-trips; screenshot
     of the expanded Maintenance tab + the JSON editor mid-edit.
 
+### LLM steering + observability items
+
+The LLM Interface tab today renders plan phase / intent / chat history /
+tool calls / snapshot summary and the chat box does drive
+`agent_loop.inject_user_message`. But the operator cannot redirect the
+*objective* mid-session, cannot see the prompt context the LLM is
+actually working from, cannot watch cost/tokens/latency, and cannot
+queue directives with acknowledgment. The items below close that gap so
+"running Froggy loops, tell it to swap to maintenance / go sell in
+Kamadan" is a first-class workflow, not a chat-message gamble.
+
+44. **Goal/objective override (structured, not chat).** Add a "Set
+    objective" affordance distinct from the chat box. The operator picks
+    or types a new objective ("go to maintenance town and restock kits",
+    "travel to Kamadan and sell gold-rarity items", "swap to seller bot",
+    "finish current run, then stop"). The directive is sent through a
+    new IPC verb `set_objective` that the agent loop treats as
+    higher-precedence than the launch-time objective until satisfied or
+    cleared. Persists in `last_tool_calls` with role `directive`.
+    Evidence: commit hash; new IPC verb + agent_loop handler; UI
+    affordance with a queue indicator; live DISCOPANIC validation:
+    inject "go to maintenance" mid-Froggy and confirm the planner's
+    next plan.updated reflects the new intent.
+45. **Directive queue + acknowledgment timeline.** Multiple directives
+    can stack: "finish current run", "go sell rares in Kamadan", "resume
+    Froggy". Each shows in a small queue panel with: state
+    (pending/in-progress/done/cancelled), submitted-at, acknowledged-at
+    (when the planner first incorporates it), satisfied-at. Operator can
+    re-order, cancel, or clear the queue.
+    Evidence: commit hash; new `DirectiveQueueViewModel` + tests; UI
+    screenshot of a 3-item queue mid-run; agent_loop persists the queue
+    in run.summary.
+46. **LLM context / prompt inspector.** A read-only "Context" pane that
+    shows the actual messages sent to the planner on its last call:
+    system prompt, observation history, tool results, current
+    directive. Lets the operator diagnose "why didn't the LLM act on my
+    instruction?" — the answer is almost always "it never saw it."
+    Refreshes per planner turn via a new bridge event
+    `prompt.composed` carrying a redacted summary (token counts +
+    message previews, full content on click).
+    Evidence: commit hash; new bridge event + handler; UI screenshot
+    showing the inspector after a chat injection; offline test that
+    redaction strips secrets if any.
+47. **Cost / tokens / latency telemetry.** `_record_llm_token_usage`
+    already exists in `agent_loop.py` — surface it. A small persistent
+    strip on the LLM Interface tab shows: last-call latency, last-call
+    prompt+completion tokens, rolling cost estimate (configurable
+    per-model price), tokens/hour, calls/minute. A click opens a sparkline
+    of the last hour.
+    Evidence: commit hash; sparkline data model + tests; live
+    validation entry showing real numbers from a DISCOPANIC session.
+48. **Quick-action directive library.** A row of buttons / dropdown of
+    common directives the operator routinely needs: "Go to maintenance
+    town", "Deposit gold at Xunlai", "Sell all white/blue", "Identify all
+    rares", "Sell all gold-rarity to merchant", "Travel to Kamadan",
+    "Swap to seller bot", "Pause until I say resume", "Finish current run
+    then stop". Each is a pre-canned `set_objective` payload (item 44)
+    so the planner treats it as a structured directive, not a chat hint.
+    Library entries are loadable from a JSON file so power users can
+    add their own.
+    Evidence: commit hash; `quick-directives.json` + UI loader; library
+    rendered as buttons; live DISCOPANIC validation: click "Go to
+    maintenance town" mid-Froggy and confirm the planner travels.
+49. **Live autonomy + allowed-action controls.** The Autonomy and
+    Allowed-actions panel in `LlmConsoleView` is display-only. Make them
+    editable mid-session: tightening autonomy from "Autonomous" to
+    "Advisory" suspends tool execution and forces operator approval;
+    toggling an allowed-action off causes the planner to skip it and
+    reroute. Wired via the existing `set_settings` IPC verb extended
+    with `autonomy_level` and `allowed_actions` fields.
+    Evidence: commit hash; agent_loop respects mid-session autonomy
+    changes; UI test that toggling "Advisory" surfaces the
+    approval-required state; live DISCOPANIC validation: drop autonomy
+    mid-run, confirm the next tool call requires approval.
+
 ### How to extend
 
 Append numbered items below item 5 with: a concrete acceptance criterion
