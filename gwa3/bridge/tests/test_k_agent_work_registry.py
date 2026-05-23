@@ -20,17 +20,26 @@ assert _SPEC is not None and _SPEC.loader is not None
 sys.modules[_SPEC.name] = agent_work_registry
 _SPEC.loader.exec_module(agent_work_registry)
 
+WORK_REGISTRY_FIXTURE = """# Agent Work Registry
+
+| Work Area | Status | Owner | Lane | Scope | Primary Files | Notes |
+|---|---|---|---|---|---|---|
+| `agent-coordination` | `active` | `BISCUIT` | `none` | registry tests fixture | `AGENT_WORK_REGISTRY.md` | active for fixture |
+| `kamadan-bridge` | `handoff` | `BISCUIT` | `none` | bridge fixture | `gwa3/bridge` | bridge work stable |
+| `player-trade-validation` | `active` | `CODEX` | `any` | player trade fixture | `gwa3/bridge/tests/test_f_player_trade.py` | active for fixture |
+"""
+
 
 class TestAgentWorkRegistry(unittest.TestCase):
     def _temp_registry(self) -> Path:
         with tempfile.NamedTemporaryFile(suffix="_agent_work_registry.md", delete=False) as tmp:
             path = Path(tmp.name)
-        path.write_text(REGISTRY_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+        path.write_text(WORK_REGISTRY_FIXTURE, encoding="utf-8")
         return path
 
     def test_list_rows_filters_active(self):
         """PASS: list_rows can show only active work areas."""
-        _, rows, _ = agent_work_registry.load_registry()
+        _, rows, _ = agent_work_registry.load_registry(self._temp_registry())
         output = agent_work_registry.list_rows(rows, status="active")
         self.assertIn("agent-coordination", output)
         self.assertIn("player-trade-validation", output)
@@ -43,6 +52,7 @@ class TestAgentWorkRegistry(unittest.TestCase):
             rows,
             "new-area",
             "BISCUIT",
+            "none",
             "test scope",
             "file_a,file_b",
             "notes",
@@ -53,15 +63,17 @@ class TestAgentWorkRegistry(unittest.TestCase):
         row = agent_work_registry.find_row(updated_rows, "new-area")
         self.assertEqual(row.status, "active")
         self.assertEqual(row.owner, "BISCUIT")
+        self.assertEqual(row.lane, "none")
 
     def test_claim_existing_active_area_requires_force_for_other_owner(self):
         """PASS: active work owned by someone else cannot be stolen accidentally."""
-        _, rows, _ = agent_work_registry.load_registry()
+        _, rows, _ = agent_work_registry.load_registry(self._temp_registry())
         with self.assertRaisesRegex(ValueError, "already active"):
             agent_work_registry.claim_row(
                 rows,
                 "player-trade-validation",
                 "BISCUIT",
+                "any",
                 "overlap",
                 "x",
                 "x",
@@ -69,7 +81,7 @@ class TestAgentWorkRegistry(unittest.TestCase):
 
     def test_release_row_sets_available(self):
         """PASS: release resets row status and owner."""
-        _, rows, _ = agent_work_registry.load_registry()
+        _, rows, _ = agent_work_registry.load_registry(self._temp_registry())
         row = agent_work_registry.find_row(rows, "kamadan-bridge")
         agent_work_registry.release_row(row, notes="released")
         self.assertEqual(row.status, "available")
@@ -94,6 +106,7 @@ async def test_agent_work_registry_suite(_tc):
 
 
 test_agent_work_registry_suite.requires_bridge = False
+test_agent_work_registry_suite.__test__ = False
 
 
 if __name__ == "__main__":

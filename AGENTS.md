@@ -104,6 +104,12 @@ Preferred lanes are documented in `MULTI_AGENT_BUILD_ARCHITECTURE.md`.
 Account ownership and claim status are documented in `AGENT_ACCOUNT_REGISTRY.md`.
 Task ownership and current work claims are documented in `AGENT_WORK_REGISTRY.md`.
 
+`AGENT_WORK_REGISTRY.md` includes a structured `Lane` column. Legal values are
+`none`, `beastrit`, `disco`, `blumpkins`, `marvin`, `biscuit`, and `any`.
+Use `none` when a work row does not touch a GW lane, use the matching lane when
+the work is tied to a specific account/build/DLL/pipe, and use `any` only when
+the work can safely run against any lane without exclusive ownership.
+
 ## Test And Build Discipline
 
 Before reporting any test or bridge regression:

@@ -9,7 +9,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REGISTRY = REPO_ROOT / "AGENT_WORK_REGISTRY.md"
-TABLE_HEADER = "| Work Area | Status | Owner | Scope | Primary Files | Notes |"
+TABLE_HEADER = "| Work Area | Status | Owner | Lane | Scope | Primary Files | Notes |"
+LEGAL_LANES = {"none", "beastrit", "disco", "blumpkins", "marvin", "biscuit", "any"}
 
 
 @dataclass
@@ -17,6 +18,7 @@ class WorkRow:
     work_area: str
     status: str
     owner: str
+    lane: str
     scope: str
     primary_files: str
     notes: str
@@ -27,14 +29,15 @@ class WorkRow:
             work_area=cells[0].strip("`"),
             status=cells[1].strip("`"),
             owner=cells[2].strip("`"),
-            scope=cells[3],
-            primary_files=cells[4].strip("`"),
-            notes=cells[5],
+            lane=cells[3].strip("`"),
+            scope=cells[4],
+            primary_files=cells[5].strip("`"),
+            notes=cells[6],
         )
 
     def to_markdown_row(self) -> str:
         return (
-            f"| `{self.work_area}` | `{self.status}` | `{self.owner}` | {self.scope} | "
+            f"| `{self.work_area}` | `{self.status}` | `{self.owner}` | `{self.lane}` | {self.scope} | "
             f"`{self.primary_files}` | {self.notes} |"
         )
 
@@ -44,7 +47,7 @@ def _parse_table_row(line: str) -> WorkRow | None:
     if not stripped.startswith("|") or stripped.startswith("|---"):
         return None
     cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-    if len(cells) != 6 or cells[0] == "Work Area":
+    if len(cells) != 7 or cells[0] == "Work Area":
         return None
     return WorkRow.from_cells(cells)
 
@@ -85,23 +88,33 @@ def find_row(rows: list[WorkRow], work_area: str) -> WorkRow:
 def list_rows(rows: list[WorkRow], status: str | None = None) -> str:
     filtered = [row for row in rows if status is None or row.status == status]
     return "\n".join(
-        f"{row.work_area}: [{row.status}] owner={row.owner} scope={row.scope}" for row in filtered
+        f"{row.work_area}: [{row.status}] owner={row.owner} lane={row.lane} scope={row.scope}"
+        for row in filtered
     )
+
+
+def normalize_lane(lane: str) -> str:
+    normalized = lane.strip().strip("`").lower()
+    if normalized not in LEGAL_LANES:
+        raise ValueError(f"invalid lane: {lane} (expected one of {', '.join(sorted(LEGAL_LANES))})")
+    return normalized
 
 
 def claim_row(
     rows: list[WorkRow],
     work_area: str,
     owner: str,
+    lane: str,
     scope: str,
     primary_files: str,
     notes: str,
     force: bool = False,
 ) -> WorkRow:
+    lane = normalize_lane(lane)
     try:
         row = find_row(rows, work_area)
     except ValueError:
-        row = WorkRow(work_area, "active", owner, scope, primary_files, notes)
+        row = WorkRow(work_area, "active", owner, lane, scope, primary_files, notes)
         rows.append(row)
         rows.sort(key=lambda item: item.work_area.lower())
         return row
@@ -109,6 +122,7 @@ def claim_row(
         raise ValueError(f"work area already active: {work_area} (owner={row.owner})")
     row.status = "active"
     row.owner = owner
+    row.lane = lane
     row.scope = scope
     row.primary_files = primary_files
     row.notes = notes
@@ -127,6 +141,7 @@ def main() -> int:
     parser.add_argument("command", choices=["list", "claim", "release"])
     parser.add_argument("--area")
     parser.add_argument("--owner", default="-")
+    parser.add_argument("--lane", default="none")
     parser.add_argument("--scope", default="-")
     parser.add_argument("--files", default="-")
     parser.add_argument("--notes", default="-")
@@ -145,7 +160,7 @@ def main() -> int:
         raise SystemExit("--area is required for claim/release")
 
     if args.command == "claim":
-        claim_row(rows, args.area, args.owner, args.scope, args.files, args.notes, force=args.force)
+        claim_row(rows, args.area, args.owner, args.lane, args.scope, args.files, args.notes, force=args.force)
     else:
         row = find_row(rows, args.area)
         release_row(row, notes=args.notes)
