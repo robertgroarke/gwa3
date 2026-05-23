@@ -518,6 +518,81 @@ Kamadan" is a first-class workflow, not a chat-message gamble.
     approval-required state; live DISCOPANIC validation: drop autonomy
     mid-run, confirm the next tool call requires approval.
 
+### Bridge console / objective items (close the launch-banner gap)
+
+When DISCOPANIC (or any LLM lane) launches today, a separate CMD window
+appears showing the bridge's startup banner:
+
+```
+GWA3 LLM Bridge
+LLM:       http://localhost:11434/v1
+Provider:  openai-compatible
+Model:     qwen3.5:cloud
+Profile:   qwen-safe
+Planner:   openai-compatible:qwen3.5:cloud
+Executor:  openai-compatible:qwen3.5:cloud
+Modes:     supervisor=deterministic executor=health-check planner=async prompt=delta
+Autonomy:  advisory
+Pipe:      \\.\pipe\gwa3_llm_disco
+Lane:      disco
+Objective: Farm Bogroot Growths HM repeatedly with Froggy HM in advisory mode. Use the configured lane only.
+[Bridge] HTTP/SSE listening on http://127.0.0.1:8765
+[Bridge] Connecting to gwa3 pipe \\.\pipe\gwa3_llm_disco...
+[TwoModel] Starting planner/executor loop
+[TwoModel] Objective: Farm Bogroot Growths HM repeatedly with Froggy HM in advisory mode.
+```
+
+Most of those fields are in the UI but spread across panels. Two are
+NOT in the UI (the Objective string, and a single-glance "I'm running X
+on Y in Z mode" summary). And the CMD window itself indicates bridge
+stdout is escaping the UI's log capture.
+
+50. **Display the launch-time objective on the LLM Interface tab.**
+    The bridge agent loop already holds an `objective` string in its
+    runtime config (`bridge/agent_loop.py`). Surface it via the existing
+    `llm.telemetry` event (or a one-shot `bridge.status` payload at
+    startup) and render it on the LLM Interface tab above the Plan +
+    State panel as a wrap-friendly read-only block: "Objective: ..."
+    with a copy-to-clipboard button. The field is distinct from
+    `LlmPlanIntent` (near-term planner intent) — name it
+    `LaunchObjective` in the VM. Bind from the session's
+    `LaunchObjective` so it updates when rail selection changes.
+    Evidence: commit hash; new bridge event payload field + Python
+    side test; new `LaunchObjective` property on `LlmConsoleViewModel`
+    + `SessionViewModel` with unit test; screenshot of the LLM
+    Interface tab showing the populated objective for DISCOPANIC.
+51. **Bridge connection summary banner.** A single-row condensed
+    banner on the LLM Interface tab that mirrors the CMD startup
+    format: `qwen-safe • qwen3.5:cloud • advisory • pipe gwa3_llm_disco
+    • bridge 127.0.0.1:8765 • disco`. Pure presentation; bind to
+    existing `LlmProfileName` / `LlmPlannerModel` / `SelectedAutonomyLevel`
+    / `PipeName` / `LlmBridgeEndpoint` / `LaneTag` fields with a small
+    converter that joins non-empty values with the `•` separator.
+    Place above the existing Plan + State panel, below the new
+    Objective block from item 50.
+    Evidence: commit hash; new `BridgeSummaryConverter` + unit test
+    covering empty/partial/all-fields cases; screenshot showing the
+    populated banner during DISCOPANIC validation.
+52. **Suppress the bridge console window and route stdout/stderr into
+    the UI logs.** The bridge Python process is currently launched
+    with a visible CMD window (CREATE_NEW_CONSOLE or no stdout
+    redirect), so its `[Bridge]` and `[TwoModel]` lines escape the
+    UI's log capture. Modify the bridge process launch in the UI's
+    `Gwa3.UI.Supervisor` (the `BridgeService` / `LauncherService`
+    spawn path that starts the Python bridge) to use
+    `CREATE_NO_WINDOW` + redirect stdout/stderr to pipes, then tee
+    the lines into the existing LogPane runtime log with a `Bridge`
+    source tag. Operators no longer see a stray CMD window; the
+    startup banner and live `[TwoModel]` lines become searchable in
+    the Logs tab.
+    Evidence: commit hash; verify on DISCOPANIC live: launch a lane,
+    confirm NO standalone CMD window appears, confirm the startup
+    banner lines are visible in the Logs tab with source=Bridge,
+    confirm shutting the UI Stop cleanly terminates the bridge
+    process (no orphaned pythonw.exe); offline unit test for the
+    process-start arguments builder asserting `CreateNoWindow=true`
+    and stdout/stderr are redirected.
+
 ### How to extend
 
 Append numbered items below item 5 with: a concrete acceptance criterion
