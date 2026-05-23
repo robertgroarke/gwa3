@@ -44,6 +44,24 @@ Constraints:
 - Keep the flat light theme; refine it, don't replace it.
 - Web/API: after the desktop changes settle, document the presentation contract (field names, log-collapsing rules, empty-state semantics) so the separate web frontend can match it. Do not build a new web frontend here.
 
+Live validation — REQUIRED on the DISCOPANIC lane:
+You must validate each fix against a real injected gwa3 session, not just the idle UI. Use the DISCOPANIC lane (account index 1, character `D I S C O P A N I C`, build dir `gwa3/build_disco`, DLL `gwa3_disco.dll`, pipe `\\.\pipe\gwa3_llm_disco`, launcher `GWA Censured/debug_scripts/launch_disco_panic_via_gwlauncher.au3`). Follow the launcher discipline exactly:
+
+1. Run the AutoIt launcher script with AutoIt3.exe; capture the launcher-returned PID. Never start `Gw.exe` directly. Never kill other agents' GW processes — only the exact PID you launched.
+2. Wait ~30s after launch, then inject `gwa3_disco.dll` into that exact PID via the injector.
+3. Wait for the DLL log and pipe to appear, then start the Control Panel against the disco profile.
+
+Then exercise the UI end-to-end against that live session:
+- Click every actionable control on every Configuration sub-tab (Launch, Profile, Team/Skills, Inventory, Maintenance, LLM, Logs, Diagnostics) and on Monitoring and LLM Interface. Confirm each button/toggle/dropdown either performs its stated action, surfaces a clear validation error, or is correctly disabled with a reason.
+- Toggle settings that the DLL consumes (e.g. Hard mode, consets, chests, pickup gold, auto salvage, inventory policy rows, maintenance limits, LLM autonomy/allowed actions) and verify the change actually reaches the injected DLL — check `gwa3_log_<pid>.txt`, the bot log, pipe traffic, or the bridge `/api/llm/state` snapshot for the new value taking effect. A change that the UI accepts but the DLL ignores is a bug to report.
+- Validate every status the UI displays against ground truth: PID matches the live process, character matches the launcher arg, DLL path matches the file actually loaded in the process, pipe name matches the open named pipe, heartbeat/health is fresh, dungeon/bot phase matches what the bot log reports, run counters match the bot log, log timestamps are in order, and "externally discovered" vs "UI-launched" provenance is correct.
+- Re-run the launch log scenario that produced the repeated `Bridge stream reconnecting` spam (e.g. start the UI before the bridge is up) and confirm the new collapsing/rate-limiting behavior works on real traffic.
+- Resize the window narrow and wide; confirm no text clips silently anywhere and that wrap/tooltip fallbacks engage.
+
+On cleanup: kill ONLY the GW PID you launched and your own injected DLL session. Leave any other agents' GW clients alone.
+
+Note: DISCOPANIC is normally reserved for the Claude Code agent (see memory: `project_claude_agent_lane`). The operator has explicitly granted this prompt use of the lane; coordinate via AGENT_WORK_REGISTRY before claiming it, and release the lane when done.
+
 Deliverables:
 - A short implementation plan before edits.
 - Narrow, reviewable commits; coordinate with AGENT_WORK_REGISTRY if claiming work.
@@ -58,6 +76,7 @@ Success criteria:
 - The idle Monitoring tab reads as a deliberate empty state, not a broken wall of "n/a".
 - The Sessions rail communicates character, state, and provenance at a glance without clipping.
 - The health readout appears once; validation errors point the operator at what to fix.
+- Every interactive control on every tab works (or is correctly disabled) against a live DISCOPANIC session, and every status field has been cross-checked against the injected DLL's ground truth (logs, pipe, bridge state).
 ```
 
 ## Compact prompt
@@ -75,5 +94,9 @@ This is a presentation-only polish pass on the WPF Control Panel. Fix, in priori
 5. Rework the dense, clipping-badge Sessions rail cards into a clear hierarchy with non-clipping state + provenance badges.
 6. De-duplicate the doubled health readout; make Validation errors point at the field to fix.
 
-Keep MVVM discipline (converters/view models, not code-behind) and the existing flat light theme. No backend/IPC/launch changes. Produce a short plan, before/after screenshots, smoke tests for the pure collapsing/empty-state logic, and a final report.
+Keep MVVM discipline (converters/view models, not code-behind) and the existing flat light theme. No backend/IPC/launch changes.
+
+Live validation is required on the DISCOPANIC lane (`build_disco` / `gwa3_disco.dll` / `\\.\pipe\gwa3_llm_disco`, launcher `GWA Censured/debug_scripts/launch_disco_panic_via_gwlauncher.au3`). Launch via the AutoIt launcher, inject only the exact returned PID, then click every actionable control on every tab, toggle settings the DLL consumes and confirm they take effect in the injected DLL's log/pipe/bridge state, and verify every UI status field against ground truth (PID, character, DLL path, pipe name, heartbeat, dungeon/bot phase, run counters, provenance). Re-trigger the repeated reconnect log scenario and confirm collapsing works on live traffic. Kill only the PID you launched.
+
+Produce a short plan, before/after screenshots, smoke tests for pure collapsing/empty-state logic, a live-validation checklist with results, and a final report.
 ```
