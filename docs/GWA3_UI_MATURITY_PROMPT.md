@@ -284,8 +284,8 @@ Companion to the code-review findings above. Where the previous pass asked
 "is this code production-quality?", this pass asks "if I'm the bot
 operator sitting in front of this thing, can I actually do my job?" The
 operator runs 5 GW lanes (BEASTRIT / DISCOPANIC / BLUMPKINS / MARVIN /
-BISCUIT), wants gold/loot per unit time, is paranoid about detection, and
-shares the machine with multiple coding agents. The UI today is
+BISCUIT), wants gold/loot per unit time, and shares the machine with
+multiple coding agents. The UI today is
 infrastructure-shaped — it exposes the *plumbing* (PID, DLL, pipe, build,
 heartbeat) but not the *outcomes* (gold/hour, what dropped, what just
 broke, what to do about it).
