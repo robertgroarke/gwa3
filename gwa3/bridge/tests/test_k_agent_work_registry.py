@@ -6,6 +6,7 @@ import importlib.util
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .helpers import TestFailure
@@ -22,11 +23,15 @@ _SPEC.loader.exec_module(agent_work_registry)
 
 WORK_REGISTRY_FIXTURE = """# Agent Work Registry
 
-| Work Area | Status | Owner | Lane | Scope | Primary Files | Notes |
-|---|---|---|---|---|---|---|
-| `agent-coordination` | `active` | `BISCUIT` | `none` | registry tests fixture | `AGENT_WORK_REGISTRY.md` | active for fixture |
-| `kamadan-bridge` | `handoff` | `BISCUIT` | `none` | bridge fixture | `gwa3/bridge` | bridge work stable |
-| `player-trade-validation` | `active` | `CODEX` | `any` | player trade fixture | `gwa3/bridge/tests/test_f_player_trade.py` | active for fixture |
+| Work Area | Status | Owner | Lane | Heartbeat | Scope | Primary Files | Notes |
+|---|---|---|---|---|---|---|---|
+| `agent-coordination` | `active` | `BISCUIT` | `none` | `2026-05-23T23:45:00Z` | registry tests fixture | `AGENT_WORK_REGISTRY.md` | active for fixture |
+| `kamadan-bridge` | `handoff` | `BISCUIT` | `none` | `2026-05-23T23:45:00Z` | bridge fixture | `gwa3/bridge` | bridge work stable |
+| `player-trade-validation` | `active` | `CODEX` | `any` | `2026-05-23T23:45:00Z` | player trade fixture | `gwa3/bridge/tests/test_f_player_trade.py` | active for fixture |
+| `stale-active` | `active` | `CODEX` | `disco` | `2026-05-23T23:20:00Z` | stale active fixture | `file` | stale active |
+| `fresh-active` | `active` | `CODEX` | `marvin` | `2026-05-23T23:44:00Z` | fresh active fixture | `file` | fresh active |
+| `stale-blocked` | `blocked` | `CODEX` | `beastrit` | `2026-05-23T23:19:00Z` | stale blocked fixture | `file` | stale blocked |
+| `malformed-heartbeat` | `active` | `CODEX` | `biscuit` | `not-a-time` | malformed fixture | `file` | malformed heartbeat |
 """
 
 
@@ -87,6 +92,42 @@ class TestAgentWorkRegistry(unittest.TestCase):
         self.assertEqual(row.status, "available")
         self.assertEqual(row.owner, "-")
         self.assertEqual(row.notes, "released")
+
+    def test_prune_stale_active_sets_available(self):
+        """PASS: stale active rows are released by the prune rule."""
+        _, rows, _ = agent_work_registry.load_registry(self._temp_registry())
+        now = datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc)
+        agent_work_registry.prune_stale_rows(rows, max_age_minutes=15, now=now, replacement_heartbeat="now")
+        row = agent_work_registry.find_row(rows, "stale-active")
+        self.assertEqual(row.status, "available")
+        self.assertEqual(row.owner, "-")
+
+    def test_prune_fresh_active_keeps_claim(self):
+        """PASS: fresh active rows remain claimed."""
+        _, rows, _ = agent_work_registry.load_registry(self._temp_registry())
+        now = datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc)
+        agent_work_registry.prune_stale_rows(rows, max_age_minutes=15, now=now, replacement_heartbeat="now")
+        row = agent_work_registry.find_row(rows, "fresh-active")
+        self.assertEqual(row.status, "active")
+        self.assertEqual(row.owner, "CODEX")
+
+    def test_prune_stale_blocked_sets_available(self):
+        """PASS: stale blocked rows are released by the prune rule."""
+        _, rows, _ = agent_work_registry.load_registry(self._temp_registry())
+        now = datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc)
+        agent_work_registry.prune_stale_rows(rows, max_age_minutes=15, now=now, replacement_heartbeat="now")
+        row = agent_work_registry.find_row(rows, "stale-blocked")
+        self.assertEqual(row.status, "available")
+        self.assertEqual(row.owner, "-")
+
+    def test_prune_malformed_heartbeat_treats_as_stale(self):
+        """PASS: malformed heartbeat values are stale."""
+        _, rows, _ = agent_work_registry.load_registry(self._temp_registry())
+        now = datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc)
+        agent_work_registry.prune_stale_rows(rows, max_age_minutes=15, now=now, replacement_heartbeat="now")
+        row = agent_work_registry.find_row(rows, "malformed-heartbeat")
+        self.assertEqual(row.status, "available")
+        self.assertEqual(row.owner, "-")
 
 
 def _run_case(case_type: type[unittest.TestCase]) -> None:

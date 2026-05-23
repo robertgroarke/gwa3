@@ -110,6 +110,12 @@ Use `none` when a work row does not touch a GW lane, use the matching lane when
 the work is tied to a specific account/build/DLL/pipe, and use `any` only when
 the work can safely run against any lane without exclusive ownership.
 
+`AGENT_WORK_REGISTRY.md` also includes a `Heartbeat` column containing a UTC
+ISO8601 timestamp. Agents must refresh that timestamp each turn they touch a
+claim. Run `python scripts/agent_work_registry.py prune-stale` to release
+`active` or `blocked` rows whose heartbeat is older than the default 15-minute
+threshold; malformed heartbeat values are treated as stale.
+
 ## Test And Build Discipline
 
 Before reporting any test or bridge regression:
