@@ -278,6 +278,99 @@ add numbered items 6+ that pick these up.
 
 ---
 
+## User-Value Findings (operator-perspective review, 2026-05-23)
+
+Companion to the code-review findings above. Where the previous pass asked
+"is this code production-quality?", this pass asks "if I'm the bot
+operator sitting in front of this thing, can I actually do my job?" The
+operator runs 5 GW lanes (BEASTRIT / DISCOPANIC / BLUMPKINS / MARVIN /
+BISCUIT), wants gold/loot per unit time, is paranoid about detection, and
+shares the machine with multiple coding agents. The UI today is
+infrastructure-shaped — it exposes the *plumbing* (PID, DLL, pipe, build,
+heartbeat) but not the *outcomes* (gold/hour, what dropped, what just
+broke, what to do about it).
+
+### Workflow gaps observed
+
+- **Run history is ephemeral.** Monitoring shows current Runs/Successes/
+  Failures/Best/Avg as in-memory counters but there is no persisted run
+  log. After a UI restart the entire history is gone.
+- **Drop accounting is implicit.** Gold/Materials/Loot fields exist on
+  the Monitoring tab but read as "n/a" until a snapshot fires; there is
+  no per-item drop ledger, no rare-drop highlight, no daily aggregate,
+  no "what did Froggy HM net per hour this week."
+- **No fleet view.** To compare lanes the operator clicks each one in
+  the rail. A glanceable tile grid with all five lanes (state, current
+  phase, last-5 outcomes, gold/hour, alerts) would replace 5 clicks
+  with 0.
+- **No quick-launch.** Launching requires: pick Profile → pick Bot →
+  pick Character → pick Mode → click Validate → click Launch → confirm.
+  For the 95% case ("launch what I ran yesterday") this should be one
+  button.
+- **No stop conditions.** Operator must babysit. "Stop after N runs",
+  "stop at HH:MM", "stop on rare drop", "stop if fail rate >X%" are
+  table stakes for unattended farming.
+- **No notifications.** Run completion, rare drop, anti-cheat detection,
+  failure cluster — all silent. Windows toast / Discord webhook / system
+  tray would be obvious wins.
+- **DLL build mismatch is silent.** The registry record carries
+  `dll_build_hash` but the rail shows "unknown build" with no comparison
+  against the operator's expected/local build. A wrong DLL is a real
+  hazard (memory layout changes break everything) and currently the UI
+  only finds out by crashing.
+- **No crash / disconnect recovery affordance.** When GW disconnects
+  (common during long runs), the operator restarts manually. No
+  auto-reinject path, no "resume my last session" button.
+- **Account safety is not lead-with.** Bot detection / kick / captcha
+  is the single highest-stakes UX event for this product and there is
+  no dedicated banner or stop-rule for it. Operator currently learns
+  about it by checking the game window.
+- **Profile editing has no dirty / diff state.** Changing a field then
+  navigating away does not warn; there is no "you've changed 3 settings
+  since last save" indicator; no Revert button; no Save As.
+- **Profile portability is broken.** Three profile JSONs exist
+  (`00-froggy-hm-beastrit-qwen-safe.json`, `01-froggy-hm-disco-qwen-safe.json`,
+  `froggy-hm.default.json`) all encoding FroggyHM. Adding a new lane
+  requires copying a JSON by hand. No Import / Export / Duplicate / Save
+  As workflow in the UI.
+- **Bot-module discovery is hardcoded to FroggyHM.** The native DLL
+  registry of bot modules (FroggyHM, RragarsMenagerie, RavensPoint,
+  ArachnisHaunt, Kathandrax, FrostmawsBurrows, etc.) is not surfaced —
+  the Bot combo offers only what the profile JSON named.
+- **LLM Interface lacks operator intervention.** Chat is one-shot
+  message in; the LLM's plan is read-only display; there is no "edit
+  the plan", "skip this step", "veto this action", or "pause and let me
+  drive" affordance.
+- **No keyboard shortcuts.** No documented chord for Launch / Stop /
+  switch lane / clear logs.
+- **No in-app help.** Field labels are terse ("Conset Crafting",
+  "Maintenance limits", "Bot phase") with no tooltips explaining what
+  they do for someone who didn't write the code.
+- **No session bundle export.** For bug reports or multi-agent
+  coordination, "export the current session as a zip (logs + profile +
+  last snapshot + screenshots)" would be invaluable. Currently the
+  Open log folder button drops you into a directory.
+- **Onboarding is implicit.** First-run experience: open the app, see
+  cryptic placeholder values, no guided "set up your first lane" flow.
+
+### Themes for the backlog
+
+- **Outcomes over plumbing.** Add views that answer "what is this
+  earning me?" before refining views that answer "what is the PID?"
+- **Unattended operation.** Stop conditions + notifications + crash
+  recovery + safety guards.
+- **Fleet first.** A multi-lane dashboard is the natural top-level
+  page; the per-session detail is the second level.
+- **Editing as a first-class action.** Profile diff, dirty state,
+  save / save-as / revert, validation actionable not informational.
+- **LLM as a collaborator.** Plan editing and operator-in-the-loop
+  controls, not a read-only console.
+
+The backlog items below (18+) lift these into concrete, evidence-bound
+work units.
+
+---
+
 ## Compact prompt
 
 ```text

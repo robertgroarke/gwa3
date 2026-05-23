@@ -207,6 +207,136 @@ item — it contains the file:line context.
     Evidence: commit hash; new `tools/tests/inject_broker.tests.ps1`;
     test runs as part of the slice-3 verification report.
 
+### User-value items (operator-perspective review)
+
+The findings below come from the 2026-05-23 "User-Value Findings" section
+in [`GWA3_UI_MATURITY_PROMPT.md`](GWA3_UI_MATURITY_PROMPT.md). Read that
+section before each item — it has the operator-experience context.
+These items prioritize outcomes (gold, drops, safety, unattended
+operation) over plumbing.
+
+18. **Persisted run history + view.** Today's Runs/Best/Avg counters are
+    in-memory only. Persist every completed run as a JSON record under
+    `%LOCALAPPDATA%\Gwa3.UI\runs\<lane>\<yyyy-mm-dd>\<session>.json` with
+    start/end, outcome (success/fail/wipe), duration, dungeon level
+    reached, gold delta, drops list, fail reason if any. Add a "Run
+    history" sub-tab on Monitoring with a sortable table (last 50
+    visible, filter by lane/date/outcome) and a click-to-open-bundle
+    action.
+    Evidence: commit hash; new `RunHistoryService` + tests for
+    JSON read/write/rotation; screenshot of populated table after a
+    DISCOPANIC run; offline test fixture with 5 synthetic runs renders.
+19. **Drop / loot ledger.** Per-session and per-day rollup of drops with
+    item name, rarity, count, gold value. Surface rare drops (gold/green
+    items) with a highlight row. Aggregate the last 7 days in a
+    sparkline ("gold/hour over time"). Backed by the same JSON store as
+    item 18.
+    Evidence: commit hash; new `DropLedger` parser tests using fixture
+    bot logs; screenshot of populated ledger; rare-drop highlight test.
+20. **Quick-launch + last-config recall.** A "Resume last session" /
+    "Launch last config" button in the top command bar that fires the
+    last successful Launch combo for the currently selected lane
+    without re-walking Profile/Bot/Character/Mode pickers. Per-lane
+    last-known-good config persists under
+    `%LOCALAPPDATA%\Gwa3.UI\last-launch-<lane>.json`.
+    Evidence: commit hash; offline test for persist/recall round-trip;
+    screenshot showing one-click relaunch.
+21. **Stop conditions.** Configurable per-session stop rules:
+    "stop after N runs", "stop at HH:MM", "stop on rare drop", "stop if
+    fail-rate >X% over last N runs", "stop on disconnect". Wired into
+    `SessionSupervisor` and surfaced in the Launch tab.
+    Evidence: commit hash; per-rule unit test in `StopRuleEvaluator`;
+    live DISCOPANIC validation: configure "stop after 1 run", confirm
+    the supervisor stops cleanly.
+22. **Notifications.** Windows toast (and optional Discord webhook) for:
+    run complete, rare drop, run failure, anti-cheat detection,
+    stop-condition fired, bridge unreachable >60s, settings drift
+    >0 fields. Single configurable notification preferences pane.
+    Evidence: commit hash; new `NotificationService` with a no-op test
+    sink, real Windows toast sink, webhook sink; settings UI; one toast
+    captured in the live-validation screenshot stream.
+23. **DLL build-mismatch banner.** The registry record carries
+    `dll_build_hash`. The UI knows the build dir it expects per lane.
+    When they differ, show a red banner on the Sessions rail card
+    ("DLL build a1b2c3 — expected def456 from build_disco") with a
+    "Rebuild + re-inject" action. The "Build" rail row currently shows
+    "unknown build" silently; that becomes an explicit warning chip.
+    Evidence: commit hash; offline test with mock-mismatched records;
+    rail screenshot showing the banner; live-validation entry naming
+    the hashes compared.
+24. **Disconnect / crash recovery.** When the registry record's
+    heartbeat goes stale or the GW process exits unexpectedly, surface
+    a "Session ended unexpectedly — Re-launch?" action card on the
+    rail that re-runs the prior launch config (item 20) for that lane.
+    Optional auto-restart toggle (default off) with backoff.
+    Evidence: commit hash; offline test for the heartbeat-stale →
+    action-card transition; live DISCOPANIC validation: kill DLL
+    mid-run, confirm the action card appears and re-launch works.
+25. **Anti-cheat / kick detection banner.** Pattern-match the bot log
+    and DLL log for kick / disconnect / suspicious-server-message
+    signatures, surface a top-of-window red banner the operator cannot
+    miss, default-fire an immediate Stop on detection. This is the
+    single highest-stakes operator UX event.
+    Evidence: commit hash; `KickDetectionParser` tests with fixture
+    log lines; banner XAML + auto-stop wiring; documented in the
+    live-validation report (without actually triggering a kick — use
+    a synthetic injected log line).
+26. **Profile dirty-state + diff + Save As.** When a Configuration tab
+    field changes, mark the profile dirty (visible indicator on the
+    Save Profile button). Add a Profile Diff panel showing
+    field-by-field "Saved → Current" rows. Add Save / Save As / Revert
+    buttons with clear distinction between them.
+    Evidence: commit hash; tests for dirty-tracking + diff
+    serialization; screenshot of the diff panel mid-edit.
+27. **Fleet dashboard tile grid.** A new top-level "Fleet" view (sibling
+    to Configuration / Monitoring / LLM Interface) showing one tile per
+    known lane with: state badge, current phase, last-5 outcome dots
+    (green/yellow/red), gold/hour, alerts/banner. Click a tile to
+    select that session in the rail.
+    Evidence: commit hash; new `FleetViewModel` + tests; screenshot
+    with at least 2 lanes populated (one live + one configured-only).
+28. **Bot module discovery from the DLL.** Currently the Bot combo is
+    populated by parsing profile JSONs. Instead, query the native DLL
+    (via `whoami` IPC extended with `list_bot_modules`) so all
+    registered modules — FroggyHM, RragarsMenagerie, RavensPoint,
+    ArachnisHaunt, Kathandrax, FrostmawsBurrows, etc. — appear with
+    their declared schemas. Backlog item from `GWA3_UI_KANBAN.md`.
+    Evidence: commit hash; new IPC handler + Python client; combo
+    populated live from the DLL; offline test for the parser.
+29. **Operator-in-the-loop LLM controls.** The LLM Interface today is a
+    one-way display + one-shot chat. Add: "Pause LLM and let me drive"
+    toggle (suspends the planner loop), "Edit plan" (operator rewrites
+    the next-step text), "Veto last action" (rolls back the last
+    tool call result), inline plan-step skip.
+    Evidence: commit hash; new IPC verbs (pause/resume/edit_plan/veto);
+    UI affordances; live DISCOPANIC validation: pause via UI,
+    confirm the bot stops issuing tool calls, resume, confirm it
+    continues.
+30. **Session bundle export.** One-click "Export session bundle" that
+    zips: bot log, DLL log, launcher log, current profile JSON, last
+    snapshot summary, last 50 telemetry events, last 5 screenshots,
+    and a manifest. Default save path
+    `%USERPROFILE%\Desktop\gwa3-session-<lane>-<timestamp>.zip`. For
+    bug reports + multi-agent coordination.
+    Evidence: commit hash; offline test for the manifest schema;
+    captured screenshot of the bundle being produced; one real
+    bundle .zip listed in the live-validation appendix.
+31. **In-app help / contextual tooltips.** Every Configuration field
+    label and every Monitoring metric row gets a hover tooltip
+    explaining what it means and what changing/seeing it implies. F1
+    opens a section-specific help drawer. Backed by a single
+    `help-strings.json` so future contributors maintain it in one
+    place.
+    Evidence: commit hash; help-strings file populated for ≥80% of
+    labels; XAML pattern documented; one screenshot per major tab
+    showing tooltips visible.
+32. **Keyboard shortcuts.** Documented chord set: Ctrl+L Launch,
+    Ctrl+Shift+L Stop, Ctrl+1..5 select rail position, Ctrl+S Save
+    Profile, F5 Validate, F1 Help, Esc clear selection. Shortcuts
+    visible in the menu / tooltip.
+    Evidence: commit hash; `KeyboardShortcuts.cs` + tests; help drawer
+    lists them; screenshot of the menu showing them.
+
 ### How to extend
 
 Append numbered items below item 5 with: a concrete acceptance criterion
