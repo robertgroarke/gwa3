@@ -12,6 +12,33 @@ Companion to [`GWA3_UI_MATURITY_PROMPT.md`](GWA3_UI_MATURITY_PROMPT.md).
 - The gwa3-private worktree has **unrelated dirty bridge / native / Kamadan
   changes**. Do NOT stage, commit, revert, or otherwise touch them.
 
+## Injection elevation (resume preconditions)
+
+Last live attempt produced GWLauncher PID 30372 with `LAUNCH_VERIFIED=1` but
+the injector failed with `OpenProcess failed (error 5). Run as Administrator?`
+The non-elevated Codex/agent shell cannot OpenProcess or Stop-Process the
+launched GW client.
+
+To unblock without elevating the agent itself:
+- **Operator step (one-time per blocked PID):** from an elevated PowerShell,
+  `Stop-Process -Id 30372 -Force` and verify with `Get-Process Gw`. The
+  orphan registry JSON does not exist (`%PROGRAMDATA%\gwa3\sessions\30372.json`
+  was never written because inject never succeeded).
+- **Inject broker (one-time setup, then leave running):** in an elevated
+  PowerShell window, run `tools\inject_broker.ps1` from the parent repo
+  (`C:\Users\Robert\Documents\GWA Censured X BotsHub`). It watches
+  `%LOCALAPPDATA%\gwa3-inject-broker\requests` and performs OpenProcess+inject
+  on behalf of non-elevated callers. Leave the window open for the duration
+  of slice-3 live work.
+- **Agent call path:** instead of invoking `injector.exe` directly, call
+  `tools\inject_via_broker.ps1 -Pid <pid> -Dll <dll_path>`. The shim drops a
+  request JSON and polls for the broker's response (`.done.json` + exit code
+  + captured stdout). Default injector path is the disco build; override
+  with `-Injector <path>` for other lanes.
+
+Once those two are in place, `/goal resume` on the blocked slice-3 session
+continues from a warm context with no agent elevation required.
+
 ## Lane discipline (mandatory)
 
 - Read `AGENT_WORK_REGISTRY` and `AGENT_ACCOUNT_REGISTRY` before any live
