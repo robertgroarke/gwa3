@@ -249,9 +249,9 @@ operation) over plumbing.
     live DISCOPANIC validation: configure "stop after 1 run", confirm
     the supervisor stops cleanly.
 22. **Notifications.** Windows toast (and optional Discord webhook) for:
-    run complete, rare drop, run failure, anti-cheat detection,
-    stop-condition fired, bridge unreachable >60s, settings drift
-    >0 fields. Single configurable notification preferences pane.
+    run complete, rare drop, run failure, stop-condition fired, bridge
+    unreachable >60s, settings drift >0 fields. Single configurable
+    notification preferences pane.
     Evidence: commit hash; new `NotificationService` with a no-op test
     sink, real Windows toast sink, webhook sink; settings UI; one toast
     captured in the live-validation screenshot stream.
@@ -272,30 +272,21 @@ operation) over plumbing.
     Evidence: commit hash; offline test for the heartbeat-stale →
     action-card transition; live DISCOPANIC validation: kill DLL
     mid-run, confirm the action card appears and re-launch works.
-25. **Anti-cheat / kick detection banner.** Pattern-match the bot log
-    and DLL log for kick / disconnect / suspicious-server-message
-    signatures, surface a top-of-window red banner the operator cannot
-    miss, default-fire an immediate Stop on detection. This is the
-    single highest-stakes operator UX event.
-    Evidence: commit hash; `KickDetectionParser` tests with fixture
-    log lines; banner XAML + auto-stop wiring; documented in the
-    live-validation report (without actually triggering a kick — use
-    a synthetic injected log line).
-26. **Profile dirty-state + diff + Save As.** When a Configuration tab
+25. **Profile dirty-state + diff + Save As.** When a Configuration tab
     field changes, mark the profile dirty (visible indicator on the
     Save Profile button). Add a Profile Diff panel showing
     field-by-field "Saved → Current" rows. Add Save / Save As / Revert
     buttons with clear distinction between them.
     Evidence: commit hash; tests for dirty-tracking + diff
     serialization; screenshot of the diff panel mid-edit.
-27. **Fleet dashboard tile grid.** A new top-level "Fleet" view (sibling
+26. **Fleet dashboard tile grid.** A new top-level "Fleet" view (sibling
     to Configuration / Monitoring / LLM Interface) showing one tile per
     known lane with: state badge, current phase, last-5 outcome dots
     (green/yellow/red), gold/hour, alerts/banner. Click a tile to
     select that session in the rail.
     Evidence: commit hash; new `FleetViewModel` + tests; screenshot
     with at least 2 lanes populated (one live + one configured-only).
-28. **Bot module discovery from the DLL.** Currently the Bot combo is
+27. **Bot module discovery from the DLL.** Currently the Bot combo is
     populated by parsing profile JSONs. Instead, query the native DLL
     (via `whoami` IPC extended with `list_bot_modules`) so all
     registered modules — FroggyHM, RragarsMenagerie, RavensPoint,
@@ -303,7 +294,7 @@ operation) over plumbing.
     their declared schemas. Backlog item from `GWA3_UI_KANBAN.md`.
     Evidence: commit hash; new IPC handler + Python client; combo
     populated live from the DLL; offline test for the parser.
-29. **Operator-in-the-loop LLM controls.** The LLM Interface today is a
+28. **Operator-in-the-loop LLM controls.** The LLM Interface today is a
     one-way display + one-shot chat. Add: "Pause LLM and let me drive"
     toggle (suspends the planner loop), "Edit plan" (operator rewrites
     the next-step text), "Veto last action" (rolls back the last
@@ -312,7 +303,7 @@ operation) over plumbing.
     UI affordances; live DISCOPANIC validation: pause via UI,
     confirm the bot stops issuing tool calls, resume, confirm it
     continues.
-30. **Session bundle export.** One-click "Export session bundle" that
+29. **Session bundle export.** One-click "Export session bundle" that
     zips: bot log, DLL log, launcher log, current profile JSON, last
     snapshot summary, last 50 telemetry events, last 5 screenshots,
     and a manifest. Default save path
@@ -321,7 +312,7 @@ operation) over plumbing.
     Evidence: commit hash; offline test for the manifest schema;
     captured screenshot of the bundle being produced; one real
     bundle .zip listed in the live-validation appendix.
-31. **In-app help / contextual tooltips.** Every Configuration field
+30. **In-app help / contextual tooltips.** Every Configuration field
     label and every Monitoring metric row gets a hover tooltip
     explaining what it means and what changing/seeing it implies. F1
     opens a section-specific help drawer. Backed by a single
@@ -330,7 +321,7 @@ operation) over plumbing.
     Evidence: commit hash; help-strings file populated for ≥80% of
     labels; XAML pattern documented; one screenshot per major tab
     showing tooltips visible.
-32. **Keyboard shortcuts.** Documented chord set: Ctrl+L Launch,
+31. **Keyboard shortcuts.** Documented chord set: Ctrl+L Launch,
     Ctrl+Shift+L Stop, Ctrl+1..5 select rail position, Ctrl+S Save
     Profile, F5 Validate, F1 Help, Esc clear selection. Shortcuts
     visible in the menu / tooltip.

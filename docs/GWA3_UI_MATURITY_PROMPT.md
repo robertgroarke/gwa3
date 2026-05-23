@@ -310,9 +310,9 @@ broke, what to do about it).
 - **No stop conditions.** Operator must babysit. "Stop after N runs",
   "stop at HH:MM", "stop on rare drop", "stop if fail rate >X%" are
   table stakes for unattended farming.
-- **No notifications.** Run completion, rare drop, anti-cheat detection,
-  failure cluster — all silent. Windows toast / Discord webhook / system
-  tray would be obvious wins.
+- **No notifications.** Run completion, rare drop, failure cluster,
+  stop-condition fired — all silent. Windows toast / Discord webhook /
+  system tray would be obvious wins.
 - **DLL build mismatch is silent.** The registry record carries
   `dll_build_hash` but the rail shows "unknown build" with no comparison
   against the operator's expected/local build. A wrong DLL is a real
@@ -321,10 +321,6 @@ broke, what to do about it).
 - **No crash / disconnect recovery affordance.** When GW disconnects
   (common during long runs), the operator restarts manually. No
   auto-reinject path, no "resume my last session" button.
-- **Account safety is not lead-with.** Bot detection / kick / captcha
-  is the single highest-stakes UX event for this product and there is
-  no dedicated banner or stop-rule for it. Operator currently learns
-  about it by checking the game window.
 - **Profile editing has no dirty / diff state.** Changing a field then
   navigating away does not warn; there is no "you've changed 3 settings
   since last save" indicator; no Revert button; no Save As.
@@ -358,7 +354,7 @@ broke, what to do about it).
 - **Outcomes over plumbing.** Add views that answer "what is this
   earning me?" before refining views that answer "what is the PID?"
 - **Unattended operation.** Stop conditions + notifications + crash
-  recovery + safety guards.
+  recovery.
 - **Fleet first.** A multi-lane dashboard is the natural top-level
   page; the per-session detail is the second level.
 - **Editing as a first-class action.** Profile diff, dirty state,
