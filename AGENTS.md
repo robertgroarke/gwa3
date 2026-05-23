@@ -116,6 +116,12 @@ claim. Run `python scripts/agent_work_registry.py prune-stale` to release
 `active` or `blocked` rows whose heartbeat is older than the default 15-minute
 threshold; malformed heartbeat values are treated as stale.
 
+Use `python scripts/agent_work_registry.py claim <work-area> --lane <lane> --owner <name>`
+and `python scripts/agent_work_registry.py release <work-area> --owner <name>` for
+work claims. The CLI takes a file lock on `AGENT_WORK_REGISTRY.md`, refuses
+non-`available` rows, and refuses lane collisions with existing `active` or
+`blocked` rows unless the requested lane is `none`.
+
 ## Test And Build Discipline
 
 Before reporting any test or bridge regression:

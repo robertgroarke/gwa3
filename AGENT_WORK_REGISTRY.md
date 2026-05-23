@@ -67,8 +67,8 @@ Use `python scripts/agent_work_registry.py prune-stale --max-age-minutes 15` to 
 
 ```powershell
 python scripts/agent_work_registry.py list
-python scripts/agent_work_registry.py claim --area "my-area" --lane none --owner "BISCUIT" --scope "what I am changing" --files "path1,path2"
-python scripts/agent_work_registry.py release --area "my-area"
+python scripts/agent_work_registry.py claim "my-area" --lane none --owner "BISCUIT" --scope "what I am changing" --files "path1,path2"
+python scripts/agent_work_registry.py release "my-area" --owner "BISCUIT"
 python scripts/agent_work_registry.py prune-stale --max-age-minutes 15
 ```
 

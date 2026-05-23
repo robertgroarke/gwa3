@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import sys
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,6 +16,8 @@ DEFAULT_REGISTRY = REPO_ROOT / "AGENT_WORK_REGISTRY.md"
 TABLE_HEADER = "| Work Area | Status | Owner | Lane | Heartbeat | Scope | Primary Files | Notes |"
 LEGAL_LANES = {"none", "beastrit", "disco", "blumpkins", "marvin", "biscuit", "any"}
 STALE_STATUSES = {"active", "blocked"}
+HELD_STATUSES = {"active", "blocked"}
+WINDOWS_LOCK_OFFSET = 2**31 - 1
 
 
 @dataclass
@@ -104,6 +109,48 @@ def normalize_lane(lane: str) -> str:
     return normalized
 
 
+@contextmanager
+def lock_registry(path: Path, timeout_seconds: float = 10.0, poll_seconds: float = 0.05):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+b")
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            while True:
+                handle.seek(WINDOWS_LOCK_OFFSET)
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"timed out waiting for registry lock: {path}")
+                    time.sleep(poll_seconds)
+            try:
+                yield
+            finally:
+                handle.seek(WINDOWS_LOCK_OFFSET)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"timed out waiting for registry lock: {path}")
+                    time.sleep(poll_seconds)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -166,15 +213,18 @@ def claim_row(
 ) -> WorkRow:
     lane = normalize_lane(lane)
     heartbeat = utc_now()
-    try:
-        row = find_row(rows, work_area)
-    except ValueError:
-        row = WorkRow(work_area, "active", owner, lane, heartbeat, scope, primary_files, notes)
-        rows.append(row)
-        rows.sort(key=lambda item: item.work_area.lower())
-        return row
-    if row.status == "active" and row.owner != owner and not force:
-        raise ValueError(f"work area already active: {work_area} (owner={row.owner})")
+    row = find_row(rows, work_area)
+    if row.status != "available":
+        raise ValueError(f"work area is not available: {work_area} (status={row.status}, owner={row.owner})")
+    if lane != "none":
+        for other in rows:
+            if other.work_area == row.work_area:
+                continue
+            if other.lane == lane and other.status in HELD_STATUSES:
+                raise ValueError(
+                    f"lane collision: lane={lane} already held by {other.work_area} "
+                    f"(status={other.status}, owner={other.owner})"
+                )
     row.status = "active"
     row.owner = owner
     row.lane = lane
@@ -185,7 +235,9 @@ def claim_row(
     return row
 
 
-def release_row(row: WorkRow, notes: str | None = None) -> None:
+def release_row(row: WorkRow, owner: str, notes: str | None = None) -> None:
+    if row.owner != owner:
+        raise ValueError(f"owner mismatch for {row.work_area}: current owner={row.owner}, requested owner={owner}")
     row.status = "available"
     row.owner = "-"
     row.heartbeat = utc_now()
@@ -196,6 +248,7 @@ def release_row(row: WorkRow, notes: str | None = None) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Manage AGENT_WORK_REGISTRY.md")
     parser.add_argument("command", choices=["list", "claim", "release", "prune-stale"])
+    parser.add_argument("work_area", nargs="?")
     parser.add_argument("--area")
     parser.add_argument("--owner", default="-")
     parser.add_argument("--lane", default="none")
@@ -204,40 +257,48 @@ def main() -> int:
     parser.add_argument("--notes", default="-")
     parser.add_argument("--status")
     parser.add_argument("--max-age-minutes", type=int, default=15)
+    parser.add_argument("--lock-timeout-seconds", type=float, default=10.0)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
     args = parser.parse_args()
 
-    prefix, rows, suffix = load_registry(args.registry)
+    try:
+        if args.command == "list":
+            _, rows, _ = load_registry(args.registry)
+            print(list_rows(rows, status=args.status))
+            return 0
 
-    if args.command == "list":
-        print(list_rows(rows, status=args.status))
-        return 0
+        work_area = args.work_area or args.area
+        with lock_registry(args.registry, timeout_seconds=args.lock_timeout_seconds):
+            prefix, rows, suffix = load_registry(args.registry)
 
-    if args.command == "prune-stale":
-        pruned = prune_stale_rows(rows, max_age_minutes=args.max_age_minutes)
-        if pruned:
+            if args.command == "prune-stale":
+                pruned = prune_stale_rows(rows, max_age_minutes=args.max_age_minutes)
+                if pruned:
+                    save_registry(rows, prefix, suffix, args.registry)
+                    for row, old_status, old_owner, old_heartbeat in pruned:
+                        print(
+                            f"pruned {row.work_area}: {old_status}/{old_owner} lane={row.lane} "
+                            f"heartbeat={old_heartbeat} -> available"
+                        )
+                else:
+                    print("no stale rows found")
+                return 0
+
+            if not work_area:
+                raise ValueError("work area is required for claim/release")
+
+            if args.command == "claim":
+                claim_row(rows, work_area, args.owner, args.lane, args.scope, args.files, args.notes, force=args.force)
+            else:
+                row = find_row(rows, work_area)
+                release_row(row, owner=args.owner, notes=args.notes)
             save_registry(rows, prefix, suffix, args.registry)
-            for row, old_status, old_owner, old_heartbeat in pruned:
-                print(
-                    f"pruned {row.work_area}: {old_status}/{old_owner} lane={row.lane} "
-                    f"heartbeat={old_heartbeat} -> available"
-                )
-        else:
-            print("no stale rows found")
-        return 0
-
-    if not args.area:
-        raise SystemExit("--area is required for claim/release")
-
-    if args.command == "claim":
-        claim_row(rows, args.area, args.owner, args.lane, args.scope, args.files, args.notes, force=args.force)
-    else:
-        row = find_row(rows, args.area)
-        release_row(row, notes=args.notes)
-    save_registry(rows, prefix, suffix, args.registry)
-    print(f"{args.command}d {args.area}")
-    return 0
+            print(f"{args.command}d {work_area}")
+            return 0
+    except (TimeoutError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
