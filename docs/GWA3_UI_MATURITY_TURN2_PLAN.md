@@ -39,6 +39,51 @@ To unblock without elevating the agent itself:
 Once those two are in place, `/goal resume` on the blocked slice-3 session
 continues from a warm context with no agent elevation required.
 
+## Active backlog (authoritative — goal is NOT complete while this section is non-empty)
+
+This section is the running task list for the resumed slice-3 goal. Each
+item below is a hard requirement: the completion audit must treat this
+section's items as unmet work. The goal may only be marked complete when
+every numbered item here is satisfied with verifiable evidence (commit
+hash, test count, screenshot under `docs/ui_ux_polish_screenshots/slice3/`,
+or live-validation entry in `docs/ui_maturity_slice3_live_validation.md`).
+
+Operators may append new items at any time. If the section is empty *and*
+M1–M6 + S1–S4 + L1–L5 are all satisfied, only then may the goal complete.
+
+### Open items
+
+1. **L2 end-to-end UI-driven Launch via broker.** Using `tools\inject_via_broker.ps1`,
+   drive a clean DISCOPANIC lane through Launch → exact-PID capture →
+   health gate → broker-mediated inject → bridge attach → first telemetry,
+   without cancelling the confirmation dialog. Evidence: screenshots per
+   supervisor transition, session tagged UI-launched, clean Stop with no
+   orphan PID/registry/pipe.
+2. **L3 live drift watcher.** Wire the slice-3 LiveSettingsDrift helper to
+   live IPC against the broker-injected session. Reproduce in-sync, drift
+   (toggle a UI setting without pushing to DLL), and probe-unavailable
+   (close the pipe). Evidence: three screenshots + diff payload captured
+   in the live-validation report.
+3. **L4 degraded-state live.** Reproduce bridge-unreachable / bridge-stale
+   / session-ended by killing the bridge, pausing it, then closing the
+   pipe. Evidence: one screenshot per state.
+4. **L1 multi-session.** Coordinate with the operator on an approved
+   second lane. Inject both simultaneously through the broker. Verify
+   rail isolation, per-session panel scoping, cross-session log
+   collapsing keyed by session-id, independent Stop, independent probe
+   round-trips. Evidence: screenshots + appended live-validation section.
+5. **L5 30-minute soak with mid-soak re-injection.** Report log-collapser
+   max fan-out, UI working-set growth (<50 MB), drift-watcher false
+   positives (zero), any UI freeze >250 ms, clean UI Stop with no orphan
+   PID/registry/pipe.
+
+### How to extend
+
+Append numbered items below item 5 with: a concrete acceptance criterion
+("evidence: ...") and a verifiable artifact (file path / commit / test
+name / screenshot name). Vague items ("do more UI polish") do not count —
+the audit will skip them as not-concrete and may complete the goal anyway.
+
 ## Lane discipline (mandatory)
 
 - Read `AGENT_WORK_REGISTRY` and `AGENT_ACCOUNT_REGISTRY` before any live
