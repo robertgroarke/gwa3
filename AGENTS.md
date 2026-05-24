@@ -158,6 +158,13 @@ commits whose staged file list is not covered by active `Primary Files` entries.
 When that coverage check passes, the hook best-effort refreshes the matching
 active claim heartbeats. Use `git commit --no-verify` only as an explicit opt-out.
 
+The installer also adds a post-commit breadcrumb hook. Each successful commit
+appends timestamp, short SHA, branch, and subject to
+`%LOCALAPPDATA%\gwa3-agent-coord\landings.log`; set
+`GWA3_AGENT_LANDINGS_LOG` to override the path. Use
+`python scripts/agent_work_registry.py landings --since-minutes 60` before
+starting work to see recent parallel-agent landings.
+
 ## Worktree Workflow
 
 Use `python scripts/agent_workspace.py` from this parent repo to provision and

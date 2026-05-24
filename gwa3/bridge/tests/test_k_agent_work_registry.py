@@ -25,6 +25,7 @@ SCRIPT_PATH = REPO_ROOT / "scripts" / "agent_work_registry.py"
 WORKSPACE_SCRIPT_PATH = REPO_ROOT / "scripts" / "agent_workspace.py"
 INSTALL_HOOKS_SCRIPT_PATH = REPO_ROOT / "scripts" / "install_agent_hooks.py"
 PRE_COMMIT_HOOK_PATH = REPO_ROOT / "scripts" / "git-hooks" / "pre-commit-claim-check"
+POST_COMMIT_HOOK_PATH = REPO_ROOT / "scripts" / "git-hooks" / "post-commit-landing-log"
 _SPEC = importlib.util.spec_from_file_location("agent_work_registry_script", SCRIPT_PATH)
 agent_work_registry = importlib.util.module_from_spec(_SPEC)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -48,6 +49,14 @@ pre_commit_claim_check = importlib.util.module_from_spec(_PRE_COMMIT_SPEC)
 assert _PRE_COMMIT_SPEC is not None and _PRE_COMMIT_SPEC.loader is not None
 sys.modules[_PRE_COMMIT_SPEC.name] = pre_commit_claim_check
 _PRE_COMMIT_SPEC.loader.exec_module(pre_commit_claim_check)
+_POST_COMMIT_SPEC = importlib.util.spec_from_loader(
+    "post_commit_landing_log",
+    importlib.machinery.SourceFileLoader("post_commit_landing_log", str(POST_COMMIT_HOOK_PATH)),
+)
+post_commit_landing_log = importlib.util.module_from_spec(_POST_COMMIT_SPEC)
+assert _POST_COMMIT_SPEC is not None and _POST_COMMIT_SPEC.loader is not None
+sys.modules[_POST_COMMIT_SPEC.name] = post_commit_landing_log
+_POST_COMMIT_SPEC.loader.exec_module(post_commit_landing_log)
 
 WORK_REGISTRY_FIXTURE = """# Agent Work Registry
 
@@ -743,6 +752,43 @@ with module.lock_registry(Path({str(registry_path)!r}), timeout_seconds=5):
         self.assertEqual(sleeps, [2.0, 2.0])
         self.assertEqual(output.getvalue().count("orphans=0 removed=0 skipped=0"), 2)
 
+    def test_landings_since_minutes_filter(self):
+        """PASS: landings output filters old rows outside the requested window."""
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "landings.log"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        "2026-05-24T00:30:00Z\tabc1234\tmain\tfresh commit",
+                        "2026-05-23T22:00:00Z\tdef5678\tmain\told commit",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            rows = agent_work_registry.load_landings(log_path)
+            output = agent_work_registry.format_landings_table(
+                rows,
+                since_minutes=60,
+                now=datetime(2026, 5, 24, 1, 0, tzinfo=timezone.utc),
+            )
+
+        self.assertIn("fresh commit", output)
+        self.assertNotIn("old commit", output)
+
+    def test_landings_skips_malformed_lines(self):
+        """PASS: malformed landing log lines are skipped without crashing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "landings.log"
+            log_path.write_text(
+                "not a valid line\n2026-05-24T00:30:00Z\tabc1234\tmain\tvalid commit\nbad-time\tabc\tmain\tbad\n",
+                encoding="utf-8",
+            )
+            rows = agent_work_registry.load_landings(log_path)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].subject, "valid commit")
+
 
 class TestAgentWorkspace(unittest.TestCase):
     def _run_git(self, repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -899,6 +945,33 @@ class TestAgentHookInstaller(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def test_post_commit_hook_appends_landing_line(self):
+        """PASS: post-commit hook appends timestamp, short SHA, branch, and subject."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            log_path = root / "landings.log"
+            self._init_staged_repo(repo, staged_path="README.md")
+            subprocess.run(["git", "-C", str(repo), "commit", "-m", "sample landing"], capture_output=True, check=True, text=True, timeout=10)
+            env = dict(os.environ)
+            env["GWA3_AGENT_LANDINGS_LOG"] = str(log_path)
+
+            result = subprocess.run(
+                [sys.executable, str(POST_COMMIT_HOOK_PATH)],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            parts = log_path.read_text(encoding="utf-8").strip().split("\t")
+            self.assertEqual(len(parts), 4)
+            self.assertIsNotNone(agent_work_registry.parse_heartbeat(parts[0]))
+            self.assertEqual(parts[2], "master")
+            self.assertEqual(parts[3], "sample landing")
+
     def test_pre_commit_hook_refreshes_matched_claim_heartbeat(self):
         """PASS: the pre-commit hook refreshes heartbeat for the matched claim."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -995,7 +1068,10 @@ class TestAgentHookInstaller(unittest.TestCase):
             results = install_agent_hooks.install_hooks(
                 parent_repo=parent_repo,
                 private_repo=private_repo,
-                hook_source=REPO_ROOT / "scripts" / "git-hooks" / "pre-commit-claim-check",
+                hook_sources={
+                    "pre-commit": REPO_ROOT / "scripts" / "git-hooks" / "pre-commit-claim-check",
+                    "post-commit": REPO_ROOT / "scripts" / "git-hooks" / "post-commit-landing-log",
+                },
                 timestamp_fn=lambda: "20260524010203",
             )
 
@@ -1003,9 +1079,11 @@ class TestAgentHookInstaller(unittest.TestCase):
             self.assertTrue(backup.exists())
             self.assertEqual(backup.read_text(encoding="utf-8"), "old hook\n")
             self.assertTrue((parent_hooks / "pre-commit").exists())
+            self.assertTrue((parent_hooks / "post-commit").exists())
             self.assertTrue((private_hooks / "pre-commit").exists())
+            self.assertTrue((private_hooks / "post-commit").exists())
             self.assertIn(repr(str(parent_repo)), (private_hooks / "pre-commit").read_text(encoding="utf-8"))
-            self.assertEqual(len(results), 2)
+            self.assertEqual(len(results), 4)
 
 
 def _run_case(case_type: type[unittest.TestCase]) -> None:

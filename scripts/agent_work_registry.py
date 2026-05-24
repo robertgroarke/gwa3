@@ -17,6 +17,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REGISTRY = REPO_ROOT / "AGENT_WORK_REGISTRY.md"
 DEFAULT_SESSION_REGISTRY_DIR = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "gwa3" / "sessions"
+DEFAULT_LANDINGS_LOG = (
+    Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "gwa3-agent-coord" / "landings.log"
+)
 TABLE_HEADER = "| Work Area | Status | Owner | Lane | Heartbeat | Scope | Primary Files | Notes |"
 LEGAL_LANES = {"none", "beastrit", "disco", "blumpkins", "marvin", "biscuit", "any"}
 STALE_STATUSES = {"active", "blocked"}
@@ -54,6 +57,14 @@ class WorkRow:
             f"| `{self.work_area}` | `{self.status}` | `{self.owner}` | `{self.lane}` | `{self.heartbeat}` | {self.scope} | "
             f"`{self.primary_files}` | {self.notes} |"
         )
+
+
+@dataclass(frozen=True)
+class LandingRow:
+    timestamp: datetime
+    sha: str
+    branch: str
+    subject: str
 
 
 def _parse_table_row(line: str) -> WorkRow | None:
@@ -161,6 +172,57 @@ def find_covering_claims(rows: list[WorkRow], staged_files: list[str]) -> list[W
         for row in rows
         if row.status == "active" and normalized_files & split_primary_files(row.primary_files)
     ]
+
+
+def landings_log_path() -> Path:
+    return Path(os.environ.get("GWA3_AGENT_LANDINGS_LOG") or DEFAULT_LANDINGS_LOG)
+
+
+def parse_landing_line(line: str) -> LandingRow | None:
+    parts = line.rstrip("\n").split("\t", 3)
+    if len(parts) != 4:
+        return None
+    timestamp = parse_heartbeat(parts[0])
+    if timestamp is None:
+        return None
+    sha, branch, subject = parts[1], parts[2], parts[3]
+    if not sha or not branch or not subject:
+        return None
+    return LandingRow(timestamp=timestamp, sha=sha, branch=branch, subject=subject)
+
+
+def load_landings(path: Path | None = None) -> list[LandingRow]:
+    path = path or landings_log_path()
+    if not path.exists():
+        return []
+    rows: list[LandingRow] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        row = parse_landing_line(line)
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
+def format_landings_table(
+    rows: list[LandingRow],
+    since_minutes: int | None = None,
+    branch: str | None = None,
+    now: datetime | None = None,
+) -> str:
+    now = now or datetime.now(timezone.utc)
+    filtered = rows
+    if since_minutes is not None:
+        cutoff = now.astimezone(timezone.utc) - timedelta(minutes=since_minutes)
+        filtered = [row for row in filtered if row.timestamp >= cutoff]
+    if branch:
+        filtered = [row for row in filtered if row.branch == branch]
+    if not filtered:
+        return "no landings"
+    lines = ["timestamp | sha | branch | subject", "---|---|---|---"]
+    for row in filtered:
+        timestamp = row.timestamp.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        lines.append(f"{timestamp} | {row.sha} | {row.branch} | {row.subject}")
+    return "\n".join(lines)
 
 
 @contextmanager
@@ -601,6 +663,7 @@ def main() -> int:
             "check",
             "clean-orphan-sessions",
             "whoami-files",
+            "landings",
         ],
     )
     parser.add_argument("work_area", nargs="?")
@@ -621,6 +684,8 @@ def main() -> int:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--strict-files", action="store_true")
     parser.add_argument("--files-from-stdin", action="store_true")
+    parser.add_argument("--since-minutes", type=int)
+    parser.add_argument("--branch")
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
     args = parser.parse_args()
 
@@ -676,6 +741,10 @@ def main() -> int:
                     print(f"  {path}", file=sys.stderr)
                 return 1
             print("all staged files covered by active claims")
+            return 0
+
+        if args.command == "landings":
+            print(format_landings_table(load_landings(), since_minutes=args.since_minutes, branch=args.branch))
             return 0
 
         work_area = args.work_area or args.area
