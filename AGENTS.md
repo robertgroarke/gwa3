@@ -124,6 +124,11 @@ default 5-minute threshold as orphans, and is safe to run while live sessions ar
 active because records with running PIDs are preserved. Elevated PowerShell is
 only needed if a particular JSON was written by an elevated DLL process.
 
+Add `--periodic <seconds>` to leave orphan-session cleanup running as a side
+task in a background terminal, or schedule the same command with Windows Task
+Scheduler, so the DLL session registry stays clean after crashes or forced
+process exits.
+
 Use `python scripts/agent_work_registry.py claim <work-area> --lane <lane> --owner <name>`
 and `python scripts/agent_work_registry.py release <work-area> --owner <name>` for
 work claims. Use `python scripts/agent_work_registry.py touch <work-area> --owner <name>`

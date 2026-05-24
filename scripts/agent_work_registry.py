@@ -411,6 +411,29 @@ def clean_orphan_sessions(
     return lines, counts
 
 
+def run_clean_orphan_sessions_periodic(
+    session_dir: Path | None = None,
+    dry_run: bool = False,
+    max_age_minutes: int = 5,
+    interval_seconds: float = 60.0,
+    sleep_fn=time.sleep,
+    output=sys.stdout,
+    cleanup_fn=clean_orphan_sessions,
+) -> None:
+    try:
+        while True:
+            lines, _ = cleanup_fn(
+                session_dir=session_dir,
+                dry_run=dry_run,
+                max_age_minutes=max_age_minutes,
+            )
+            print("\n".join(lines), file=output)
+            output.flush()
+            sleep_fn(interval_seconds)
+    except KeyboardInterrupt:
+        return
+
+
 def _format_session(session: dict[str, object]) -> str:
     pid = session.get("gw_pid") or session.get("pid") or "?"
     character = session.get("character") or "?"
@@ -565,6 +588,7 @@ def main() -> int:
     parser.add_argument("--max-age-minutes", type=int)
     parser.add_argument("--session-dir", type=Path)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--periodic", type=float)
     parser.add_argument("--lock-timeout-seconds", type=float, default=10.0)
     parser.add_argument("--warn-only", action="store_true")
     parser.add_argument("--force", action="store_true")
@@ -595,10 +619,19 @@ def main() -> int:
             return 0
 
         if args.command == "clean-orphan-sessions":
+            max_age_minutes = args.max_age_minutes if args.max_age_minutes is not None else 5
+            if args.periodic is not None:
+                run_clean_orphan_sessions_periodic(
+                    session_dir=args.session_dir,
+                    dry_run=args.dry_run,
+                    max_age_minutes=max_age_minutes,
+                    interval_seconds=args.periodic,
+                )
+                return 0
             lines, _ = clean_orphan_sessions(
                 session_dir=args.session_dir,
                 dry_run=args.dry_run,
-                max_age_minutes=args.max_age_minutes if args.max_age_minutes is not None else 5,
+                max_age_minutes=max_age_minutes,
             )
             print("\n".join(lines))
             return 0

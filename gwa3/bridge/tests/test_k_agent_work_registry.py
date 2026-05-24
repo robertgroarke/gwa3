@@ -655,6 +655,35 @@ with module.lock_registry(Path({str(registry_path)!r}), timeout_seconds=5):
             self.assertEqual(counts["skipped"], 1)
             self.assertIn("skipped", "\n".join(lines))
 
+    def test_clean_orphan_sessions_periodic_runs_twice_then_exits(self):
+        """PASS: periodic cleanup repeats and stops cleanly on Ctrl+C."""
+        output = io.StringIO()
+        calls: list[dict[str, object]] = []
+        sleeps: list[float] = []
+
+        def cleanup_fn(**kwargs):
+            calls.append(kwargs)
+            return ["orphans=0 removed=0 skipped=0"], {"orphans": 0, "removed": 0, "skipped": 0}
+
+        def sleep_fn(seconds: float) -> None:
+            sleeps.append(seconds)
+            if len(sleeps) == 2:
+                raise KeyboardInterrupt
+
+        agent_work_registry.run_clean_orphan_sessions_periodic(
+            session_dir=Path("sessions"),
+            dry_run=True,
+            max_age_minutes=5,
+            interval_seconds=2.0,
+            sleep_fn=sleep_fn,
+            output=output,
+            cleanup_fn=cleanup_fn,
+        )
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [2.0, 2.0])
+        self.assertEqual(output.getvalue().count("orphans=0 removed=0 skipped=0"), 2)
+
 
 class TestAgentWorkspace(unittest.TestCase):
     def _run_git(self, repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
