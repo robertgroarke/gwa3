@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import importlib.machinery
 import io
 import json
 import os
@@ -23,6 +24,7 @@ REGISTRY_PATH = REPO_ROOT / "AGENT_WORK_REGISTRY.md"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "agent_work_registry.py"
 WORKSPACE_SCRIPT_PATH = REPO_ROOT / "scripts" / "agent_workspace.py"
 INSTALL_HOOKS_SCRIPT_PATH = REPO_ROOT / "scripts" / "install_agent_hooks.py"
+PRE_COMMIT_HOOK_PATH = REPO_ROOT / "scripts" / "git-hooks" / "pre-commit-claim-check"
 _SPEC = importlib.util.spec_from_file_location("agent_work_registry_script", SCRIPT_PATH)
 agent_work_registry = importlib.util.module_from_spec(_SPEC)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -38,6 +40,14 @@ install_agent_hooks = importlib.util.module_from_spec(_INSTALL_HOOKS_SPEC)
 assert _INSTALL_HOOKS_SPEC is not None and _INSTALL_HOOKS_SPEC.loader is not None
 sys.modules[_INSTALL_HOOKS_SPEC.name] = install_agent_hooks
 _INSTALL_HOOKS_SPEC.loader.exec_module(install_agent_hooks)
+_PRE_COMMIT_SPEC = importlib.util.spec_from_loader(
+    "pre_commit_claim_check",
+    importlib.machinery.SourceFileLoader("pre_commit_claim_check", str(PRE_COMMIT_HOOK_PATH)),
+)
+pre_commit_claim_check = importlib.util.module_from_spec(_PRE_COMMIT_SPEC)
+assert _PRE_COMMIT_SPEC is not None and _PRE_COMMIT_SPEC.loader is not None
+sys.modules[_PRE_COMMIT_SPEC.name] = pre_commit_claim_check
+_PRE_COMMIT_SPEC.loader.exec_module(pre_commit_claim_check)
 
 WORK_REGISTRY_FIXTURE = """# Agent Work Registry
 
@@ -868,6 +878,107 @@ class TestAgentWorkspace(unittest.TestCase):
 
 
 class TestAgentHookInstaller(unittest.TestCase):
+    def _init_staged_repo(self, repo: Path, staged_path: str = "AGENTS.md") -> None:
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-b", "master", str(repo)], capture_output=True, check=True, text=True, timeout=10)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "agent@example.invalid"], capture_output=True, check=True, text=True, timeout=10)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "Agent Test"], capture_output=True, check=True, text=True, timeout=10)
+        target = repo / staged_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("staged\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", staged_path], capture_output=True, check=True, text=True, timeout=10)
+
+    def _hook_registry(self, path: Path, heartbeat: str = "2026-05-23T23:45:00Z") -> None:
+        path.write_text(
+            f"""# Agent Work Registry
+
+| Work Area | Status | Owner | Lane | Heartbeat | Scope | Primary Files | Notes |
+|---|---|---|---|---|---|---|---|
+| `agent-coordination` | `active` | `CODEX` | `none` | `{heartbeat}` | hook fixture | `AGENTS.md` | - |
+""",
+            encoding="utf-8",
+        )
+
+    def test_pre_commit_hook_refreshes_matched_claim_heartbeat(self):
+        """PASS: the pre-commit hook refreshes heartbeat for the matched claim."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            registry = root / "registry.md"
+            self._init_staged_repo(repo)
+            self._hook_registry(registry)
+            env = dict(os.environ)
+            env["GWA3_PARENT_REPO"] = str(REPO_ROOT)
+            env["GWA3_AGENT_WORK_REGISTRY"] = str(registry)
+
+            result = subprocess.run(
+                [sys.executable, str(PRE_COMMIT_HOOK_PATH)],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertIn("heartbeat: refreshed agent-coordination", result.stderr)
+            row = agent_work_registry.find_row(agent_work_registry.load_registry(registry)[1], "agent-coordination")
+            self.assertNotEqual(row.heartbeat, "2026-05-23T23:45:00Z")
+
+    def test_pre_commit_hook_allows_commit_when_touch_fails(self):
+        """PASS: the pre-commit hook allows coverage success even if touch fails."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            registry = root / "registry.md"
+            self._init_staged_repo(repo)
+            self._hook_registry(registry)
+            env = dict(os.environ)
+            env["GWA3_PARENT_REPO"] = str(REPO_ROOT)
+            env["GWA3_AGENT_WORK_REGISTRY"] = str(registry)
+            env["GWA3_AGENT_TOUCH_LOCK_TIMEOUT_SECONDS"] = "0.1"
+
+            with agent_work_registry.lock_registry(registry, timeout_seconds=1):
+                result = subprocess.run(
+                    [sys.executable, str(PRE_COMMIT_HOOK_PATH)],
+                    cwd=repo,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertIn("heartbeat: skipped agent-coordination", result.stderr)
+
+    def test_pre_commit_hook_touch_message_names_work_area(self):
+        """PASS: heartbeat messages include the matched work area name."""
+        output = io.StringIO()
+
+        def failing_touch(_parent, _registry_script, _work_area, _owner):
+            return False, "simulated failure"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = Path(tmp) / "registry.md"
+            self._hook_registry(registry)
+            old_registry = os.environ.get("GWA3_AGENT_WORK_REGISTRY")
+            try:
+                os.environ["GWA3_AGENT_WORK_REGISTRY"] = str(registry)
+                pre_commit_claim_check.refresh_matched_claims(
+                    REPO_ROOT,
+                    SCRIPT_PATH,
+                    ["AGENTS.md"],
+                    touch_fn=failing_touch,
+                    output=output,
+                )
+            finally:
+                if old_registry is None:
+                    os.environ.pop("GWA3_AGENT_WORK_REGISTRY", None)
+                else:
+                    os.environ["GWA3_AGENT_WORK_REGISTRY"] = old_registry
+
+        self.assertIn("agent-coordination", output.getvalue())
+
     def test_installer_backs_up_existing_hooks(self):
         """PASS: installing hooks backs up an existing pre-commit hook."""
         with tempfile.TemporaryDirectory() as tmp:

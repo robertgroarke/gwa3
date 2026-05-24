@@ -154,6 +154,15 @@ def find_uncovered_files(rows: list[WorkRow], staged_files: list[str]) -> list[s
     return [path for path in staged_files if path.strip() and path.strip().lower() not in covered_files]
 
 
+def find_covering_claims(rows: list[WorkRow], staged_files: list[str]) -> list[WorkRow]:
+    normalized_files = {path.strip().lower() for path in staged_files if path.strip()}
+    return [
+        row
+        for row in rows
+        if row.status == "active" and normalized_files & split_primary_files(row.primary_files)
+    ]
+
+
 @contextmanager
 def lock_registry(path: Path, timeout_seconds: float = 10.0, poll_seconds: float = 0.05):
     path.parent.mkdir(parents=True, exist_ok=True)

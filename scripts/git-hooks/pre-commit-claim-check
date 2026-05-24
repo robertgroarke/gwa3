@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import importlib.util
 from pathlib import Path
 
 
@@ -21,7 +22,17 @@ def parent_repo() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def run_command(args: list[str], cwd: Path, input_text: str | None = None) -> int:
+def registry_args() -> list[str]:
+    registry = os.environ.get("GWA3_AGENT_WORK_REGISTRY")
+    return ["--registry", registry] if registry else []
+
+
+def touch_args() -> list[str]:
+    timeout = os.environ.get("GWA3_AGENT_TOUCH_LOCK_TIMEOUT_SECONDS")
+    return ["--lock-timeout-seconds", timeout] if timeout else []
+
+
+def run_command(args: list[str], cwd: Path, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         args,
         cwd=str(cwd),
@@ -33,7 +44,72 @@ def run_command(args: list[str], cwd: Path, input_text: str | None = None) -> in
         print(result.stdout, end="")
     if result.stderr:
         print(result.stderr, end="", file=sys.stderr)
-    return result.returncode
+    return result
+
+
+def load_registry_module(registry_script: Path):
+    spec = importlib.util.spec_from_file_location("agent_work_registry_hook", registry_script)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {registry_script}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def matched_claims(parent: Path, registry_script: Path, files: list[str]):
+    module = load_registry_module(registry_script)
+    registry = Path(os.environ.get("GWA3_AGENT_WORK_REGISTRY") or parent / "AGENT_WORK_REGISTRY.md")
+    _, rows, _ = module.load_registry(registry)
+    return module.find_covering_claims(rows, files)
+
+
+def touch_claim(
+    parent: Path,
+    registry_script: Path,
+    work_area: str,
+    owner: str,
+    runner=subprocess.run,
+) -> tuple[bool, str]:
+    result = runner(
+        [
+            sys.executable,
+            str(registry_script),
+            "touch",
+            work_area,
+            "--owner",
+            owner,
+            *touch_args(),
+            *registry_args(),
+        ],
+        cwd=str(parent),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return True, ""
+    reason = (result.stderr or result.stdout or f"exit {result.returncode}").strip().replace("\n", " ")
+    return False, reason
+
+
+def refresh_matched_claims(
+    parent: Path,
+    registry_script: Path,
+    files: list[str],
+    touch_fn=touch_claim,
+    output=sys.stderr,
+) -> None:
+    try:
+        claims = matched_claims(parent, registry_script, files)
+    except Exception as exc:
+        print(f"heartbeat: skipped all ({exc})", file=output)
+        return
+    for claim in claims:
+        ok, reason = touch_fn(parent, registry_script, claim.work_area, claim.owner)
+        if ok:
+            print(f"heartbeat: refreshed {claim.work_area}", file=output)
+        else:
+            print(f"heartbeat: skipped {claim.work_area} ({reason})", file=output)
 
 
 def staged_files() -> list[str] | None:
@@ -57,19 +133,22 @@ def main() -> int:
         return 1
 
     check_result = run_command(
-        [sys.executable, str(registry_script), "check", "--warn-only"],
+        [sys.executable, str(registry_script), "check", "--warn-only", *registry_args()],
         cwd=parent,
     )
-    if check_result != 0:
-        return check_result
+    if check_result.returncode != 0:
+        return check_result.returncode
     if not files:
         return 0
 
-    return run_command(
-        [sys.executable, str(registry_script), "whoami-files", "--files-from-stdin"],
+    coverage_result = run_command(
+        [sys.executable, str(registry_script), "whoami-files", "--files-from-stdin", *registry_args()],
         cwd=parent,
         input_text="\n".join(files) + "\n",
     )
+    if coverage_result.returncode == 0:
+        refresh_matched_claims(parent, registry_script, files)
+    return coverage_result.returncode
 
 
 if __name__ == "__main__":

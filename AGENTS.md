@@ -155,7 +155,8 @@ Install claim-check pre-commit hooks with `python scripts/install_agent_hooks.py
 The hook runs `agent_work_registry.py check --warn-only` and then verifies staged
 files with `agent_work_registry.py whoami-files --files-from-stdin`. It blocks
 commits whose staged file list is not covered by active `Primary Files` entries.
-Use `git commit --no-verify` only as an explicit opt-out.
+When that coverage check passes, the hook best-effort refreshes the matching
+active claim heartbeats. Use `git commit --no-verify` only as an explicit opt-out.
 
 ## Worktree Workflow
 
