@@ -116,6 +116,14 @@ claim. Run `python scripts/agent_work_registry.py prune-stale` to release
 `active` or `blocked` rows whose heartbeat is older than the default 15-minute
 threshold; malformed heartbeat values are treated as stale.
 
+Use `python scripts/agent_work_registry.py clean-orphan-sessions` after a UI
+crash, forced DLL unload, or killed Guild Wars process leaves stale
+`%PROGRAMDATA%\gwa3\sessions\*.json` records behind. It uses the same session
+directory as `check`, treats dead or unknown PIDs with heartbeats older than the
+default 5-minute threshold as orphans, and is safe to run while live sessions are
+active because records with running PIDs are preserved. Elevated PowerShell is
+only needed if a particular JSON was written by an elevated DLL process.
+
 Use `python scripts/agent_work_registry.py claim <work-area> --lane <lane> --owner <name>`
 and `python scripts/agent_work_registry.py release <work-area> --owner <name>` for
 work claims. Use `python scripts/agent_work_registry.py touch <work-area> --owner <name>`
