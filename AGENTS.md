@@ -177,6 +177,12 @@ Only use the worktree path, branch, build directory, DLL name, and pipe name
 that match the claimed lane. Prune first with `--dry-run`; use `--apply` only
 after confirming the listed worktrees are safe to remove.
 
+### Line Endings
+
+The root `.gitattributes` file is the source of truth for line endings. Agents
+must not bulk-renormalize files while making unrelated changes; keep commits
+limited to the requested logic so diffs stay reviewable.
+
 ## Test And Build Discipline
 
 Before reporting any test or bridge regression:
