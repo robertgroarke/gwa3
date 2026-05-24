@@ -151,6 +151,11 @@ Use `python scripts/agent_work_registry.py status` for a compact snapshot of
 current work claims. Add `--lane <lane>` to filter by lane, or `--watch` for a
 5-second refreshing terminal view.
 
+Use `python scripts/agent_work_registry.py validate` before handoffs or registry
+edits to catch malformed work rows. The pre-commit hook runs the same validation
+with `--warn-only`, so validation issues are visible during commits without
+blocking an operator who is in the middle of fixing the table.
+
 Install claim-check pre-commit hooks with `python scripts/install_agent_hooks.py`.
 The hook runs `agent_work_registry.py check --warn-only` and then verifies staged
 files with `agent_work_registry.py whoami-files --files-from-stdin`. It blocks

@@ -411,6 +411,63 @@ class TestAgentWorkRegistry(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("work area not found", result.stderr)
 
+    def test_validate_flags_empty_work_area(self):
+        """PASS: validate reports rows with empty work areas."""
+        row = agent_work_registry.WorkRow("", "available", "-", "none", "2026-05-23T23:45:00Z", "scope", "-", "-")
+        self.assertTrue(any("empty Work Area" in error for error in agent_work_registry.validate_rows([row])))
+
+    def test_validate_flags_invalid_status(self):
+        """PASS: validate reports statuses outside the legal set."""
+        row = agent_work_registry.WorkRow("bad-status", "done", "-", "none", "2026-05-23T23:45:00Z", "scope", "-", "-")
+        self.assertTrue(any("invalid Status" in error for error in agent_work_registry.validate_rows([row])))
+
+    def test_validate_flags_empty_owner_for_held_row(self):
+        """PASS: validate reports held rows with empty owners."""
+        row = agent_work_registry.WorkRow("empty-owner", "active", "", "none", "2026-05-23T23:45:00Z", "scope", "file", "-")
+        self.assertTrue(any("Owner empty" in error for error in agent_work_registry.validate_rows([row])))
+
+    def test_validate_flags_invalid_lane(self):
+        """PASS: validate reports lanes outside the legal set."""
+        row = agent_work_registry.WorkRow("bad-lane", "available", "-", "trade-helper", "2026-05-23T23:45:00Z", "scope", "-", "-")
+        self.assertTrue(any("invalid Lane" in error for error in agent_work_registry.validate_rows([row])))
+
+    def test_validate_flags_empty_heartbeat_for_held_row(self):
+        """PASS: validate reports active or blocked rows with empty heartbeat."""
+        row = agent_work_registry.WorkRow("empty-heartbeat", "blocked", "CODEX", "none", "", "scope", "file", "-")
+        self.assertTrue(any("Heartbeat empty" in error for error in agent_work_registry.validate_rows([row])))
+
+    def test_validate_flags_malformed_heartbeat(self):
+        """PASS: validate reports malformed heartbeat values."""
+        row = agent_work_registry.WorkRow("bad-heartbeat", "available", "-", "none", "not-a-time", "scope", "-", "-")
+        self.assertTrue(any("malformed Heartbeat" in error for error in agent_work_registry.validate_rows([row])))
+
+    def test_validate_flags_empty_primary_files_for_active_row(self):
+        """PASS: validate reports active rows with empty primary files."""
+        row = agent_work_registry.WorkRow("empty-files", "active", "CODEX", "none", "2026-05-23T23:45:00Z", "scope", "-", "-")
+        self.assertTrue(any("Primary Files empty" in error for error in agent_work_registry.validate_rows([row])))
+
+    def test_cli_validate_warn_only_exits_zero_on_errors(self):
+        """PASS: validate exits non-zero by default and zero with --warn-only."""
+        registry_path = self._temp_registry_with_rows(
+            "| `bad-status` | `done` | `-` | `none` | `2026-05-23T23:45:00Z` | scope | `-` | - |"
+        )
+        failed = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "validate", "--registry", str(registry_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        warned = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "validate", "--warn-only", "--registry", str(registry_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertEqual(warned.returncode, 0, msg=warned.stderr)
+        self.assertIn("ERROR bad-status", warned.stdout)
+
     def test_status_snapshot_output_contains_every_row(self):
         """PASS: status snapshot output contains every registry row."""
         _, rows, _ = agent_work_registry.load_registry(self._temp_registry())
@@ -1051,6 +1108,39 @@ class TestAgentHookInstaller(unittest.TestCase):
                     os.environ["GWA3_AGENT_WORK_REGISTRY"] = old_registry
 
         self.assertIn("agent-coordination", output.getvalue())
+
+    def test_pre_commit_hook_warns_on_registry_validate_errors(self):
+        """PASS: pre-commit runs validate as a soft warning-only check."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            registry = root / "registry.md"
+            self._init_staged_repo(repo)
+            registry.write_text(
+                """# Agent Work Registry
+
+| Work Area | Status | Owner | Lane | Heartbeat | Scope | Primary Files | Notes |
+|---|---|---|---|---|---|---|---|
+| `agent-coordination` | `active` | `CODEX` | `none` | `2026-05-23T23:45:00Z` | hook fixture | `AGENTS.md` | - |
+| `bad-status` | `done` | `-` | `none` | `2026-05-23T23:45:00Z` | hook fixture | `-` | - |
+""",
+                encoding="utf-8",
+            )
+            env = dict(os.environ)
+            env["GWA3_PARENT_REPO"] = str(REPO_ROOT)
+            env["GWA3_AGENT_WORK_REGISTRY"] = str(registry)
+
+            result = subprocess.run(
+                [sys.executable, str(PRE_COMMIT_HOOK_PATH)],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertIn("WARNING: registry validate surfaced issues", result.stderr)
 
     def test_installer_backs_up_existing_hooks(self):
         """PASS: installing hooks backs up an existing pre-commit hook."""

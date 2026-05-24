@@ -22,6 +22,7 @@ DEFAULT_LANDINGS_LOG = (
 )
 TABLE_HEADER = "| Work Area | Status | Owner | Lane | Heartbeat | Scope | Primary Files | Notes |"
 LEGAL_LANES = {"none", "beastrit", "disco", "blumpkins", "marvin", "biscuit", "any"}
+LEGAL_STATUSES = {"available", "active", "blocked", "handoff"}
 STALE_STATUSES = {"active", "blocked"}
 HELD_STATUSES = {"active", "blocked"}
 WINDOWS_LOCK_OFFSET = 2**31 - 1
@@ -223,6 +224,27 @@ def format_landings_table(
         timestamp = row.timestamp.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         lines.append(f"{timestamp} | {row.sha} | {row.branch} | {row.subject}")
     return "\n".join(lines)
+
+
+def validate_rows(rows: list[WorkRow]) -> list[str]:
+    errors: list[str] = []
+    for index, row in enumerate(rows, start=1):
+        row_name = row.work_area or f"<empty-row-{index}>"
+        if not row.work_area.strip():
+            errors.append(f"ERROR {row_name}: empty Work Area")
+        if row.status not in LEGAL_STATUSES:
+            errors.append(f"ERROR {row_name}: invalid Status {row.status}")
+        if row.status in HELD_STATUSES and not row.owner.strip():
+            errors.append(f"ERROR {row_name}: Owner empty for held row")
+        if row.lane not in LEGAL_LANES:
+            errors.append(f"ERROR {row_name}: invalid Lane {row.lane}")
+        if row.status in HELD_STATUSES and not row.heartbeat.strip():
+            errors.append(f"ERROR {row_name}: Heartbeat empty for held row")
+        if row.heartbeat.strip() and parse_heartbeat(row.heartbeat) is None:
+            errors.append(f"ERROR {row_name}: malformed Heartbeat {row.heartbeat}")
+        if row.status == "active" and not split_primary_files(row.primary_files):
+            errors.append(f"ERROR {row_name}: Primary Files empty for active row")
+    return errors
 
 
 @contextmanager
@@ -664,6 +686,7 @@ def main() -> int:
             "clean-orphan-sessions",
             "whoami-files",
             "landings",
+            "validate",
         ],
     )
     parser.add_argument("work_area", nargs="?")
@@ -745,6 +768,15 @@ def main() -> int:
 
         if args.command == "landings":
             print(format_landings_table(load_landings(), since_minutes=args.since_minutes, branch=args.branch))
+            return 0
+
+        if args.command == "validate":
+            _, rows, _ = load_registry(args.registry)
+            errors = validate_rows(rows)
+            if errors:
+                print("\n".join(errors))
+                return 0 if args.warn_only else 1
+            print("OK registry valid")
             return 0
 
         work_area = args.work_area or args.area

@@ -132,6 +132,14 @@ def main() -> int:
     if files is None:
         return 1
 
+    validate_result = run_command(
+        [sys.executable, str(registry_script), "validate", "--warn-only", *registry_args()],
+        cwd=parent,
+    )
+    validate_text = f"{validate_result.stdout}\n{validate_result.stderr}"
+    if "ERROR " in validate_text:
+        print("WARNING: registry validate surfaced issues", file=sys.stderr)
+
     check_result = run_command(
         [sys.executable, str(registry_script), "check", "--warn-only", *registry_args()],
         cwd=parent,
