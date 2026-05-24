@@ -124,6 +124,10 @@ CLI takes a file lock on `AGENT_WORK_REGISTRY.md`, refuses non-`available` rows,
 and refuses lane collisions with existing `active` or `blocked` rows unless the
 requested lane is `none`.
 
+`claim` also warns when the requested `Primary Files` exactly overlap an existing
+`active` or `blocked` row after comma-splitting and case-folding the file list.
+Use `--strict-files` when that advisory overlap should fail the claim instead.
+
 Use `python scripts/agent_work_registry.py check` to compare active work-registry
 lanes with the live DLL self-registration files in
 `%PROGRAMDATA%\gwa3\sessions\*.json`. Set `GWA3_SESSION_REGISTRY_DIR` to override

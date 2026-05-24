@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 import time
 from contextlib import contextmanager
@@ -113,6 +112,37 @@ def normalize_lane(lane: str) -> str:
         raise ValueError(f"invalid lane: {lane} (expected one of {', '.join(sorted(LEGAL_LANES))})")
     return normalized
 
+
+def split_primary_files(primary_files: str) -> set[str]:
+    files = {part.strip().lower() for part in primary_files.split(",") if part.strip()}
+    files.discard("-")
+    return files
+
+
+def find_file_overlaps(
+    rows: list[WorkRow],
+    claimed_row: WorkRow,
+    primary_files: str,
+) -> list[tuple[WorkRow, list[str]]]:
+    requested_files = split_primary_files(primary_files)
+    if not requested_files:
+        return []
+    overlaps: list[tuple[WorkRow, list[str]]] = []
+    for other in rows:
+        if other.work_area == claimed_row.work_area or other.status not in HELD_STATUSES:
+            continue
+        colliding_files = sorted(requested_files & split_primary_files(other.primary_files))
+        if colliding_files:
+            overlaps.append((other, colliding_files))
+    return overlaps
+
+
+def format_file_overlap_message(work_area: str, overlaps: list[tuple[WorkRow, list[str]]]) -> str:
+    details = "; ".join(
+        f"{row.work_area}(owner={row.owner}, status={row.status}, files={','.join(files)})"
+        for row, files in overlaps
+    )
+    return f"file overlap for {work_area}: {details}"
 
 @contextmanager
 def lock_registry(path: Path, timeout_seconds: float = 10.0, poll_seconds: float = 0.05):
@@ -281,104 +311,6 @@ def _session_is_live(session: dict[str, object]) -> bool:
     return status not in {"stopped", "exited", "terminated", "dead"}
 
 
-
-def _session_pid(session: dict[str, object]) -> int | None:
-    raw_pid = session.get("gw_pid") or session.get("pid")
-    try:
-        pid = int(raw_pid)
-    except (TypeError, ValueError):
-        return None
-    return pid if pid > 0 else None
-
-
-def pid_is_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        result = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return False
-        for line in result.stdout.splitlines():
-            fields = [field.strip().strip('"') for field in line.split(",")]
-            if len(fields) > 1 and fields[1] == str(pid):
-                return True
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def session_heartbeat_is_stale(session: dict[str, object], now: datetime, max_age_minutes: int) -> bool:
-    parsed = parse_heartbeat(str(session.get("heartbeat_at") or ""))
-    if parsed is None:
-        return True
-    return now - parsed > timedelta(minutes=max_age_minutes)
-
-
-def classify_orphan_session(
-    session: dict[str, object],
-    now: datetime,
-    max_age_minutes: int,
-    pid_checker=pid_is_running,
-) -> str | None:
-    if session.get("_error"):
-        return f"unreadable or malformed JSON: {session['_error']}"
-    pid = _session_pid(session)
-    if pid is None:
-        return "unknown pid"
-    if pid_checker(pid):
-        return None
-    if not session_heartbeat_is_stale(session, now, max_age_minutes):
-        return None
-    heartbeat = session.get("heartbeat_at") or "<missing>"
-    return f"pid {pid} is not running and heartbeat_at {heartbeat} is older than {max_age_minutes} minutes"
-
-
-def remove_session_file(path: Path) -> None:
-    path.unlink()
-
-
-def clean_orphan_sessions(
-    session_dir: Path | None = None,
-    dry_run: bool = False,
-    max_age_minutes: int = 5,
-    now: datetime | None = None,
-    pid_checker=pid_is_running,
-    remover=remove_session_file,
-    loader=load_session_registry,
-) -> tuple[list[str], dict[str, int]]:
-    now = now or datetime.now(timezone.utc)
-    lines: list[str] = []
-    counts = {"orphans": 0, "removed": 0, "skipped": 0}
-    for session in loader(session_dir):
-        path = Path(str(session.get("_path", "")))
-        reason = classify_orphan_session(session, now, max_age_minutes, pid_checker=pid_checker)
-        if reason is None:
-            continue
-        counts["orphans"] += 1
-        if dry_run:
-            lines.append(f"would remove {path}: {reason}")
-            continue
-        try:
-            remover(path)
-        except OSError as exc:
-            counts["skipped"] += 1
-            lines.append(f"skipped {path}: {exc}")
-        else:
-            counts["removed"] += 1
-            lines.append(f"removed {path}: {reason}")
-    lines.append(f"orphans={counts['orphans']} removed={counts['removed']} skipped={counts['skipped']}")
-    return lines, counts
-
 def _format_session(session: dict[str, object]) -> str:
     pid = session.get("gw_pid") or session.get("pid") or "?"
     character = session.get("character") or "?"
@@ -464,6 +396,8 @@ def claim_row(
     primary_files: str,
     notes: str,
     force: bool = False,
+    strict_files: bool = False,
+    warning_stream=sys.stderr,
 ) -> WorkRow:
     lane = normalize_lane(lane)
     heartbeat = utc_now()
@@ -479,6 +413,12 @@ def claim_row(
                     f"lane collision: lane={lane} already held by {other.work_area} "
                     f"(status={other.status}, owner={other.owner})"
                 )
+    file_overlaps = find_file_overlaps(rows, row, primary_files)
+    if file_overlaps:
+        message = format_file_overlap_message(work_area, file_overlaps)
+        if strict_files:
+            raise ValueError(message)
+        print(f"WARNING: {message}", file=warning_stream)
     row.status = "active"
     row.owner = owner
     row.lane = lane
@@ -509,10 +449,7 @@ def touch_row(row: WorkRow, owner: str, replacement_heartbeat: str | None = None
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Manage AGENT_WORK_REGISTRY.md")
-    parser.add_argument(
-        "command",
-        choices=["list", "claim", "release", "touch", "status", "prune-stale", "check", "clean-orphan-sessions"],
-    )
+    parser.add_argument("command", choices=["list", "claim", "release", "touch", "status", "prune-stale", "check"])
     parser.add_argument("work_area", nargs="?")
     parser.add_argument("--area")
     parser.add_argument("--owner", default="-")
@@ -522,12 +459,11 @@ def main() -> int:
     parser.add_argument("--notes", default="-")
     parser.add_argument("--status")
     parser.add_argument("--watch", action="store_true")
-    parser.add_argument("--max-age-minutes", type=int)
-    parser.add_argument("--session-dir", type=Path)
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--max-age-minutes", type=int, default=15)
     parser.add_argument("--lock-timeout-seconds", type=float, default=10.0)
     parser.add_argument("--warn-only", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--strict-files", action="store_true")
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
     args = parser.parse_args()
 
@@ -553,22 +489,12 @@ def main() -> int:
                 print(format_status_table(rows, lane_filter=args.lane))
             return 0
 
-        if args.command == "clean-orphan-sessions":
-            lines, _ = clean_orphan_sessions(
-                session_dir=args.session_dir,
-                dry_run=args.dry_run,
-                max_age_minutes=args.max_age_minutes if args.max_age_minutes is not None else 5,
-            )
-            print("
-".join(lines))
-            return 0
-
         work_area = args.work_area or args.area
         with lock_registry(args.registry, timeout_seconds=args.lock_timeout_seconds):
             prefix, rows, suffix = load_registry(args.registry)
 
             if args.command == "prune-stale":
-                pruned = prune_stale_rows(rows, max_age_minutes=args.max_age_minutes if args.max_age_minutes is not None else 15)
+                pruned = prune_stale_rows(rows, max_age_minutes=args.max_age_minutes)
                 if pruned:
                     save_registry(rows, prefix, suffix, args.registry)
                     for row, old_status, old_owner, old_heartbeat in pruned:
@@ -584,7 +510,17 @@ def main() -> int:
                 raise ValueError("work area is required for claim/release/touch")
 
             if args.command == "claim":
-                claim_row(rows, work_area, args.owner, args.lane or "none", args.scope, args.files, args.notes, force=args.force)
+                claim_row(
+                    rows,
+                    work_area,
+                    args.owner,
+                    args.lane or "none",
+                    args.scope,
+                    args.files,
+                    args.notes,
+                    force=args.force,
+                    strict_files=args.strict_files,
+                )
             elif args.command == "release":
                 row = find_row(rows, work_area)
                 release_row(row, owner=args.owner, notes=args.notes)

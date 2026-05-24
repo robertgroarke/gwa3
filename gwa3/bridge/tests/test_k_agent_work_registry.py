@@ -67,14 +67,13 @@ class TestAgentWorkRegistry(unittest.TestCase):
         path.write_text(CHECK_REGISTRY_TEMPLATE.format(rows=rows), encoding="utf-8")
         return path
 
-    def _write_session(self, directory: Path, name: str, lane: str, heartbeat_at: str = "2026-05-23T23:45:00Z") -> None:
+    def _write_session(self, directory: Path, name: str, lane: str) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         payload = {
             "lane": lane,
             "status": "running",
             "gw_pid": int(name),
             "character": f"{lane}-character",
-            "heartbeat_at": heartbeat_at,
         }
         (directory / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
 
@@ -162,6 +161,118 @@ class TestAgentWorkRegistry(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("lane collision", result.stderr)
         self.assertIn("stale-active", result.stderr)
+
+    def test_claim_file_overlap_warns_but_succeeds(self):
+        """PASS: overlapping primary files warn to stderr but do not block claim."""
+        registry_path = self._temp_registry()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "claim",
+                "kamadan-bridge",
+                "--lane",
+                "none",
+                "--owner",
+                "BISCUIT",
+                "--files",
+                " agent_work_registry.md , extra.py",
+                "--registry",
+                str(registry_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("WARNING", result.stderr)
+        self.assertIn("agent-coordination", result.stderr)
+        row = agent_work_registry.find_row(agent_work_registry.load_registry(registry_path)[1], "kamadan-bridge")
+        self.assertEqual(row.status, "active")
+
+    def test_claim_strict_files_refuses_overlap(self):
+        """PASS: --strict-files promotes file overlap warnings to claim refusal."""
+        registry_path = self._temp_registry()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "claim",
+                "kamadan-bridge",
+                "--lane",
+                "none",
+                "--owner",
+                "BISCUIT",
+                "--files",
+                "AGENT_WORK_REGISTRY.md",
+                "--strict-files",
+                "--registry",
+                str(registry_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("file overlap", result.stderr)
+        row = agent_work_registry.find_row(agent_work_registry.load_registry(registry_path)[1], "kamadan-bridge")
+        self.assertEqual(row.status, "available")
+
+    def test_claim_without_file_overlap_has_no_warning(self):
+        """PASS: non-overlapping primary files do not emit warnings."""
+        registry_path = self._temp_registry()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "claim",
+                "kamadan-bridge",
+                "--lane",
+                "none",
+                "--owner",
+                "BISCUIT",
+                "--files",
+                "new_file.py",
+                "--registry",
+                str(registry_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertNotIn("WARNING", result.stderr)
+
+    def test_claim_lane_collision_precedes_file_overlap(self):
+        """PASS: lane collision remains the first refusal even when files overlap."""
+        registry_path = self._temp_registry()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "claim",
+                "kamadan-bridge",
+                "--lane",
+                "disco",
+                "--owner",
+                "BISCUIT",
+                "--files",
+                "file",
+                "--strict-files",
+                "--registry",
+                str(registry_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("lane collision", result.stderr)
+        self.assertNotIn("file overlap", result.stderr)
 
     def test_release_by_wrong_owner_refused(self):
         """PASS: a row can only be released by its current owner."""
@@ -452,97 +563,6 @@ with module.lock_registry(Path({str(registry_path)!r}), timeout_seconds=5):
             )
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn("MISMATCH live-session-without-active-claim lane=disco", result.stdout)
-
-
-    def test_clean_orphan_sessions_dry_run_lists_without_deleting(self):
-        """PASS: dry-run reports an orphan session without deleting the JSON."""
-        with tempfile.TemporaryDirectory() as tmp:
-            session_dir = Path(tmp)
-            self._write_session(session_dir, "1234", "marvin", heartbeat_at="2026-05-23T23:30:00Z")
-            session_file = session_dir / "1234.json"
-            lines, counts = agent_work_registry.clean_orphan_sessions(
-                session_dir=session_dir,
-                dry_run=True,
-                max_age_minutes=5,
-                now=datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc),
-                pid_checker=lambda _pid: False,
-            )
-            self.assertTrue(session_file.exists())
-            self.assertEqual(counts["orphans"], 1)
-            self.assertIn("would remove", "\n".join(lines))
-
-    def test_clean_orphan_sessions_preserves_live_pid_json(self):
-        """PASS: a session with a running PID is preserved even with an old heartbeat."""
-        with tempfile.TemporaryDirectory() as tmp:
-            session_dir = Path(tmp)
-            self._write_session(session_dir, "1234", "marvin", heartbeat_at="2026-05-23T23:30:00Z")
-            session_file = session_dir / "1234.json"
-            lines, counts = agent_work_registry.clean_orphan_sessions(
-                session_dir=session_dir,
-                max_age_minutes=5,
-                now=datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc),
-                pid_checker=lambda _pid: True,
-            )
-            self.assertTrue(session_file.exists())
-            self.assertEqual(counts, {"orphans": 0, "removed": 0, "skipped": 0})
-            self.assertEqual(lines[-1], "orphans=0 removed=0 skipped=0")
-
-    def test_clean_orphan_sessions_deletes_dead_stale_pid_json(self):
-        """PASS: a dead PID with a stale heartbeat is deleted."""
-        with tempfile.TemporaryDirectory() as tmp:
-            session_dir = Path(tmp)
-            self._write_session(session_dir, "1234", "marvin", heartbeat_at="2026-05-23T23:30:00Z")
-            session_file = session_dir / "1234.json"
-            lines, counts = agent_work_registry.clean_orphan_sessions(
-                session_dir=session_dir,
-                max_age_minutes=5,
-                now=datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc),
-                pid_checker=lambda _pid: False,
-            )
-            self.assertFalse(session_file.exists())
-            self.assertEqual(counts["orphans"], 1)
-            self.assertEqual(counts["removed"], 1)
-            self.assertIn("removed", "\n".join(lines))
-
-    def test_clean_orphan_sessions_treats_malformed_json_as_orphan(self):
-        """PASS: malformed session JSON is classified as an orphan."""
-        with tempfile.TemporaryDirectory() as tmp:
-            session_dir = Path(tmp)
-            session_file = session_dir / "bad.json"
-            session_file.write_text("{not json", encoding="utf-8")
-            lines, counts = agent_work_registry.clean_orphan_sessions(
-                session_dir=session_dir,
-                dry_run=True,
-                max_age_minutes=5,
-                now=datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc),
-                pid_checker=lambda _pid: True,
-            )
-            self.assertTrue(session_file.exists())
-            self.assertEqual(counts["orphans"], 1)
-            self.assertIn("malformed", "\n".join(lines))
-
-    def test_clean_orphan_sessions_skips_unreadable_file_delete_error(self):
-        """PASS: unreadable orphan records that cannot be deleted are skipped, not fatal."""
-        with tempfile.TemporaryDirectory() as tmp:
-            session_file = Path(tmp) / "blocked.json"
-
-            def loader(_session_dir):
-                return [{"_path": str(session_file), "_error": "permission denied"}]
-
-            def remover(_path):
-                raise PermissionError("permission denied")
-
-            lines, counts = agent_work_registry.clean_orphan_sessions(
-                session_dir=Path(tmp),
-                max_age_minutes=5,
-                now=datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc),
-                pid_checker=lambda _pid: False,
-                remover=remover,
-                loader=loader,
-            )
-            self.assertEqual(counts["orphans"], 1)
-            self.assertEqual(counts["skipped"], 1)
-            self.assertIn("skipped", "\n".join(lines))
 
 
 class TestAgentWorkspace(unittest.TestCase):
