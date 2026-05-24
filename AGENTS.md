@@ -151,6 +151,12 @@ Use `python scripts/agent_work_registry.py status` for a compact snapshot of
 current work claims. Add `--lane <lane>` to filter by lane, or `--watch` for a
 5-second refreshing terminal view.
 
+Install claim-check pre-commit hooks with `python scripts/install_agent_hooks.py`.
+The hook runs `agent_work_registry.py check --warn-only` and then verifies staged
+files with `agent_work_registry.py whoami-files --files-from-stdin`. It blocks
+commits whose staged file list is not covered by active `Primary Files` entries.
+Use `git commit --no-verify` only as an explicit opt-out.
+
 ## Worktree Workflow
 
 Use `python scripts/agent_workspace.py` from this parent repo to provision and

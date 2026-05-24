@@ -1,0 +1,76 @@
+#!/usr/bin/env python
+"""Pre-commit hook that verifies staged files are covered by active work claims."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+PARENT_REPO_TEXT = "__PARENT_REPO__"
+
+
+def parent_repo() -> Path:
+    env_parent = os.environ.get("GWA3_PARENT_REPO")
+    if env_parent:
+        return Path(env_parent)
+    if PARENT_REPO_TEXT != "__PARENT_REPO__":
+        return Path(PARENT_REPO_TEXT)
+    return Path(__file__).resolve().parents[2]
+
+
+def run_command(args: list[str], cwd: Path, input_text: str | None = None) -> int:
+    result = subprocess.run(
+        args,
+        cwd=str(cwd),
+        input=input_text,
+        capture_output=True,
+        text=True,
+    )
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    return result.returncode
+
+
+def staged_files() -> list[str] | None:
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
+        return None
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def main() -> int:
+    parent = parent_repo()
+    registry_script = parent / "scripts" / "agent_work_registry.py"
+    files = staged_files()
+    if files is None:
+        return 1
+
+    check_result = run_command(
+        [sys.executable, str(registry_script), "check", "--warn-only"],
+        cwd=parent,
+    )
+    if check_result != 0:
+        return check_result
+    if not files:
+        return 0
+
+    return run_command(
+        [sys.executable, str(registry_script), "whoami-files", "--files-from-stdin"],
+        cwd=parent,
+        input_text="\n".join(files) + "\n",
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 REGISTRY_PATH = REPO_ROOT / "AGENT_WORK_REGISTRY.md"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "agent_work_registry.py"
 WORKSPACE_SCRIPT_PATH = REPO_ROOT / "scripts" / "agent_workspace.py"
+INSTALL_HOOKS_SCRIPT_PATH = REPO_ROOT / "scripts" / "install_agent_hooks.py"
 _SPEC = importlib.util.spec_from_file_location("agent_work_registry_script", SCRIPT_PATH)
 agent_work_registry = importlib.util.module_from_spec(_SPEC)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -32,6 +33,11 @@ agent_workspace = importlib.util.module_from_spec(_WORKSPACE_SPEC)
 assert _WORKSPACE_SPEC is not None and _WORKSPACE_SPEC.loader is not None
 sys.modules[_WORKSPACE_SPEC.name] = agent_workspace
 _WORKSPACE_SPEC.loader.exec_module(agent_workspace)
+_INSTALL_HOOKS_SPEC = importlib.util.spec_from_file_location("install_agent_hooks_script", INSTALL_HOOKS_SCRIPT_PATH)
+install_agent_hooks = importlib.util.module_from_spec(_INSTALL_HOOKS_SPEC)
+assert _INSTALL_HOOKS_SPEC is not None and _INSTALL_HOOKS_SPEC.loader is not None
+sys.modules[_INSTALL_HOOKS_SPEC.name] = install_agent_hooks
+_INSTALL_HOOKS_SPEC.loader.exec_module(install_agent_hooks)
 
 WORK_REGISTRY_FIXTURE = """# Agent Work Registry
 
@@ -274,6 +280,49 @@ class TestAgentWorkRegistry(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("lane collision", result.stderr)
         self.assertNotIn("file overlap", result.stderr)
+
+    def test_whoami_files_passes_when_active_claim_covers_staged_files(self):
+        """PASS: whoami-files succeeds when active claims cover every staged file."""
+        registry_path = self._temp_registry()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "whoami-files",
+                "--files-from-stdin",
+                "--registry",
+                str(registry_path),
+            ],
+            input="AGENT_WORK_REGISTRY.md\n",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("all staged files covered", result.stdout)
+
+    def test_whoami_files_fails_and_lists_uncovered_file(self):
+        """PASS: whoami-files fails with a diagnostic for uncovered staged files."""
+        registry_path = self._temp_registry()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "whoami-files",
+                "--files-from-stdin",
+                "--registry",
+                str(registry_path),
+            ],
+            input="AGENT_WORK_REGISTRY.md\nmissing.py\n",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("uncovered staged files", result.stderr)
+        self.assertIn("missing.py", result.stderr)
 
     def test_release_by_wrong_owner_refused(self):
         """PASS: a row can only be released by its current owner."""
@@ -816,6 +865,36 @@ class TestAgentWorkspace(unittest.TestCase):
             self.assertIn("removed", result.stdout)
             self.assertFalse(worktree.exists())
             self.assertNotIn(str(worktree).replace("\\", "/"), self._run_git(repo, "worktree", "list", "--porcelain").stdout)
+
+
+class TestAgentHookInstaller(unittest.TestCase):
+    def test_installer_backs_up_existing_hooks(self):
+        """PASS: installing hooks backs up an existing pre-commit hook."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            parent_repo = root / "parent"
+            private_repo = root / "private"
+            parent_hooks = parent_repo / ".git" / "hooks"
+            private_hooks = private_repo / ".git" / "hooks"
+            parent_hooks.mkdir(parents=True)
+            private_hooks.mkdir(parents=True)
+            existing_hook = parent_hooks / "pre-commit"
+            existing_hook.write_text("old hook\n", encoding="utf-8")
+
+            results = install_agent_hooks.install_hooks(
+                parent_repo=parent_repo,
+                private_repo=private_repo,
+                hook_source=REPO_ROOT / "scripts" / "git-hooks" / "pre-commit-claim-check",
+                timestamp_fn=lambda: "20260524010203",
+            )
+
+            backup = parent_hooks / "pre-commit.bak.20260524010203"
+            self.assertTrue(backup.exists())
+            self.assertEqual(backup.read_text(encoding="utf-8"), "old hook\n")
+            self.assertTrue((parent_hooks / "pre-commit").exists())
+            self.assertTrue((private_hooks / "pre-commit").exists())
+            self.assertIn(repr(str(parent_repo)), (private_hooks / "pre-commit").read_text(encoding="utf-8"))
+            self.assertEqual(len(results), 2)
 
 
 def _run_case(case_type: type[unittest.TestCase]) -> None:

@@ -146,6 +146,14 @@ def format_file_overlap_message(work_area: str, overlaps: list[tuple[WorkRow, li
     return f"file overlap for {work_area}: {details}"
 
 
+def find_uncovered_files(rows: list[WorkRow], staged_files: list[str]) -> list[str]:
+    covered_files: set[str] = set()
+    for row in rows:
+        if row.status == "active":
+            covered_files.update(split_primary_files(row.primary_files))
+    return [path for path in staged_files if path.strip() and path.strip().lower() not in covered_files]
+
+
 @contextmanager
 def lock_registry(path: Path, timeout_seconds: float = 10.0, poll_seconds: float = 0.05):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -574,7 +582,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Manage AGENT_WORK_REGISTRY.md")
     parser.add_argument(
         "command",
-        choices=["list", "claim", "release", "touch", "status", "prune-stale", "check", "clean-orphan-sessions"],
+        choices=[
+            "list",
+            "claim",
+            "release",
+            "touch",
+            "status",
+            "prune-stale",
+            "check",
+            "clean-orphan-sessions",
+            "whoami-files",
+        ],
     )
     parser.add_argument("work_area", nargs="?")
     parser.add_argument("--area")
@@ -593,6 +611,7 @@ def main() -> int:
     parser.add_argument("--warn-only", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--strict-files", action="store_true")
+    parser.add_argument("--files-from-stdin", action="store_true")
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
     args = parser.parse_args()
 
@@ -634,6 +653,20 @@ def main() -> int:
                 max_age_minutes=max_age_minutes,
             )
             print("\n".join(lines))
+            return 0
+
+        if args.command == "whoami-files":
+            if not args.files_from_stdin:
+                raise ValueError("whoami-files requires --files-from-stdin")
+            staged_files = [line.strip() for line in sys.stdin.read().splitlines() if line.strip()]
+            _, rows, _ = load_registry(args.registry)
+            uncovered = find_uncovered_files(rows, staged_files)
+            if uncovered:
+                print("uncovered staged files:", file=sys.stderr)
+                for path in uncovered:
+                    print(f"  {path}", file=sys.stderr)
+                return 1
+            print("all staged files covered by active claims")
             return 0
 
         work_area = args.work_area or args.area
