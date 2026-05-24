@@ -11,7 +11,7 @@
 # the captured injector output.
 
 param(
-    [Parameter(Mandatory=$true)][int]$Pid,
+    [Parameter(Mandatory=$true)][Alias('Pid')][int]$TargetPid,
     [Parameter(Mandatory=$true)][string]$Dll,
     [string]$Injector = '',
     [string[]]$Extra = @(),
@@ -24,24 +24,38 @@ $Root = Join-Path $env:LOCALAPPDATA 'gwa3-inject-broker'
 $ReqDir = Join-Path $Root 'requests'
 
 if (-not (Test-Path $ReqDir)) {
-    Write-Error "Broker not running (request dir missing: $ReqDir). Start tools\inject_broker.ps1 in an elevated PowerShell window first."
+    [Console]::Error.WriteLine("Broker not running (request dir missing: $ReqDir). Start tools\inject_broker.ps1 in an elevated PowerShell window first.")
     exit 100
+}
+
+if ($TargetPid -le 0) {
+    [Console]::Error.WriteLine("Broker request requires a positive PID.")
+    exit 64
+}
+
+if ([string]::IsNullOrWhiteSpace($Dll)) {
+    [Console]::Error.WriteLine("Broker request requires a non-empty DLL path or DLL name.")
+    exit 64
 }
 
 $id = [Guid]::NewGuid().ToString('N').Substring(0, 12)
 $req = [ordered]@{
-    pid = $Pid
+    action = 'inject'
+    pid = $TargetPid
     dll = $Dll
+    source = 'tools.inject_via_broker.ps1'
 }
 if ($Injector) { $req.injector = $Injector }
 if ($Extra.Count -gt 0) { $req.extra = $Extra }
 
 $reqPath = Join-Path $ReqDir "$id.req.json"
+$tempPath = "$reqPath.tmp"
 $donePath = Join-Path $ReqDir "$id.done.json"
 $outPath = "$reqPath.out"
 $exitPath = "$reqPath.exit"
 
-$req | ConvertTo-Json | Set-Content -Path $reqPath -Encoding UTF8
+$req | ConvertTo-Json | Set-Content -Path $tempPath -Encoding UTF8
+Move-Item -LiteralPath $tempPath -Destination $reqPath -Force
 
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 while ((Get-Date) -lt $deadline) {
@@ -50,8 +64,8 @@ while ((Get-Date) -lt $deadline) {
 }
 
 if (-not (Test-Path $donePath)) {
-    Write-Error "Broker did not respond within ${TimeoutSeconds}s. Is tools\inject_broker.ps1 running in an elevated window?"
-    Remove-Item $reqPath -ErrorAction SilentlyContinue
+    [Console]::Error.WriteLine("Broker did not respond within ${TimeoutSeconds}s. Is tools\inject_broker.ps1 running in an elevated window?")
+    Remove-Item $reqPath, $tempPath -ErrorAction SilentlyContinue
     exit 101
 }
 
