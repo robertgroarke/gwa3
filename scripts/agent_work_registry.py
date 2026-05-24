@@ -174,6 +174,49 @@ def parse_heartbeat(value: str) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def heartbeat_age_minutes(value: str, now: datetime | None = None) -> str:
+    parsed = parse_heartbeat(value)
+    if parsed is None:
+        return "stale"
+    now = now or datetime.now(timezone.utc)
+    now = now.astimezone(timezone.utc)
+    age_seconds = max(0, int((now - parsed).total_seconds()))
+    return str(age_seconds // 60)
+
+
+def format_status_table(rows: list[WorkRow], lane_filter: str | None = None, now: datetime | None = None) -> str:
+    if lane_filter:
+        lane_filter = normalize_lane(lane_filter)
+    filtered = [row for row in rows if lane_filter is None or row.lane == lane_filter]
+    if not filtered:
+        return "no rows"
+    lines = ["work_area | status | owner | lane | heartbeat-age-mins", "---|---|---|---|---"]
+    for row in filtered:
+        lines.append(
+            f"{row.work_area} | {row.status} | {row.owner} | {row.lane} | "
+            f"{heartbeat_age_minutes(row.heartbeat, now=now)}"
+        )
+    return "\n".join(lines)
+
+
+def watch_status(
+    registry: Path,
+    lane_filter: str | None = None,
+    sleep_fn=time.sleep,
+    now_fn=lambda: datetime.now(timezone.utc),
+    output=sys.stdout,
+) -> None:
+    try:
+        while True:
+            _, rows, _ = load_registry(registry)
+            print("\033[H\033[J", end="", file=output)
+            print(format_status_table(rows, lane_filter=lane_filter, now=now_fn()), file=output)
+            output.flush()
+            sleep_fn(5)
+    except KeyboardInterrupt:
+        return
+
+
 def heartbeat_is_stale(row: WorkRow, now: datetime, max_age_minutes: int) -> bool:
     parsed = parse_heartbeat(row.heartbeat)
     if parsed is None:
@@ -367,15 +410,16 @@ def touch_row(row: WorkRow, owner: str, replacement_heartbeat: str | None = None
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Manage AGENT_WORK_REGISTRY.md")
-    parser.add_argument("command", choices=["list", "claim", "release", "touch", "prune-stale", "check"])
+    parser.add_argument("command", choices=["list", "claim", "release", "touch", "status", "prune-stale", "check"])
     parser.add_argument("work_area", nargs="?")
     parser.add_argument("--area")
     parser.add_argument("--owner", default="-")
-    parser.add_argument("--lane", default="none")
+    parser.add_argument("--lane")
     parser.add_argument("--scope", default="-")
     parser.add_argument("--files", default="-")
     parser.add_argument("--notes", default="-")
     parser.add_argument("--status")
+    parser.add_argument("--watch", action="store_true")
     parser.add_argument("--max-age-minutes", type=int, default=15)
     parser.add_argument("--lock-timeout-seconds", type=float, default=10.0)
     parser.add_argument("--warn-only", action="store_true")
@@ -392,10 +436,18 @@ def main() -> int:
         if args.command == "check":
             _, rows, _ = load_registry(args.registry)
             sessions = load_session_registry()
-            report = format_check_report(rows, sessions, lane_filter=args.lane if args.lane != "none" else None)
+            report = format_check_report(rows, sessions, lane_filter=args.lane)
             print(report)
             has_mismatch = "MISMATCH " in report
             return 0 if args.warn_only or not has_mismatch else 1
+
+        if args.command == "status":
+            if args.watch:
+                watch_status(args.registry, lane_filter=args.lane)
+            else:
+                _, rows, _ = load_registry(args.registry)
+                print(format_status_table(rows, lane_filter=args.lane))
+            return 0
 
         work_area = args.work_area or args.area
         with lock_registry(args.registry, timeout_seconds=args.lock_timeout_seconds):
@@ -418,7 +470,7 @@ def main() -> int:
                 raise ValueError("work area is required for claim/release/touch")
 
             if args.command == "claim":
-                claim_row(rows, work_area, args.owner, args.lane, args.scope, args.files, args.notes, force=args.force)
+                claim_row(rows, work_area, args.owner, args.lane or "none", args.scope, args.files, args.notes, force=args.force)
             elif args.command == "release":
                 row = find_row(rows, work_area)
                 release_row(row, owner=args.owner, notes=args.notes)

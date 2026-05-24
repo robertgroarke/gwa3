@@ -130,6 +130,10 @@ lanes with the live DLL self-registration files in
 the session directory for tests. The check exits non-zero on mismatches unless
 `--warn-only` is supplied.
 
+Use `python scripts/agent_work_registry.py status` for a compact snapshot of
+current work claims. Add `--lane <lane>` to filter by lane, or `--watch` for a
+5-second refreshing terminal view.
+
 ## Worktree Workflow
 
 Use `python scripts/agent_workspace.py` from this parent repo to provision and

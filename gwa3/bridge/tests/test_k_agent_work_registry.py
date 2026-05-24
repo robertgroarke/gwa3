@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -228,6 +229,73 @@ class TestAgentWorkRegistry(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("work area not found", result.stderr)
+
+    def test_status_snapshot_output_contains_every_row(self):
+        """PASS: status snapshot output contains every registry row."""
+        _, rows, _ = agent_work_registry.load_registry(self._temp_registry())
+        now = datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc)
+        output = agent_work_registry.format_status_table(rows, now=now)
+
+        for work_area in [
+            "agent-coordination",
+            "kamadan-bridge",
+            "player-trade-validation",
+            "stale-active",
+            "fresh-active",
+            "stale-blocked",
+            "malformed-heartbeat",
+        ]:
+            self.assertIn(work_area, output)
+
+    def test_status_lane_filter_restricts_output(self):
+        """PASS: status can restrict output to one lane."""
+        _, rows, _ = agent_work_registry.load_registry(self._temp_registry())
+        now = datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc)
+        output = agent_work_registry.format_status_table(rows, lane_filter="disco", now=now)
+
+        self.assertIn("stale-active", output)
+        self.assertNotIn("agent-coordination", output)
+        self.assertNotIn("fresh-active", output)
+
+    def test_status_heartbeat_age_uses_fixed_now(self):
+        """PASS: heartbeat age is computed in whole minutes from a fixed now."""
+        now = datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc)
+
+        age = agent_work_registry.heartbeat_age_minutes("2026-05-23T23:20:00Z", now=now)
+
+        self.assertEqual(age, "25")
+
+    def test_status_malformed_heartbeat_shows_stale(self):
+        """PASS: status renders malformed heartbeat values as stale."""
+        _, rows, _ = agent_work_registry.load_registry(self._temp_registry())
+        now = datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc)
+        output = agent_work_registry.format_status_table(rows, lane_filter="biscuit", now=now)
+
+        self.assertIn("malformed-heartbeat", output)
+        self.assertIn("stale", output)
+
+    def test_status_watch_reprints_until_keyboard_interrupt(self):
+        """PASS: watch mode refreshes repeatedly and stops cleanly on Ctrl+C."""
+        registry_path = self._temp_registry()
+        output = io.StringIO()
+        sleeps: list[int] = []
+        now = datetime(2026, 5, 23, 23, 45, tzinfo=timezone.utc)
+
+        def sleep_once(seconds: int) -> None:
+            sleeps.append(seconds)
+            if len(sleeps) == 2:
+                raise KeyboardInterrupt
+
+        agent_work_registry.watch_status(
+            registry_path,
+            sleep_fn=sleep_once,
+            now_fn=lambda: now,
+            output=output,
+        )
+
+        self.assertEqual(sleeps, [5, 5])
+        self.assertEqual(output.getvalue().count("\033[H\033[J"), 2)
+        self.assertIn("agent-coordination", output.getvalue())
 
     def test_cli_waits_for_registry_file_lock(self):
         """PASS: concurrent CLI attempts wait for the registry lock."""
