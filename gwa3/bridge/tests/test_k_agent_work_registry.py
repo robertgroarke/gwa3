@@ -168,6 +168,67 @@ class TestAgentWorkRegistry(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "owner mismatch"):
             agent_work_registry.release_row(row, owner="BISCUIT", notes="released")
 
+    def test_touch_updates_heartbeat_on_held_active_row(self):
+        """PASS: touch refreshes only the heartbeat for a held active row."""
+        _, rows, _ = agent_work_registry.load_registry(self._temp_registry())
+        row = agent_work_registry.find_row(rows, "agent-coordination")
+        before = row.__dict__.copy()
+
+        agent_work_registry.touch_row(row, owner="BISCUIT", replacement_heartbeat="2026-05-24T00:01:00Z")
+
+        self.assertEqual(row.heartbeat, "2026-05-24T00:01:00Z")
+        for field in ["work_area", "status", "owner", "lane", "scope", "primary_files", "notes"]:
+            self.assertEqual(getattr(row, field), before[field])
+
+    def test_cli_touch_refuses_owner_mismatch(self):
+        """PASS: touch exits non-zero when the requested owner does not hold the row."""
+        registry_path = self._temp_registry()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "touch",
+                "agent-coordination",
+                "--owner",
+                "CODEX",
+                "--registry",
+                str(registry_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("owner mismatch", result.stderr)
+
+    def test_touch_refuses_available_row(self):
+        """PASS: touch refuses rows that are not active or blocked."""
+        _, rows, _ = agent_work_registry.load_registry(self._temp_registry())
+        row = agent_work_registry.find_row(rows, "kamadan-bridge")
+        with self.assertRaisesRegex(ValueError, "not held"):
+            agent_work_registry.touch_row(row, owner="-")
+
+    def test_cli_touch_refuses_unknown_work_area(self):
+        """PASS: touch exits non-zero when the work area does not exist."""
+        registry_path = self._temp_registry()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "touch",
+                "missing-area",
+                "--owner",
+                "CODEX",
+                "--registry",
+                str(registry_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("work area not found", result.stderr)
+
     def test_cli_waits_for_registry_file_lock(self):
         """PASS: concurrent CLI attempts wait for the registry lock."""
         registry_path = self._temp_registry()

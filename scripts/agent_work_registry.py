@@ -357,9 +357,17 @@ def release_row(row: WorkRow, owner: str, notes: str | None = None) -> None:
         row.notes = notes
 
 
+def touch_row(row: WorkRow, owner: str, replacement_heartbeat: str | None = None) -> None:
+    if row.status not in HELD_STATUSES:
+        raise ValueError(f"work area is not held: {row.work_area} (status={row.status})")
+    if row.owner != owner:
+        raise ValueError(f"owner mismatch for {row.work_area}: current owner={row.owner}, requested owner={owner}")
+    row.heartbeat = replacement_heartbeat or utc_now()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Manage AGENT_WORK_REGISTRY.md")
-    parser.add_argument("command", choices=["list", "claim", "release", "prune-stale", "check"])
+    parser.add_argument("command", choices=["list", "claim", "release", "touch", "prune-stale", "check"])
     parser.add_argument("work_area", nargs="?")
     parser.add_argument("--area")
     parser.add_argument("--owner", default="-")
@@ -407,15 +415,19 @@ def main() -> int:
                 return 0
 
             if not work_area:
-                raise ValueError("work area is required for claim/release")
+                raise ValueError("work area is required for claim/release/touch")
 
             if args.command == "claim":
                 claim_row(rows, work_area, args.owner, args.lane, args.scope, args.files, args.notes, force=args.force)
-            else:
+            elif args.command == "release":
                 row = find_row(rows, work_area)
                 release_row(row, owner=args.owner, notes=args.notes)
+            else:
+                row = find_row(rows, work_area)
+                touch_row(row, owner=args.owner)
             save_registry(rows, prefix, suffix, args.registry)
-            print(f"{args.command}d {work_area}")
+            verb = "touched" if args.command == "touch" else f"{args.command}d"
+            print(f"{verb} {work_area}")
             return 0
     except (TimeoutError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)

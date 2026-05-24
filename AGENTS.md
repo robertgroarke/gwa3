@@ -118,9 +118,11 @@ threshold; malformed heartbeat values are treated as stale.
 
 Use `python scripts/agent_work_registry.py claim <work-area> --lane <lane> --owner <name>`
 and `python scripts/agent_work_registry.py release <work-area> --owner <name>` for
-work claims. The CLI takes a file lock on `AGENT_WORK_REGISTRY.md`, refuses
-non-`available` rows, and refuses lane collisions with existing `active` or
-`blocked` rows unless the requested lane is `none`.
+work claims. Use `python scripts/agent_work_registry.py touch <work-area> --owner <name>`
+to refresh a held claim's heartbeat without changing any other row fields. The
+CLI takes a file lock on `AGENT_WORK_REGISTRY.md`, refuses non-`available` rows,
+and refuses lane collisions with existing `active` or `blocked` rows unless the
+requested lane is `none`.
 
 Use `python scripts/agent_work_registry.py check` to compare active work-registry
 lanes with the live DLL self-registration files in
