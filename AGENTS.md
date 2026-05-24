@@ -128,6 +128,26 @@ lanes with the live DLL self-registration files in
 the session directory for tests. The check exits non-zero on mismatches unless
 `--warn-only` is supplied.
 
+## Worktree Workflow
+
+Use `python scripts/agent_workspace.py` from this parent repo to provision and
+inspect isolated `gwa3-private` worktrees. By default it manages
+`C:\Users\Robert\Documents\gwa3-private` and uses lane paths like
+`C:\Users\Robert\Documents\gwa3-<lane>`.
+
+Examples:
+
+```powershell
+python scripts/agent_workspace.py provision --lane disco --branch codex/disco-work
+python scripts/agent_workspace.py list
+python scripts/agent_workspace.py prune --dry-run
+python scripts/agent_workspace.py prune --apply
+```
+
+Only use the worktree path, branch, build directory, DLL name, and pipe name
+that match the claimed lane. Prune first with `--dry-run`; use `--apply` only
+after confirming the listed worktrees are safe to remove.
+
 ## Test And Build Discipline
 
 Before reporting any test or bridge regression:

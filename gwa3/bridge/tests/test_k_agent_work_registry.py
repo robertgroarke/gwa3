@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,11 +20,17 @@ from .helpers import TestFailure
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REGISTRY_PATH = REPO_ROOT / "AGENT_WORK_REGISTRY.md"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "agent_work_registry.py"
+WORKSPACE_SCRIPT_PATH = REPO_ROOT / "scripts" / "agent_workspace.py"
 _SPEC = importlib.util.spec_from_file_location("agent_work_registry_script", SCRIPT_PATH)
 agent_work_registry = importlib.util.module_from_spec(_SPEC)
 assert _SPEC is not None and _SPEC.loader is not None
 sys.modules[_SPEC.name] = agent_work_registry
 _SPEC.loader.exec_module(agent_work_registry)
+_WORKSPACE_SPEC = importlib.util.spec_from_file_location("agent_workspace_script", WORKSPACE_SCRIPT_PATH)
+agent_workspace = importlib.util.module_from_spec(_WORKSPACE_SPEC)
+assert _WORKSPACE_SPEC is not None and _WORKSPACE_SPEC.loader is not None
+sys.modules[_WORKSPACE_SPEC.name] = agent_workspace
+_WORKSPACE_SPEC.loader.exec_module(agent_workspace)
 
 WORK_REGISTRY_FIXTURE = """# Agent Work Registry
 
@@ -315,6 +322,139 @@ with module.lock_registry(Path({str(registry_path)!r}), timeout_seconds=5):
             )
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn("MISMATCH live-session-without-active-claim lane=disco", result.stdout)
+
+
+class TestAgentWorkspace(unittest.TestCase):
+    def _run_git(self, repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=10,
+        )
+
+    def _init_repo(self, repo: Path) -> None:
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-b", "master", str(repo)], capture_output=True, check=True, text=True, timeout=10)
+        self._run_git(repo, "config", "user.email", "agent@example.invalid")
+        self._run_git(repo, "config", "user.name", "Agent Test")
+        (repo / "README.md").write_text("workspace fixture\n", encoding="utf-8")
+        self._run_git(repo, "add", "README.md")
+        self._run_git(repo, "commit", "-m", "initial")
+
+    def test_workspace_provision_creates_temp_parent_worktree(self):
+        """PASS: provision creates a real worktree at a caller-provided path."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            self._init_repo(repo)
+            self._run_git(repo, "branch", "feature/provision")
+            worktree = root / "parent" / "gwa3-none"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(WORKSPACE_SCRIPT_PATH),
+                    "--repo",
+                    str(repo),
+                    "provision",
+                    "--lane",
+                    "none",
+                    "--branch",
+                    "feature/provision",
+                    "--path",
+                    str(worktree),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertTrue(worktree.exists())
+            self.assertIn(str(worktree), result.stdout)
+            branch = self._run_git(worktree, "branch", "--show-current").stdout.strip()
+            self.assertEqual(branch, "feature/provision")
+
+    def test_workspace_list_parses_porcelain_output(self):
+        """PASS: porcelain worktree output is parsed into branch and lane data."""
+        output = "\n".join(
+            [
+                "worktree C:/Users/Robert/Documents/gwa3-disco",
+                "HEAD abc123",
+                "branch refs/heads/feature/disco",
+                "",
+                "worktree C:/Users/Robert/Documents/gwa3-private",
+                "HEAD def456",
+                "branch refs/heads/master",
+                "",
+            ]
+        )
+        entries = agent_workspace.parse_worktree_porcelain(output)
+
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0].branch_name, "feature/disco")
+        self.assertEqual(agent_workspace.lane_for_path(entries[0].path), "disco")
+
+    def test_workspace_prune_dry_run_identifies_missing_worktree(self):
+        """PASS: prune --dry-run reports a missing synthetic worktree without pruning metadata."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            self._init_repo(repo)
+            self._run_git(repo, "branch", "feature/missing")
+            worktree = root / "gwa3-none"
+            self._run_git(repo, "worktree", "add", str(worktree), "feature/missing")
+            shutil.rmtree(worktree)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(WORKSPACE_SCRIPT_PATH),
+                    "--repo",
+                    str(repo),
+                    "prune",
+                    "--dry-run",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertIn("would remove", result.stdout)
+            self.assertIn("missing-path", result.stdout)
+            self.assertIn(str(worktree).replace("\\", "/"), self._run_git(repo, "worktree", "list", "--porcelain").stdout)
+
+    def test_workspace_prune_apply_removes_stale_worktree(self):
+        """PASS: prune --apply removes a worktree whose branch is merged into master."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            self._init_repo(repo)
+            self._run_git(repo, "branch", "feature/stale")
+            worktree = root / "gwa3-none"
+            self._run_git(repo, "worktree", "add", str(worktree), "feature/stale")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(WORKSPACE_SCRIPT_PATH),
+                    "--repo",
+                    str(repo),
+                    "prune",
+                    "--apply",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertIn("removed", result.stdout)
+            self.assertFalse(worktree.exists())
+            self.assertNotIn(str(worktree).replace("\\", "/"), self._run_git(repo, "worktree", "list", "--porcelain").stdout)
 
 
 def _run_case(case_type: type[unittest.TestCase]) -> None:
