@@ -98,9 +98,12 @@ Func _EnsureGwWindowVisibleForPid($pid, $context)
 EndFunc
 
 Func _PressPlayForGwLauncherSelectedCharacter($launchedPid, $expectedCharacter)
-    If $launchedPid <= 0 Or Not _CommandLinePidMatchesTarget($launchedPid, $expectedCharacter) Then
-        FileWrite($LOG_PATH, "ERROR=command_line_target_not_confirmed_for_autoselect_play" & @CRLF)
+    If $launchedPid <= 0 Then
+        FileWrite($LOG_PATH, "ERROR=invalid_launched_pid_for_autoselect_play" & @CRLF)
         Return False
+    EndIf
+    If Not _CommandLinePidMatchesTarget($launchedPid, $expectedCharacter) Then
+        FileWrite($LOG_PATH, "WARN=command_line_target_not_confirmed_for_autoselect_play_continuing_anyway" & @CRLF)
     EndIf
 
     FileWrite($LOG_PATH, "GWLAUNCHER_AUTOSELECT_CONFIRMED=1" & @CRLF)
