@@ -259,12 +259,13 @@ While Not IsAtCharSelect() And TimerDiff($waitCharSelect) < 15000
 WEnd
 
 If Not IsAtCharSelect() And $accountPassword <> '' Then
-    FileWrite($LOG_PATH, "LOGIN_FALLBACK_ATTEMPT=1" & @CRLF)
-    WinActivate($game_clients[$clientIdx][2])
-    Sleep(500)
-    Send($accountPassword, 1)
+    FileWrite($LOG_PATH, "LOGIN_FALLBACK_FOCUS_SAFE_ATTEMPT=1" & @CRLF)
+    Local $loginHwnd = $game_clients[$clientIdx][2]
+    WinSetState($loginHwnd, '', @SW_SHOWMINNOACTIVE)
+    Sleep(200)
+    ControlSend($loginHwnd, '', '', $accountPassword)
     Sleep(250)
-    Send("{ENTER}")
+    ControlSend($loginHwnd, '', '', "{ENTER}")
     Local $waitLoginFallback = TimerInit()
     While Not IsAtCharSelect() And TimerDiff($waitLoginFallback) < 45000
         Sleep(1000)
