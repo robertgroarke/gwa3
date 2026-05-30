@@ -13,6 +13,12 @@ Global Const $GWLAUNCHER_MEM_COMMIT_RESERVE = 0x00003000 ; MEM_COMMIT | MEM_RESE
 Global Const $GWLAUNCHER_PAGE_READWRITE     = 0x00000004
 Global Const $GWLAUNCHER_MEM_RELEASE        = 0x00008000
 Global Const $GWLAUNCHER_PROCESS_ALL_ACCESS = 0x001F0FFF
+Global Const $GWLAUNCHER_STARTF_USESHOWWINDOW = 0x00000001
+Global Const $GWLAUNCHER_SW_HIDE = 0
+Global Const $GWLAUNCHER_LSFW_LOCK = 1
+Global Const $GWLAUNCHER_LSFW_UNLOCK = 2
+Global $GWLAUNCHER_FOREGROUND_LOCK_HELD = False
+OnAutoItExitRegister("GWLauncher_ReleaseForegroundLock")
 
 ; Multiclient patch signature â€” the byte pattern located near the mutex check
 Global Const $GWLAUNCHER_MC_SIGNATURE = "0x56,0x57,0x68,0x00,0x01,0x00,0x00,0x89,0x85,0xF4,0xFE,0xFF,0xFF,0xC7,0x00,0x00,0x00,0x00,0x00"
@@ -95,6 +101,8 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
     FileWrite($TRACE_PATH, "after_startupinfo" & @CRLF)
     DllStructSetData($startupInfo, "cb", DllStructGetSize($startupInfo))
     FileWrite($TRACE_PATH, "after_startupinfo_cb" & @CRLF)
+    DllStructSetData($startupInfo, "Flags", $GWLAUNCHER_STARTF_USESHOWWINDOW)
+    DllStructSetData($startupInfo, "ShowWindow", $GWLAUNCHER_SW_HIDE)
 
     ; Prepare PROCESS_INFORMATION
     FileWrite($TRACE_PATH, "before_processinfo" & @CRLF)
@@ -106,8 +114,10 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
     FileWrite($TRACE_PATH, "after_processinfo" & @CRLF)
 
     FileWrite($TRACE_PATH, "before_create_process" & @CRLF)
+    _GWLauncher_LockForeground(True)
 
-    ; CreateProcessW with CREATE_SUSPENDED
+    ; CreateProcessW with CREATE_SUSPENDED. STARTUPINFO starts hidden because GW can
+    ; still promote itself to foreground during early startup if shown minimized.
     Local $ret = DllCall("kernel32.dll", "bool", "CreateProcessW", _
         "ptr", 0, _
         "wstr", $cmdLine, _
@@ -124,6 +134,7 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
     If @error Or $ret[0] = 0 Then
         ConsoleWrite("[GWLauncher] Error: CreateProcessW failed. @error=" & @error & @CRLF)
         FileWrite($TRACE_PATH, "create_process_failed" & @CRLF)
+        _GWLauncher_LockForeground(False)
         Return 0
     EndIf
 
@@ -149,6 +160,7 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
         ; Close handles on failure
         DllCall("kernel32.dll", "bool", "CloseHandle", "handle", $hThread)
         DllCall("kernel32.dll", "bool", "CloseHandle", "handle", $hProcess)
+        _GWLauncher_LockForeground(False)
         Return 0
     EndIf
 
@@ -160,6 +172,20 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
     $result[1] = $hProcess
     $result[2] = $hThread
     Return $result
+EndFunc
+
+Func GWLauncher_ReleaseForegroundLock()
+    If Not $GWLAUNCHER_FOREGROUND_LOCK_HELD Then Return True
+    Return _GWLauncher_LockForeground(False)
+EndFunc
+
+Func _GWLauncher_LockForeground($lock)
+    Local $mode = $GWLAUNCHER_LSFW_UNLOCK
+    If $lock Then $mode = $GWLAUNCHER_LSFW_LOCK
+    Local $ret = DllCall("user32.dll", "bool", "LockSetForegroundWindow", "uint", $mode)
+    If @error Then Return False
+    If $ret[0] <> 0 Then $GWLAUNCHER_FOREGROUND_LOCK_HELD = $lock
+    Return $ret[0] <> 0
 EndFunc
 
 ; ============================================================================

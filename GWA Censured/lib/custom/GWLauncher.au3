@@ -31,9 +31,11 @@ Global Const $GWLAUNCHER_PAGE_READWRITE     = 0x00000004
 Global Const $GWLAUNCHER_MEM_RELEASE        = 0x00008000
 Global Const $GWLAUNCHER_PROCESS_ALL_ACCESS = 0x001F0FFF
 Global Const $GWLAUNCHER_STARTF_USESHOWWINDOW = 0x00000001
-Global Const $GWLAUNCHER_SW_SHOWMINNOACTIVE = 7
+Global Const $GWLAUNCHER_SW_HIDE = 0
 Global Const $GWLAUNCHER_LSFW_LOCK = 1
 Global Const $GWLAUNCHER_LSFW_UNLOCK = 2
+Global $GWLAUNCHER_FOREGROUND_LOCK_HELD = False
+OnAutoItExitRegister("GWLauncher_ReleaseForegroundLock")
 
 ; Multiclient patch signature — the byte pattern located near the mutex check
 Global Const $GWLAUNCHER_MC_SIGNATURE = "0x56,0x57,0x68,0x00,0x01,0x00,0x00,0x89,0x85,0xF4,0xFE,0xFF,0xFF,0xC7,0x00,0x00,0x00,0x00,0x00"
@@ -113,7 +115,7 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
         "ptr StdError")
     DllStructSetData($startupInfo, "cb", DllStructGetSize($startupInfo))
     DllStructSetData($startupInfo, "Flags", $GWLAUNCHER_STARTF_USESHOWWINDOW)
-    DllStructSetData($startupInfo, "ShowWindow", $GWLAUNCHER_SW_SHOWMINNOACTIVE)
+    DllStructSetData($startupInfo, "ShowWindow", $GWLAUNCHER_SW_HIDE)
 
     ; Prepare PROCESS_INFORMATION
     Local $processInfo = DllStructCreate( _
@@ -124,8 +126,8 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
 
     _GWLauncher_LockForeground(True)
 
-    ; CreateProcessW with CREATE_SUSPENDED. STARTUPINFO requests a non-active show state
-    ; so GW does not steal the operator's foreground window during launch.
+    ; CreateProcessW with CREATE_SUSPENDED. STARTUPINFO starts hidden because GW can
+    ; still promote itself to foreground during early startup if shown minimized.
     Local $ret = DllCall("kernel32.dll", "bool", "CreateProcessW", _
         "ptr", 0, _
         "wstr", $cmdLine, _
@@ -168,8 +170,6 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
         _GWLauncher_LockForeground(False)
         Return 0
     EndIf
-    _GWLauncher_LockForeground(False)
-
     ConsoleWrite("[GWLauncher] Thread resumed. GW client running. PID=" & $pid & @CRLF)
 
     ; Return process info
@@ -180,11 +180,17 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
     Return $result
 EndFunc
 
+Func GWLauncher_ReleaseForegroundLock()
+    If Not $GWLAUNCHER_FOREGROUND_LOCK_HELD Then Return True
+    Return _GWLauncher_LockForeground(False)
+EndFunc
+
 Func _GWLauncher_LockForeground($lock)
     Local $mode = $GWLAUNCHER_LSFW_UNLOCK
     If $lock Then $mode = $GWLAUNCHER_LSFW_LOCK
     Local $ret = DllCall("user32.dll", "bool", "LockSetForegroundWindow", "uint", $mode)
     If @error Then Return False
+    If $ret[0] <> 0 Then $GWLAUNCHER_FOREGROUND_LOCK_HELD = $lock
     Return $ret[0] <> 0
 EndFunc
 
