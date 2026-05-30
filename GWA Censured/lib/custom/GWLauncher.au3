@@ -30,6 +30,10 @@ Global Const $GWLAUNCHER_MEM_COMMIT_RESERVE = 0x00003000 ; MEM_COMMIT | MEM_RESE
 Global Const $GWLAUNCHER_PAGE_READWRITE     = 0x00000004
 Global Const $GWLAUNCHER_MEM_RELEASE        = 0x00008000
 Global Const $GWLAUNCHER_PROCESS_ALL_ACCESS = 0x001F0FFF
+Global Const $GWLAUNCHER_STARTF_USESHOWWINDOW = 0x00000001
+Global Const $GWLAUNCHER_SW_SHOWMINNOACTIVE = 7
+Global Const $GWLAUNCHER_LSFW_LOCK = 1
+Global Const $GWLAUNCHER_LSFW_UNLOCK = 2
 
 ; Multiclient patch signature — the byte pattern located near the mutex check
 Global Const $GWLAUNCHER_MC_SIGNATURE = "0x56,0x57,0x68,0x00,0x01,0x00,0x00,0x89,0x85,0xF4,0xFE,0xFF,0xFF,0xC7,0x00,0x00,0x00,0x00,0x00"
@@ -108,6 +112,8 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
         "ptr StdOutput;" & _
         "ptr StdError")
     DllStructSetData($startupInfo, "cb", DllStructGetSize($startupInfo))
+    DllStructSetData($startupInfo, "Flags", $GWLAUNCHER_STARTF_USESHOWWINDOW)
+    DllStructSetData($startupInfo, "ShowWindow", $GWLAUNCHER_SW_SHOWMINNOACTIVE)
 
     ; Prepare PROCESS_INFORMATION
     Local $processInfo = DllStructCreate( _
@@ -116,7 +122,10 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
         "dword dwProcessId;" & _
         "dword dwThreadId")
 
-    ; CreateProcessW with CREATE_SUSPENDED
+    _GWLauncher_LockForeground(True)
+
+    ; CreateProcessW with CREATE_SUSPENDED. STARTUPINFO requests a non-active show state
+    ; so GW does not steal the operator's foreground window during launch.
     Local $ret = DllCall("kernel32.dll", "bool", "CreateProcessW", _
         "ptr", 0, _
         "wstr", $cmdLine, _
@@ -131,6 +140,7 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
 
     If @error Or $ret[0] = 0 Then
         ConsoleWrite("[GWLauncher] Error: CreateProcessW failed. @error=" & @error & @CRLF)
+        _GWLauncher_LockForeground(False)
         Return 0
     EndIf
 
@@ -155,8 +165,10 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
         ; Close handles on failure
         DllCall("kernel32.dll", "bool", "CloseHandle", "handle", $hThread)
         DllCall("kernel32.dll", "bool", "CloseHandle", "handle", $hProcess)
+        _GWLauncher_LockForeground(False)
         Return 0
     EndIf
+    _GWLauncher_LockForeground(False)
 
     ConsoleWrite("[GWLauncher] Thread resumed. GW client running. PID=" & $pid & @CRLF)
 
@@ -166,6 +178,14 @@ Func GWLauncher_Launch($gwPath, $email = '', $password = '', $character = '', $e
     $result[1] = $hProcess
     $result[2] = $hThread
     Return $result
+EndFunc
+
+Func _GWLauncher_LockForeground($lock)
+    Local $mode = $GWLAUNCHER_LSFW_UNLOCK
+    If $lock Then $mode = $GWLAUNCHER_LSFW_LOCK
+    Local $ret = DllCall("user32.dll", "bool", "LockSetForegroundWindow", "uint", $mode)
+    If @error Then Return False
+    Return $ret[0] <> 0
 EndFunc
 
 ; ============================================================================
@@ -667,6 +687,7 @@ Func GWLauncher_ClickPlay($gwWindowTitle = '', $characterName = '')
         ConsoleWrite('[GWLauncher] ClickPlay: GW window not found' & @CRLF)
         Return False
     EndIf
+    EnsureGwWindowVisibleForClick($hWnd, 'GWLauncher_ClickPlay')
 
     ; If character name provided, select it via PreGameContext
     If $characterName <> '' Then
@@ -705,11 +726,14 @@ Func GWLauncher_ClickPlay($gwWindowTitle = '', $characterName = '')
         EndIf
     EndIf
 
-    ; Press Enter to click Play (Send to foreground — ControlSend doesn't work with DirectX)
-    WinActivate($hWnd)
-    Sleep(500)
-    Send('{ENTER}')
-    ConsoleWrite('[GWLauncher] Sent Enter key to press Play' & @CRLF)
+    ; Press Play without sending keystrokes to the foreground window.
+    EnsureGwWindowVisibleForClick($hWnd, 'GWLauncher_ClickPlay_Enter')
+    If IsFrameVisible($FRAME_HASH_PLAY_BUTTON) And ClickFrameButton($FRAME_HASH_PLAY_BUTTON) Then
+        ConsoleWrite('[GWLauncher] Clicked Play frame button' & @CRLF)
+    Else
+        ControlSend($hWnd, '', '', '{ENTER}')
+        ConsoleWrite('[GWLauncher] Sent ControlSend Enter fallback to press Play' & @CRLF)
+    EndIf
     Sleep(1000)
     Return True
 EndFunc
@@ -728,8 +752,7 @@ Func GWLauncher_HandleReconnectDialog($choice = 'no', $gwWindowTitle = '')
     EndIf
     If $hWnd = 0 Then Return False
 
-    WinActivate($hWnd)
-    Sleep(500)
+    EnsureGwWindowVisibleForClick($hWnd, 'GWLauncher_HandleReconnectDialog')
 
     ; The reconnect dialog has Yes (left) and No (right) buttons
     ; Default focus might be on Yes. Arrow keys navigate between them.

@@ -1283,6 +1283,46 @@ EndFunc
 ; Char Select Helpers
 ; =============================================================================
 
+Func EnsureGwWindowVisibleForClick($hWnd, $context = 'click')
+    If $hWnd = 0 Then Return False
+
+    Local $pos = WinGetPos($hWnd)
+    If IsArray($pos) Then
+        ConsoleWrite('[FrameUI] Window before ' & $context & ': x=' & $pos[0] & ' y=' & $pos[1] & _
+            ' w=' & $pos[2] & ' h=' & $pos[3] & @CRLF)
+    EndIf
+
+    WinSetState($hWnd, '', @SW_SHOWMINNOACTIVE)
+
+    $pos = WinGetPos($hWnd)
+    Local $needsMove = True
+    If IsArray($pos) Then
+        Local $right = $pos[0] + $pos[2]
+        Local $bottom = $pos[1] + $pos[3]
+        $needsMove = ($pos[2] < 640 Or $pos[3] < 480 Or _
+            $pos[0] < 0 Or $pos[1] < 0 Or _
+            $right > @DesktopWidth Or $bottom > @DesktopHeight)
+    EndIf
+
+    If $needsMove Then
+        WinMove($hWnd, '', 40, 40, 1280, 900)
+    EndIf
+
+    Sleep(150)
+
+    $pos = WinGetPos($hWnd)
+    If IsArray($pos) Then
+        ConsoleWrite('[FrameUI] Window after ' & $context & ': x=' & $pos[0] & ' y=' & $pos[1] & _
+            ' w=' & $pos[2] & ' h=' & $pos[3] & @CRLF)
+        If $pos[0] < 0 Or $pos[1] < 0 Or ($pos[0] + $pos[2]) > @DesktopWidth Or ($pos[1] + $pos[3]) > @DesktopHeight Then
+            ConsoleWrite('[FrameUI] Window still not fully clickable after move for ' & $context & @CRLF)
+            Return False
+        EndIf
+    EndIf
+
+    Return True
+EndFunc
+
 ;~ Check if we're at the character select screen
 Func IsAtCharSelect()
     Return IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Or IsFrameVisible($FRAME_HASH_PLAY_GREYED)
@@ -1295,6 +1335,9 @@ EndFunc
 
 ;~ Press Play at character select — uses mouse click (GW ignores synthetic input)
 Func PressPlayButton()
+    Local $hWnd = GetWindowHandle()
+    If $hWnd <> 0 And Not EnsureGwWindowVisibleForClick($hWnd, 'PressPlayButton') Then Return False
+
     If Not IsFrameVisible($FRAME_HASH_PLAY_BUTTON) Then
         ConsoleWrite('[FrameUI] Play button not visible' & @CRLF)
         Return False
@@ -1311,20 +1354,16 @@ Func PressPlayButton_MOUSE()
     Local $hWnd = GetWindowHandle()
     If $hWnd = 0 Then Return False
 
-    WinActivate($hWnd)
-    Sleep(300)
-    Local $pos = WinGetPos($hWnd)
-    If Not IsArray($pos) Then Return False
-
-    Local $playX = $pos[0] + Int($pos[2] * 0.78)
-    Local $playY = $pos[1] + Int($pos[3] * 0.96)
-    ConsoleWrite('[FrameUI] Clicking Play at ' & $playX & ',' & $playY & @CRLF)
-    MouseClick('left', $playX, $playY, 1, 3)
-    Return True
+    If Not EnsureGwWindowVisibleForClick($hWnd, 'PressPlayButton_MOUSE') Then Return False
+    ConsoleWrite('[FrameUI] PressPlayButton_MOUSE routed through frame click to avoid physical cursor input' & @CRLF)
+    Return ClickFrameButton($FRAME_HASH_PLAY_BUTTON)
 EndFunc
 
 ;~ Dismiss reconnect dialog with Yes or No using mouse click
 Func DismissReconnectDialog($choice = 'no')
+    Local $hWnd = GetWindowHandle()
+    If $hWnd <> 0 Then EnsureGwWindowVisibleForClick($hWnd, 'DismissReconnectDialog')
+
     If Not IsReconnectDialogShowing() Then
         ConsoleWrite('[FrameUI] No reconnect dialog showing' & @CRLF)
         Return False
