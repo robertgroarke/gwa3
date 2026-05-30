@@ -15,10 +15,12 @@ New-Item -ItemType Directory -Path (Split-Path -Parent $LogPath) -Force | Out-Nu
 Write-TraceLine "trace-start seconds=$Seconds"
 
 Get-CimInstance Win32_Process |
-    Where-Object { $_.Name -match '^AutoIt3(_x64)?\.exe$' -or $_.CommandLine -match 'AutoIt3(\.exe)?' } |
+    Where-Object { $_.Name -match '^AutoIt3(_x64)?\.exe$' } |
     ForEach-Object {
         Write-TraceLine ("existing pid={0} name={1} commandLine={2}" -f $_.ProcessId, $_.Name, $_.CommandLine)
     }
+
+$seen = @{}
 
 $query = "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'AutoIt3.exe' OR ProcessName = 'AutoIt3_x64.exe'"
 $sourceId = "gwa3-autoit-trace-{0}" -f ([Guid]::NewGuid().ToString("N"))
@@ -42,7 +44,19 @@ $registration = Register-CimIndicationEvent -Query $query -SourceIdentifier $sou
 try {
     Write-Output "Tracing AutoIt invocations for $Seconds seconds."
     Write-Output "Log: $LogPath"
-    Start-Sleep -Seconds $Seconds
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        Get-CimInstance Win32_Process |
+            Where-Object { $_.Name -match '^AutoIt3(_x64)?\.exe$' } |
+            ForEach-Object {
+                $key = "{0}:{1}" -f $_.ProcessId, $_.CommandLine
+                if (-not $seen.ContainsKey($key)) {
+                    $seen[$key] = $true
+                    Write-TraceLine ("poll pid={0} name={1} commandLine={2}" -f $_.ProcessId, $_.Name, $_.CommandLine)
+                }
+            }
+        Start-Sleep -Milliseconds 50
+    }
 } finally {
     Unregister-Event -SourceIdentifier $sourceId -ErrorAction SilentlyContinue
     $registration | Remove-Job -Force -ErrorAction SilentlyContinue
