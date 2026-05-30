@@ -143,11 +143,9 @@ Func _EnsureGwWindowVisibleForPid($pid, $context)
             " x=" & $pos[0] & " y=" & $pos[1] & " w=" & $pos[2] & " h=" & $pos[3] & @CRLF)
     EndIf
 
-    WinSetState($hWnd, '', @SW_RESTORE)
+    WinSetState($hWnd, '', @SW_SHOWMINNOACTIVE)
     WinMove($hWnd, '', 40, 40, 1280, 900)
-    WinActivate($hWnd)
-    WinWaitActive($hWnd, '', 3)
-    Sleep(500)
+    Sleep(200)
 
     $pos = WinGetPos($hWnd)
     If IsArray($pos) Then
@@ -178,10 +176,10 @@ Func _PressPlayForGwLauncherSelectedCharacter($launchedPid, $expectedCharacter)
         Return True
     EndIf
 
-    FileWrite($LOG_PATH, "WARN=press_play_frame_failed_using_mouse" & @CRLF)
+    FileWrite($LOG_PATH, "WARN=press_play_frame_failed_using_safe_fallback" & @CRLF)
     If Not _EnsureGwWindowVisibleForPid($launchedPid, "press-play-mouse-fallback") Then Return False
     If PressPlayButton_MOUSE() Then
-        FileWrite($LOG_PATH, "CLICK_PLAY_MOUSE_SENT=1" & @CRLF)
+        FileWrite($LOG_PATH, "CLICK_PLAY_SAFE_FALLBACK_SENT=1" & @CRLF)
         Return True
     EndIf
 
