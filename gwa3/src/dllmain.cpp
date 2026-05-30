@@ -89,31 +89,18 @@ static bool ClickPlayButtonMouseFallback() {
         return false;
     }
 
-    const LONG clickX = rect.left + static_cast<LONG>(width * 0.78f);
-    const LONG clickY = rect.top + static_cast<LONG>(height * 0.96f);
+    const LONG clickX = static_cast<LONG>(width * 0.78f);
+    const LONG clickY = static_cast<LONG>(height * 0.96f);
+    const LPARAM clickParam = MAKELPARAM(static_cast<SHORT>(clickX), static_cast<SHORT>(clickY));
+    const BOOL downOk = PostMessageA(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, clickParam);
+    const BOOL upOk = PostMessageA(hwnd, WM_LBUTTONUP, 0, clickParam);
 
-    SetForegroundWindow(hwnd);
-    SetActiveWindow(hwnd);
-    BringWindowToTop(hwnd);
-    Sleep(100);
-
-    POINT oldPos{};
-    GetCursorPos(&oldPos);
-    SetCursorPos(clickX, clickY);
-    Sleep(50);
-
-    INPUT inputs[2] = {};
-    inputs[0].type = INPUT_MOUSE;
-    inputs[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-    inputs[1].type = INPUT_MOUSE;
-    inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
-    const UINT sent = SendInput(2, inputs, sizeof(INPUT));
-
-    Sleep(50);
-    SetCursorPos(oldPos.x, oldPos.y);
-
-    GWA3::Log::Info("Bootstrap: mouse-clicking Play fallback at (%ld,%ld), sent=%u", clickX, clickY, sent);
-    return sent == 2;
+    GWA3::Log::Info("Bootstrap: background Play fallback client=(%ld,%ld) down=%u up=%u",
+                    clickX,
+                    clickY,
+                    downOk ? 1u : 0u,
+                    upOk ? 1u : 0u);
+    return downOk && upOk;
 }
 
 static bool RunCharSelectBootstrap(DWORD timeoutMs) {
@@ -590,9 +577,14 @@ DWORD WINAPI InitThread(LPVOID hModule) {
         } else {
             GWA3::Log::Info("gwa3.dll initialization complete - advisory mode active");
         }
-        // Keep alive while either is running
+        // Keep alive while either is running. Advisory mode still needs to
+        // dispatch bridge actions from this init thread; otherwise Python can
+        // write tool calls to the pipe and never receive action_result frames.
         while (GWA3::Bot::IsRunning() || GWA3::LLM::IsRunning()) {
-            Sleep(1000);
+            if (GWA3::LLM::IsRunning()) {
+                GWA3::LLM::DrainInboundActions();
+            }
+            Sleep(50);
         }
         GWA3::SmokeTest::StopWatchdog(false);
         return 0;

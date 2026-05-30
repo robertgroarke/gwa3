@@ -3,6 +3,7 @@
 
 #include <gwa3/managers/MaintenanceMgr.h>
 #include <gwa3/managers/ItemMgr.h>
+#include <gwa3/bot/BotFramework.h>
 #include <gwa3/managers/MapMgr.h>
 #include <gwa3/managers/AgentMgr.h>
 #include <gwa3/managers/DialogMgr.h>
@@ -1524,28 +1525,8 @@ static bool SendWindowEnterKey() {
 }
 
 static bool SendForegroundEnterInput() {
-    HWND hwnd = static_cast<HWND>(MemoryMgr::GetGWWindowHandle());
-    if (!hwnd || !IsWindow(hwnd)) {
-        Log::Warn("MaintenanceMgr: SendForegroundEnterInput missing GW hwnd");
-        return false;
-    }
-
-    SetForegroundWindow(hwnd);
-    SetFocus(hwnd);
-    Sleep(40);
-
-    INPUT inputs[2] = {};
-    inputs[0].type = INPUT_KEYBOARD;
-    inputs[0].ki.wVk = VK_RETURN;
-    inputs[1].type = INPUT_KEYBOARD;
-    inputs[1].ki.wVk = VK_RETURN;
-    inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
-
-    const UINT sent = SendInput(2, inputs, sizeof(INPUT));
-    Log::Info("MaintenanceMgr: SendForegroundEnterInput hwnd=0x%08X sent=%u",
-              static_cast<unsigned>(reinterpret_cast<uintptr_t>(hwnd)),
-              sent);
-    return sent == 2;
+    Log::Info("MaintenanceMgr: SendForegroundEnterInput routed to window message path");
+    return SendWindowEnterKey();
 }
 
 static bool SendRootFrameEnterKey() {
@@ -2768,6 +2749,7 @@ bool ConvertExcessStorageGoldToConsets(const Config& cfg) {
 // ===== Full Maintenance =====
 
 void PerformMaintenance(const Config& cfg) {
+    GWA3::Bot::PhaseScope phase(GWA3::Bot::BotPhase::Maintenance);
     Log::Info("MaintenanceMgr: Starting maintenance (freeSlots=%u superiorIdKits=%u salvKits=%u targets=%u/%u gold=%u/%u consetTrigger=%u floor=%u)",
               CountFreeSlots(), CountItemByModel(MODEL_SUP_ID_KIT), CountAllSalvageKits(),
               cfg.targetIdKits, cfg.targetSalvageKits,
