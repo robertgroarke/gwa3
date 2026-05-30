@@ -33,6 +33,70 @@ Func _FindClientIndexByTargetCommandLine($expectedCharacter)
     Return -1
 EndFunc
 
+Func _CurrentGwPidSet()
+    Local $processList = ProcessList('gw.exe')
+    Local $set = "|"
+    If @error Or $processList[0][0] = 0 Then Return $set
+    For $i = 1 To $processList[0][0]
+        $set &= $processList[$i][1] & "|"
+    Next
+    Return $set
+EndFunc
+
+Func _FindSingleNewClientIndex($baselinePidSet)
+    If Not IsArray($game_clients) Or $game_clients[0][0] <= 0 Then Return -1
+    Local $found = -1
+    Local $count = 0
+    For $ci = 1 To $game_clients[0][0]
+        Local $clientPid = $game_clients[$ci][0]
+        If $clientPid <= 0 Then ContinueLoop
+        If StringInStr($baselinePidSet, "|" & $clientPid & "|") = 0 Then
+            $found = $ci
+            $count += 1
+        EndIf
+    Next
+    If $count = 1 Then Return $found
+    Return -1
+EndFunc
+
+Func _ScanAndUpdateGameClientsWithoutCharScan()
+    Local $processList = ProcessList('gw.exe')
+    If @error Or $processList[0][0] = 0 Then Return
+
+    Local $initialClientCount = $game_clients[0][0]
+    Local $seen[$initialClientCount + 1]
+    For $si = 0 To $initialClientCount
+        $seen[$si] = False
+    Next
+
+    For $i = 1 To $processList[0][0]
+        Local $pid = $processList[$i][1]
+        Local $index = FindClientIndexByPID($pid)
+        If $index <> -1 Then
+            $seen[$index] = True
+        Else
+            Local $openProcess = SafeDllCall9($kernel_handle, 'int', 'OpenProcess', 'int', 0x1F0FFF, 'int', 1, 'int', $pid)
+            Local $processHandle = IsArray($openProcess) ? $openProcess[0] : 0
+            If $processHandle <> 0 Then
+                Local $windowHandle = GetWindowHandleForProcess($pid)
+                AddClient($pid, $processHandle, $windowHandle, "")
+                FileWrite($LOG_PATH, "CLIENT_DISCOVERED_WITHOUT_CHAR_SCAN pid=" & $pid & " hwnd=0x" & Hex($windowHandle) & @CRLF)
+            Else
+                FileWrite($LOG_PATH, "WARN=open_process_failed pid=" & $pid & @CRLF)
+            EndIf
+        EndIf
+    Next
+
+    For $i = 1 To $initialClientCount
+        If Not $seen[$i] Then
+            $game_clients[$i][0] = -1
+            $game_clients[$i][1] = -1
+            $game_clients[$i][2] = -1
+            $game_clients[$i][3] = ''
+        EndIf
+    Next
+EndFunc
+
 Func _SelectExpectedCharacterAndPressPlay($expectedCharacter)
     Local $preGameCandidates[2] = [MemRead($pre_game_address), $pre_game_address]
     Local $preGamePtr = 0
@@ -130,6 +194,8 @@ If $idx < 0 Then
 EndIf
 
 FileWrite($LOG_PATH, "ACCOUNT_INDEX=" & $idx & @CRLF)
+Local $baselineGwPids = _CurrentGwPidSet()
+FileWrite($LOG_PATH, "BASELINE_GW_PIDS=" & $baselineGwPids & @CRLF)
 Local $result = GWLauncher_LaunchAccount($accounts, $idx)
 If $result = 0 Then
     ConsoleWrite("ERROR: GWLauncher_LaunchAccount failed" & @CRLF)
@@ -145,7 +211,7 @@ Local $clientIdx = -1
 Local $waitScan = TimerInit()
 While TimerDiff($waitScan) < 30000
     Sleep(1000)
-    ScanAndUpdateGameClients()
+    _ScanAndUpdateGameClientsWithoutCharScan()
     If IsArray($game_clients) And $game_clients[0][0] > 0 Then
         For $ci = 1 To $game_clients[0][0]
             If $game_clients[$ci][0] = $launchedPID Then
@@ -157,6 +223,14 @@ While TimerDiff($waitScan) < 30000
         If $targetCommandLineIdx > 0 Then
             $clientIdx = $targetCommandLineIdx
             FileWrite($LOG_PATH, "CLIENT_INDEX_RESOLVED_BY_TARGET_COMMAND_LINE=" & $clientIdx & @CRLF)
+            ExitLoop
+        EndIf
+        Local $singleNewClientIdx = _FindSingleNewClientIndex($baselineGwPids)
+        If $singleNewClientIdx > 0 Then
+            $clientIdx = $singleNewClientIdx
+            $launchedPID = $game_clients[$clientIdx][0]
+            FileWrite($LOG_PATH, "CLIENT_INDEX_RESOLVED_BY_SINGLE_NEW_PROCESS=" & $clientIdx & @CRLF)
+            FileWrite($LOG_PATH, "GWLAUNCHER_PID=" & $launchedPID & @CRLF)
             ExitLoop
         EndIf
     EndIf
@@ -189,9 +263,9 @@ If IsAtCharSelect() Then
     FileWrite($LOG_PATH, "SELECT_CHARACTER=" & $TARGET_CHARACTER & @CRLF)
     If Not _SelectExpectedCharacterAndPressPlay($TARGET_CHARACTER) Then Exit 4
 Else
-    ConsoleWrite("Client was not at character select before play selection" & @CRLF)
+    ConsoleWrite("Client was not at character select before play selection; continuing verification" & @CRLF)
     FileWrite($LOG_PATH, "NOT_AT_CHAR_SELECT=1" & @CRLF)
-    Exit 5
+    FileWrite($LOG_PATH, "NOT_AT_CHAR_SELECT_CONTINUE_VERIFY=1" & @CRLF)
 EndIf
 
 Local $verifyTimer = TimerInit()
@@ -199,7 +273,7 @@ Local $lastRetryMs = 0
 Local $lastScanLogMs = 0
 While TimerDiff($verifyTimer) < 90000
     Sleep(2000)
-    ScanAndUpdateGameClients()
+    _ScanAndUpdateGameClientsWithoutCharScan()
     If IsArray($game_clients) And $game_clients[0][0] > 0 Then
         Local $verifyClientIdx = -1
         For $ci = 1 To $game_clients[0][0]
@@ -212,6 +286,14 @@ While TimerDiff($verifyTimer) < 90000
             $verifyClientIdx = _FindClientIndexByTargetCommandLine($TARGET_CHARACTER)
             If $verifyClientIdx > 0 Then
                 FileWrite($LOG_PATH, "VERIFY_CLIENT_RESOLVED_BY_TARGET_COMMAND_LINE=" & $verifyClientIdx & @CRLF)
+            EndIf
+        EndIf
+        If $verifyClientIdx < 0 Then
+            $verifyClientIdx = _FindSingleNewClientIndex($baselineGwPids)
+            If $verifyClientIdx > 0 Then
+                $launchedPID = $game_clients[$verifyClientIdx][0]
+                FileWrite($LOG_PATH, "VERIFY_CLIENT_RESOLVED_BY_SINGLE_NEW_PROCESS=" & $verifyClientIdx & @CRLF)
+                FileWrite($LOG_PATH, "GWLAUNCHER_PID=" & $launchedPID & @CRLF)
             EndIf
         EndIf
 
