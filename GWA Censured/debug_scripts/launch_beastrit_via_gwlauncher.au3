@@ -261,7 +261,7 @@ WEnd
 If Not IsAtCharSelect() And $accountPassword <> '' Then
     FileWrite($LOG_PATH, "LOGIN_FALLBACK_FOCUS_SAFE_ATTEMPT=1" & @CRLF)
     Local $loginHwnd = $game_clients[$clientIdx][2]
-    WinSetState($loginHwnd, '', @SW_SHOWMINNOACTIVE)
+    EnsureGwWindowVisibleForClick($loginHwnd, "login-fallback")
     Sleep(200)
     ControlSend($loginHwnd, '', '', $accountPassword)
     Sleep(250)

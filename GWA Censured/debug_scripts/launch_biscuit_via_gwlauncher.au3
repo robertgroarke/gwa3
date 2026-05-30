@@ -142,8 +142,10 @@ Func _EnsureGwWindowVisibleForPid($pid, $context)
             " x=" & $pos[0] & " y=" & $pos[1] & " w=" & $pos[2] & " h=" & $pos[3] & @CRLF)
     EndIf
 
-    WinSetState($hWnd, '', @SW_SHOWMINNOACTIVE)
-    WinMove($hWnd, '', 40, 40, 1280, 900)
+    If Not EnsureGwWindowVisibleForClick($hWnd, $context) Then
+        FileWrite($LOG_PATH, "WARN=window_not_visible_noactivate context=" & $context & " pid=" & $pid & @CRLF)
+        Return False
+    EndIf
     Sleep(200)
 
     $pos = WinGetPos($hWnd)

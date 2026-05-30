@@ -44,6 +44,15 @@ Global Const $FRAME_HASH_LOGOUT_BUTTON = 1117342925
 Global Const $FRAME_HASH_CHARACTER_FRAME = 828467986
 Global Const $FRAME_HASH_EDIT_ACCOUNT = 1601494406
 
+; Window visibility helpers for launcher/char-select automation.
+; Use user32 calls with SWP_NOACTIVATE instead of AutoIt WinSetState/WinMove,
+; which can still make Guild Wars the foreground window on some desktops.
+Global Const $FRAMEUI_SW_SHOWNOACTIVATE = 4
+Global Const $FRAMEUI_SWP_NOZORDER = 0x0004
+Global Const $FRAMEUI_SWP_NOACTIVATE = 0x0010
+Global Const $FRAMEUI_SWP_SHOWWINDOW = 0x0040
+Global Const $FRAMEUI_SWP_NOOWNERZORDER = 0x0200
+
 ; =============================================================================
 ; Extension Points (called by BotsHub framework during initialization)
 ; =============================================================================
@@ -1292,7 +1301,7 @@ Func EnsureGwWindowVisibleForClick($hWnd, $context = 'click')
             ' w=' & $pos[2] & ' h=' & $pos[3] & @CRLF)
     EndIf
 
-    WinSetState($hWnd, '', @SW_SHOWMINNOACTIVE)
+    _FrameUI_ShowWindowNoActivate($hWnd)
 
     $pos = WinGetPos($hWnd)
     Local $needsMove = True
@@ -1305,7 +1314,7 @@ Func EnsureGwWindowVisibleForClick($hWnd, $context = 'click')
     EndIf
 
     If $needsMove Then
-        WinMove($hWnd, '', 40, 40, 1280, 900)
+        _FrameUI_SetWindowPosNoActivate($hWnd, 40, 40, 1280, 900)
     EndIf
 
     Sleep(150)
@@ -1320,6 +1329,34 @@ Func EnsureGwWindowVisibleForClick($hWnd, $context = 'click')
         EndIf
     EndIf
 
+    Return True
+EndFunc
+
+Func _FrameUI_ShowWindowNoActivate($hWnd)
+    If $hWnd = 0 Then Return False
+    Local $ret = DllCall("user32.dll", "bool", "ShowWindow", "hwnd", $hWnd, "int", $FRAMEUI_SW_SHOWNOACTIVATE)
+    If @error Then
+        ConsoleWrite('[FrameUI] ShowWindow(SW_SHOWNOACTIVATE) failed @error=' & @error & @CRLF)
+        Return False
+    EndIf
+    Return $ret[0] <> 0
+EndFunc
+
+Func _FrameUI_SetWindowPosNoActivate($hWnd, $x, $y, $width, $height)
+    If $hWnd = 0 Then Return False
+    Local $flags = BitOR($FRAMEUI_SWP_NOZORDER, $FRAMEUI_SWP_NOACTIVATE, $FRAMEUI_SWP_SHOWWINDOW, $FRAMEUI_SWP_NOOWNERZORDER)
+    Local $ret = DllCall("user32.dll", "bool", "SetWindowPos", _
+        "hwnd", $hWnd, _
+        "hwnd", 0, _
+        "int", $x, _
+        "int", $y, _
+        "int", $width, _
+        "int", $height, _
+        "uint", $flags)
+    If @error Or $ret[0] = 0 Then
+        ConsoleWrite('[FrameUI] SetWindowPos(SWP_NOACTIVATE) failed @error=' & @error & @CRLF)
+        Return False
+    EndIf
     Return True
 EndFunc
 
