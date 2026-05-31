@@ -19,8 +19,11 @@ if (-not (Test-Path -LiteralPath $LauncherScript -PathType Leaf)) {
 
 $quotedLauncher = '"' + $LauncherScript + '"'
 $windowStyle = if ($Hidden) { "Hidden" } else { "Normal" }
+$diagPath = Join-Path $env:TEMP "gwa3-autoit-invocation-callsites.log"
+$diagLine = "{0} source=tools/Invoke-AutoItLauncher.ps1 filePath=""{1}"" argumentList=""{2}"" windowStyle={3}" -f (Get-Date).ToUniversalTime().ToString("o"), $AutoItPath.Replace('"', '\"'), $quotedLauncher.Replace('"', '\"'), $windowStyle
 
 Write-Output ("AUTOIT_INVOCATION filePath={0} argumentList={1} windowStyle={2}" -f $AutoItPath, $quotedLauncher, $windowStyle)
+Add-Content -LiteralPath $diagPath -Value $diagLine
 
 $startProcessArgs = @{
     FilePath = $AutoItPath

@@ -23,7 +23,9 @@ For $i = 0 To 4
     Local $char = $characters[$i]
     ConsoleWrite("[" & @HOUR & ":" & @MIN & ":" & @SEC & "] Launching " & $char & "..." & @CRLF)
 
-    Run('"' & $autoitExe & '" "' & $froggyScript & '" -autolaunch "' & $char & '" -noconsets')
+    Local $cmd = '"' & $autoitExe & '" "' & $froggyScript & '" -autolaunch "' & $char & '" -noconsets'
+    ConsoleWrite("AUTOIT_INVOCATION source=launch_all_bots_no_consets.au3 command=" & $cmd & @CRLF)
+    Run($cmd)
 
     If $i < 4 Then
         ConsoleWrite("  Waiting " & $delayBetween & "s before next launch..." & @CRLF)

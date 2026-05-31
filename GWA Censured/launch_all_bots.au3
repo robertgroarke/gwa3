@@ -27,7 +27,9 @@ For $i = 0 To 4
 
     ; Launch Froggy with -autolaunch flag
     ; The script handles: GW launch, multiclient patch, char select, reconnect, Play, hero config
-    Run('"' & $autoitExe & '" "' & $froggyScript & '" -autolaunch "' & $char & '"')
+    Local $cmd = '"' & $autoitExe & '" "' & $froggyScript & '" -autolaunch "' & $char & '"'
+    ConsoleWrite("AUTOIT_INVOCATION source=launch_all_bots.au3 command=" & $cmd & @CRLF)
+    Run($cmd)
 
     If $i < 4 Then
         ConsoleWrite("  Waiting " & $delayBetween & "s before next launch..." & @CRLF)
